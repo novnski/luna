@@ -660,6 +660,7 @@ async fn seed_sidebar_scale(core: &EngineCore, root: &Path) -> anyhow::Result<()
         .open(&ids[1])?
         .doc()
         .push_queued(&QueuedMessage {
+            input_items: Vec::new(),
             id: "sidebar-review-failure".into(),
             text: "Fixture-only queued message requiring review".into(),
             attachments: Vec::new(),

@@ -4457,6 +4457,9 @@ pub struct Composer {
     /// Staged-but-unsent attachments per chat key (use-attachments.ts `stash`):
     /// navigating away and back restores them; memory-only, like the original.
     pub(crate) attachments: HashMap<String, Vec<StagedAttachment>>,
+    /// Native selections are durable content, keyed identically to drafts.
+    pub(crate) input_items: HashMap<String, Vec<luna_proto::ComposerInput>>,
+    pub(crate) queue_edit_input_items: Option<Vec<luna_proto::ComposerInput>>,
     /// Rich window captures keyed exactly like drafts and ordinary staged
     /// attachments. Each owns one screenshot that joins the existing upload
     /// path only at send time.
@@ -4872,6 +4875,8 @@ impl Composer {
             pickers,
             drafts: HashMap::new(),
             attachments: HashMap::new(),
+            input_items: HashMap::new(),
+            queue_edit_input_items: None,
             appshots: HashMap::new(),
             canvas_draft_id: uuid::Uuid::new_v4().to_string(),
             draft_revisions: HashMap::new(),
@@ -5187,6 +5192,10 @@ impl Composer {
     fn current_prompt_is_empty(&self, cx: &App) -> bool {
         self.input.read(cx).text().is_empty()
             && self
+                .input_items
+                .get(&self.current_key)
+                .is_none_or(Vec::is_empty)
+            && self
                 .attachments
                 .get(&self.current_key)
                 .is_none_or(Vec::is_empty)
@@ -5266,7 +5275,8 @@ impl Composer {
         if self.stash_task.is_some() {
             return;
         }
-        let staged = self.attachments.get(&self.current_key).map_or(0, Vec::len)
+        let staged = self.input_items.get(&self.current_key).map_or(0, Vec::len)
+            + self.attachments.get(&self.current_key).map_or(0, Vec::len)
             + self.appshots.get(&self.current_key).map_or(0, Vec::len);
         let comments = self.state.read(cx).review_comments(&self.current_key).len();
         if !composer_has_content(self.input.read(cx).text(), staged, comments) {
@@ -5327,6 +5337,7 @@ impl Composer {
         };
         let label = label.chars().take(120).collect();
         let entry = PromptStashEntry {
+            input_items: snapshot.input_items,
             id: uuid::Uuid::new_v4().to_string(),
             label,
             text: snapshot.text,
@@ -5365,6 +5376,7 @@ impl Composer {
                                 == source_revision
                         {
                             composer.attachments.remove(&key);
+                            composer.input_items.remove(&key);
                             composer.appshots.remove(&key);
                             composer.draft_blobs.remove(&key);
                             composer.draft_unavailable.remove(&key);
@@ -5543,6 +5555,7 @@ impl Composer {
                     composer.stash_task = None;
                     return None;
                 }
+                composer.input_items.insert(key.clone(), entry.input_items.clone());
                 composer.attachments.insert(key.clone(), ordinary);
                 composer.appshots.insert(key.clone(), shots);
                 composer.draft_blobs.insert(key.clone(), entry.attachments.iter()
@@ -5811,6 +5824,11 @@ impl Composer {
             .filter_map(|comment| serde_json::to_value(comment).ok())
             .collect();
         ComposerDraft {
+            input_items: if key == self.current_key && self.queue_edit_draft.is_some() {
+                self.queue_edit_input_items.clone().unwrap_or_default()
+            } else {
+                self.input_items.get(key).cloned().unwrap_or_default()
+            },
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: self.draft_id_for(key),
             task_id: (!key.is_empty()).then(|| key.to_string()),
@@ -6206,6 +6224,12 @@ impl Composer {
                 (_, true, _) => restored.record.text.clone(),
                 _ => format!("{}\n\n{}", restored.record.text, local_text),
             };
+            let selections = self.input_items.entry(key.to_string()).or_default();
+            for selection in &restored.record.input_items {
+                if !selections.contains(selection) {
+                    selections.push(selection.clone());
+                }
+            }
             let local_attachments = self.attachments.remove(key).unwrap_or_default();
             for attachment in local_attachments {
                 if !restored
@@ -6382,6 +6406,7 @@ impl Composer {
                                 composer.draft_saves_in_flight.remove(&key);
                                 composer.drafts.insert(key.clone(), String::new());
                                 composer.attachments.remove(&key);
+                                composer.input_items.remove(&key);
                                 composer.appshots.remove(&key);
                                 composer.draft_blobs.remove(&key);
                                 composer.draft_unavailable.remove(&key);
@@ -6518,6 +6543,12 @@ impl Composer {
                         _ => format!("{local_text}\n\n{recovered_text}"),
                     };
 
+                    let selections = composer.input_items.entry(key.clone()).or_default();
+                    for selection in &submission.snapshot.input_items {
+                        if !selections.contains(selection) {
+                            selections.push(selection.clone());
+                        }
+                    }
                     let ordinary = composer.attachments.entry(key.clone()).or_default();
                     for blob in &submission.snapshot.attachments {
                         if appshot_attachment_ids.contains(&blob.attachment_id) {
@@ -6707,6 +6738,8 @@ impl Composer {
         self.draft_receipt_tasks.clear();
         self.drafts.clear();
         self.attachments.clear();
+        self.input_items.clear();
+        self.queue_edit_input_items = None;
         self.appshots.clear();
         self.draft_revisions.clear();
         self.draft_saved_revisions.clear();
@@ -6928,6 +6961,7 @@ impl Composer {
                                     // submitted snapshot as the live draft here
                                     // reinserted an already-sent prompt on reopen.
                                     record.text.clear();
+                                    record.input_items.clear();
                                     record.attachments.clear();
                                     record.appshots.clear();
                                     record.context = Default::default();
@@ -7180,6 +7214,7 @@ impl Composer {
                         .insert(load_key.clone(), restored.recoverable_entries.clone());
                 }
                 if !pending_same_revision {
+                    composer.input_items.insert(load_key.clone(), restored.record.input_items.clone());
                     composer
                         .drafts
                         .insert(load_key.clone(), restored.record.text.clone());
@@ -7680,6 +7715,7 @@ impl Composer {
     /// raw image bytes, and a deleted chat's stage could never be sent again.
     pub fn purge_chat(&mut self, chat_id: &str, cx: &mut Context<Self>) {
         self.attachments.remove(chat_id);
+        self.input_items.remove(chat_id);
         self.appshots.remove(chat_id);
         self.draft_blobs.remove(chat_id);
         self.draft_unavailable.remove(chat_id);
@@ -8805,6 +8841,10 @@ impl Composer {
                 Some("The queued message was removed; your edit remains in the composer".into());
             // Recover both drafts when another device removes the reserved row.
             if let Some((draft, mut attachments, mut appshots)) = self.queue_edit_draft.take() {
+                self.input_items.insert(
+                    self.current_key.clone(),
+                    self.queue_edit_input_items.take().unwrap_or_default(),
+                );
                 appshots.extend(self.appshots.remove(&self.current_key).unwrap_or_default());
                 self.appshots.insert(self.current_key.clone(), appshots);
                 let edited = self.input.read(cx).text().to_string();
@@ -9021,7 +9061,9 @@ impl Composer {
         }
         let has_text = composer_has_content(
             self.input.read(cx).text(),
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         send_button_mode(self.run_live(cx), has_text)
@@ -9034,7 +9076,9 @@ impl Composer {
         let text = self.input.read(cx).text().trim().to_string();
         let no_content = !composer_has_content(
             &text,
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         match self.button_mode(cx) {
@@ -9062,7 +9106,9 @@ impl Composer {
     fn on_modifier_submit(&mut self, cx: &mut Context<Self>) {
         let no_content = !composer_has_content(
             self.input.read(cx).text(),
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         if no_content && self.editing_queued.is_none() {
@@ -9082,7 +9128,9 @@ impl Composer {
         let text = self.input.read(cx).text().trim().to_string();
         let has_content = composer_has_content(
             &text,
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         if !has_content || !self.require_project_for_new_session(cx) || self.send_blocked(cx) {
@@ -9246,6 +9294,10 @@ impl Composer {
         // Snapshot-and-clear NOW (use-attachments.ts takeAttachments): the
         // strip empties the instant you hit send; a failure hands the files
         // back into the chat's stash.
+        let submitted_input_items = self
+            .input_items
+            .remove(&self.current_key)
+            .unwrap_or_default();
         let ordinary_staged = self
             .attachments
             .remove(&self.current_key)
@@ -9760,6 +9812,7 @@ impl Composer {
                         "messageId": message_id,
                         "text": queue_text,
                         "attachments": attachment_paths,
+                        "inputItems": submitted_input_items,
                         "holdForTurnEnd": true,
                         "followUpBehavior": follow_up_behavior.unwrap_or_default(),
                         "execution": resolved.chat_config(),
@@ -9793,6 +9846,7 @@ impl Composer {
 
                 let command = SessionCommandPayload::Run {
                     request: RunRequest {
+                        input_items: submitted_input_items.clone(),
                         prompt: content.clone(),
                         harness: resolved.harness,
                         provider_account_id: resolved.provider_account_id.clone(),
@@ -10016,6 +10070,12 @@ impl Composer {
                         message.into()
                     });
                     composer.failure_key = Some(restore_key.clone());
+                    if !has_newer_draft {
+                        let selections = composer.input_items.entry(restore_key.clone()).or_default();
+                        for selection in &submitted_input_items {
+                            if !selections.contains(selection) { selections.push(selection.clone()); }
+                        }
+                    }
                     composer.state.update(cx, |s, cx| {
                         s.remove_echo(&err_chat_id, &err_message_id);
                         s.end_pending_send(&err_chat_id, &err_message_id);
@@ -12300,6 +12360,7 @@ mod tests {
 
     fn test_draft(task_id: &str, revision: u64, text: &str) -> ComposerDraft {
         ComposerDraft {
+            input_items: Vec::new(),
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: task_id.into(),
             task_id: Some(task_id.into()),

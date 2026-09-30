@@ -315,7 +315,22 @@ fn command_transfers(entry: &SessionCommandEntry) -> Vec<crate::uploads::Attachm
             .filter(|p| crate::uploads::is_pending_ref(p))
             .cloned()
             .collect(),
-        SessionCommandPayload::Steer { prompt, .. } => crate::uploads::pending_refs_in(prompt),
+        SessionCommandPayload::Steer {
+            prompt,
+            attachments,
+            ..
+        } => {
+            let mut refs = crate::uploads::pending_refs_in(prompt);
+            refs.extend(
+                attachments
+                    .iter()
+                    .filter(|p| crate::uploads::is_pending_ref(p))
+                    .cloned(),
+            );
+            refs.sort();
+            refs.dedup();
+            refs
+        }
         _ => Vec::new(),
     };
     refs.iter()
@@ -467,6 +482,7 @@ pub enum BeginQueueEditOutcome {
         lease_id: String,
         text: String,
         attachments: Vec<String>,
+        input_items: Vec<luna_proto::ComposerInput>,
         base_text_hash: String,
         revision: u64,
         expires_at_ms: i64,
@@ -561,6 +577,7 @@ fn finish_queue_edit_projection(
     text: Option<&str>,
     expected_text_hash: Option<&str>,
     attachments: Option<&[String]>,
+    input_items: Option<&[luna_proto::ComposerInput]>,
     expected_revision: Option<u64>,
 ) -> Result<(FinishQueueEditOutcome, bool), EngineError> {
     let Some(item) = doc.read_queue()?.into_iter().find(|item| item.id == id) else {
@@ -617,11 +634,16 @@ fn finish_queue_edit_projection(
         FinishQueueEditAction::Cancel | FinishQueueEditAction::ReleaseUnchanged => None,
         FinishQueueEditAction::Discard => Some(""),
     };
-    if !doc.finish_queued_edit_with_attachments(
+    if !doc.finish_queued_edit_with_inputs(
         id,
         replacement,
         if action == FinishQueueEditAction::Commit {
             attachments
+        } else {
+            None
+        },
+        if action == FinishQueueEditAction::Commit {
+            input_items
         } else {
             None
         },
@@ -4230,6 +4252,30 @@ impl DocHost {
         follow_up_behavior: luna_proto::FollowUpBehavior,
         execution: Option<luna_proto::ChatConfig>,
     ) -> Result<bool, EngineError> {
+        self.queue_message_with_inputs(
+            chat_id,
+            message_id,
+            text,
+            attachments,
+            Vec::new(),
+            hold_for_turn_end,
+            follow_up_behavior,
+            execution,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn queue_message_with_inputs(
+        &self,
+        chat_id: &str,
+        message_id: &str,
+        text: &str,
+        attachments: Vec<String>,
+        input_items: Vec<luna_proto::ComposerInput>,
+        hold_for_turn_end: bool,
+        follow_up_behavior: luna_proto::FollowUpBehavior,
+        execution: Option<luna_proto::ChatConfig>,
+    ) -> Result<bool, EngineError> {
         let handle = self.open(chat_id)?;
         let inserted = self.persist_queue_projection(
             &handle,
@@ -4242,11 +4288,13 @@ impl DocHost {
                 {
                     return Ok(existing.text == text
                         && existing.attachments == attachments
+                        && existing.input_items == input_items
                         && existing.hold_for_turn_end == hold_for_turn_end
                         && existing.follow_up_behavior == follow_up_behavior
                         && existing.execution == execution);
                 }
                 doc.push_queued(&QueuedMessage {
+                    input_items,
                     id: message_id.to_string(),
                     text: text.to_string(),
                     attachments,
@@ -4289,6 +4337,7 @@ impl DocHost {
             message_id,
             text,
             attachments,
+            Vec::new(),
             hold_for_turn_end,
             follow_up_behavior,
             execution,
@@ -4306,6 +4355,7 @@ impl DocHost {
         message_id: &str,
         text: &str,
         attachments: Vec<String>,
+        input_items: Vec<luna_proto::ComposerInput>,
         hold_for_turn_end: bool,
         follow_up_behavior: luna_proto::FollowUpBehavior,
         execution: Option<luna_proto::ChatConfig>,
@@ -4330,6 +4380,7 @@ impl DocHost {
                     return Ok(
                         if existing.text == text
                             && existing.attachments == attachments
+                            && existing.input_items == input_items
                             && existing.hold_for_turn_end == hold_for_turn_end
                             && existing.follow_up_behavior == follow_up_behavior
                             && existing.execution == execution
@@ -4341,6 +4392,7 @@ impl DocHost {
                     );
                 }
                 doc.push_queued(&QueuedMessage {
+                    input_items,
                     id: message_id.to_string(),
                     text: text.to_string(),
                     attachments,
@@ -4586,6 +4638,7 @@ impl DocHost {
                         lease_id: lease_id.clone(),
                         text: item.text,
                         attachments: item.attachments,
+                        input_items: item.input_items,
                         base_text_hash,
                         revision: item.revision,
                         expires_at_ms,
@@ -4748,6 +4801,7 @@ impl DocHost {
                 text,
                 expected_text_hash,
                 attachments,
+                None,
                 expected_revision,
             )
             .await?
@@ -4766,6 +4820,33 @@ impl DocHost {
         attachments: &[String],
         expected_revision: u64,
     ) -> Result<(FinishQueueEditOutcome, Option<CommandReceipt>), EngineError> {
+        self.finish_queued_message_edit_task_with_inputs(
+            command_id,
+            chat_id,
+            id,
+            lease_id,
+            text,
+            expected_text_hash,
+            attachments,
+            None,
+            expected_revision,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn finish_queued_message_edit_task_with_inputs(
+        &self,
+        command_id: &str,
+        chat_id: &str,
+        id: &str,
+        lease_id: &str,
+        text: &str,
+        expected_text_hash: &str,
+        attachments: &[String],
+        input_items: Option<&[luna_proto::ComposerInput]>,
+        expected_revision: u64,
+    ) -> Result<(FinishQueueEditOutcome, Option<CommandReceipt>), EngineError> {
         self.finish_queued_message_edit_durable(
             Some(command_id),
             chat_id,
@@ -4775,6 +4856,7 @@ impl DocHost {
             Some(text),
             Some(expected_text_hash),
             Some(attachments),
+            input_items,
             Some(expected_revision),
         )
         .await
@@ -4791,6 +4873,7 @@ impl DocHost {
         text: Option<&str>,
         expected_text_hash: Option<&str>,
         attachments: Option<&[String]>,
+        input_items: Option<&[luna_proto::ComposerInput]>,
         expected_revision: Option<u64>,
     ) -> Result<(FinishQueueEditOutcome, Option<CommandReceipt>), EngineError> {
         if !self.is_host(chat_id) {
@@ -4819,6 +4902,7 @@ impl DocHost {
                         text,
                         expected_text_hash,
                         attachments,
+                        input_items,
                         expected_revision,
                     )
                 })?
@@ -4835,6 +4919,7 @@ impl DocHost {
                             text,
                             expected_text_hash,
                             attachments,
+                            input_items,
                             expected_revision,
                         )
                         .map(|(outcome, _)| outcome)
@@ -5079,7 +5164,14 @@ impl DocHost {
             };
             let reason = if candidate.follow_up_behavior != luna_proto::FollowUpBehavior::Steer {
                 Some(QueueHoldReason::SteeringUnavailable)
-            } else if !candidate.attachments.is_empty() {
+            } else if !candidate.attachments.is_empty()
+                && candidate
+                    .execution
+                    .as_ref()
+                    .map(|c| c.harness)
+                    .unwrap_or_else(|| self.harness_for(chat_id))
+                    != luna_proto::HarnessId::Codex
+            {
                 Some(QueueHoldReason::AttachmentsUnsupported)
             } else {
                 let Some(sessions) = self.sessions() else {
@@ -5714,10 +5806,19 @@ impl DocHost {
         // therefore wait without disturbing the active turn's runway, then
         // anchor the prompt only once this exact row reaches the transcript.
         let message_id = item.id.clone();
-        let prompt = queued_message_prompt(&item.text, &item.attachments);
+        let mut prompt = queued_message_prompt(&item.text, &item.attachments);
+        let mut attachments = item.attachments.clone();
+        self.resolve_input_attachments(&mut prompt, &mut attachments);
         if send == QueueSend::Steer {
             match sessions
-                .steer_at_workspace_revision(chat_id, &prompt, Some(message_id.clone()), original_w)
+                .steer_with_inputs_at_workspace_revision(
+                    chat_id,
+                    &prompt,
+                    &attachments,
+                    &item.input_items,
+                    Some(message_id.clone()),
+                    original_w,
+                )
                 .await?
             {
                 SteerOutcome::Accepted => return Ok(QueueProviderOutcome::Accepted),
@@ -5766,7 +5867,8 @@ impl DocHost {
         }
         request.prompt = prompt;
         request.resume = None; // dispatch re-derives the harness session
-        request.attachments = item.attachments.clone();
+        request.attachments = attachments;
+        request.input_items = item.input_items.clone();
         let harness = self.harness_for_request(chat_id, &request);
         self.dispatch_with_source_context(
             &sessions,
@@ -6712,7 +6814,22 @@ impl DocHost {
                 .filter(|p| crate::uploads::is_pending_ref(p))
                 .cloned()
                 .collect(),
-            SessionCommandPayload::Steer { prompt, .. } => crate::uploads::pending_refs_in(prompt),
+            SessionCommandPayload::Steer {
+                prompt,
+                attachments,
+                ..
+            } => {
+                let mut refs = crate::uploads::pending_refs_in(prompt);
+                refs.extend(
+                    attachments
+                        .iter()
+                        .filter(|p| crate::uploads::is_pending_ref(p))
+                        .cloned(),
+                );
+                refs.sort();
+                refs.dedup();
+                refs
+            }
             _ => Vec::new(),
         };
         if refs.is_empty() {
@@ -6769,12 +6886,16 @@ impl DocHost {
     /// (and the persisted user entry) see ordinary local files, exactly like
     /// the legacy pre-upload flow produced.
     fn resolve_request_attachments(&self, request: &mut luna_proto::RunRequest) {
+        self.resolve_input_attachments(&mut request.prompt, &mut request.attachments);
+    }
+
+    fn resolve_input_attachments(&self, prompt: &mut String, attachments: &mut [String]) {
         let Some(uploads) = self.inner.uploads.get() else {
             return;
         };
-        for path in request.attachments.iter_mut() {
+        for path in attachments.iter_mut() {
             if let Some(abs) = uploads.resolve_pending(path) {
-                request.prompt = request.prompt.replace(path.as_str(), &abs);
+                *prompt = prompt.replace(path.as_str(), &abs);
                 *path = abs;
             }
         }
@@ -7136,11 +7257,18 @@ impl DocHost {
                 handle.queue_paused.store(false, Ordering::Release);
                 Ok((SessionCommandStatus::Applied, None))
             }
-            SessionCommandPayload::Steer { prompt, message_id } => {
-                self.deliver_prompt(
+            SessionCommandPayload::Steer {
+                prompt,
+                message_id,
+                attachments,
+                input_items,
+            } => {
+                self.deliver_prompt_with_inputs(
                     sessions,
                     handle,
                     prompt,
+                    attachments,
+                    input_items,
                     message_id.clone(),
                     entry.issued_at,
                     original_w,
@@ -7262,6 +7390,7 @@ impl DocHost {
                 request.prompt = respond_input_prompt(&questions, answers);
                 request.resume = None; // dispatch re-derives the harness session
                 request.attachments = Vec::new();
+                request.input_items.clear();
                 if let Err(err) = handle.doc.resolve_input(request_id) {
                     tracing::warn!(chat = %chat_id, request = %request_id, error = %err,
                         "orphaned input resolve failed");
@@ -7348,11 +7477,50 @@ impl DocHost {
         issued_at: i64,
         original_w: u64,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
+        self.deliver_prompt_with_inputs(
+            sessions,
+            handle,
+            prompt,
+            &[],
+            &[],
+            message_id,
+            issued_at,
+            original_w,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn deliver_prompt_with_inputs(
+        &self,
+        sessions: &SessionsEngine,
+        handle: &Arc<ChatDocHandle>,
+        prompt: &str,
+        attachments: &[String],
+        input_items: &[luna_proto::ComposerInput],
+        message_id: Option<String>,
+        issued_at: i64,
+        original_w: u64,
+    ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
         // Keep upstream's queued-attachment rewrite and send-time canonical
         // history while preserving the personal cut's turn-boundary queue.
-        let prompt = self.resolve_prompt_attachments(prompt);
-        if self.held_until_turn_end(sessions, chat_id, &prompt, message_id.as_deref())? {
+        let mut prompt = self.resolve_prompt_attachments(prompt);
+        let mut attachments = attachments.to_vec();
+        self.resolve_input_attachments(&mut prompt, &mut attachments);
+        if self.harness_for(chat_id) == luna_proto::HarnessId::Codex {
+            luna_harness::validate_composer_inputs(&attachments, input_items)?;
+        } else if !input_items.is_empty() {
+            return Err(EngineError::Other("Native plugin, app and skill selections require Codex; keep the draft and choose Codex or remove them.".into()));
+        }
+        if self.held_until_turn_end(
+            sessions,
+            chat_id,
+            &prompt,
+            &attachments,
+            input_items,
+            message_id.as_deref(),
+        )? {
             return Ok((
                 SessionCommandStatus::Applied,
                 Some("held until the turn ends".into()),
@@ -7365,7 +7533,14 @@ impl DocHost {
             tracing::warn!(chat = %chat_id, error = %err, "canonical user-message write failed");
         }
         match sessions
-            .steer_at_workspace_revision(chat_id, &prompt, message_id.clone(), original_w)
+            .steer_with_inputs_at_workspace_revision(
+                chat_id,
+                &prompt,
+                &attachments,
+                input_items,
+                message_id.clone(),
+                original_w,
+            )
             .await?
         {
             SteerOutcome::Accepted => {
@@ -7384,9 +7559,10 @@ impl DocHost {
                 };
                 request.prompt = prompt;
                 request.resume = None; // dispatch re-derives the harness session
-                // A reused config must not re-inline the PREVIOUS turn's
-                // images; this prompt's own refs (if any) ride its text.
-                request.attachments = Vec::new();
+                // Replace the previous turn's envelope with this input's
+                // staged images and exact native selections.
+                request.attachments = attachments;
+                request.input_items = input_items.to_vec();
                 let harness = self.harness_for_request(chat_id, &request);
                 self.dispatch_with_source_context(
                     sessions, chat_id, harness, request, message_id, original_w,
@@ -7444,6 +7620,8 @@ impl DocHost {
         sessions: &SessionsEngine,
         chat_id: &str,
         prompt: &str,
+        attachments: &[String],
+        input_items: &[luna_proto::ComposerInput],
         message_id: Option<&str>,
     ) -> Result<bool, EngineError> {
         // A persistent session parked BETWEEN turns DOES take the next prompt
@@ -7452,7 +7630,7 @@ impl DocHost {
         // which is the state a question's own follow-up arrives in. An empty
         // prompt is no message to queue.
         if !sessions.turn_in_flight(chat_id)
-            || prompt.trim().is_empty()
+            || (prompt.trim().is_empty() && attachments.is_empty() && input_items.is_empty())
             || sessions.steers_mid_turn(self.harness_for(chat_id))
         {
             return Ok(false);
@@ -7464,9 +7642,10 @@ impl DocHost {
             .and_then(|workspace| workspace.chat_config(chat_id));
         self.persist_queue_projection(&handle, &format!("turn-end:{message_id}"), |doc| {
             doc.push_queued(&QueuedMessage {
+                input_items: input_items.to_vec(),
                 id: message_id,
                 text: prompt.to_string(),
-                attachments: Vec::new(),
+                attachments: attachments.to_vec(),
                 hold_for_turn_end: false,
                 follow_up_behavior: luna_proto::FollowUpBehavior::Queue,
                 hold_reason: None,
@@ -7586,6 +7765,7 @@ impl DocHost {
         };
         let config = chat.config;
         Some(luna_proto::RunRequest {
+            input_items: Vec::new(),
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),
             provider_account_id: config.as_ref().and_then(|c| c.provider_account_id.clone()),
@@ -8405,6 +8585,7 @@ mod approved_queue_projection_tests {
 
     fn queue(doc: &SessionDoc) -> Result<((), bool), EngineError> {
         doc.push_queued(&QueuedMessage {
+            input_items: Vec::new(),
             id: "approved-send".into(),
             text: "synthetic queued follow-up".into(),
             attachments: Vec::new(),
@@ -8648,6 +8829,8 @@ mod unwired_interrupt_projection_tests {
             .queue_command(&SessionCommandEntry {
                 id: "occupied-id".into(),
                 payload: SessionCommandPayload::Steer {
+                    attachments: Vec::new(),
+                    input_items: Vec::new(),
                     prompt: "synthetic only".into(),
                     message_id: None,
                 },

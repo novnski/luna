@@ -5691,6 +5691,7 @@ mod draft_tests {
 
     pub(super) fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
         ComposerDraft {
+            input_items: Vec::new(),
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: "task-a".into(),
             task_id: Some("task-a".into()),

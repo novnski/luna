@@ -694,6 +694,7 @@ impl SideChats {
             "This provider cannot preserve the parent's read-only sandbox in a side chat"
         );
         let request = RunRequest {
+            input_items: Vec::new(),
             prompt: if first {
                 let mut seed = if meta.context_mode == "contextSnapshot" {
                     format!("[Bounded parent context snapshot]\n{context}\n[End snapshot]\n")

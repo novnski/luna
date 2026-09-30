@@ -155,6 +155,7 @@ async fn transcript_survives_open_racing_create_chat() {
                 CHAT,
                 SessionCommandPayload::Run {
                     request: RunRequest {
+                        input_items: Vec::new(),
                         prompt: "what's the codeword?".into(),
                         harness: None,
                         provider_account_id: None,

@@ -26,6 +26,7 @@ const CHAT: &str = "chat-e2e";
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -646,6 +647,8 @@ async fn steer_with_no_live_run_falls_back_to_new_turn() {
         handle.doc(),
         "cmd-steer-1",
         SessionCommandPayload::Steer {
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             prompt: "also do this".into(),
             message_id: Some("m-2".into()),
         },
@@ -3044,6 +3047,7 @@ async fn real_claude_sees_uploaded_image_inline() {
          Attached images (local files — open them to view):\n- {path}"
     );
     let request = RunRequest {
+        input_items: Vec::new(),
         prompt,
         harness: None,
         provider_account_id: None,
@@ -3465,6 +3469,8 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
         handle.doc(),
         "cmd-steer-park-timer",
         SessionCommandPayload::Steer {
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             prompt: "next".into(),
             message_id: Some("m-2".into()),
         },

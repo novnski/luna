@@ -498,7 +498,8 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        request.attachments.is_empty() && self == &Self::from_request(harness_id, request)
+        (harness_id == HarnessId::Codex || request.attachments.is_empty())
+            && self == &Self::from_request(harness_id, request)
     }
 }
 
@@ -866,6 +867,8 @@ impl RunHandle {
 #[derive(Debug, Clone)]
 struct RoutedSteer {
     prompt: String,
+    attachments: Vec<String>,
+    input_items: Vec<luna_proto::ComposerInput>,
     message_id: String,
     delivery: luna_harness::SteerDelivery,
 }
@@ -2855,6 +2858,12 @@ impl SessionsEngine {
         recovery: Option<RecoveryAttemptContext>,
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
+        if !request.input_items.is_empty() && harness_id != HarnessId::Codex {
+            return Err(EngineError::Other("Native plugin, app and skill selections require Codex. Keep the draft and choose Codex or remove the selections.".into()));
+        }
+        if harness_id == HarnessId::Codex {
+            luna_harness::validate_composer_inputs(&request.attachments, &request.input_items)?;
+        }
         if recovery.is_some()
             && self
                 .inner
@@ -3150,6 +3159,8 @@ impl SessionsEngine {
                 // Register acceptance before a fast boundary can retire it.
                 let mut pending = lock(&ledger);
                 let message = SteerMessage {
+                    input_items: request.input_items.clone(),
+                    attachments: request.attachments.clone(),
                     prompt: request.prompt.clone(),
                     message_id: Some(user_id.clone()),
                     delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -3157,6 +3168,8 @@ impl SessionsEngine {
                 };
                 if steer_tx.try_send(message).is_ok() {
                     pending.push_back(RoutedSteer {
+                        attachments: request.attachments.clone(),
+                        input_items: request.input_items.clone(),
                         prompt: request.prompt.clone(),
                         message_id: user_id.clone(),
                         delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -3506,6 +3519,27 @@ impl SessionsEngine {
         message_id: Option<String>,
         workspace_repair_revision: u64,
     ) -> Result<SteerOutcome, EngineError> {
+        self.steer_with_inputs_at_workspace_revision(
+            chat_id,
+            prompt,
+            &[],
+            &[],
+            message_id,
+            workspace_repair_revision,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn steer_with_inputs_at_workspace_revision(
+        &self,
+        chat_id: &str,
+        prompt: &str,
+        attachments: &[String],
+        input_items: &[luna_proto::ComposerInput],
+        message_id: Option<String>,
+        workspace_repair_revision: u64,
+    ) -> Result<SteerOutcome, EngineError> {
         let _transition = self.transition_gate(chat_id).lock_owned().await;
         if self.inner.recovery.workspace_repair_revision(chat_id)? != workspace_repair_revision {
             return Err(EngineError::Other("Workspace association changed after steer admission; review and submit a new message.".into()));
@@ -3525,14 +3559,21 @@ impl SessionsEngine {
             })
             .map(|h| {
                 (
+                    h.runtime_config.harness_id,
                     h.run_id.clone(),
                     h.steer_tx.clone(),
                     h.routed_steers.clone(),
                 )
             });
-        let Some((run_id, steer_tx, ledger)) = target else {
+        let Some((harness_id, run_id, steer_tx, ledger)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
+        if (!attachments.is_empty() || !input_items.is_empty()) && harness_id != HarnessId::Codex {
+            return Ok(SteerOutcome::Rejected);
+        }
+        if harness_id == HarnessId::Codex {
+            luna_harness::validate_composer_inputs(attachments, input_items)?;
+        }
         let user_id = message_id.unwrap_or_else(new_id);
         self.inner
             .recovery
@@ -3543,6 +3584,8 @@ impl SessionsEngine {
             )?;
         let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
         let message = SteerMessage {
+            input_items: input_items.to_vec(),
+            attachments: attachments.to_vec(),
             prompt: prompt.to_string(),
             message_id: Some(user_id.clone()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -3563,6 +3606,8 @@ impl SessionsEngine {
                 return Ok(SteerOutcome::Busy);
             }
             pending.push_back(RoutedSteer {
+                attachments: attachments.to_vec(),
+                input_items: input_items.to_vec(),
                 prompt: prompt.to_string(),
                 message_id: user_id.clone(),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -4437,6 +4482,7 @@ impl SessionsEngine {
             }
             request.prompt = "Continue from the preserved provider session. Do not repeat completed tool or external effects; first inspect the current state and resume only unfinished work.".into();
             request.attachments.clear();
+            request.input_items.clear();
             request.resume = Some(session_id);
         }
         let context = RecoveryAttemptContext {
@@ -7600,7 +7646,8 @@ async fn drive_run(
                 };
                 request.prompt = steer.prompt.clone();
                 request.resume = None;
-                request.attachments = Vec::new();
+                request.attachments = steer.attachments.clone();
+                request.input_items = steer.input_items.clone();
                 tracing::info!(chat = %chat, "re-dispatching steer orphaned by a dying run");
                 let Some(host) = engine.inner.doc_host() else {
                     tracing::warn!(chat = %chat, "orphaned steer lost: doc host unavailable");
@@ -12873,6 +12920,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            input_items: Vec::new(),
             prompt: "first".into(),
             harness: None,
             provider_account_id: None,

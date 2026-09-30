@@ -1,0 +1,30 @@
+# Native composer inputs
+
+The composer keeps native selections separate from their readable projection in text. `luna_proto::ComposerInput` is a tagged `mention` (`name`, exact `plugin://<id>` or `app://<id>` URI) or `skill` (`name`, absolute host-native skill path). `inputItems` is optional on the wire and defaults to an empty vector. It persists through drafts, submitted snapshots, saved prompts, queued rows, queue editing, run requests and steering. A missing queue-edit vector preserves existing selections; `[]` clears them. Picker reconciliation can remove previously selected chips after edits; pasted text never creates native identity.
+
+Images retain the existing `attachments` upload/staging transport. `pending://` refs wait for uploaded bytes, then resolve to absolute paths on the execution host. Codex receives deduplicated `localImage` items for initial turns, active steering and correlated-rejection fallback. Empty text with attached images is valid. Native inputs require readable regular host files; supported Codex image formats are PNG, JPEG, GIF and WebP. SVG, BMP and TIFF need conversion before attaching to Codex. Header validation does not fully decode the image; Codex owns decoding. Claude/OpenCode retain their existing image handling.
+
+Native selections require Codex. They are verified again against the loaded runtime's account, workspace and thread policy immediately before initial dispatch, steering and fallback. Selected-input startup waits for this validation before returning the stream; catalog failure or timeout returns `RejectedBeforeAcceptance`. A cancellation during validation starts no user turn. Ordinary messages with no native selections incur no catalog reads. The request/queue/draft envelopes remain frozen during validation and retain exact identity for recovery. Existing accepted/unknown steering replay rules still apply.
+
+## Repeatable offline proof
+
+After combining the native-inputs and integrations-picker branches in the primary checkout, the coordinator runs:
+
+```sh
+scripts/qa-native-inputs.sh /absolute/path/to/evidence/native-inputs/central-validation
+```
+
+The adapter scenarios record actual subprocess JSON-RPC requests for image-only startup, attached steering, rejection before provider spawn, catalog rejection before `turn/start`, and attached correlated-steer fallback. The engine scenario covers upload staging, SQLite draft restart, queue lease/edit preservation, and dispatch through the real Codex adapter. `SHA256SUMS`, exit-code files, logs and JSON/JSONL payloads are retained. The fixture is deterministic and does not prove a real model or native GUI behavior. It creates no Git worktrees.
+
+## Native/provider verification
+
+The coordinator refreshes the primary app after compilation and regression checks, then verifies:
+
+1. Drop/paste a representative PNG or JPEG, send it with empty text, and have Codex report a visible property of that image. Keep the transcript and a screenshot.
+2. Send another image with text, queue an attached follow-up, and choose Steer while an actual turn is active. Confirm native correlation, transcript placement and model incorporation separately.
+3. Select two native integrations with distinct IDs, change chats and restart the app, then reopen the draft and queued edit. Confirm the selected identities survive. Remove a chip, undo/redo, and confirm the picker reconciliation matches the visible selection.
+4. Make a selected integration unavailable or switch execution account before dispatch. Confirm the selected input remains recoverable and no unvalidated provider turn starts.
+5. Submit an image from a remote device, confirm the owning host's resolved path appears in `localImage`, and verify the bytes/content, not just HTTP success.
+6. Try an invalid/missing image path and a stale queue edit. Confirm a recoverable failure. Submit ordinary Claude/OpenCode text and image requests to check their existing behavior.
+
+Retain host-side payload evidence, app identity/IPC/signature checks, transcript/screen readback and hashes outside disposable checkouts. Do not label the offline fixture as native or real-provider proof.

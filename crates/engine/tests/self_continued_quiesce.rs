@@ -48,6 +48,7 @@ fn init_env() {
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,

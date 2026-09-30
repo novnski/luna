@@ -760,6 +760,7 @@ fn account_config(root: &Path) -> AgentAccountsConfig {
 
 fn draft(task_id: &str, revision: u64, text: &str) -> ComposerDraft {
     ComposerDraft {
+        input_items: Vec::new(),
         version: luna_proto::COMPOSER_DRAFT_VERSION,
         draft_id: task_id.into(),
         task_id: Some(task_id.into()),
@@ -1020,6 +1021,7 @@ fn l11_fixture_project(root: &Path) -> PathBuf {
 
 fn l11_run_request(project: &Path) -> RunRequest {
     RunRequest {
+        input_items: Vec::new(),
         prompt: "L11 synthetic history seed with visible context usage".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,
@@ -1350,6 +1352,7 @@ fn turn_recovery_project(root: &Path) -> PathBuf {
 
 fn turn_recovery_request(project: &Path, attachment: &str) -> RunRequest {
     RunRequest {
+        input_items: Vec::new(),
         prompt: "L10 frozen request with one attachment".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,
@@ -2687,6 +2690,7 @@ mod tests {
             invoke_luna_tool: None,
         };
         let request = RunRequest {
+            input_items: Vec::new(),
             prompt: "fixture control test".into(),
             harness: Some(HarnessId::Mock),
             provider_account_id: None,

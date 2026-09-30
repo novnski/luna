@@ -15356,6 +15356,7 @@ mod exit_regressions {
         text: &str,
     ) -> ComposerDraft {
         ComposerDraft {
+            input_items: Vec::new(),
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: draft_id.into(),
             task_id: task_id.map(str::to_string),

@@ -39,6 +39,7 @@ fn harness() -> ClaudeHarness {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -395,6 +396,8 @@ async fn steering_lines_are_written_to_stdin_mid_run() {
     let (controls, steer, _token) = controls("A");
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -439,6 +442,8 @@ async fn explicit_steer_does_not_claim_incorporation_from_a_text_echo() {
     let (acceptance_tx, acceptance_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -466,6 +471,8 @@ async fn explicit_claude_write_ack_without_echo_is_not_incorporated() {
     let (acceptance_tx, acceptance_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,

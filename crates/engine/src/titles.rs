@@ -86,6 +86,7 @@ impl TitleGenerator {
             serde_json::to_string(diff).map_err(|_| "Could not encode staged diff".to_string())?
         );
         let request = RunRequest {
+            input_items: Vec::new(),
             prompt,
             harness: Some(harness_id),
             provider_account_id: None,
@@ -278,6 +279,7 @@ impl TitleGenerator {
         );
         for attempt in 0..=RETRY_DELAYS_MS.len() {
             let request = RunRequest {
+                input_items: Vec::new(),
                 prompt: title_prompt.clone(),
                 harness: Some(harness_id),
                 provider_account_id: None,
@@ -449,6 +451,7 @@ mod tests {
             ],
         };
         let request = RunRequest {
+            input_items: Vec::new(),
             prompt: "Title only".into(),
             harness: None,
             provider_account_id: None,

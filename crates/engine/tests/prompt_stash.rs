@@ -31,6 +31,7 @@ fn assemble(root: &std::path::Path) -> EngineCore {
 
 fn draft(id: &str, revision: u64, text: &str, attachments: Vec<DraftBlob>) -> ComposerDraft {
     ComposerDraft {
+        input_items: Vec::new(),
         version: luna_proto::COMPOSER_DRAFT_VERSION,
         draft_id: id.into(),
         task_id: Some(id.into()),
@@ -85,6 +86,7 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
         .await
         .unwrap();
     let entry = PromptStashEntry {
+        input_items: Vec::new(),
         id: uuid::Uuid::new_v4().to_string(),
         label: "keep this image".into(),
         text: "keep this image".into(),
@@ -233,6 +235,7 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
     assert!(!std::path::Path::new(&path).exists());
 
     let oversized = PromptStashEntry {
+        input_items: Vec::new(),
         id: uuid::Uuid::new_v4().to_string(),
         label: "oversized".into(),
         text: "x".repeat(luna_proto::MAX_PROMPT_STASH_ENTRY_BYTES),
@@ -335,6 +338,7 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
 
     for index in 0..50 {
         let slot = PromptStashEntry {
+            input_items: Vec::new(),
             id: uuid::Uuid::new_v4().to_string(),
             label: format!("slot {index}"),
             text: format!("slot {index}"),
@@ -352,6 +356,7 @@ async fn stash_survives_source_clear_restart_and_shared_owner_release() {
             .unwrap();
     }
     let extra = PromptStashEntry {
+        input_items: Vec::new(),
         id: uuid::Uuid::new_v4().to_string(),
         label: "overflow".into(),
         text: "overflow".into(),
