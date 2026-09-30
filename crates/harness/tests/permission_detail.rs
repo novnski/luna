@@ -14,6 +14,7 @@ async fn permission_detail_wire_choices_and_scope() {
         ("command:once", "Allow once"),
         ("command:deny", "Deny"),
         ("command:cancel", "Cancel turn"),
+        ("command:once:stale-completion", "Allow once"),
         ("command:exec", "Allow proposed command rule"),
         ("command:network", "Apply proposed network rule 1"),
         ("command:forged", "Allow for session"),
@@ -83,16 +84,31 @@ async fn permission_detail_wire_choices_and_scope() {
             tokio::time::timeout(std::time::Duration::from_secs(10), stream.collect())
                 .await
                 .unwrap();
+        let expected_status = if scenario == "command:cancel" {
+            DoneStatus::Interrupted
+        } else {
+            DoneStatus::Completed
+        };
         assert!(
-            matches!(
-                events.last(),
-                Some(Ok(AgentEvent::Done {
-                    status: DoneStatus::Completed,
-                    ..
-                }))
-            ),
-            "{scenario}: {events:?}"
+            matches!(events.last(), Some(Ok(AgentEvent::Done {status, ..})) if *status == expected_status),
+            "{scenario}: expected {expected_status:?}; {events:?}"
         );
+        if scenario == "command:cancel" {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Ok(AgentEvent::Done { .. })))
+                    .count(),
+                1,
+                "native Cancel must settle exactly once: {events:?}"
+            );
+            assert!(
+                !events
+                    .iter()
+                    .any(|event| matches!(event, Ok(AgentEvent::Steered { .. }))),
+                "native Cancel must not synthesize a follow-up: {events:?}"
+            );
+        }
         let questions = asked.lock().unwrap();
         if scenario.ends_with(":stale") || scenario.ends_with(":unknown") {
             assert!(questions.is_empty(), "{scenario}: {questions:?}");

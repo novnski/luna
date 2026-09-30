@@ -1677,7 +1677,14 @@ async fn run_session(session: Session) {
                                 == Some("failed"))
                             .then(|| "Codex turn failed".to_owned())
                         });
-                        let status = if interrupted {
+                        // Native Cancel/auto-review can interrupt a turn without
+                        // LUNA's local Stop token ever being cancelled. The
+                        // active-turn fence above makes this status authoritative.
+                        let provider_interrupted = params
+                            .pointer("/turn/status")
+                            .and_then(Value::as_str)
+                            == Some("interrupted");
+                        let status = if interrupted || provider_interrupted {
                             DoneStatus::Interrupted
                         } else if error.is_some() {
                             DoneStatus::Errored
@@ -1698,7 +1705,7 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                        if interrupted {
+                        if status == DoneStatus::Interrupted {
                             done_after_interrupt = true;
                             break 'main;
                         }

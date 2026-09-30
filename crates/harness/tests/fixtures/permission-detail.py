@@ -51,6 +51,8 @@ if scenario.endswith(':stale'):
 if scenario.endswith(':unknown'):
     params['permissions']['unknownCategory'] = {'enabled': True}
     expected = {'permissions': {}, 'scope': 'turn'}
+if scenario.endswith(':stale-completion'):
+    emit({'method': 'turn/completed', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'old-turn', 'status': 'interrupted'}}})
 emit({'id': 'request-opaque', 'method': method, 'params': params})
 if scenario.endswith(':resolved'):
     emit({'method': 'serverRequest/resolved', 'params': {'threadId': 'permission-thread', 'requestId': 'request-opaque'}})
@@ -60,4 +62,5 @@ answer = read()
 if answer.get('result') != expected:
     emit({'method': 'turn/failed', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'permission-turn', 'error': {'message': f'Expected {expected!r}; received {answer!r}'}}}})
 else:
-    emit({'method': 'turn/completed', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'permission-turn', 'status': 'completed'}}})
+    status = 'interrupted' if scenario == 'command:cancel' else 'completed'
+    emit({'method': 'turn/completed', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'permission-turn', 'status': status}}})
