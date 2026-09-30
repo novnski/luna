@@ -1494,7 +1494,9 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
 
 #[tokio::test]
 async fn structured_approval_preserves_details_and_rejects_unadvertised_choice() {
-    struct ApprovalHarness;
+    struct ApprovalHarness {
+        prompts: Arc<std::sync::Mutex<Vec<String>>>,
+    }
     #[async_trait]
     impl Harness for ApprovalHarness {
         fn id(&self) -> HarnessId {
@@ -1517,16 +1519,17 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
         }
         async fn run(
             &self,
-            _request: RunRequest,
+            request: RunRequest,
             controls: RunControls,
         ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            self.prompts.lock().unwrap().push(request.prompt.clone());
             let (tx, rx) = tokio::sync::mpsc::channel(16);
             tokio::spawn(async move {
                 let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
                     id: "approval-question".into(),
                     header: "Approve command".into(),
                     question: "Allow echo safe?".into(),
-                    options: vec!["Deny".into(), "Allow once".into()],
+                    options: vec!["Deny".into(), "Allow once".into(), "Cancel turn".into()],
                     multi_select: false,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-approval".into(),
@@ -1552,6 +1555,11 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
                                     scope: "request".into(),
                                     description: "Only this request".into(),
                                 },
+                                luna_proto::ApprovalChoice {
+                                    label: "Cancel turn".into(),
+                                    scope: "turn".into(),
+                                    description: "Interrupt this turn".into(),
+                                },
                             ],
                             ..Default::default()
                         }),
@@ -1564,6 +1572,12 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
                     .and_then(|answer| answer.labels.first())
                     .cloned()
                     .unwrap_or_else(|| "none".into());
+                if picked == "Cancel turn" {
+                    // Mirrors the Codex adapter: native Cancel ends the turn
+                    // with turn/completed status=interrupted and no local Stop.
+                    let _ = tx.send(Ok(done(DoneStatus::Interrupted))).await;
+                    return;
+                }
                 let _ = tx
                     .send(Ok(AgentEvent::TextDelta {
                         text: format!("approval {picked}"),
@@ -1579,7 +1593,28 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
     }
 
     let dir = tempfile::tempdir().unwrap();
-    let core = assemble(dir.path(), Arc::new(ApprovalHarness));
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let core = assemble(
+        dir.path(),
+        Arc::new(ApprovalHarness {
+            prompts: prompts.clone(),
+        }),
+    );
+    // A real chat row gives queued follow-ups the same local authority and
+    // run configuration the composer queue uses.
+    core.workspace
+        .create_space("space-approval", &core.device_id, "/tmp", None, false)
+        .expect("create project");
+    luna_rpc::memory_client(core.rpc_service())
+        .call(
+            luna_rpc::methods::MUTATE,
+            serde_json::json!({"op": "createChat", "chatId": CHAT, "spaceId": "space-approval"}),
+        )
+        .await
+        .expect("createChat");
+    core.workspace
+        .rename_chat(CHAT, "Pre-titled")
+        .expect("rename chat");
     let handle = core.doc_host.open(CHAT).unwrap();
     queue_as_owner(
         &core,
@@ -1698,6 +1733,10 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
             )
             .unwrap()
     );
+    // Queued behind the approval: a normal completion must still release it.
+    core.doc_host
+        .queue_message(CHAT, "after allow", Vec::new())
+        .expect("queue behind approval");
     queue_as_owner(
         &core,
         handle.doc(),
@@ -1722,6 +1761,84 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
         command_status(&core, "cmd-approval-right"),
         Some((SessionCommandStatus::Applied, None))
     );
+
+    // Normal completion drains the queue: the follow-up becomes the next turn.
+    wait_for(
+        || prompts.lock().unwrap().iter().any(|p| p == "after allow"),
+        "queued follow-up drains after a normal completion",
+    )
+    .await;
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).map(|s| s.status)
+                == Some(SessionStatus::AwaitingApproval)
+        },
+        "follow-up awaits approval",
+    )
+    .await;
+    let mut cancel_request = None;
+    wait_for(
+        || {
+            cancel_request = entries_now(&core).iter().find_map(|entry| {
+                entry.parts.iter().find_map(|part| match part {
+                    MessagePart::Input {
+                        request_id,
+                        resolved: false,
+                        ..
+                    } => Some(request_id.clone()),
+                    _ => None,
+                })
+            });
+            cancel_request.is_some()
+        },
+        "second typed approval part appears",
+    )
+    .await;
+    core.doc_host
+        .queue_message(CHAT, "held after cancel", Vec::new())
+        .expect("queue behind the cancelled turn");
+
+    // Native Cancel (no local Stop): the provider settles the turn as
+    // interrupted. The queue must be held exactly as after Stop.
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-cancel",
+        SessionCommandPayload::RespondApproval {
+            request_id: cancel_request.unwrap(),
+            decision: luna_proto::ApprovalDecision::ProviderChoice { index: 2 },
+        },
+    );
+    wait_for(
+        || {
+            !core.sessions.turn_in_flight(CHAT)
+                && entries_now(&core).iter().any(|entry| {
+                    entry.role == MessageRole::Assistant
+                        && entry.status == Some(MessageStatus::Aborted)
+                })
+        },
+        "native Cancel settles the turn as aborted",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let queued = handle
+        .doc()
+        .read_queue()
+        .unwrap()
+        .into_iter()
+        .map(|item| item.text)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        queued,
+        vec!["held after cancel".to_string()],
+        "native Cancel must hold the queued message like Stop"
+    );
+    assert_eq!(
+        *prompts.lock().unwrap(),
+        vec!["approve".to_string(), "after allow".to_string()],
+        "native Cancel must neither replay the cancelled turn nor send the held row"
+    );
+    core.shutdown().await;
 }
 
 #[tokio::test]

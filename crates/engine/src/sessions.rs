@@ -7192,6 +7192,31 @@ async fn drive_run(
         if matches!(&event, AgentEvent::Done { .. }) {
             inner.clear_codex_checkpoint(&chat_id, &run_id);
         }
+        // A provider-side interruption of the running turn (native approval
+        // Cancel reports turn/completed status=interrupted) holds follow-up
+        // work exactly like a local Stop: freeze the durable queue through
+        // the Stop fence before the Idle transition can drain it, and treat
+        // the run as interrupted so unconfirmed mailbox steers are not
+        // re-dispatched as fresh turns at run exit. Local Stop already set
+        // `interrupted` through the cancel channel and keeps its own path.
+        if turn_was_active
+            && !interrupted
+            && matches!(
+                &event,
+                AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    ..
+                }
+            )
+        {
+            interrupted = true;
+            if let Some(host) = inner.doc_host()
+                && let Err(error) = host.fence_queue_for_stop(&chat_id).await
+            {
+                tracing::warn!(chat = %chat_id, run = %run_id, %error,
+                    "provider interruption could not hold the queue");
+            }
+        }
 
         match &event {
             AgentEvent::SessionStarted {
