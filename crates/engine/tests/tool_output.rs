@@ -83,6 +83,7 @@ async fn received_tool_payloads_and_live_activity_survive_steer_and_reopen() {
                 attachments: vec![],
                 worktree: None,
                 resume: None,
+                review: None,
             },
             Some("fixture-user".into()),
         )
