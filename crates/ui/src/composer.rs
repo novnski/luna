@@ -9793,6 +9793,7 @@ impl Composer {
 
                 let command = SessionCommandPayload::Run {
                     request: RunRequest {
+                        review: None,
                         prompt: content.clone(),
                         harness: resolved.harness,
                         provider_account_id: resolved.provider_account_id.clone(),

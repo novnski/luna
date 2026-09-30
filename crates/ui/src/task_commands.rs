@@ -230,7 +230,11 @@ async fn execute_receipt_on_with_snapshot(
     let turn_fenced = (session_kind == Some("session")
         && matches!(control_kind, Some("steer" | "interrupt")))
         || matches!(session_kind, Some("sendQueuedNow" | "steerQueuedNow"));
-    let revision_fenced = revision_fenced_kind(session_kind);
+    let revision_fenced = revision_fenced_kind(session_kind)
+        || (session_kind == Some("session")
+            && intent
+                .pointer("/command/request/review")
+                .is_some_and(|review| !review.is_null()));
     let binding_fenced = binding_fenced_kind(session_kind);
     let mut params = serde_json::json!({
         "commandId": command_id,

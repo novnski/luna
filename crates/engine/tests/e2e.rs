@@ -26,6 +26,7 @@ const CHAT: &str = "chat-e2e";
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -3044,6 +3045,7 @@ async fn real_claude_sees_uploaded_image_inline() {
          Attached images (local files — open them to view):\n- {path}"
     );
     let request = RunRequest {
+        review: None,
         prompt,
         harness: None,
         provider_account_id: None,

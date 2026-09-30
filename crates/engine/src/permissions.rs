@@ -310,6 +310,7 @@ pub fn resolve_preview_for(
     requested: PermissionMode,
 ) -> PermissionPolicy {
     let mut request = RunRequest {
+        review: None,
         prompt: String::new(),
         harness: Some(harness),
         provider_account_id: None,
@@ -336,6 +337,7 @@ mod tests {
 
     fn request(mode: PermissionMode) -> RunRequest {
         RunRequest {
+            review: None,
             prompt: "safe test".into(),
             harness: Some(HarnessId::Codex),
             provider_account_id: None,

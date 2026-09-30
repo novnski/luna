@@ -143,6 +143,7 @@ where
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,

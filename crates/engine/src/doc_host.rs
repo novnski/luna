@@ -5764,6 +5764,7 @@ impl DocHost {
             request.sandbox = execution.sandbox;
             request.permission_mode = execution.permission_mode;
         }
+        request.review = None;
         request.prompt = prompt;
         request.resume = None; // dispatch re-derives the harness session
         request.attachments = item.attachments.clone();
@@ -7259,6 +7260,7 @@ impl DocHost {
                         Some("no pending input request and no prior run config".into()),
                     ));
                 };
+                request.review = None;
                 request.prompt = respond_input_prompt(&questions, answers);
                 request.resume = None; // dispatch re-derives the harness session
                 request.attachments = Vec::new();
@@ -7382,6 +7384,7 @@ impl DocHost {
                         Some("no live run and no prior run config".into()),
                     ));
                 };
+                request.review = None;
                 request.prompt = prompt;
                 request.resume = None; // dispatch re-derives the harness session
                 // A reused config must not re-inline the PREVIOUS turn's
@@ -7586,6 +7589,7 @@ impl DocHost {
         };
         let config = chat.config;
         Some(luna_proto::RunRequest {
+            review: None,
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),
             provider_account_id: config.as_ref().and_then(|c| c.provider_account_id.clone()),

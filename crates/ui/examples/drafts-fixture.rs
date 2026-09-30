@@ -1020,6 +1020,7 @@ fn l11_fixture_project(root: &Path) -> PathBuf {
 
 fn l11_run_request(project: &Path) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: "L11 synthetic history seed with visible context usage".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,
@@ -1350,6 +1351,7 @@ fn turn_recovery_project(root: &Path) -> PathBuf {
 
 fn turn_recovery_request(project: &Path, attachment: &str) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: "L10 frozen request with one attachment".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,
@@ -2687,6 +2689,7 @@ mod tests {
             invoke_luna_tool: None,
         };
         let request = RunRequest {
+            review: None,
             prompt: "fixture control test".into(),
             harness: Some(HarnessId::Mock),
             provider_account_id: None,

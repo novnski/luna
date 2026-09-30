@@ -162,6 +162,7 @@ async fn create(core: &EngineCore, root: &Path, task: &str) {
 
 fn request(root: &Path, prompt: &str) -> RunRequest {
     RunRequest {
+        review: None,
         prompt: prompt.into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,

@@ -567,31 +567,32 @@ impl TaskCommandIntent {
     }
 
     fn requires_revision(&self) -> bool {
-        matches!(
-            self,
-            Self::Rename { .. }
-                | Self::RepairWorkspaceIdentity { .. }
-                | Self::SetPinned { .. }
-                | Self::SetRead { .. }
-                | Self::SetSettled { .. }
-                | Self::SetArchived { .. }
-                | Self::MoveProject { .. }
-                | Self::ForkTask { .. }
-                | Self::EditEarlierMessage { .. }
-                | Self::RestoreHistoryRecovery { .. }
-                | Self::Delete {}
-                | Self::SetBranch { .. }
-                | Self::SetCwd { .. }
-                | Self::SetHost { .. }
-                | Self::SetConfig { .. }
-                | Self::SetModel { .. }
-                | Self::CompactContext {}
-                | Self::ClearContext {}
-                | Self::SwitchProvider { .. }
-                | Self::SetPermission { .. }
-                | Self::SetProviderAccount { .. }
-                | Self::MarkSeen { .. }
-        )
+        matches!(self, Self::Session { command: SessionCommandPayload::Run { request, .. }, .. } if request.review.is_some())
+            || matches!(
+                self,
+                Self::Rename { .. }
+                    | Self::RepairWorkspaceIdentity { .. }
+                    | Self::SetPinned { .. }
+                    | Self::SetRead { .. }
+                    | Self::SetSettled { .. }
+                    | Self::SetArchived { .. }
+                    | Self::MoveProject { .. }
+                    | Self::ForkTask { .. }
+                    | Self::EditEarlierMessage { .. }
+                    | Self::RestoreHistoryRecovery { .. }
+                    | Self::Delete {}
+                    | Self::SetBranch { .. }
+                    | Self::SetCwd { .. }
+                    | Self::SetHost { .. }
+                    | Self::SetConfig { .. }
+                    | Self::SetModel { .. }
+                    | Self::CompactContext {}
+                    | Self::ClearContext {}
+                    | Self::SwitchProvider { .. }
+                    | Self::SetPermission { .. }
+                    | Self::SetProviderAccount { .. }
+                    | Self::MarkSeen { .. }
+            )
     }
 
     fn requires_turn(&self) -> bool {
@@ -609,24 +610,25 @@ impl TaskCommandIntent {
     }
 
     fn conflicts_with_active_turn(&self) -> bool {
-        matches!(
-            self,
-            Self::SetArchived { .. }
-                | Self::RepairWorkspaceIdentity { .. }
-                | Self::SetSettled { .. }
-                | Self::MoveProject { .. }
-                | Self::ForkTask { .. }
-                | Self::EditEarlierMessage { .. }
-                | Self::RestoreHistoryRecovery { .. }
-                | Self::SetBranch { .. }
-                | Self::SetCwd { .. }
-                | Self::SetHost { .. }
-                | Self::SetConfig { .. }
-                | Self::SetModel { .. }
-                | Self::CompactContext {}
-                | Self::ClearContext {}
-                | Self::SwitchProvider { .. }
-        )
+        matches!(self, Self::Session { command: SessionCommandPayload::Run { request, .. }, .. } if request.review.is_some())
+            || matches!(
+                self,
+                Self::SetArchived { .. }
+                    | Self::RepairWorkspaceIdentity { .. }
+                    | Self::SetSettled { .. }
+                    | Self::MoveProject { .. }
+                    | Self::ForkTask { .. }
+                    | Self::EditEarlierMessage { .. }
+                    | Self::RestoreHistoryRecovery { .. }
+                    | Self::SetBranch { .. }
+                    | Self::SetCwd { .. }
+                    | Self::SetHost { .. }
+                    | Self::SetConfig { .. }
+                    | Self::SetModel { .. }
+                    | Self::CompactContext {}
+                    | Self::ClearContext {}
+                    | Self::SwitchProvider { .. }
+            )
     }
 }
 
@@ -3914,6 +3916,7 @@ impl EngineRpc {
             .ok_or_else(|| {
                 crate::EngineError::Other("task execution settings are unavailable".into())
             })?;
+        request.review = None;
         request.prompt = prompt.to_string();
         request.harness = Some(config.harness);
         request.provider_account_id = config.provider_account_id.clone();

@@ -289,6 +289,11 @@ pub struct ModelOptionChoice {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
+    /// A native Codex review, dispatched through review/start rather than an ordinary turn.
+    /// Separate reviews first create an ordinary LUNA chat and a fresh native thread;
+    /// the adapter always runs inline in that chat's own provider binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<NativeReviewRequest>,
     pub prompt: String,
     /// The harness picked at send time. Rides the command plane so
     /// claim-on-first-command (chat row still in flight on the registry
@@ -338,6 +343,58 @@ pub struct RunRequest {
     /// host ignores it and runs in `cwd` (the repo's main checkout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeSpec>,
+}
+
+/// Stable native review target contract shared by durable commands and the picker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    BaseBranch { branch: String },
+    Commit { sha: String, title: Option<String> },
+    Custom { instructions: String },
+}
+
+impl ReviewTarget {
+    pub fn validate(&self) -> Result<(), String> {
+        let (value, label) = match self {
+            Self::UncommittedChanges => return Ok(()),
+            Self::BaseBranch { branch } => (branch, "base branch"),
+            Self::Commit { sha, .. } => (sha, "commit"),
+            Self::Custom { instructions } => (instructions, "review instructions"),
+        };
+        if value.trim().is_empty() {
+            return Err(format!("Enter a {label} before starting the review"));
+        }
+        if value.contains('\0') {
+            return Err(format!("The {label} contains an invalid null character"));
+        }
+        Ok(())
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::UncommittedChanges => "Review working changes".into(),
+            Self::BaseBranch { branch } => format!("Review changes against {branch}"),
+            Self::Commit { sha, title } => format!(
+                "Review commit {}{}",
+                sha,
+                title
+                    .as_ref()
+                    .map(|title| format!(": {title}"))
+                    .unwrap_or_default()
+            ),
+            Self::Custom { instructions } => {
+                format!("Review with custom instructions:\n\n{instructions}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeReviewRequest {
+    pub target: ReviewTarget,
 }
 
 /// Isolated-worktree directive riding [`RunRequest`]. The worktree is created
@@ -606,6 +663,14 @@ pub enum AgentEvent {
         /// Harness-native session id (used for resume).
         session_id: String,
         assistant_message_id: String,
+    },
+    /// Native review lifecycle. Completion text is authoritative and folded by ID,
+    /// so started/completed replay never duplicates findings in the transcript.
+    #[serde(rename_all = "camelCase")]
+    NativeReview {
+        id: String,
+        completed: bool,
+        text: String,
     },
     TextDelta {
         text: String,

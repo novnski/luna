@@ -31,6 +31,7 @@ pub const NATIVE_CAPABILITIES: &[&str] = &[
     "thread/unarchive",
     "thread/fork",
     "thread/compact/start",
+    "review/start",
 ];
 
 #[derive(Debug, Clone, PartialEq)]

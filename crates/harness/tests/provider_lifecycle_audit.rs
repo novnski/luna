@@ -97,6 +97,7 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
         }),
     };
     let mut request = RunRequest {
+        review: None,
         prompt: "disposable QA".into(),
         harness: None,
         provider_account_id: None,

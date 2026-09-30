@@ -336,6 +336,7 @@ mod tests {
 
     fn run_request() -> RunRequest {
         RunRequest {
+            review: None,
             prompt: "hello".into(),
             harness: None,
             provider_account_id: None,
