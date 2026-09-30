@@ -2192,6 +2192,7 @@ mod tests {
 
     fn test_chat() -> Chat {
         Chat {
+            child_thread: None,
             id: "chat".into(),
             device_id: "host".into(),
             title: None,

@@ -172,6 +172,8 @@ pub struct ChatSettlementOverride {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_thread: Option<crate::ChildThread>,
     pub id: String,
     /// Owning (host) device.
     pub device_id: String,

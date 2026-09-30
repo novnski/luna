@@ -314,6 +314,18 @@ struct HistoryReviewToken {
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum TaskCommandIntent {
     #[serde(rename_all = "camelCase")]
+    CreateChildChat {
+        parent_task_id: String,
+        request: luna_proto::CreateChildThreadRequest,
+    },
+    ChildOutcome {
+        outcome: luna_proto::ChildThreadOutcome,
+    },
+    #[serde(rename_all = "camelCase")]
+    ChildOutcomeDelivered {
+        outcome_id: String,
+    },
+    #[serde(rename_all = "camelCase")]
     CreateChat {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         side_parent_id: Option<String>,
@@ -543,6 +555,9 @@ fn commit_validated_project_move(
 impl TaskCommandIntent {
     fn name(&self) -> &'static str {
         match self {
+            Self::CreateChildChat { .. } => "createChildChat",
+            Self::ChildOutcome { .. } => "childOutcome",
+            Self::ChildOutcomeDelivered { .. } => "childOutcomeDelivered",
             Self::CreateChat { .. } => "createChat",
             Self::RepairWorkspaceIdentity { .. } => "repairWorkspaceIdentity",
             Self::Session { command, .. } => match command {
@@ -630,7 +645,10 @@ impl TaskCommandIntent {
     }
 
     fn requires_binding_fence(&self) -> bool {
-        !matches!(self, Self::CreateChat { .. } | Self::SetActivity { .. })
+        !matches!(
+            self,
+            Self::CreateChildChat { .. } | Self::CreateChat { .. } | Self::SetActivity { .. }
+        )
     }
 
     fn conflicts_with_active_turn(&self) -> bool {
@@ -1208,6 +1226,7 @@ pub struct EngineRpc {
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
     cleanup_boot_id: String,
+    new_task_preferences_path: Option<std::path::PathBuf>,
     activity_cancel: CancellationToken,
 }
 
@@ -1513,6 +1532,7 @@ impl EngineRpc {
             local_import: None,
             engine_info,
             cleanup_boot_id,
+            new_task_preferences_path: None,
             activity_cancel: CancellationToken::new(),
         };
         rpc.spawn_activity_bootstrap();
@@ -4827,6 +4847,69 @@ impl EngineRpc {
                     .await?;
                 Ok(Some(receipt))
             }
+            TaskCommandIntent::ChildOutcome { outcome } => self
+                .commit_task_projection(command_id, task_id, |doc| {
+                    let mut chat = doc
+                        .chat(task_id)?
+                        .ok_or_else(|| crate::EngineError::Other("Child is missing".into()))?;
+                    let child = chat
+                        .child_thread
+                        .as_mut()
+                        .ok_or_else(|| crate::EngineError::Other("Task is not a child".into()))?;
+                    if !child.outcomes.iter().any(|entry| entry.id == outcome.id) {
+                        let id = outcome.id.clone();
+                        child.outcomes.push(outcome);
+                        child_threads::compact_child_outcomes(child);
+                        // Undelivered outcomes accumulate while a parent is
+                        // unavailable; drop the summary before exceeding the
+                        // synced row budget, and refuse rather than wedge sync.
+                        if child_threads::child_row_bytes(&chat)
+                            > child_threads::CHILD_ROW_BUDGET_BYTES
+                            && let Some(child) = chat.child_thread.as_mut()
+                            && let Some(entry) =
+                                child.outcomes.iter_mut().find(|entry| entry.id == id)
+                        {
+                            entry.summary = child_threads::CHILD_SUMMARY_OMITTED.into();
+                        }
+                        if child_threads::child_row_bytes(&chat)
+                            > child_threads::CHILD_ROW_BUDGET_BYTES
+                        {
+                            return Err(crate::EngineError::Other(
+                                "Child outcome history is at its synced size limit; open the parent to deliver pending results".into(),
+                            ));
+                        }
+                    }
+                    doc.upsert_chat(&chat)?;
+                    Ok(())
+                })
+                .map(|(_, receipt)| Some(receipt)),
+            TaskCommandIntent::ChildOutcomeDelivered { outcome_id } => self
+                .commit_task_projection(command_id, task_id, |doc| {
+                    let mut chat = doc
+                        .chat(task_id)?
+                        .ok_or_else(|| crate::EngineError::Other("Child is missing".into()))?;
+                    let child = chat
+                        .child_thread
+                        .as_mut()
+                        .ok_or_else(|| crate::EngineError::Other("Task is not a child".into()))?;
+                    if let Some(outcome) = child
+                        .outcomes
+                        .iter_mut()
+                        .find(|entry| entry.id == outcome_id)
+                    {
+                        outcome.delivered = true;
+                    }
+                    child_threads::compact_child_outcomes(child);
+                    doc.upsert_chat(&chat)?;
+                    Ok(())
+                })
+                .map(|(_, receipt)| Some(receipt)),
+            TaskCommandIntent::CreateChildChat {
+                parent_task_id,
+                request,
+            } => self
+                .apply_child_creation(command_id, task_id, &parent_task_id, request, send_fence)
+                .map(Some),
             TaskCommandIntent::CreateChat {
                 side_parent_id,
                 space_id,
@@ -4882,6 +4965,7 @@ impl EngineRpc {
                                 })?;
                                 let host_device = space.device_id.clone();
                                 let child = Chat {
+                                    child_thread: None,
                                     id: owned_task_id.clone(),
                                     device_id: host_device,
                                     title: side_parent_id.as_ref().map(|_| "Side chat".to_string()),
@@ -5151,6 +5235,7 @@ impl EngineRpc {
                                 move |registry| {
                                     let side_parent = source_for_registry.id.clone();
                                     let child = Chat {
+                                        child_thread: None,
                                         id: new_task_for_registry,
                                         device_id: source_for_registry.device_id,
                                         title: target_title,
@@ -7046,6 +7131,7 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_MODELS
             | methods::LIST_COMMANDS
             | methods::QUEUE_COMMAND
+            | methods::CREATE_CHILD_THREAD
             | methods::EXECUTE_TASK_COMMAND
             | methods::GET_TASK_COMMAND_RECEIPT
             | methods::GET_TASK_CLEANUP
@@ -7689,9 +7775,30 @@ impl CrossTaskBackend for EngineRpc {
             durable_queue: true,
             approved_queue: true,
             event_wait: true,
+            child_creation: true,
         }
     }
 
+    async fn child_creation_snapshot(
+        &self,
+        request: &luna_proto::CreateChildThreadRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+        self.validate_child_authority(request, authority)?;
+        self.current_task_command_snapshot(&crate::cross_task_tools::child_task_id(
+            &authority.caller_task_id,
+            &request.idempotency_key,
+        ))
+        .map_err(|_| CrossTaskError::Backend("child snapshot unavailable".into()))
+    }
+    async fn create_child(
+        &self,
+        request: luna_proto::CreateChildThreadRequest,
+        authority: &CrossTaskAuthority,
+        fence: &crate::cross_task_tools::ApprovedChildFence,
+    ) -> Result<luna_proto::ChildThreadReceipt, CrossTaskError> {
+        self.create_child_approved(request, authority, fence).await
+    }
     async fn task(
         &self,
         task_id: &str,
@@ -9098,8 +9205,34 @@ impl RpcService for EngineRpc {
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&view)
             }
+            methods::CREATE_CHILD_THREAD => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct Params {
+                    parent_task_id: String,
+                    request: luna_proto::CreateChildThreadRequest,
+                }
+                let p: Params = parse_params(params)?;
+                let receipt = self
+                    .create_child_manual(p.parent_task_id, p.request)
+                    .await?;
+                RpcReply::value(&receipt)
+            }
             methods::EXECUTE_TASK_COMMAND => {
                 let command: TaskCommandParams = parse_params(params)?;
+                // Child lineage, outcomes and delivery marks are engine-owned.
+                // Clients use CreateChildThread; they never forge the outbox.
+                if matches!(
+                    command.intent,
+                    TaskCommandIntent::CreateChildChat { .. }
+                        | TaskCommandIntent::ChildOutcome { .. }
+                        | TaskCommandIntent::ChildOutcomeDelivered { .. }
+                ) {
+                    return Err(RpcError::Failed(
+                        "Child chat creation and outcomes are engine-owned; use CreateChildThread"
+                            .into(),
+                    ));
+                }
                 let receipt = self.execute_task_command(command, false).await?;
                 RpcReply::value(&receipt)
             }
@@ -11536,6 +11669,7 @@ mod tests {
 
     fn move_test_chat() -> Chat {
         Chat {
+            child_thread: None,
             id: "task".into(),
             device_id: "device".into(),
             title: Some("Task".into()),
@@ -12073,3 +12207,6 @@ mod context_usage_tests {
         assert!(stream.next().await.unwrap()["contextUsage"].is_null());
     }
 }
+
+#[path = "child_threads.rs"]
+mod child_threads;

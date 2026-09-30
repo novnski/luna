@@ -209,3 +209,73 @@ mod tests {
         );
     }
 }
+
+/// Fresh, visible same-project child. Parent authority is never a tool argument.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateChildThreadRequest {
+    pub prompt: String,
+    pub idempotency_key: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<crate::ReasoningLevel>,
+    /// Explicit existing checkout; this version never materializes a worktree.
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default = "child_reports_default")]
+    pub report_results: bool,
+    /// Consent to queue a new parent turn, shown in the one-use approval.
+    #[serde(default)]
+    pub continue_parent: bool,
+}
+fn child_reports_default() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildThreadReceipt {
+    pub task_id: String,
+    pub parent_task_id: String,
+    pub command: CommandReceipt,
+    pub initial_message_id: String,
+    /// Durable intent/queue acceptance is not provider acceptance.
+    pub startup_state: String,
+}
+
+/// Engine-owned synced lineage and durable startup intent. Independent from
+/// source/fork lineage and destructive lifecycle ownership.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildThread {
+    pub parent_task_id: String,
+    pub creation_command_id: String,
+    #[serde(default)]
+    pub permission_ceiling: crate::PermissionMode,
+    #[serde(default)]
+    pub sandbox_ceiling: Option<crate::SandboxLevel>,
+    pub initial_message_id: String,
+    pub initial_prompt: String,
+    pub report_results: bool,
+    pub continue_parent: bool,
+    #[serde(default)]
+    pub outcomes: Vec<ChildThreadOutcome>,
+    /// Transcript turns created at or before this time were reported and
+    /// their delivered outcomes compacted away, keeping the synced row bounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_floor_ms: Option<i64>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildThreadOutcome {
+    pub id: String,
+    pub turn_id: String,
+    pub outcome: String,
+    pub summary: String,
+    pub created_at_ms: i64,
+    #[serde(default)]
+    pub delivered: bool,
+}

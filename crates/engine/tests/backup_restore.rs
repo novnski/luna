@@ -592,6 +592,7 @@ fn add_synthetic_task(root: &Path, room_gen: Option<u32>) {
         .unwrap();
     registry
         .upsert_chat(&Chat {
+            child_thread: None,
             id: "synthetic-task".into(),
             device_id: "synthetic-device".into(),
             title: Some("Synthetic task".into()),

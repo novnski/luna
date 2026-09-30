@@ -705,6 +705,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
             .unwrap();
         legacy
             .upsert_chat(&Chat {
+                child_thread: None,
                 id: "chat-legacy".into(),
                 device_id: "dev-a".into(),
                 title: Some("Migrated chat".into()),

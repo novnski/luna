@@ -970,6 +970,12 @@ impl RegistryDoc {
         if let Some(parent) = side_parent {
             set.insert("sideChatParentId".into(), json!(parent));
         }
+        // Lineage is set once at creation and never cleared. Omitting the key
+        // for ordinary rows keeps a full-row upsert built without it (or from
+        // an older peer) from clocking a delete over a child's lineage/outbox.
+        if let Some(child) = &chat.child_thread {
+            set.insert("childThread".into(), serde_json::to_value(child)?);
+        }
         self.write(KIND_CHATS, &chat.id.clone(), OpKind::Upsert, set);
         Ok(())
     }
@@ -1388,53 +1394,53 @@ impl RegistryDoc {
                 Some(config) => serde_json::to_value(config)?,
                 None => Value::Null,
             };
-            seed(
-                KIND_CHATS,
-                &chat.id,
-                ms,
-                fields([
-                    ("id", json!(chat.id)),
-                    ("deviceId", json!(chat.device_id)),
-                    ("title", opt_str(chat.title.as_deref())),
-                    ("archived", json!(chat.archived)),
-                    (
-                        "settlementOverride",
-                        chat.settlement_override
-                            .as_ref()
-                            .map(serde_json::to_value)
-                            .transpose()?
-                            .unwrap_or(Value::Null),
-                    ),
-                    (
-                        "pinnedOrder",
-                        chat.pinned_order
-                            .as_deref()
-                            .map(|order| json!(order))
-                            .unwrap_or(Value::Null),
-                    ),
-                    ("cwd", opt_str(chat.cwd.as_deref())),
-                    ("branch", opt_str(chat.branch.as_deref())),
-                    ("checkoutId", opt_str(chat.checkout_id.as_deref())),
-                    ("config", config),
-                    (
-                        "lastMessagePreview",
-                        opt_str(chat.last_message_preview.as_deref()),
-                    ),
-                    ("lastMessageAt", opt_ms(chat.last_message_at)),
-                    ("createdAt", json!(chat.created_at.timestamp_millis())),
-                    (
-                        "harnessSessionId",
-                        opt_str(chat.harness_session_id.as_deref()),
-                    ),
-                    (
-                        "harnessSessionCwd",
-                        opt_str(chat.harness_session_cwd.as_deref()),
-                    ),
-                    ("spaceId", opt_str(chat.space_id.as_deref())),
-                    ("lastSeenAt", opt_ms(chat.last_seen_at)),
-                    ("manuallyUnread", json!(chat.manually_unread)),
-                ]),
-            );
+            let mut row = fields([
+                ("id", json!(chat.id)),
+                ("deviceId", json!(chat.device_id)),
+                ("title", opt_str(chat.title.as_deref())),
+                ("archived", json!(chat.archived)),
+                (
+                    "settlementOverride",
+                    chat.settlement_override
+                        .as_ref()
+                        .map(serde_json::to_value)
+                        .transpose()?
+                        .unwrap_or(Value::Null),
+                ),
+                (
+                    "pinnedOrder",
+                    chat.pinned_order
+                        .as_deref()
+                        .map(|order| json!(order))
+                        .unwrap_or(Value::Null),
+                ),
+                ("cwd", opt_str(chat.cwd.as_deref())),
+                ("branch", opt_str(chat.branch.as_deref())),
+                ("checkoutId", opt_str(chat.checkout_id.as_deref())),
+                ("config", config),
+                (
+                    "lastMessagePreview",
+                    opt_str(chat.last_message_preview.as_deref()),
+                ),
+                ("lastMessageAt", opt_ms(chat.last_message_at)),
+                ("createdAt", json!(chat.created_at.timestamp_millis())),
+                (
+                    "harnessSessionId",
+                    opt_str(chat.harness_session_id.as_deref()),
+                ),
+                (
+                    "harnessSessionCwd",
+                    opt_str(chat.harness_session_cwd.as_deref()),
+                ),
+                ("spaceId", opt_str(chat.space_id.as_deref())),
+                ("lastSeenAt", opt_ms(chat.last_seen_at)),
+                ("manuallyUnread", json!(chat.manually_unread)),
+            ]);
+            // Seeding must not drop persistent child lineage/outbox.
+            if let Some(child) = &chat.child_thread {
+                row.insert("childThread".into(), serde_json::to_value(child)?);
+            }
+            seed(KIND_CHATS, &chat.id, ms, row);
         }
         for session in &state.sessions {
             let ms = newest(&[Some(session.updated_at), session.started_at]);

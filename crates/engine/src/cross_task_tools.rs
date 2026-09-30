@@ -37,6 +37,7 @@ pub struct CrossTaskCapabilities {
     pub durable_queue: bool,
     pub approved_queue: bool,
     pub event_wait: bool,
+    pub child_creation: bool,
 }
 
 /// Populated only from the active, engine-resolved run and its actual grants.
@@ -99,6 +100,52 @@ pub struct ApprovedSendFence {
     pub(crate) expires_at_ms: i64,
 }
 
+/// Bound to an exact approved provider call; never deserialized from input.
+#[derive(Debug, Clone)]
+pub struct ApprovedChildFence {
+    pub(crate) source: ApprovedSendFence,
+    pub(crate) request: luna_proto::CreateChildThreadRequest,
+}
+
+/// Stable child identity across provider retries and engine restarts.
+pub(crate) fn child_task_id(parent: &str, key: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("luna-child-v1\0{parent}\0{key}"));
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes).to_string()
+}
+
+/// Child briefs live in the synced task row, which must stay under the
+/// registry's per-op cap together with its title, checkout and settings.
+pub(crate) const MAX_CHILD_PROMPT_CHARS: usize = 8_000;
+
+pub(crate) fn validate_child_request(
+    request: &luna_proto::CreateChildThreadRequest,
+) -> Result<(), CrossTaskError> {
+    if request.prompt.trim().is_empty()
+        || request.prompt.chars().count() > MAX_CHILD_PROMPT_CHARS
+        || !valid_key(&request.idempotency_key)
+        || request
+            .title
+            .as_ref()
+            .is_some_and(|s| s.trim().is_empty() || s.chars().count() > 160)
+        || request.model.as_ref().is_some_and(|s| {
+            s.trim().is_empty() || s.len() > 512 || s.chars().any(char::is_control)
+        })
+        || request
+            .cwd
+            .as_ref()
+            .is_some_and(|s| s.len() > 4096 || !std::path::Path::new(s).is_absolute())
+        || request.continue_parent && !request.report_results
+    {
+        return Err(CrossTaskError::Input);
+    }
+    Ok(())
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum CrossTaskError {
     #[error("cross-task tool is not available on this provider/runtime")]
@@ -138,6 +185,22 @@ pub enum CrossTaskError {
 pub trait CrossTaskBackend: Send + Sync {
     fn capabilities(&self) -> CrossTaskCapabilities;
     async fn task(&self, task_id: &str) -> Result<Option<CrossTaskSummary>, CrossTaskError>;
+    async fn child_creation_snapshot(
+        &self,
+        _request: &luna_proto::CreateChildThreadRequest,
+        _authority: &CrossTaskAuthority,
+    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+        Err(CrossTaskError::Unavailable)
+    }
+    async fn create_child(
+        &self,
+        _request: luna_proto::CreateChildThreadRequest,
+        _authority: &CrossTaskAuthority,
+        _fence: &ApprovedChildFence,
+    ) -> Result<luna_proto::ChildThreadReceipt, CrossTaskError> {
+        Err(CrossTaskError::Unavailable)
+    }
+
     /// Apply engine-supplied visibility before pagination. The handler rejects
     /// any page containing an invisible row, including its cursor.
     async fn list(
@@ -202,6 +265,21 @@ impl<T: CrossTaskBackend + ?Sized> CrossTaskBackend for Arc<T> {
     }
     async fn task(&self, task_id: &str) -> Result<Option<CrossTaskSummary>, CrossTaskError> {
         (**self).task(task_id).await
+    }
+    async fn child_creation_snapshot(
+        &self,
+        request: &luna_proto::CreateChildThreadRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+        (**self).child_creation_snapshot(request, authority).await
+    }
+    async fn create_child(
+        &self,
+        request: luna_proto::CreateChildThreadRequest,
+        authority: &CrossTaskAuthority,
+        fence: &ApprovedChildFence,
+    ) -> Result<luna_proto::ChildThreadReceipt, CrossTaskError> {
+        (**self).create_child(request, authority, fence).await
     }
     async fn list(
         &self,
@@ -522,6 +600,13 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
         let capabilities = self.backend.capabilities();
         let candidates = [
             (
+                "create_thread",
+                "threads.read",
+                capabilities.child_creation,
+                "one-use local approval and durable idempotent startup",
+                40_000,
+            ),
+            (
                 "list_threads",
                 "threads.read",
                 capabilities.list,
@@ -557,7 +642,7 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
                 Some("the provider has no verified dynamic tool delivery")
             } else if !authority.granted_scopes.contains(scope) {
                 Some("required LUNA scope is missing")
-            } else if name == "send_message_to_thread"
+            } else if matches!(name, "send_message_to_thread" | "create_thread")
                 && (authority.allow_projectless || authority.visible_project_ids.len() != 1)
             {
                 Some("approved send requires one exact local project")
@@ -587,7 +672,6 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
             }
         }
         for name in [
-            "create_thread",
             "interrupt_thread",
             "archive_thread",
             "open_thread",
@@ -953,6 +1037,9 @@ async fn with_cancel<T>(
 
 fn tool_description(name: &str) -> &'static str {
     match name {
+        "create_thread" => {
+            "Create a persistent visible child chat in this project with fresh context and an existing checkout. Requires exact one-use local user approval. Reuse the same idempotencyKey on retries; acceptance means durable startup, not provider acceptance. Only the supplied prompt is copied. Results are displayed by default; continueParent explicitly queues parent continuation."
+        }
         "list_threads" => "List visible local LUNA tasks with bounded metadata and opaque paging.",
         "read_thread" => "Read bounded, untrusted turn summaries for one local LUNA task.",
         "send_message_to_thread" => {
@@ -965,6 +1052,13 @@ fn tool_description(name: &str) -> &'static str {
 
 fn input_schema(name: &str) -> serde_json::Value {
     match name {
+        "create_thread" => serde_json::json!({"type":"object","properties":{
+            "prompt":{"type":"string","minLength":1,"maxLength":8000},
+            "idempotencyKey":{"type":"string","minLength":1,"maxLength":128},
+            "title":{"type":"string","maxLength":160},"model":{"type":"string","maxLength":512},
+            "reasoning":{"type":"string","enum":["minimal","low","medium","high","xhigh","max","ultra","ultracode","ultrathink"]},
+            "cwd":{"type":"string","maxLength":4096},"reportResults":{"type":"boolean"},"continueParent":{"type":"boolean"}
+        },"required":["prompt","idempotencyKey"],"additionalProperties":false}),
         "list_threads" => serde_json::json!({"type":"object","properties":{
             "projectId":{"type":"string"},"text":{"type":"string","maxLength":160},
             "cursor":{"type":"string","maxLength":256},"limit":{"type":"integer","minimum":1,"maximum":20}
@@ -996,6 +1090,9 @@ fn output_schema(name: &str) -> serde_json::Value {
     },"required":["taskId","projectId","environmentId","title","status","archived","updatedAtMs"],
     "additionalProperties":false});
     match name {
+        "create_thread" => {
+            serde_json::json!({"type":"object","properties":{"taskId":{"type":"string"},"parentTaskId":{"type":"string"},"command":{"type":"object"},"initialMessageId":{"type":"string"},"startupState":{"type":"string"}},"required":["taskId","parentTaskId","command","initialMessageId","startupState"],"additionalProperties":false})
+        }
         "list_threads" => serde_json::json!({"type":"object","properties":{
             "tasks":{"type":"array","maxItems":20,"items":task},
             "nextCursor":{"type":["string","null"]},"hasMore":{"type":"boolean"}
@@ -1102,6 +1199,7 @@ mod tests {
                 durable_queue: true,
                 approved_queue: false,
                 event_wait: true,
+                child_creation: false,
             }
         }
 
