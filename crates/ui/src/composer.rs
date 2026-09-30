@@ -10935,6 +10935,7 @@ impl Composer {
                                 },
                                 "wizard-open-url",
                             )
+                            .id("wizard-open-url")
                             .on_click(cx.listener(|this, _, _, cx| this.wizard_open_mcp_url(cx))),
                         )
                     }),
@@ -10969,6 +10970,7 @@ impl Composer {
                                         "Decline",
                                         "wizard-mcp-decline",
                                     )
+                                    .id("wizard-mcp-decline")
                                     .on_click(cx.listener(
                                         |this, _, _, cx| this.wizard_mcp_action("Decline", cx),
                                     )),
@@ -10979,6 +10981,7 @@ impl Composer {
                                         "Cancel",
                                         "wizard-mcp-cancel",
                                     )
+                                    .id("wizard-mcp-cancel")
                                     .on_click(cx.listener(
                                         |this, _, _, cx| this.wizard_mcp_action("Cancel", cx),
                                     )),
