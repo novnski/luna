@@ -616,6 +616,13 @@ impl Composer {
             .then(|| self.mention.results.len() + self.mention.native_results.len())
     }
 
+    pub(super) fn native_retry_focused(&self, window: &Window) -> bool {
+        self.integrations
+            .retry_focus
+            .as_ref()
+            .is_some_and(|focus| focus.is_focused(window))
+    }
+
     pub(super) fn retry_focus_handle(&mut self, cx: &mut Context<Self>) -> FocusHandle {
         self.integrations
             .retry_focus

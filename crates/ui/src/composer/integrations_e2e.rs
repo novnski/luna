@@ -43,6 +43,7 @@ impl Composer {
             })
             .collect();
         json!({
+            "open": self.mention.token.is_some(),
             "active": self.mention.active,
             "itemCount": self.mention_item_count(),
             "retryIndex": self.native_retry_index(),
@@ -879,6 +880,11 @@ pub async fn run_integrations_picker_e2e(
     anyhow::ensure!(
         clicked,
         "keyboard activation of the focused Retry did not retry"
+    );
+    let still_open = popup(&composer, cx);
+    anyhow::ensure!(
+        still_open["open"] == true && !still_open["retryIndex"].is_null(),
+        "the completion closed after Retry was activated from focus: {still_open}"
     );
 
     Ok(json!({
