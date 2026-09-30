@@ -5,7 +5,6 @@ use crate::cross_task_tools::{
     ApprovedChildFence, ApprovedSendFence, child_task_id, validate_child_request,
 };
 use luna_proto::{ChildThread, ChildThreadOutcome, ChildThreadReceipt, CreateChildThreadRequest};
-use sha2::Digest as _;
 use std::sync::Arc;
 
 #[derive(Default, Deserialize)]
@@ -391,13 +390,12 @@ impl EngineRpc {
                 return format!("queue-{:?}", receipt.status).to_lowercase();
             }
             if let Ok(handle) = self.doc_host.open(id) {
-                if let Ok(queue) = handle.doc().read_queue() {
-                    if let Some(item) = queue
+                if let Ok(queue) = handle.doc().read_queue()
+                    && let Some(item) = queue
                         .iter()
                         .find(|item| item.id == child.initial_message_id)
-                    {
-                        return format!("queue-{:?}", item.status).to_lowercase();
-                    }
+                {
+                    return format!("queue-{:?}", item.status).to_lowercase();
                 }
                 if let Some(session) = self
                     .sessions
@@ -524,38 +522,38 @@ impl EngineRpc {
             }
             // Attention is keyed by the engine's current turn, not timestamps
             // that change on status heartbeats.
-            if let Some(session) = self.sessions.session_status(&chat.id) {
-                if matches!(
+            if let Some(session) = self.sessions.session_status(&chat.id)
+                && matches!(
                     session.status,
                     luna_proto::SessionStatus::AwaitingInput
                         | luna_proto::SessionStatus::AwaitingApproval
                         | luna_proto::SessionStatus::Errored
-                ) {
-                    let turn = entries
-                        .iter()
-                        .rev()
-                        .find(|entry| entry.role == MessageRole::Assistant);
-                    let turn_id = turn
-                        .map(|entry| entry.id.clone())
-                        .unwrap_or_else(|| child.initial_message_id.clone());
-                    let outcome = format!("{:?}", session.status).to_lowercase();
-                    self.persist_child_outcome(
-                        &chat.id,
-                        ChildThreadOutcome {
-                            id: format!("{}:{}:{}", chat.id, turn_id, outcome),
-                            turn_id,
-                            outcome,
-                            summary:
-                                "Open the child chat to inspect its current input or failure state."
-                                    .into(),
-                            created_at_ms: turn
-                                .map(|entry| entry.created_at)
-                                .unwrap_or(chat.created_at.timestamp_millis()),
-                            delivered: false,
-                        },
-                    )
-                    .await?;
-                }
+                )
+            {
+                let turn = entries
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.role == MessageRole::Assistant);
+                let turn_id = turn
+                    .map(|entry| entry.id.clone())
+                    .unwrap_or_else(|| child.initial_message_id.clone());
+                let outcome = format!("{:?}", session.status).to_lowercase();
+                self.persist_child_outcome(
+                    &chat.id,
+                    ChildThreadOutcome {
+                        id: format!("{}:{}:{}", chat.id, turn_id, outcome),
+                        turn_id,
+                        outcome,
+                        summary:
+                            "Open the child chat to inspect its current input or failure state."
+                                .into(),
+                        created_at_ms: turn
+                            .map(|entry| entry.created_at)
+                            .unwrap_or(chat.created_at.timestamp_millis()),
+                        delivered: false,
+                    },
+                )
+                .await?;
             }
             let current = self
                 .workspace
