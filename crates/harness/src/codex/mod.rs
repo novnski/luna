@@ -69,8 +69,9 @@ use crate::{
 };
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, to_effort};
 use normalize::{
-    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_type,
-    notification_thread_id, route_child_notification, turn_error_message, turn_id, usage_event,
+    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_turn_id,
+    item_type, notification_thread_id, route_child_notification, turn_error_message, turn_id,
+    usage_event,
 };
 
 /// Engine-only model-option keys. They are consumed by this adapter and never
@@ -1651,9 +1652,11 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
-                        if let Some(message_id) = native_steers.record(item, &turn_id(&params)) {
+                        // Item notifications carry the root `turnId`, not `turn.id`.
+                        let item_turn = item_turn_id(&params);
+                        if let Some(message_id) = native_steers.record(item, &item_turn) {
                             if !emit_recorded_steer(&event_tx, &mut assistant_message_id, message_id,
-                                router.active_id() != Some(turn_id(&params).as_str())).await {
+                                router.active_id() != Some(item_turn.as_str())).await {
                                 break 'main;
                             }
                             continue;

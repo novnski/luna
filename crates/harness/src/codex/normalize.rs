@@ -902,6 +902,13 @@ pub(crate) fn item_id(params: &Value) -> String {
     str_field(params, &["itemId", "item_id"])
 }
 
+/// Root `params.turnId` on item/* notifications. The app-server v2 schema
+/// (`ItemStartedNotification`/`ItemCompletedNotification`) requires it and
+/// carries no `turn` object, so [`turn_id`] would always read "" here.
+pub(crate) fn item_turn_id(params: &Value) -> String {
+    str_field(params, &["turnId", "turn_id"])
+}
+
 /// `params.turn.id` on the turn/* lifecycle notifications.
 pub(crate) fn turn_id(params: &Value) -> String {
     params
