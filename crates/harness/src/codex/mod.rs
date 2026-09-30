@@ -2241,6 +2241,7 @@ fn codex_permission_settings(
 /// Deliver a steer as a fresh `turn/start` on the same thread (the fallback
 /// leg of the steer race, and the between-turns delivery path). Returns false
 /// when the loop should end (turn/start failed or the consumer hung up).
+#[allow(clippy::too_many_arguments)]
 async fn steer_as_new_turn(
     client: &RpcClient,
     mut params: Value,
