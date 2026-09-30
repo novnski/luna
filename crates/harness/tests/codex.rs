@@ -1516,7 +1516,7 @@ async fn approvals_round_trip_as_input_requests() {
     assert!(asked[0].question.contains("rm -rf /tmp/x"));
     assert_eq!(
         asked[0].options,
-        vec!["Deny", "Allow once", "Allow for task", "Cancel"]
+        vec!["Deny", "Allow once", "Allow for session", "Cancel turn"]
     );
     assert_eq!(
         asked[0].approval.as_ref().unwrap().provider,
@@ -1685,7 +1685,7 @@ async fn computer_use_without_luna_task_binding_remains_unavailable() {
 async fn provider_permission_event_uses_exact_turn_and_one_request_grant() {
     let home = tempfile::tempdir().unwrap();
     for (scenario, choice) in [
-        ("scenario:computer-use:permission-allow", "Allow once"),
+        ("scenario:computer-use:permission-allow", "Allow for turn"),
         ("scenario:computer-use:permission-deny", "Deny"),
     ] {
         let (controls, _steer, _token) = controls(choice);

@@ -8109,6 +8109,7 @@ mod luna_approval_recovery_tests {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: i64::MAX,
                 supports_task_allowance: false,
+                details: None,
             }),
         }
     }

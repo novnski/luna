@@ -1354,6 +1354,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }])
                 .await
@@ -1498,6 +1499,367 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
 }
 
 #[tokio::test]
+async fn structured_approval_preserves_details_and_rejects_unadvertised_choice() {
+    struct ApprovalHarness {
+        prompts: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    #[async_trait]
+    impl Harness for ApprovalHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Approval"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            self.prompts.lock().unwrap().push(request.prompt.clone());
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            // Like a real adapter, confirm the provider session first: that is
+            // what settles a claimed queue row into the transcript.
+            let started = AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: vec![],
+                cwd: request.cwd.clone(),
+                session_id: "hs-1".into(),
+                assistant_message_id: format!("a-{}", request.prompt),
+            };
+            tokio::spawn(async move {
+                let _ = tx.send(Ok(started)).await;
+                let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
+                    id: "approval-question".into(),
+                    header: "Approve command".into(),
+                    question: "Allow echo safe?".into(),
+                    options: vec!["Deny".into(), "Allow once".into(), "Cancel turn".into()],
+                    multi_select: false,
+                    mcp: None,
+                    approval: Some(luna_proto::ApprovalRequest {
+                        provider_request_id: "provider-approval".into(),
+                        provider: HarnessId::Mock,
+                        turn_id: None,
+                        machine_name: "test-machine".into(),
+                        action_kind: luna_proto::ApprovalActionKind::Command,
+                        summary: "echo safe".into(),
+                        requested_scope: luna_proto::PermissionScope::Workspace,
+                        expires_at_ms: i64::MAX,
+                        supports_task_allowance: false,
+                        details: Some(luna_proto::ApprovalDetails {
+                            cwd: Some("/tmp/permission-fixture".into()),
+                            command: Some("echo safe".into()),
+                            choices: vec![
+                                luna_proto::ApprovalChoice {
+                                    label: "Deny".into(),
+                                    scope: "none".into(),
+                                    description: "Reject".into(),
+                                },
+                                luna_proto::ApprovalChoice {
+                                    label: "Allow once".into(),
+                                    scope: "request".into(),
+                                    description: "Only this request".into(),
+                                },
+                                luna_proto::ApprovalChoice {
+                                    label: "Cancel turn".into(),
+                                    scope: "turn".into(),
+                                    description: "Interrupt this turn".into(),
+                                },
+                            ],
+                            ..Default::default()
+                        }),
+                    }),
+                }])
+                .await
+                .unwrap_or_default();
+                let picked = answers
+                    .first()
+                    .and_then(|answer| answer.labels.first())
+                    .cloned()
+                    .unwrap_or_else(|| "none".into());
+                if picked == "Cancel turn" {
+                    // Mirrors the Codex adapter: native Cancel ends the turn
+                    // with turn/completed status=interrupted and no local Stop.
+                    let _ = tx.send(Ok(done(DoneStatus::Interrupted))).await;
+                    return;
+                }
+                let _ = tx
+                    .send(Ok(AgentEvent::TextDelta {
+                        text: format!("approval {picked}"),
+                    }))
+                    .await;
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let core = assemble(
+        dir.path(),
+        Arc::new(ApprovalHarness {
+            prompts: prompts.clone(),
+        }),
+    );
+    // A real chat row gives queued follow-ups the same local authority and
+    // run configuration the composer queue uses.
+    core.workspace
+        .create_space("space-approval", &core.device_id, "/tmp", None, false)
+        .expect("create project");
+    luna_rpc::memory_client(core.rpc_service())
+        .call(
+            luna_rpc::methods::MUTATE,
+            serde_json::json!({"op": "createChat", "chatId": CHAT, "spaceId": "space-approval"}),
+        )
+        .await
+        .expect("createChat");
+    core.workspace
+        .rename_chat(CHAT, "Pre-titled")
+        .expect("rename chat");
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-run-approval",
+        SessionCommandPayload::Run {
+            request: run_request("approve"),
+            message_id: "m-approval".into(),
+        },
+    );
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).map(|s| s.status)
+                == Some(SessionStatus::AwaitingApproval)
+        },
+        "awaiting typed approval",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        MessagePart::Input {
+                            resolved: false,
+                            ..
+                        }
+                    )
+                })
+            })
+        },
+        "typed approval part appears",
+    )
+    .await;
+    let request_id = entries(&core)
+        .iter()
+        .find_map(|entry| {
+            entry.parts.iter().find_map(|part| match part {
+                MessagePart::Input {
+                    request_id,
+                    resolved: false,
+                    ..
+                } => Some(request_id.clone()),
+                _ => None,
+            })
+        })
+        .unwrap();
+
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-bypass",
+        SessionCommandPayload::RespondInput {
+            request_id: request_id.clone(),
+            answers: vec![luna_proto::UserInputAnswer {
+                question_id: "approval-question".into(),
+                labels: vec!["Allow once".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "cmd-approval-bypass")
+                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
+        },
+        "ordinary input bypass rejected",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-bypass"),
+        Some((
+            SessionCommandStatus::Rejected,
+            Some("no pending input request".into())
+        ))
+    );
+    assert_eq!(
+        core.sessions.session_status(CHAT).map(|s| s.status),
+        Some(SessionStatus::AwaitingApproval)
+    );
+    assert!(
+        entries(&core)
+            .iter()
+            .any(|entry| entry.parts.iter().any(|part| matches!(
+                part,
+                MessagePart::Input {
+                    resolved: false,
+                    ..
+                }
+            )))
+    );
+
+    let stored = entries(&core)
+        .into_iter()
+        .flat_map(|entry| entry.parts)
+        .find_map(|part| match part {
+            MessagePart::Input {
+                questions,
+                resolved: false,
+                ..
+            } => questions.into_iter().find_map(|question| question.approval),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        stored.details.as_ref().unwrap().cwd.as_deref(),
+        Some("/tmp/permission-fixture")
+    );
+    assert!(
+        !core
+            .sessions
+            .respond_approval(
+                CHAT,
+                &request_id,
+                luna_proto::ApprovalDecision::ProviderChoice { index: u32::MAX }
+            )
+            .unwrap()
+    );
+    // Queued behind the approval: a normal completion must still release it.
+    core.doc_host
+        .queue_message(CHAT, "after allow", Vec::new())
+        .expect("queue behind approval");
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-right",
+        SessionCommandPayload::RespondApproval {
+            request_id,
+            decision: luna_proto::ApprovalDecision::ProviderChoice { index: 1 },
+        },
+    );
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(
+                    |part| matches!(part, MessagePart::Text { text, .. } if text == "approval Allow once"),
+                )
+            })
+        },
+        "typed approval completes",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-right"),
+        Some((SessionCommandStatus::Applied, None))
+    );
+
+    // Normal completion drains the queue: the follow-up becomes the next turn.
+    wait_for(
+        || prompts.lock().unwrap().iter().any(|p| p == "after allow"),
+        "queued follow-up drains after a normal completion",
+    )
+    .await;
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).map(|s| s.status)
+                == Some(SessionStatus::AwaitingApproval)
+        },
+        "follow-up awaits approval",
+    )
+    .await;
+    let mut cancel_request = None;
+    wait_for(
+        || {
+            cancel_request = entries_now(&core).iter().find_map(|entry| {
+                entry.parts.iter().find_map(|part| match part {
+                    MessagePart::Input {
+                        request_id,
+                        resolved: false,
+                        ..
+                    } => Some(request_id.clone()),
+                    _ => None,
+                })
+            });
+            cancel_request.is_some()
+        },
+        "second typed approval part appears",
+    )
+    .await;
+    core.doc_host
+        .queue_message(CHAT, "held after cancel", Vec::new())
+        .expect("queue behind the cancelled turn");
+
+    // Native Cancel (no local Stop): the provider settles the turn as
+    // interrupted. The queue must be held exactly as after Stop.
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-cancel",
+        SessionCommandPayload::RespondApproval {
+            request_id: cancel_request.unwrap(),
+            decision: luna_proto::ApprovalDecision::ProviderChoice { index: 2 },
+        },
+    );
+    wait_for(
+        || {
+            !core.sessions.turn_in_flight(CHAT)
+                && entries_now(&core).iter().any(|entry| {
+                    entry.role == MessageRole::Assistant
+                        && entry.status == Some(MessageStatus::Aborted)
+                })
+        },
+        "native Cancel settles the turn as aborted",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let queued = handle
+        .doc()
+        .read_queue()
+        .unwrap()
+        .into_iter()
+        .map(|item| item.text)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        queued,
+        vec!["held after cancel".to_string()],
+        "native Cancel must hold the queued message like Stop"
+    );
+    assert_eq!(
+        *prompts.lock().unwrap(),
+        vec!["approve".to_string(), "after allow".to_string()],
+        "native Cancel must neither replay the cancelled turn nor send the held row"
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test]
 async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_can() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(
@@ -1605,6 +1967,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }],
                 resolved: false,
