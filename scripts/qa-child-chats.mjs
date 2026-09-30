@@ -113,8 +113,10 @@ try {
     await assert.rejects(call('CreateChildThread', { parentTaskId: great.taskId, request: { ...request, idempotencyKey: 'too-deep' } }));
   });
   await check('archiving a parent preserves independent children', async () => {
-    await call('Mutate', { op: 'setChatArchived', chatId: parent, archived: true });
-    const rows = await call('WatchChats'); save('archived-parent-readback', rows);
+    const archived = await call('Mutate', { op: 'setChatArchived', chatId: parent, archived: true }); save('archive-parent-receipt', archived);
+    // WatchChats republishes asynchronously after a registry write; poll the readback.
+    const rows = await until(async () => { const current = await call('WatchChats'); return current.find(row => row.id === parent)?.archived ? current : null; });
+    save('archived-parent-readback', rows);
     assert.ok(rows.find(row => row.id === parent).archived); assert.ok(!rows.find(row => row.id === child).archived);
     await assert.rejects(call('CreateChildThread', { parentTaskId: parent, request: { ...request, idempotencyKey: 'archived-parent' } }));
   });
