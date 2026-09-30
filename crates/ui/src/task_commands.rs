@@ -132,13 +132,26 @@ pub async fn execute_reviewed(
     snapshot: luna_proto::TaskCommandSnapshot,
     intent: serde_json::Value,
 ) -> Result<CommandReceipt, RpcError> {
+    execute_reviewed_on(engine, task_id, None, Some(snapshot), intent).await
+}
+
+/// Addressed to the task's execution host, so that host (not a possibly newer
+/// local engine that only queues the command) parses and admits the intent.
+/// Without a reviewed snapshot, the host's current snapshot supplies fences.
+pub async fn execute_reviewed_on(
+    engine: &EngineHandle,
+    task_id: &str,
+    target_device_id: Option<&str>,
+    snapshot: Option<luna_proto::TaskCommandSnapshot>,
+    intent: serde_json::Value,
+) -> Result<CommandReceipt, RpcError> {
     let receipt = execute_receipt_on_with_snapshot(
         engine,
         task_id,
-        None,
+        target_device_id,
         uuid::Uuid::new_v4().to_string(),
         intent,
-        Some(snapshot),
+        snapshot,
     )
     .await?;
     match receipt.status {

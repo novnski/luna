@@ -289,12 +289,18 @@ impl Shell {
                         "Profile changed during review setup".into(),
                     ));
                 }
-                if separate {
-                    crate::task_commands::execute(&engine, &destination, intent).await?;
-                } else {
-                    crate::task_commands::execute_reviewed(&engine, &destination, snapshot, intent)
-                        .await?;
-                }
+                // Address the execution host so an older host rejects the
+                // nativeReview kind instead of a newer local engine queueing a
+                // Run that the host would treat as an ordinary text turn.
+                let reviewed = (!separate).then_some(snapshot);
+                crate::task_commands::execute_reviewed_on(
+                    &engine,
+                    &destination,
+                    Some(source.device_id.as_str()),
+                    reviewed,
+                    intent,
+                )
+                .await?;
                 Ok::<_, RpcError>(destination)
             }
             .await;
@@ -401,6 +407,7 @@ impl Shell {
             .child(div().mt(px(12.0)).text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted).child(format!("Checkout: {cwd}")))
             .child(div().mt(px(12.0)).flex().gap(px(8.0)).children([false, true].into_iter().map(|choice| {
                 popover::btn_ghost(&theme, if choice { "Separate review chat" } else { "In this chat" }, if choice { "native-review-separate" } else { "native-review-inline" })
+                    .id(if choice { "native-review-separate" } else { "native-review-inline" })
                     .opacity(if choice == separate { 1.0 } else { 0.65 })
                     .when(!sending && destination.is_none(), |button| button.on_click(cx.listener(move |this, _, _, cx| {
                         if let Some(dialog) = this.native_review_dialog.as_mut() { dialog.separate = choice; cx.notify(); }
@@ -414,6 +421,7 @@ impl Shell {
                 .text_color(theme.text).child(error.unwrap_or_default())))
             .child(div().mt(px(16.0)).flex().justify_end().gap(px(8.0))
                 .child(popover::btn_ghost(&theme, if sending { "Close" } else { "Cancel" }, "native-review-cancel")
+                    .id("native-review-cancel")
                     .on_click(cx.listener(|this, _, _, cx| this.cancel_history_flow(cx))))
                 .child(popover::btn_primary(&theme, if sending { "Starting review…" } else { "Start review" })
                     .id("native-review-confirm").opacity(if ready { 1.0 } else { 0.5 })
