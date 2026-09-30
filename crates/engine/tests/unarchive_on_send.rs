@@ -101,6 +101,7 @@ fn run_payload(message_id: &str) -> SessionCommandPayload {
     SessionCommandPayload::Run {
         request: RunRequest {
             review: None,
+            input_items: Vec::new(),
             prompt: "back from the archive".into(),
             harness: None,
             provider_account_id: None,

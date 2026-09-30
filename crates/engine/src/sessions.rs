@@ -645,10 +645,11 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        // The warm mailbox carries text only. Native review targets require a
-        // fresh adapter dispatch (resuming the same binding) at a safe boundary.
+        // Codex's warm mailbox carries typed inputs and attachments; other
+        // harnesses take text only. Native review targets require a fresh
+        // adapter dispatch (resuming the same binding) at a safe boundary.
         request.review.is_none()
-            && request.attachments.is_empty()
+            && (harness_id == HarnessId::Codex || request.attachments.is_empty())
             && self == &Self::from_request(harness_id, request)
     }
 }
@@ -1018,6 +1019,8 @@ impl RunHandle {
 #[derive(Debug, Clone)]
 struct RoutedSteer {
     prompt: String,
+    attachments: Vec<String>,
+    input_items: Vec<luna_proto::ComposerInput>,
     message_id: String,
     delivery: luna_harness::SteerDelivery,
 }
@@ -3101,6 +3104,12 @@ impl SessionsEngine {
         recovery: Option<RecoveryAttemptContext>,
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
+        if !request.input_items.is_empty() && harness_id != HarnessId::Codex {
+            return Err(EngineError::Other("Native plugin, app and skill selections require Codex. Keep the draft and choose Codex or remove the selections.".into()));
+        }
+        if harness_id == HarnessId::Codex {
+            luna_harness::validate_composer_inputs(&request.attachments, &request.input_items)?;
+        }
         if recovery.is_some()
             && self
                 .inner
@@ -3466,6 +3475,8 @@ impl SessionsEngine {
                 // Register acceptance before a fast boundary can retire it.
                 let mut pending = lock(&ledger);
                 let message = SteerMessage {
+                    input_items: request.input_items.clone(),
+                    attachments: request.attachments.clone(),
                     prompt: request.prompt.clone(),
                     message_id: Some(user_id.clone()),
                     delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -3473,6 +3484,8 @@ impl SessionsEngine {
                 };
                 if steer_tx.try_send(message).is_ok() {
                     pending.push_back(RoutedSteer {
+                        attachments: request.attachments.clone(),
+                        input_items: request.input_items.clone(),
                         prompt: request.prompt.clone(),
                         message_id: user_id.clone(),
                         delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -3866,6 +3879,27 @@ impl SessionsEngine {
         message_id: Option<String>,
         workspace_repair_revision: u64,
     ) -> Result<SteerOutcome, EngineError> {
+        self.steer_with_inputs_at_workspace_revision(
+            chat_id,
+            prompt,
+            &[],
+            &[],
+            message_id,
+            workspace_repair_revision,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn steer_with_inputs_at_workspace_revision(
+        &self,
+        chat_id: &str,
+        prompt: &str,
+        attachments: &[String],
+        input_items: &[luna_proto::ComposerInput],
+        message_id: Option<String>,
+        workspace_repair_revision: u64,
+    ) -> Result<SteerOutcome, EngineError> {
         let _transition = self.transition_gate(chat_id).lock_owned().await;
         if self.inner.recovery.workspace_repair_revision(chat_id)? != workspace_repair_revision {
             return Err(EngineError::Other("Workspace association changed after steer admission; review and submit a new message.".into()));
@@ -3885,15 +3919,21 @@ impl SessionsEngine {
             })
             .map(|h| {
                 (
+                    h.runtime_config.harness_id,
                     h.run_id.clone(),
                     h.steer_tx.clone(),
                     h.routed_steers.clone(),
-                    h.runtime_config.harness_id,
                 )
             });
-        let Some((run_id, steer_tx, ledger, harness_id)) = target else {
+        let Some((harness_id, run_id, steer_tx, ledger)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
+        if (!attachments.is_empty() || !input_items.is_empty()) && harness_id != HarnessId::Codex {
+            return Ok(SteerOutcome::Rejected);
+        }
+        if harness_id == HarnessId::Codex {
+            luna_harness::validate_composer_inputs(attachments, input_items)?;
+        }
         let user_id = message_id.unwrap_or_else(new_id);
         self.inner
             .recovery
@@ -3904,6 +3944,8 @@ impl SessionsEngine {
             )?;
         let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
         let message = SteerMessage {
+            input_items: input_items.to_vec(),
+            attachments: attachments.to_vec(),
             prompt: prompt.to_string(),
             message_id: Some(user_id.clone()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -3922,6 +3964,8 @@ impl SessionsEngine {
                 return Ok(SteerOutcome::Busy);
             }
             pending.push_back(RoutedSteer {
+                attachments: attachments.to_vec(),
+                input_items: input_items.to_vec(),
                 prompt: prompt.to_string(),
                 message_id: user_id.clone(),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -4856,6 +4900,7 @@ impl SessionsEngine {
             request.review = None;
             request.prompt = "Continue from the preserved provider session. Do not repeat completed tool or external effects; first inspect the current state and resume only unfinished work.".into();
             request.attachments.clear();
+            request.input_items.clear();
             request.resume = Some(session_id);
         }
         let context = RecoveryAttemptContext {
@@ -6509,6 +6554,67 @@ fn stop_after_journal_failure(
     inner.set_status(chat_id, SessionStatus::Errored, false);
 }
 
+/// Recovery acceptance for a startup the adapter proved was rejected before
+/// any user turn. A durable receipt that already proves acceptance or
+/// ambiguous delivery keeps that stronger claim, so this rejection never makes
+/// the whole input replayable. Read-only; see [`reject_known_startup`].
+fn startup_rejection_acceptance(
+    inner: &Arc<Inner>,
+    chat_id: &str,
+    correlation_id: &str,
+) -> RecoveryAcceptance {
+    let Some(host) = inner.doc_host() else {
+        return RecoveryAcceptance::RejectedBeforeAcceptance;
+    };
+    match host.task_command_receipt_for_correlation(chat_id, correlation_id) {
+        Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => {
+            RecoveryAcceptance::Accepted
+        }
+        Ok(Some(receipt))
+            if receipt.status == CommandReceiptStatus::Pending
+                && receipt.committed_at_ms.is_some() =>
+        {
+            RecoveryAcceptance::Unknown
+        }
+        Ok(_) => RecoveryAcceptance::RejectedBeforeAcceptance,
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection receipt readback failed");
+            RecoveryAcceptance::Unknown
+        }
+    }
+}
+
+/// Terminalize the exact pending Run receipt of a known startup rejection that
+/// no automatic recovery will resend (a scheduled resend confirms the same
+/// correlation on its own `SessionStarted`). The store fences the receipt and
+/// marks the same-device frozen submission recoverable atomically; accepted,
+/// delivery-unknown, terminal and fenced-out receipts are left unchanged.
+fn reject_known_startup(inner: &Arc<Inner>, chat_id: &str, correlation_id: &str, message: &str) {
+    let Some(host) = inner.doc_host() else {
+        return;
+    };
+    let expected_w = match inner
+        .recovery
+        .execution_workspace_repair_revision(chat_id, correlation_id)
+    {
+        Ok(revision) => revision,
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection workspace fence unavailable");
+            return;
+        }
+    };
+    match host.reject_run_before_acceptance(chat_id, correlation_id, expected_w, message) {
+        Ok(rejected) if rejected.is_empty() => {
+            tracing::info!(chat = %chat_id, correlation = %correlation_id,
+                "startup rejection left the command receipt unchanged (terminal, unknown, accepted or fenced)");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection receipt could not be finalized");
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn drive_run(
     inner: Arc<Inner>,
@@ -6585,22 +6691,40 @@ async fn drive_run(
                 return;
             }
             inner.remove_run(&chat_id, &run_id);
+            // Recovery attempts keep their chain's own acceptance rules.
+            let fresh_rejection = acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
+                && resume_state.recovery.is_none();
+            let acceptance = if fresh_rejection {
+                startup_rejection_acceptance(&inner, &chat_id, &resume_state.user_message_id)
+            } else {
+                acceptance
+            };
             inner.set_status(&chat_id, SessionStatus::Errored, false);
             let engine = SessionsEngine {
                 inner: inner.clone(),
             };
-            if let Err(error) = engine.record_recovery_failure(
+            let correlation_id = resume_state.user_message_id.clone();
+            let recorded = engine.record_recovery_failure(
                 &chat_id,
                 harness_id,
                 recovery_request,
                 resume_state.user_message_id,
                 acceptance,
                 classify_failure(&message),
-                message,
+                message.clone(),
                 None,
                 resume_state.recovery.as_ref(),
-            ) {
+            );
+            let automatic_resend = matches!(&recorded, Ok(Some(view))
+                if view.automatic || view.status == RecoveryStatus::Scheduled);
+            if let Err(error) = recorded {
                 tracing::error!(chat = %chat_id, %error, "failed to record pre-accept recovery");
+            }
+            if fresh_rejection
+                && acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
+                && !automatic_resend
+            {
+                reject_known_startup(&inner, &chat_id, &correlation_id, &message);
             }
             return;
         }
@@ -7478,8 +7602,11 @@ async fn drive_run(
                     ) {
                         return None;
                     }
+                    // Restore typed durable content from the same exact row.
                     Some(RoutedSteer {
                         prompt: row.text,
+                        attachments: row.attachments,
+                        input_items: row.input_items,
                         message_id: row.id,
                         delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                     })
@@ -8149,7 +8276,8 @@ async fn drive_run(
                 request.review = None;
                 request.prompt = steer.prompt.clone();
                 request.resume = None;
-                request.attachments = Vec::new();
+                request.attachments = steer.attachments.clone();
+                request.input_items = steer.input_items.clone();
                 tracing::info!(chat = %chat, "re-dispatching steer orphaned by a dying run");
                 let Some(host) = engine.inner.doc_host() else {
                     tracing::warn!(chat = %chat, "orphaned steer lost: doc host unavailable");
@@ -13431,6 +13559,7 @@ mod tests {
     fn request() -> RunRequest {
         RunRequest {
             review: None,
+            input_items: Vec::new(),
             prompt: "first".into(),
             harness: None,
             provider_account_id: None,

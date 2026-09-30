@@ -659,6 +659,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
 
     let request = luna_proto::RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: "please fix the login flow".into(),
         harness: None,
         provider_account_id: None,
@@ -710,6 +711,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         .expect("rename");
     let request = luna_proto::RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: "another request".into(),
         harness: None,
         provider_account_id: None,

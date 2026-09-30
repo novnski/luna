@@ -45,6 +45,10 @@ use crate::settings::{ComposerSendBehavior, platform_combo};
 use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
 
+mod integrations;
+#[cfg(feature = "appshots-fixture")]
+pub use integrations::run_integrations_picker_e2e;
+
 // ---------------------------------------------------------------------------
 // Constants + pure decision logic
 // ---------------------------------------------------------------------------
@@ -1119,6 +1123,8 @@ const FILE_MENTION_SCHEME: &str = "luna-file:";
 /// selection sat when the edit landed.
 #[derive(Clone)]
 struct EditSnapshot {
+    native_owner: Option<integrations::NativeEditorOwner>,
+    native_spans: Vec<integrations::NativeLink>,
     content: String,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -1446,11 +1452,7 @@ struct MentionHit {
 
 impl TextProjection {
     fn new(raw: &str) -> Self {
-        Self::project(raw, false)
-    }
-
-    fn for_composer(raw: &str) -> Self {
-        Self::project(raw, true)
+        Self::project(raw, false, &[])
     }
 
     fn push_chip(
@@ -1481,7 +1483,7 @@ impl TextProjection {
         display
     }
 
-    fn project(raw: &str, with_icons: bool) -> Self {
+    fn project(raw: &str, with_icons: bool, native_spans: &[integrations::NativeLink]) -> Self {
         let links = file_mention_links(raw);
         let labels = mention_display_labels(&links);
         let mut projection = Self::default();
@@ -1497,24 +1499,38 @@ impl TextProjection {
                 raw_at = end;
             }
         }
-        for (link, label) in links.into_iter().zip(labels) {
-            if link.range.start < raw_at {
+        let mut projected: Vec<_> = links
+            .into_iter()
+            .zip(labels)
+            .map(|(link, label)| {
+                let kind = if link.is_dir {
+                    ComposerChipKind::Folder
+                } else {
+                    ComposerChipKind::File
+                };
+                (link.range.clone(), label, kind, Some(link))
+            })
+            .collect();
+        projected.extend(native_spans.iter().cloned().map(|link| {
+            let (name, _) = integrations::identity(&link.item);
+            (link.range, name.to_owned(), ComposerChipKind::Skill, None)
+        }));
+        projected.sort_by_key(|(range, _, _, _)| range.start);
+        for (range, label, kind, file) in projected {
+            if range.start < raw_at {
                 continue;
             }
-            projection.display.push_str(&raw[raw_at..link.range.start]);
+            projection.display.push_str(&raw[raw_at..range.start]);
             let mut chip_label = String::with_capacity(label.len() + 1);
             chip_label.push(MENTION_PREFIX);
             for ch in label.chars() {
                 chip_label.push(if ch == ' ' { '\u{00A0}' } else { ch });
             }
-            let kind = if link.is_dir {
-                ComposerChipKind::Folder
-            } else {
-                ComposerChipKind::File
-            };
-            let display = projection.push_chip(link.range.clone(), &chip_label, kind, with_icons);
-            projection.mentions.push((link.clone(), display));
-            raw_at = link.range.end;
+            let display = projection.push_chip(range.clone(), &chip_label, kind, with_icons);
+            if let Some(link) = file {
+                projection.mentions.push((link, display));
+            }
+            raw_at = range.end;
         }
         projection.display.push_str(&raw[raw_at..]);
         projection
@@ -2063,6 +2079,8 @@ pub struct ComposerInput {
     accessibility_role: Role,
     focus_handle: FocusHandle,
     content: String,
+    native_owner: Option<integrations::NativeEditorOwner>,
+    native_spans: Vec<integrations::NativeLink>,
     pub(crate) read_only: bool,
     placeholder: SharedString,
     selected_range: Range<usize>,
@@ -2164,6 +2182,8 @@ impl ComposerInput {
             accessibility_role: Role::MultilineTextInput,
             focus_handle: cx.focus_handle(),
             content: String::new(),
+            native_owner: None,
+            native_spans: Vec::new(),
             read_only: false,
             placeholder: placeholder.into(),
             selected_range: 0..0,
@@ -2301,7 +2321,7 @@ impl ComposerInput {
 
     fn refresh_projection(&mut self) {
         self.projection = if self.mentions_enabled {
-            TextProjection::for_composer(&self.content)
+            TextProjection::project(&self.content, true, &self.native_spans)
         } else {
             TextProjection {
                 display: self.content.clone(),
@@ -2332,6 +2352,7 @@ impl ComposerInput {
             format!("{path} ")
         };
         self.record_edit(&range, &inserted);
+        self.apply_native_edit(&range, inserted.len());
         self.content =
             self.content[..range.start].to_owned() + &inserted + &self.content[range.end..];
         self.refresh_projection();
@@ -2361,6 +2382,7 @@ impl ComposerInput {
         };
         self.invalidate_mention_tooltip();
         self.record_edit(&range, &inserted);
+        self.apply_native_edit(&range, inserted.len());
         self.content =
             self.content[..range.start].to_owned() + &inserted + &self.content[range.end..];
         self.refresh_projection();
@@ -2394,6 +2416,7 @@ impl ComposerInput {
             format!("{replacement} ")
         };
         self.record_edit(&range, &inserted);
+        self.apply_native_edit(&range, inserted.len());
         self.content =
             self.content[..range.start].to_owned() + &inserted + &self.content[range.end..];
         self.refresh_projection();
@@ -2446,6 +2469,7 @@ impl ComposerInput {
 
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
         self.invalidate_mention_tooltip();
+        self.native_spans.clear();
         self.content = text.into();
         if self.single_line {
             self.content = self.content.replace(['\r', '\n'], " ");
@@ -2598,6 +2622,8 @@ impl ComposerInput {
 
     fn snapshot(&self) -> EditSnapshot {
         EditSnapshot {
+            native_owner: self.native_owner.clone(),
+            native_spans: self.native_spans.clone(),
             content: self.content.clone(),
             selected_range: self.selected_range.clone(),
             selection_reversed: self.selection_reversed,
@@ -2645,6 +2671,9 @@ impl ComposerInput {
     }
 
     fn restore(&mut self, snapshot: EditSnapshot, cx: &mut Context<Self>) {
+        // Snapshots carry their typed anchors: only a real Undo/Redo of the
+        // same owner can bring an identity back; pasted text never does.
+        self.native_spans = snapshot.native_spans;
         self.invalidate_mention_tooltip();
         self.content = snapshot.content;
         self.refresh_projection();
@@ -2660,6 +2689,18 @@ impl ComposerInput {
         cx.notify();
     }
 
+    /// History recorded under another draft owner must never be replayed
+    /// here; owner binding clears it, and this guard keeps the stacks honest.
+    fn history_owned(&mut self, snapshot: &EditSnapshot) -> bool {
+        if snapshot.native_owner == self.native_owner {
+            return true;
+        }
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_edit = None;
+        false
+    }
+
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         if self.read_only {
             return;
@@ -2667,6 +2708,9 @@ impl ComposerInput {
         let Some(previous) = self.undo_stack.pop() else {
             return;
         };
+        if !self.history_owned(&previous) {
+            return;
+        }
         self.redo_stack.push(self.snapshot());
         self.restore(previous, cx);
     }
@@ -2678,6 +2722,9 @@ impl ComposerInput {
         let Some(next) = self.redo_stack.pop() else {
             return;
         };
+        if !self.history_owned(&next) {
+            return;
+        }
         self.undo_stack.push(self.snapshot());
         self.restore(next, cx);
     }
@@ -3716,6 +3763,7 @@ impl EntityInputHandler for ComposerInput {
         if self.marked_range.is_none() {
             self.record_edit(&range, new_text);
         }
+        self.apply_native_edit(&range, new_text.len());
         self.content =
             self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
         self.refresh_projection();
@@ -3764,6 +3812,7 @@ impl EntityInputHandler for ComposerInput {
             self.redo_stack.clear();
             self.last_edit = None;
         }
+        self.apply_native_edit(&range, new_text.len());
         self.content =
             self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
         self.refresh_projection();
@@ -4456,6 +4505,7 @@ struct SlashState {
 
 #[derive(Debug, Clone, Default)]
 struct FileMentionState {
+    native_results: Vec<luna_proto::ComposerCatalogEntry>,
     token: Option<MentionToken>,
     results: Vec<FileSearchMatch>,
     active: Option<usize>,
@@ -4527,6 +4577,9 @@ pub struct Composer {
     /// Staged-but-unsent attachments per chat key (use-attachments.ts `stash`):
     /// navigating away and back restores them; memory-only, like the original.
     pub(crate) attachments: HashMap<String, Vec<StagedAttachment>>,
+    /// Native selections are durable content, keyed identically to drafts.
+    pub(crate) input_items: HashMap<String, Vec<luna_proto::ComposerInput>>,
+    pub(crate) queue_edit_input_items: Option<Vec<luna_proto::ComposerInput>>,
     /// Rich window captures keyed exactly like drafts and ordinary staged
     /// attachments. Each owns one screenshot that joins the existing upload
     /// path only at send time.
@@ -4573,6 +4626,7 @@ pub struct Composer {
     picker_task: Option<Task<()>>,
     mention_task: Option<Task<()>>,
     mention: FileMentionState,
+    integrations: integrations::IntegrationPicker,
     slash_task: Option<Task<()>>,
     slash: SlashState,
     /// Advertised commands per harness (one `ListCommands` per harness per
@@ -4854,6 +4908,7 @@ impl Composer {
                     this.mark_draft_dirty(cx);
                 }
             }
+            this.ensure_native_catalog(true, cx);
             cx.notify();
         });
         let picker_focus = cx.subscribe(
@@ -4942,6 +4997,8 @@ impl Composer {
             pickers,
             drafts: HashMap::new(),
             attachments: HashMap::new(),
+            input_items: HashMap::new(),
+            queue_edit_input_items: None,
             appshots: HashMap::new(),
             canvas_draft_id: uuid::Uuid::new_v4().to_string(),
             draft_revisions: HashMap::new(),
@@ -4978,6 +5035,7 @@ impl Composer {
             picker_task: None,
             mention_task: None,
             mention: FileMentionState::default(),
+            integrations: integrations::IntegrationPicker::default(),
             slash_task: None,
             slash: SlashState::default(),
             slash_cache: HashMap::new(),
@@ -5135,7 +5193,10 @@ impl Composer {
         } else {
             format!("{existing}\n\n{result}")
         };
-        self.input.update(cx, |input, cx| input.set_text(text, cx));
+        // Appending keeps existing chips; the inserted result stays plain text.
+        self.input.update(cx, |input, cx| {
+            input.set_text_keeping_native_prefix(text, cx)
+        });
         self.focus_pending = true;
         true
     }
@@ -5254,8 +5315,32 @@ impl Composer {
         cx.notify();
     }
 
+    /// JOINT-INTEGRATION POINT `trusted-envelope-restore`
+    /// (native-inputs -> integrations-picker).
+    ///
+    /// Called only by trusted persistence restores (draft load and merge,
+    /// saved prompt, queue-edit start and end, displaced private draft,
+    /// failed send, recoverable submission) right after `key`'s exact text and
+    /// typed `input_items` were assembled under an established owner (engine
+    /// generation + draft key). Typed identities are written before the text.
+    ///
+    /// For the visible draft this hydrates the editor's owner-bound anchors
+    /// from the assembled envelope (`hydrate_native_input_envelope`). A
+    /// background key needs nothing now: opening that draft hydrates its
+    /// `input_items` on navigation. Raw or pasted text must never reach this
+    /// hook or mint typed identity.
+    pub(crate) fn trusted_native_envelope_restored(&mut self, key: &str, cx: &mut Context<Self>) {
+        if key == self.current_key {
+            self.hydrate_native_input_envelope(cx);
+        }
+    }
+
     fn current_prompt_is_empty(&self, cx: &App) -> bool {
         self.input.read(cx).text().is_empty()
+            && self
+                .input_items
+                .get(&self.current_key)
+                .is_none_or(Vec::is_empty)
             && self
                 .attachments
                 .get(&self.current_key)
@@ -5336,7 +5421,8 @@ impl Composer {
         if self.stash_task.is_some() {
             return;
         }
-        let staged = self.attachments.get(&self.current_key).map_or(0, Vec::len)
+        let staged = self.input_items.get(&self.current_key).map_or(0, Vec::len)
+            + self.attachments.get(&self.current_key).map_or(0, Vec::len)
             + self.appshots.get(&self.current_key).map_or(0, Vec::len);
         let comments = self.state.read(cx).review_comments(&self.current_key).len();
         if !composer_has_content(self.input.read(cx).text(), staged, comments) {
@@ -5397,6 +5483,7 @@ impl Composer {
         };
         let label = label.chars().take(120).collect();
         let entry = PromptStashEntry {
+            input_items: snapshot.input_items,
             id: uuid::Uuid::new_v4().to_string(),
             label,
             text: snapshot.text,
@@ -5435,6 +5522,7 @@ impl Composer {
                                 == source_revision
                         {
                             composer.attachments.remove(&key);
+                            composer.input_items.remove(&key);
                             composer.appshots.remove(&key);
                             composer.draft_blobs.remove(&key);
                             composer.draft_unavailable.remove(&key);
@@ -5613,6 +5701,7 @@ impl Composer {
                     composer.stash_task = None;
                     return None;
                 }
+                composer.input_items.insert(key.clone(), entry.input_items.clone());
                 composer.attachments.insert(key.clone(), ordinary);
                 composer.appshots.insert(key.clone(), shots);
                 composer.draft_blobs.insert(key.clone(), entry.attachments.iter()
@@ -5627,6 +5716,7 @@ impl Composer {
                 composer.draft_comment_fingerprints.remove(&key);
                 composer.drafts.insert(key.clone(), entry.text.clone());
                 composer.set_input_text_without_draft_edit(entry.text.clone(), cx);
+                composer.trusted_native_envelope_restored(&key, cx);
                 let next_revision = composer.draft_revisions.entry(key.clone()).or_insert(0);
                 *next_revision = next_revision.saturating_add(1);
                 composer.stash_menu_open = false;
@@ -5881,6 +5971,11 @@ impl Composer {
             .filter_map(|comment| serde_json::to_value(comment).ok())
             .collect();
         ComposerDraft {
+            input_items: if key == self.current_key && self.queue_edit_draft.is_some() {
+                self.queue_edit_input_items.clone().unwrap_or_default()
+            } else {
+                self.input_items.get(key).cloned().unwrap_or_default()
+            },
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: self.draft_id_for(key),
             task_id: (!key.is_empty()).then(|| key.to_string()),
@@ -6276,6 +6371,12 @@ impl Composer {
                 (_, true, _) => restored.record.text.clone(),
                 _ => format!("{}\n\n{}", restored.record.text, local_text),
             };
+            let selections = self.input_items.entry(key.to_string()).or_default();
+            for selection in &restored.record.input_items {
+                if !selections.contains(selection) {
+                    selections.push(selection.clone());
+                }
+            }
             let local_attachments = self.attachments.remove(key).unwrap_or_default();
             for attachment in local_attachments {
                 if !restored
@@ -6347,6 +6448,7 @@ impl Composer {
             if key == self.current_key {
                 self.set_input_text_without_draft_edit(merged_text, cx);
             }
+            self.trusted_native_envelope_restored(key, cx);
             let message: SharedString =
                 "This draft changed while it was loading. Both versions were kept and are being saved."
                     .into();
@@ -6452,6 +6554,7 @@ impl Composer {
                                 composer.draft_saves_in_flight.remove(&key);
                                 composer.drafts.insert(key.clone(), String::new());
                                 composer.attachments.remove(&key);
+                                composer.input_items.remove(&key);
                                 composer.appshots.remove(&key);
                                 composer.draft_blobs.remove(&key);
                                 composer.draft_unavailable.remove(&key);
@@ -6588,6 +6691,12 @@ impl Composer {
                         _ => format!("{local_text}\n\n{recovered_text}"),
                     };
 
+                    let selections = composer.input_items.entry(key.clone()).or_default();
+                    for selection in &submission.snapshot.input_items {
+                        if !selections.contains(selection) {
+                            selections.push(selection.clone());
+                        }
+                    }
                     let ordinary = composer.attachments.entry(key.clone()).or_default();
                     for blob in &submission.snapshot.attachments {
                         if appshot_attachment_ids.contains(&blob.attachment_id) {
@@ -6669,6 +6778,7 @@ impl Composer {
                     if key == composer.current_key {
                         composer.set_input_text_without_draft_edit(merged_text.clone(), cx);
                     }
+                    composer.trusted_native_envelope_restored(&key, cx);
                     let revision = composer.draft_revisions.entry(key.clone()).or_default();
                     *revision = (*revision)
                         .max(submission.snapshot.revision)
@@ -6777,6 +6887,8 @@ impl Composer {
         self.draft_receipt_tasks.clear();
         self.drafts.clear();
         self.attachments.clear();
+        self.input_items.clear();
+        self.queue_edit_input_items = None;
         self.appshots.clear();
         self.draft_revisions.clear();
         self.draft_saved_revisions.clear();
@@ -6836,6 +6948,7 @@ impl Composer {
         self.slash_cache.clear();
         self.canvas_draft_id = uuid::Uuid::new_v4().to_string();
         self.current_key = key;
+        self.reset_native_picker_owner(cx);
         self.last_canvas_draft_config = self.pickers.read(cx).draft().clone();
         self.input.update(cx, |input, cx| {
             input.read_only = false;
@@ -6998,6 +7111,7 @@ impl Composer {
                                     // submitted snapshot as the live draft here
                                     // reinserted an already-sent prompt on reopen.
                                     record.text.clear();
+                                    record.input_items.clear();
                                     record.attachments.clear();
                                     record.appshots.clear();
                                     record.context = Default::default();
@@ -7250,6 +7364,7 @@ impl Composer {
                         .insert(load_key.clone(), restored.recoverable_entries.clone());
                 }
                 if !pending_same_revision {
+                    composer.input_items.insert(load_key.clone(), restored.record.input_items.clone());
                     composer
                         .drafts
                         .insert(load_key.clone(), restored.record.text.clone());
@@ -7271,6 +7386,7 @@ impl Composer {
                             restored.record.text.clone(),
                             cx,
                         );
+                        composer.trusted_native_envelope_restored(&load_key, cx);
                         composer.pickers.update(cx, |pickers, cx| {
                             pickers.restore_draft_execution(&restored.record.execution, cx)
                         });
@@ -7750,6 +7866,7 @@ impl Composer {
     /// raw image bytes, and a deleted chat's stage could never be sent again.
     pub fn purge_chat(&mut self, chat_id: &str, cx: &mut Context<Self>) {
         self.attachments.remove(chat_id);
+        self.input_items.remove(chat_id);
         self.appshots.remove(chat_id);
         self.draft_blobs.remove(chat_id);
         self.draft_unavailable.remove(chat_id);
@@ -8168,6 +8285,7 @@ impl Composer {
     }
 
     fn on_input_edited(&mut self, cx: &mut Context<Self>) {
+        self.reconcile_native_selections(cx);
         let (text, cursor) = {
             let input = self.input.read(cx);
             (input.text().to_string(), input.cursor_offset())
@@ -8191,6 +8309,7 @@ impl Composer {
         }
         self.mention.dismissed = None;
         if token == self.mention.token {
+            self.ensure_native_catalog(false, cx);
             self.sync_mention_controls(cx);
             cx.notify();
             return;
@@ -8210,6 +8329,7 @@ impl Composer {
         }
         self.mention.error = None;
         self.mention.loading = token.is_some();
+        self.ensure_native_catalog(!refining, cx);
         self.sync_mention_controls(cx);
         let Some(token) = token else {
             cx.notify();
@@ -8297,6 +8417,7 @@ impl Composer {
                         composer.mention.error = Some(mention_error_message(&err));
                     }
                 }
+                composer.update_native_rows();
                 composer.sync_mention_controls(cx);
                 cx.notify();
             })
@@ -8307,9 +8428,12 @@ impl Composer {
 
     fn move_mention(&mut self, delta: isize, cx: &mut Context<Self>) {
         self.mention.active =
-            crate::popover::menu_step(self.mention.active, self.mention.results.len(), delta);
-        if let Some(active) = self.mention.active {
+            crate::popover::menu_step(self.mention.active, self.mention_item_count(), delta);
+        if let Some(active) = self.mention.active.filter(|active| {
+            *active < self.mention.results.len() + self.mention.native_results.len()
+        }) {
             // Keep the keyboard cursor visible in the scrolled row stack.
+            // Retry sits in the fixed footer below the list.
             self.mention_scroll.scroll_to_item(active);
         }
         self.sync_mention_controls(cx);
@@ -8329,6 +8453,18 @@ impl Composer {
     }
 
     fn accept_mention(&mut self, cx: &mut Context<Self>) {
+        if self.mention.active.is_some() && self.mention.active == self.native_retry_index() {
+            self.retry_native_catalog(cx);
+            return;
+        }
+        if let Some(index) = self
+            .mention
+            .active
+            .filter(|index| *index >= self.mention.results.len())
+        {
+            self.accept_native_mention(index - self.mention.results.len(), cx);
+            return;
+        }
         let Some(token) = self.mention.token.clone() else {
             return;
         };
@@ -8350,8 +8486,10 @@ impl Composer {
     fn render_file_mention_popup(
         &mut self,
         theme: &Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
+        self.ensure_native_catalog(false, cx);
         let theme = &theme.for_popup();
         let token = self.mention.token.as_ref()?;
         let mut card = crate::popover::popover_card(theme)
@@ -8367,7 +8505,14 @@ impl Composer {
                 }),
             )
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_mention(cx)));
-        if self.mention.loading && self.mention.results.is_empty() {
+        let file_count = self.mention.results.len();
+        // Options only; Retry is a separate button after the listbox.
+        let set_size = file_count + self.mention.native_results.len();
+        let retry_index = self.native_retry_index();
+        if self.mention.loading
+            && self.mention.results.is_empty()
+            && self.mention.native_results.is_empty()
+        {
             card = card.child(crate::popover::skeleton_rows(
                 "file-mention-loading",
                 theme,
@@ -8375,7 +8520,9 @@ impl Composer {
                 cx.entity_id(),
                 cx,
             ));
-        } else if let Some(error) = self.mention.error.clone() {
+        } else if self.mention.native_results.is_empty()
+            && let Some(error) = self.mention.error.clone()
+        {
             card = card.child(
                 div()
                     .px(px(12.0))
@@ -8384,7 +8531,7 @@ impl Composer {
                     .text_color(theme.danger_muted)
                     .child(error),
             );
-        } else if self.mention.results.is_empty() {
+        } else if self.mention.results.is_empty() && self.mention.native_results.is_empty() {
             card = card.child(
                 div()
                     .px(px(12.0))
@@ -8405,9 +8552,16 @@ impl Composer {
                     Some((directory, name)) => (directory.to_string(), name.to_string()),
                     None => (String::new(), result.path.clone()),
                 };
+                let kind = if result.is_dir { "Folder" } else { "File" };
                 rows.push(
                     crate::popover::menu_row(theme, selected, format!("file-mention-result-{ix}"))
                         .id(("file-mention-result", ix))
+                        .role(Role::ListBoxOption)
+                        .aria_label(format!("{kind} {}", result.path))
+                        .aria_selected(selected)
+                        .aria_position_in_set(ix + 1)
+                        .aria_size_of_set(set_size)
+                        .when(selected, |row| row.aria_active_descendant())
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.mention.active = Some(ix);
                             this.accept_mention(cx);
@@ -8459,6 +8613,79 @@ impl Composer {
             }
             // Overflowing rows wheel-scroll inside a bounded viewport; the
             // floating rail mirrors the model-list scrollbar treatment.
+            for (index, result) in self.mention.native_results.iter().enumerate() {
+                let ix = file_count + index;
+                let selected = self.mention.active == Some(ix);
+                let Some(semantics) = self.native_row_semantics(index) else {
+                    continue;
+                };
+                let enabled = semantics.enabled;
+                rows.push(
+                    crate::popover::menu_row(
+                        theme,
+                        selected,
+                        format!("native-mention-result-{ix}"),
+                    )
+                    .id(("native-mention-result", ix))
+                    .role(Role::ListBoxOption)
+                    .aria_label(semantics.label)
+                    .aria_description(semantics.description)
+                    .aria_selected(selected)
+                    .aria_position_in_set(ix + 1)
+                    .aria_size_of_set(set_size)
+                    .when(selected, |row| row.aria_active_descendant())
+                    // Disabled rows expose no Click action and report Disabled.
+                    .when(enabled, |row| {
+                        row.on_click(cx.listener(move |this, _, _, cx| {
+                            this.mention.active = Some(ix);
+                            this.accept_mention(cx);
+                        }))
+                    })
+                    .when(!enabled, |row| {
+                        row.cursor_default()
+                            .opacity(0.55)
+                            .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+                    })
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                crate::icons::icon(crate::icons::MAGIC_WAND_3)
+                                    .size(px(14.0))
+                                    .text_color(theme.warning),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_color(theme.text)
+                                    .child(result.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
+                                    .child(integrations::kind_label(result.kind)),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .pl(px(22.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text_muted)
+                            .child(
+                                result
+                                    .description
+                                    .clone()
+                                    .unwrap_or_else(|| result.id.clone()),
+                            ),
+                    )
+                    .into_any_element(),
+                );
+            }
             card = card.child(
                 div()
                     .id("mention-scroll-host")
@@ -8467,6 +8694,8 @@ impl Composer {
                     .child(
                         div()
                             .id("mention-list")
+                            .role(Role::ListBox)
+                            .aria_label("Mention suggestions")
                             .max_h(px(312.0))
                             .flex()
                             .flex_col()
@@ -8476,6 +8705,52 @@ impl Composer {
                             .children(rows),
                     )
                     .children(crate::popover::rail(self, "mention-scrollbar", theme, cx)),
+            );
+        }
+        if let (Some(notice), Some(retry_index)) = (self.native_catalog_notice(), retry_index) {
+            // Status footer: keyboard order (rows, then Retry) matches the
+            // visual order, and Retry is reachable by arrows, Tab and AT.
+            let retry_active = self.mention.active == Some(retry_index);
+            let retry_focus = self.retry_focus_handle(cx);
+            // Active descendant is for arrow navigation from the input; a
+            // Retry that holds real focus is already the focused node.
+            let retry_descendant = retry_active && !retry_focus.is_focused(window);
+            let accent = theme.accent;
+            card = card.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .px(px(4.0))
+                    .pt(px(6.0))
+                    .child(
+                        div()
+                            .id("native-catalog-status")
+                            .role(Role::Status)
+                            .aria_label(notice.clone())
+                            .px(px(8.0))
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.text_muted)
+                            .child(notice.clone()),
+                    )
+                    .child(
+                        crate::popover::menu_row(theme, retry_active, "retry-native-catalog")
+                            .id("retry-native-catalog")
+                            .role(Role::Button)
+                            .aria_label("Retry native integrations discovery")
+                            .aria_description(notice)
+                            .aria_keyshortcuts("Enter")
+                            .when(retry_descendant, |row| row.aria_active_descendant())
+                            .track_focus(&retry_focus)
+                            .tab_index(0)
+                            .focus_visible(move |style| {
+                                style.bg(accent.opacity(0.18)).text_color(accent)
+                            })
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(theme.accent)
+                            .child("Retry integrations")
+                            .on_click(cx.listener(|this, _, _, cx| this.retry_native_catalog(cx))),
+                    ),
             );
         }
         Some(crate::popover::full_width_menu_above(
@@ -8875,6 +9150,15 @@ impl Composer {
                 Some("The queued message was removed; your edit remains in the composer".into());
             // Recover both drafts when another device removes the reserved row.
             if let Some((draft, mut attachments, mut appshots)) = self.queue_edit_draft.take() {
+                // Both halves of the joined text keep their typed identities:
+                // the private draft's envelope, then the edit's live anchors.
+                let mut items = self.queue_edit_input_items.take().unwrap_or_default();
+                for item in self.input.read(cx).native_input_items() {
+                    if !items.contains(&item) {
+                        items.push(item);
+                    }
+                }
+                self.input_items.insert(self.current_key.clone(), items);
                 appshots.extend(self.appshots.remove(&self.current_key).unwrap_or_default());
                 self.appshots.insert(self.current_key.clone(), appshots);
                 let edited = self.input.read(cx).text().to_string();
@@ -8891,6 +9175,8 @@ impl Composer {
                 );
                 self.attachments
                     .insert(self.current_key.clone(), attachments);
+                let restored_key = self.current_key.clone();
+                self.trusted_native_envelope_restored(&restored_key, cx);
             }
             self.clear_queue_edit(cx);
         }
@@ -8909,6 +9195,8 @@ impl Composer {
             }
             self.schedule_draft_save(self.current_key.clone(), Duration::ZERO, cx);
             let draft = self.drafts.get(&key).cloned().unwrap_or_default();
+            // Keep the leaving draft's exact native anchors for navigation back.
+            self.park_native_editor(cx);
             self.current_key = key;
             // `failure` deliberately survives navigation: chat-scoped
             // failures render only under their own chat (see `failure_key`),
@@ -8949,6 +9237,9 @@ impl Composer {
                 self.route_snap_until = Some(Instant::now() + Duration::from_millis(ROUTE_SNAP_MS));
             }
             self.set_input_text_without_draft_edit(draft, cx);
+            // Bind the new owner now: exact parked anchors or the draft's
+            // trusted typed envelope return; raw link text never does.
+            self.restore_native_after_navigation(cx);
         }
 
         self.load_draft(self.current_key.clone(), cx);
@@ -9092,7 +9383,9 @@ impl Composer {
         }
         let has_text = composer_has_content(
             self.input.read(cx).text(),
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         send_button_mode(self.run_live(cx), has_text)
@@ -9105,7 +9398,9 @@ impl Composer {
         let text = self.input.read(cx).text().trim().to_string();
         let no_content = !composer_has_content(
             &text,
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         match self.button_mode(cx) {
@@ -9133,7 +9428,9 @@ impl Composer {
     fn on_modifier_submit(&mut self, cx: &mut Context<Self>) {
         let no_content = !composer_has_content(
             self.input.read(cx).text(),
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         if no_content && self.editing_queued.is_none() {
@@ -9153,7 +9450,9 @@ impl Composer {
         let text = self.input.read(cx).text().trim().to_string();
         let has_content = composer_has_content(
             &text,
-            self.staged().len() + self.staged_appshots().len(),
+            self.staged().len()
+                + self.staged_appshots().len()
+                + self.input_items.get(&self.current_key).map_or(0, Vec::len),
             self.staged_comments(cx).len(),
         );
         if !has_content || !self.require_project_for_new_session(cx) || self.send_blocked(cx) {
@@ -9178,6 +9477,9 @@ impl Composer {
         follow_up_behavior: Option<luna_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
+        if self.defer_native_send(&text, follow_up_behavior, cx) {
+            return;
+        }
         if !self.require_project_for_new_session(cx) {
             return;
         }
@@ -9317,6 +9619,10 @@ impl Composer {
         // Snapshot-and-clear NOW (use-attachments.ts takeAttachments): the
         // strip empties the instant you hit send; a failure hands the files
         // back into the chat's stash.
+        let submitted_input_items = self
+            .input_items
+            .remove(&self.current_key)
+            .unwrap_or_default();
         let ordinary_staged = self
             .attachments
             .remove(&self.current_key)
@@ -9831,6 +10137,7 @@ impl Composer {
                         "messageId": message_id,
                         "text": queue_text,
                         "attachments": attachment_paths,
+                        "inputItems": submitted_input_items,
                         "holdForTurnEnd": true,
                         "followUpBehavior": follow_up_behavior.unwrap_or_default(),
                         "execution": resolved.chat_config(),
@@ -9865,6 +10172,7 @@ impl Composer {
                 let command = SessionCommandPayload::Run {
                     request: RunRequest {
                         review: None,
+                        input_items: submitted_input_items.clone(),
                         prompt: content.clone(),
                         harness: resolved.harness,
                         provider_account_id: resolved.provider_account_id.clone(),
@@ -10088,6 +10396,12 @@ impl Composer {
                         message.into()
                     });
                     composer.failure_key = Some(restore_key.clone());
+                    if !has_newer_draft {
+                        let selections = composer.input_items.entry(restore_key.clone()).or_default();
+                        for selection in &submitted_input_items {
+                            if !selections.contains(selection) { selections.push(selection.clone()); }
+                        }
+                    }
                     composer.state.update(cx, |s, cx| {
                         s.remove_echo(&err_chat_id, &err_message_id);
                         s.end_pending_send(&err_chat_id, &err_message_id);
@@ -10117,6 +10431,7 @@ impl Composer {
                         // Already keyed to the restore target; no navigation
                         // swap can overwrite this prompt.
                         composer.set_input_text_without_draft_edit(restore_text, cx);
+                        composer.trusted_native_envelope_restored(&restore_key, cx);
                     }
                     if !has_newer_draft && !ordinary_staged.is_empty() {
                         // Merge by id (stashAttachments): files the user staged
@@ -11249,8 +11564,17 @@ impl Render for Composer {
         }
         let theme = Theme::of(cx).clone();
         let wizard_active = self.wizard.is_some();
-        if self.mention.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
+        // Focus on the popup's own Retry control keeps the completion open;
+        // anywhere else closes it. Never leave focus on a vanished Retry.
+        let retry_focused = self.native_retry_focused(window);
+        if self.mention.token.is_some()
+            && !retry_focused
+            && !self.input.focus_handle(cx).is_focused(window)
+        {
             self.reset_mention(None, cx);
+        } else if self.mention.token.is_none() && retry_focused {
+            let focus = self.input.focus_handle(cx);
+            window.focus(&focus, cx);
         }
         if self.slash.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
             self.reset_slash(None, cx);
@@ -12129,7 +12453,7 @@ impl Render for Composer {
             })
             // Both completion popups span the full pill width above it —
             // the file-mention and slash tokens are mutually exclusive.
-            .children(self.render_file_mention_popup(&theme, cx))
+            .children(self.render_file_mention_popup(&theme, window, cx))
             .children(self.render_slash_popup(&theme, cx));
         // Restore the original chip-only selector treatment: destination at
         // the top-right, no surrounding surface. Cancel the column gap as the
@@ -12534,6 +12858,7 @@ mod tests {
 
     fn test_draft(task_id: &str, revision: u64, text: &str) -> ComposerDraft {
         ComposerDraft {
+            input_items: Vec::new(),
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: task_id.into(),
             task_id: Some(task_id.into()),

@@ -277,6 +277,7 @@ impl Shell {
                     permission_policy: None,
                     resume: None,
                     attachments: Vec::new(),
+                    input_items: Vec::new(),
                     worktree: None,
                 };
                 let message_id = uuid::Uuid::new_v4().to_string();

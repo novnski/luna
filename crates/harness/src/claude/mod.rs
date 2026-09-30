@@ -472,6 +472,7 @@ impl Harness for ClaudeHarness {
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
+        request.input_items.clear();
         request.model_options.clear();
         request.auto_approve = false;
         self.run_with_mode(request, controls, true).await

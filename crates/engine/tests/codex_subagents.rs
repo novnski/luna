@@ -104,6 +104,7 @@ async fn check_persistence(
     let (core, profile) = assemble(dir.path(), Some(replay_kind));
     let request = RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: format!("scenario:{scenario}"),
         harness: None,
         provider_account_id: None,
@@ -309,6 +310,7 @@ async fn parent_turn_end_does_not_claim_an_uncompleted_child_stopped() {
     let (core, _profile) = assemble(dir.path(), None);
     let request = RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: "scenario:child-unobserved".into(),
         harness: None,
         provider_account_id: None,

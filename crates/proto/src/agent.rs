@@ -286,6 +286,15 @@ pub struct ModelOptionChoice {
     pub label: String,
 }
 
+/// Native selections keep their provider identity independent of composer labels.
+/// Images use the existing staged attachment transport, never sender-local paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ComposerInput {
+    Mention { name: String, path: String },
+    Skill { name: String, path: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
@@ -295,6 +304,8 @@ pub struct RunRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<NativeReviewRequest>,
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<ComposerInput>,
     /// The harness picked at send time. Rides the command plane so
     /// claim-on-first-command (chat row still in flight on the registry
     /// channel) dispatches — and records — the picked harness instead of the
@@ -333,8 +344,8 @@ pub struct RunRequest {
     /// (composer uploads: UploadChunk/UploadCommit → durable path). The same
     /// paths also ride the prompt text as `Attached images (local files …)`
     /// refs (luna's `withAttachments` transport — that's what persists in the
-    /// doc); this field additionally lets a harness inline the bytes as image
-    /// content blocks. Additive + serde-defaulted for wire compat.
+    /// doc); this field additionally lets a harness send native image input
+    /// (Codex localImage) or inline image content blocks. Additive + serde-defaulted for wire compat.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
     /// Host-side isolated-worktree creation (see [`WorktreeSpec`]): when set,

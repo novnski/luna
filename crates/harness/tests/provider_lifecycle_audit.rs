@@ -98,6 +98,7 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
     };
     let mut request = RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: "disposable QA".into(),
         harness: None,
         provider_account_id: None,
@@ -144,6 +145,8 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
         acceptance = Some(rx);
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: if mode == "claude" {
                     "x".repeat(4 * 1024 * 1024)
                 } else {

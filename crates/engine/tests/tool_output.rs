@@ -81,6 +81,7 @@ async fn received_tool_payloads_and_live_activity_survive_steer_and_reopen() {
                 environment_permission_ceiling: None,
                 permission_policy: None,
                 attachments: vec![],
+                input_items: Vec::new(),
                 worktree: None,
                 resume: None,
                 review: None,

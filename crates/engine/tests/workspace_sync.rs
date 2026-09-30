@@ -144,6 +144,7 @@ where
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -487,6 +488,7 @@ async fn claimed_chat_row_records_the_run_harness() {
     let core = assemble(dir.path(), "dev-a");
 
     let request = RunRequest {
+        input_items: Vec::new(),
         harness: Some(HarnessId::Opencode),
         ..run_request("go do it")
     };

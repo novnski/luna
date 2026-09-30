@@ -246,6 +246,7 @@ fn request(attachment: &str) -> RunRequest {
     model_options.insert("fixtureChoice".into(), "frozen".into());
     RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: "perform the original synthetic request".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,

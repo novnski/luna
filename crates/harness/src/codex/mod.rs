@@ -38,6 +38,7 @@
 //!   always ends with `Done { status: Interrupted }`.
 
 pub(crate) mod catalog;
+pub(crate) mod composer_catalog;
 mod elicitation;
 pub mod native;
 mod normalize;
@@ -133,6 +134,7 @@ pub(super) fn apply_file_auth_override(cmd: &mut Command) {
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
 /// fake app server with [`CodexHarness::with_executable`].
 pub struct CodexHarness {
+    catalog_connections: composer_catalog::CatalogConnections,
     executable: Option<PathBuf>,
     /// Grace between `turn/interrupt` and SIGTERM.
     interrupt_grace: Duration,
@@ -150,6 +152,7 @@ impl Default for CodexHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             commands: tokio::sync::OnceCell::new(),
+            catalog_connections: composer_catalog::CatalogConnections::default(),
         }
     }
 }
@@ -732,8 +735,45 @@ impl Harness for CodexHarness {
         self.discover_models(None, false).await
     }
 
-    /// Skills from a short-lived `skills/list` probe (see
-    /// [`Self::discover_commands`]); cached on success.
+    async fn composer_catalog(
+        &self,
+        cwd: &std::path::Path,
+        home: &std::path::Path,
+        force_file_auth: bool,
+        thread_id: Option<&str>,
+    ) -> Result<luna_proto::ComposerCatalog, HarnessError> {
+        let cwd = cwd.canonicalize().map_err(HarnessError::Io)?;
+        if let Some(client) =
+            thread_id.and_then(|thread| self.catalog_connections.get(home, &cwd, thread))
+        {
+            return tokio::time::timeout(
+                Duration::from_secs(8),
+                composer_catalog::read(&client, &cwd, thread_id),
+            )
+            .await
+            .map_err(|_| HarnessError::Protocol("native thread catalog timed out".into()))?;
+        }
+        native::CodexNativeClient::new(home)
+            .with_executable(self.resolve_executable()?)
+            .for_execution_home(home, force_file_auth)
+            .read_composer_catalog(&cwd, thread_id)
+            .await
+    }
+
+    fn composer_catalog_source(&self) -> String {
+        let Ok(path) = self.resolve_executable() else {
+            return "unavailable".into();
+        };
+        let metadata = std::fs::metadata(&path).ok();
+        format!(
+            "{}:{:?}:{:?}",
+            path.display(),
+            metadata.as_ref().map(|m| m.len()),
+            metadata.and_then(|m| m.modified().ok())
+        )
+    }
+
+    /// Skills from a short-lived `skills/list` probe, cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         self.commands
             .get_or_try_init(|| self.discover_commands())
@@ -760,6 +800,7 @@ impl Harness for CodexHarness {
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
+        request.input_items.clear();
         request.model_options.clear();
         if let Some(codex_home) = codex_home {
             request
@@ -818,6 +859,7 @@ impl CodexHarness {
                 ));
             }
         }
+        crate::validate_composer_inputs(&request.attachments, &request.input_items)?;
         let exe = self.resolve_executable()?;
         // Title generation has no tools and remains read-only. Ordinary runs
         // keep the engine-resolved sandbox; never broaden it in the adapter.
@@ -853,11 +895,13 @@ impl CodexHarness {
             apply_file_auth_override(&mut cmd);
         }
         cmd.arg("app-server");
-        if let Some(codex_home) = request
+        let catalog_home = request
             .model_options
             .remove(LUNA_CODEX_HOME_OPTION)
             .and_then(|value| value.as_str().map(std::path::PathBuf::from))
-        {
+            .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
+            .or_else(|| crate::executable::home_dir().map(|home| home.join(".codex")));
+        if let Some(codex_home) = &catalog_home {
             cmd.env("CODEX_HOME", codex_home);
         }
         request
@@ -901,8 +945,13 @@ impl CodexHarness {
 
         let (client, incoming) = RpcClient::new(stdin, stdout);
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
+        let (input_ready_tx, input_ready_rx) = tokio::sync::oneshot::channel();
+        let validate_selections = !request.input_items.is_empty();
         tokio::spawn(run_session(Session {
+            input_ready: validate_selections.then_some(input_ready_tx),
             title_only,
+            catalog_home,
+            catalog_connections: self.catalog_connections.clone(),
             child,
             client,
             incoming,
@@ -914,6 +963,9 @@ impl CodexHarness {
             stderr_tail,
         }));
 
+        if validate_selections {
+            input_ready_rx.await.map_err(|_| HarnessError::RejectedBeforeAcceptance("Codex stopped before validating the selected inputs; your input remains available".into()))??;
+        }
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))
         })
@@ -926,7 +978,10 @@ impl CodexHarness {
 // ---------------------------------------------------------------------------
 
 struct Session {
+    input_ready: Option<tokio::sync::oneshot::Sender<Result<(), HarnessError>>>,
     title_only: bool,
+    catalog_home: Option<PathBuf>,
+    catalog_connections: composer_catalog::CatalogConnections,
     child: Child,
     client: RpcClient,
     incoming: mpsc::Receiver<Incoming>,
@@ -1196,7 +1251,10 @@ impl SessionLiveness<'_> {
 /// steering mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        mut input_ready,
         title_only,
+        catalog_home,
+        catalog_connections,
         mut child,
         client,
         mut incoming,
@@ -1398,6 +1456,16 @@ async fn run_session(session: Session) {
                 "Codex returned no thread identity for native review".into(),
             ));
         }
+        // Native thread/start and thread/resume report this policy beside `thread`.
+        // thread/read does not expose it; keep the provider-reported loaded state.
+        client.set_composer_policy(
+            &thread_id,
+            thread
+                .get("disabledPluginIds")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
         if !title_only
             && let Some(name) = request
                 .model_options
@@ -1453,10 +1521,21 @@ async fn run_session(session: Session) {
         }
     };
 
-    let turn_params = |text: &str| -> Value {
+    // Metadata requests reuse the exact loaded native runtime. The lease drops
+    // with this session and never keeps a child alive after adapter shutdown.
+    let catalog_cwd = std::path::Path::new(&request.cwd)
+        .canonicalize()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| request.cwd.clone());
+    let _catalog_lease = catalog_home
+        .as_deref()
+        .map(|home| catalog_connections.register(home, &catalog_cwd, &thread_id, client.clone()));
+
+    let turn_params = |input: Vec<Value>| -> Value {
         let mut p = serde_json::Map::new();
         p.insert("threadId".into(), Value::String(thread_id.clone()));
-        p.insert("input".into(), json!([{ "type": "text", "text": text }]));
+        p.insert("input".into(), Value::Array(input));
         p.insert("approvalPolicy".into(), approval_policy.into());
         p.insert("approvalsReviewer".into(), approvals_reviewer.into());
         p.insert(
@@ -1479,6 +1558,47 @@ async fn run_session(session: Session) {
         }
         Value::Object(p)
     };
+
+    let initial_input = match crate::composer_input::codex_input(
+        &request.prompt,
+        &request.attachments,
+        &request.input_items,
+    ) {
+        Ok(input) => input,
+        Err(error) => {
+            if let Some(tx) = input_ready.take() {
+                let _ = tx.send(Err(error));
+            } else {
+                let _ = event_tx.send(Err(error)).await;
+            }
+            shutdown_child(&mut child, kill_grace).await;
+            return;
+        }
+    };
+    let Some(validation) = liveness
+        .wait(composer_catalog::validate_inputs(
+            &client,
+            std::path::Path::new(&request.cwd),
+            &thread_id,
+            &request.input_items,
+        ))
+        .await
+    else {
+        shutdown_child(&mut child, kill_grace).await;
+        return;
+    };
+    if let Err(error) = validation {
+        if let Some(tx) = input_ready.take() {
+            let _ = tx.send(Err(error));
+        } else {
+            let _ = event_tx.send(Err(error)).await;
+        }
+        shutdown_child(&mut child, kill_grace).await;
+        return;
+    }
+    if let Some(tx) = input_ready.take() {
+        let _ = tx.send(Ok(()));
+    }
 
     let mut assistant_message_id = new_message_id();
     if !send(
@@ -1532,7 +1652,7 @@ async fn run_session(session: Session) {
     let initial_turn = async {
         match request.review.as_ref() {
             Some(review) => start_review(&client, &thread_id, review).await,
-            None => start_turn(&client, turn_params(&request.prompt)).await,
+            None => start_turn(&client, turn_params(initial_input)).await,
         }
     };
     let Some(started) = liveness.wait(initial_turn).await else {
@@ -1596,7 +1716,9 @@ async fn run_session(session: Session) {
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
     // next `turn/start` when the expected turn's end notification arrives.
-    let mut queued_steers: VecDeque<(String, Option<String>)> = VecDeque::new();
+    // Typed input, its composer selections and the durable correlation ID.
+    let mut queued_steers: VecDeque<(Vec<Value>, Vec<luna_proto::ComposerInput>, Option<String>)> =
+        VecDeque::new();
     // Acknowledged input remains pending until its exact clientId is recorded.
     let mut steering_open = true;
     let mut interrupted = false;
@@ -1906,11 +2028,12 @@ async fn run_session(session: Session) {
                         // Persistent session: a steer that lost the race with
                         // this turn's end becomes the next turn now; otherwise
                         // stay alive for the mailbox — the caller owns teardown.
-                        if let Some((text, message_id)) = queued_steers.pop_front() {
+                        if let Some((input, selections, message_id)) = queued_steers.pop_front() {
                             if !steer_as_new_turn(
                                 &client,
-                                turn_params(&text),
+                                turn_params(input),
                                 message_id,
+                                &request.cwd, &thread_id, &selections,
                                 &mut router,
                                 &liveness,
                                 &mut assistant_message_id,
@@ -2055,7 +2178,21 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
-                    let text = msg.prompt;
+                    let Some(validation) = liveness.wait(composer_catalog::validate_inputs(&client, std::path::Path::new(&request.cwd), &thread_id, &msg.input_items)).await else { break 'main; };
+                    if let Err(error) = validation {
+                        if let Some(tx) = msg.acceptance { let _ = tx.send(SteerAcceptance::Rejected(error.to_string())); }
+                        else { terminal_error = Some(error.to_string()); break 'main; }
+                        continue 'main;
+                    }
+                    let selections = msg.input_items.clone();
+                    let input = match crate::composer_input::codex_input(&msg.prompt, &msg.attachments, &msg.input_items) {
+                        Ok(input) => input,
+                        Err(error) => {
+                            if let Some(tx) = msg.acceptance { let _ = tx.send(SteerAcceptance::Rejected(error.to_string())); }
+                            else { terminal_error = Some(error.to_string()); break 'main; }
+                            continue 'main;
+                        }
+                    };
                     let require_active =
                         msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let mut acceptance = msg.acceptance;
@@ -2066,7 +2203,7 @@ async fn run_session(session: Session) {
                             "threadId": thread_id,
                             "expectedTurnId": expected,
                             "clientUserMessageId": wire_id,
-                            "input": [{ "type": "text", "text": text }],
+                            "input": input,
                         });
                         native_steers.pending.insert(wire_id.clone(),
                             (Some(expected.clone()), message_id.clone()));
@@ -2140,11 +2277,12 @@ async fn run_session(session: Session) {
                                 if router.active.as_deref() == Some(expected.as_str())
                                     && !router.is_completed(&expected)
                                 {
-                                    queued_steers.push_back((text, message_id));
+                                    queued_steers.push_back((input, selections, message_id));
                                 } else if !steer_as_new_turn(
                                     &client,
-                                    turn_params(&text),
+                                    turn_params(input),
                                     message_id,
+                                    &request.cwd, &thread_id, &selections,
                                     &mut router,
                                     &liveness,
                                     &mut assistant_message_id,
@@ -2165,8 +2303,9 @@ async fn run_session(session: Session) {
                         }
                     } else if !steer_as_new_turn(
                         &client,
-                        turn_params(&text),
+                        turn_params(input),
                         message_id,
+                        &request.cwd, &thread_id, &selections,
                         &mut router,
                         &liveness,
                         &mut assistant_message_id,
@@ -2319,6 +2458,9 @@ async fn steer_as_new_turn(
     client: &RpcClient,
     mut params: Value,
     user_message_id: Option<String>,
+    cwd: &str,
+    thread_id: &str,
+    selections: &[luna_proto::ComposerInput],
     router: &mut TurnRouter,
     liveness: &SessionLiveness<'_>,
     assistant_message_id: &mut String,
@@ -2328,7 +2470,28 @@ async fn steer_as_new_turn(
     if let Some(id) = &user_message_id {
         params["clientUserMessageId"] = json!(id);
     }
-    let Some(started) = liveness.wait(start_turn(client, params)).await else {
+    let Some(started) = liveness
+        .wait(async {
+            let attachments: Vec<String> = params
+                .get("input")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("localImage"))
+                .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            crate::validate_composer_inputs(&attachments, selections)?;
+            composer_catalog::validate_inputs(
+                client,
+                std::path::Path::new(cwd),
+                thread_id,
+                selections,
+            )
+            .await?;
+            start_turn(client, params).await
+        })
+        .await
+    else {
         return false;
     };
     let event_tx = liveness.events;

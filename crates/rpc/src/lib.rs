@@ -65,6 +65,7 @@ pub mod methods {
     pub const SET_TITLE_SETTINGS: &str = "SetTitleSettings";
     pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
     pub const LIST_MODELS: &str = "ListModels";
+    pub const LIST_COMPOSER_CATALOG: &str = "ListComposerCatalog";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
     /// Peer-to-peer delivery fallback: the SENDER's engine forwards a queued
@@ -333,6 +334,7 @@ pub mod methods {
         SET_HARNESS_ENABLED,
         LIST_MODELS,
         LIST_COMMANDS,
+        LIST_COMPOSER_CATALOG,
         QUEUE_COMMAND,
         RELAY_COMMAND,
         RETRY_DELIVERY,

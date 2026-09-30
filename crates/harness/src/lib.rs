@@ -4,6 +4,9 @@
 //! Code over stream-json, Codex over app-server JSON-RPC, and OpenCode over
 //! its HTTP/SSE server protocol.
 
+mod composer_input;
+pub use composer_input::validate_composer_inputs;
+
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -58,6 +61,8 @@ pub type ProviderForkProgressReporter =
 /// A steer prompt pushed into a live run; delivered at the harness's steering boundary.
 pub struct SteerMessage {
     pub prompt: String,
+    pub attachments: Vec<String>,
+    pub input_items: Vec<luna_proto::ComposerInput>,
     pub message_id: Option<String>,
     /// Ordinary warm routing may become a fresh provider turn when it loses
     /// the boundary race. Explicit queue steering must not.
@@ -233,8 +238,23 @@ pub trait Harness: Send + Sync {
     async fn models_live(&self) -> Result<Vec<Model>, HarnessError> {
         self.models().await
     }
-    /// Slash commands the agent advertises (ACP `availableCommands`); empty
-    /// for harnesses without them. May spawn a short-lived discovery process.
+    /// Installed-use native inputs scoped to the execution account and workspace.
+    async fn composer_catalog(
+        &self,
+        _cwd: &std::path::Path,
+        _home: &std::path::Path,
+        _force_file_auth: bool,
+        _thread_id: Option<&str>,
+    ) -> Result<luna_proto::ComposerCatalog, HarnessError> {
+        Err(HarnessError::Protocol(
+            "native composer discovery is unsupported".into(),
+        ))
+    }
+    /// Provider executable identity participates in the host catalog cache key.
+    fn composer_catalog_source(&self) -> String {
+        String::new()
+    }
+    /// Slash commands advertised by the agent; may spawn a short-lived probe.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
     }

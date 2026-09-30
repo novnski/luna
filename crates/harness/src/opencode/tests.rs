@@ -535,6 +535,8 @@ impl TurnWire {
         if queued {
             steer_tx
                 .send(crate::SteerMessage {
+                    input_items: Vec::new(),
+                    attachments: Vec::new(),
                     prompt: "second".into(),
                     message_id: None,
                     delivery: crate::SteerDelivery::AllowFollowUpTurn,

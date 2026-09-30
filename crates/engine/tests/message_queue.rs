@@ -890,6 +890,7 @@ async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
     handle
         .doc()
         .push_queued(&QueuedMessage {
+            input_items: Vec::new(),
             id: id.clone(),
             text: "accepted once".into(),
             attachments: Vec::new(),
@@ -1056,6 +1057,8 @@ async fn a_steer_command_holds_for_an_agent_that_takes_no_mid_turn_prompt() {
         .queue_command(
             CHAT,
             SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "and also this".into(),
                 message_id: Some("m-steer".into()),
             },

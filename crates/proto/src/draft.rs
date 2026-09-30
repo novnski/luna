@@ -68,6 +68,8 @@ pub struct ComposerDraft {
     pub task_id: Option<String>,
     pub revision: u64,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<crate::ComposerInput>,
     #[serde(default)]
     pub attachments: Vec<DraftBlob>,
     #[serde(default)]
@@ -94,6 +96,7 @@ impl ComposerDraft {
     /// even when the user changed the execution model before retrying.
     pub fn same_message_content(&self, other: &Self) -> bool {
         self.text == other.text
+            && self.input_items == other.input_items
             && self.attachments == other.attachments
             && self.appshots == other.appshots
             && self.context == other.context

@@ -46,6 +46,7 @@ fn native_client() -> CodexNativeClient {
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -1153,6 +1154,8 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
     let (controls, steer, _token) = controls("Yes");
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -1200,6 +1203,8 @@ async fn explicit_steer_native_record_emits_one_correlated_boundary() {
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1233,6 +1238,8 @@ async fn explicit_steer_ignores_stale_and_duplicate_echoes() {
     for (message_id, acceptance) in [("queued-steer-a", first_tx)] {
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "same prompt".into(),
                 message_id: Some(message_id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1278,6 +1285,8 @@ async fn explicit_steer_uncorrelated_ack_stays_unknown_without_replay() {
         let (accepted_tx, accepted_rx) = oneshot::channel();
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "redirect please".into(),
                 message_id: Some("uncorrelated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1312,6 +1321,8 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1345,6 +1356,8 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1385,6 +1398,8 @@ async fn explicit_steer_ack_only_remains_pending_without_boundary() {
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1419,6 +1434,8 @@ async fn rejected_steer_falls_back_to_a_follow_up_turn() {
     let (controls, steer, _token) = controls("Yes");
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -1868,6 +1885,8 @@ async fn next_turn_response_owns_approval_before_started_notification() {
     }
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "follow-up t2".into(),
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -2544,6 +2563,8 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
     for turn in 0..3 {
         if turn == 1 {
             steer.send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "Reuse the SAME existing subagent for one more task: reply exactly child-second. Use followup_task if available, otherwise send_input. Do not spawn a new agent. Wait for it to finish, then reply exactly parent-second. Do not inspect or change files.".into(),
                 message_id: None,
                 delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -2730,6 +2751,8 @@ async fn live_real_app_server_tool_and_steer() {
             if !sent && matches!(&event, AgentEvent::ToolCall { call: ToolCall::Exec { command }, .. } if command.contains("sleep")) {
                 let (tx, rx) = oneshot::channel();
                 steer.send(SteerMessage {
+                    input_items: Vec::new(),
+                    attachments: Vec::new(),
                     prompt: "After the command completes, change the final reply to exactly LUNA_AUDIT_STEER_OK.".into(),
                     message_id: Some("luna-audit-live-steer".into()),
                     delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -3137,6 +3160,8 @@ async fn native_steering_reconciles_lost_ack_and_terminal_readback() {
         let (tx, rx) = oneshot::channel();
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "redirect please".into(),
                 message_id: Some("native-correlated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -3181,6 +3206,8 @@ async fn native_steering_records_multiple_ids_once_in_order() {
         replies.push(rx);
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "same prompt".into(),
                 message_id: Some(id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,

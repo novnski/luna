@@ -105,6 +105,7 @@ fn core(root: &Path, runs: Arc<AtomicUsize>) -> EngineCore {
 fn run_request(text: &str) -> RunRequest {
     RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: text.into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,
@@ -164,6 +165,8 @@ async fn foreign_rows_cannot_run_from_an_open_chat_or_replay() {
         (
             "foreign-steer",
             SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "foreign steer".into(),
                 message_id: None,
             },

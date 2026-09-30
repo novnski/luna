@@ -8,6 +8,7 @@ fn run_request_attachments_survive_command_round_trip() {
     let doc = SessionDoc::init("chat-1").unwrap();
     let request = luna_proto::RunRequest {
         review: None,
+        input_items: Vec::new(),
         prompt: "p".into(),
         harness: None,
         provider_account_id: None,

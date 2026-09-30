@@ -415,7 +415,7 @@ impl Composer {
             item.follow_up_behavior,
             run_live,
             self.pickers().read(cx).harness_steers_mid_turn(harness),
-            !item.attachments.is_empty(),
+            !item.attachments.is_empty() && harness != Some(luna_proto::HarnessId::Codex),
             item.hold_reason.is_some(),
             blocked,
         )
@@ -1610,6 +1610,9 @@ impl Composer {
                             std::time::Duration::ZERO,
                             cx,
                         );
+                        composer.queue_edit_input_items = Some(composer.input_items.remove(&composer.current_key).unwrap_or_default());
+                        let selected_inputs = serde_json::from_value(reply.get("inputItems").cloned().unwrap_or_else(|| serde_json::json!([]))).unwrap_or_default();
+                        composer.input_items.insert(composer.current_key.clone(), selected_inputs);
                         composer.queue_edit_draft = Some((
                             composer.input.read(cx).text().to_string(),
                             composer.attachments.remove(&composer.current_key).unwrap_or_default(),
@@ -1619,6 +1622,8 @@ impl Composer {
                         composer.appshots.insert(composer.current_key.clone(), loaded_appshots);
                         composer.focus_pending = true;
                         composer.set_input_text_without_draft_edit(text, cx);
+                        let restored_key = composer.current_key.clone();
+                        composer.trusted_native_envelope_restored(&restored_key, cx);
                         composer.start_queue_edit_renewal(engine.clone(), cx);
                     }
                     Ok(reply)
@@ -1697,8 +1702,14 @@ impl Composer {
         self.queue_edit_task = None;
         self.queue_edit_renew_task = None;
         if let Some((text, attachments, appshots)) = self.queue_edit_draft.take() {
+            self.input_items.insert(
+                self.current_key.clone(),
+                self.queue_edit_input_items.take().unwrap_or_default(),
+            );
             self.appshots.insert(self.current_key.clone(), appshots);
             self.set_input_text_without_draft_edit(text, cx);
+            let restored_key = self.current_key.clone();
+            self.trusted_native_envelope_restored(&restored_key, cx);
             self.attachments
                 .insert(self.current_key.clone(), attachments);
         }
@@ -1739,6 +1750,11 @@ impl Composer {
         };
         let expected = self.queue_edit_base_text_hash.clone();
         let mut staged = self.staged().to_vec();
+        let input_items = self
+            .input_items
+            .get(&self.current_key)
+            .cloned()
+            .unwrap_or_default();
         let staged_appshots = self.staged_appshots().to_vec();
         staged.extend(staged_appshots.iter().map(|shot| shot.screenshot.clone()));
         let mut params = serde_json::json!({
@@ -1787,6 +1803,7 @@ impl Composer {
                         "text": params["text"],
                         "expectedTextHash": params["expectedTextHash"],
                         "attachments": params["attachments"],
+                        "inputItems": input_items,
                     });
                     let receipt = crate::task_commands::execute_receipt_on_with_id(
                         &engine,
@@ -2218,6 +2235,7 @@ mod tests {
 
     fn held_steer(status: QueueMessageStatus) -> QueuedMessage {
         QueuedMessage {
+            input_items: Vec::new(),
             id: "held-steer".into(),
             text: "explicitly authorize me".into(),
             attachments: Vec::new(),

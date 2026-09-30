@@ -247,6 +247,7 @@ async fn turn(core: &EngineCore, cwd: &std::path::Path, live: bool, second: bool
             HarnessId::Codex,
             RunRequest {
                 review: None,
+                input_items: Vec::new(),
                 prompt: prompt.into(),
                 harness: None,
                 provider_account_id: None,
