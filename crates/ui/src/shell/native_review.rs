@@ -375,7 +375,7 @@ impl Shell {
             .child(popover::dialog_title(&theme, "Review code"))
             .child(div().mt(px(12.0)).flex().flex_wrap().gap(px(6.0)).children(
                 targets.into_iter().enumerate().map(|(index, label)| {
-                    popover::btn_ghost(&theme, label, &format!("native-review-target-{index}"))
+                    popover::btn_ghost(&theme, label, format!("native-review-target-{index}"))
                         .id(("native-review-target", index))
                         .opacity(if kind == index { 1.0 } else { 0.65 })
                         .when(!sending, |button| button.on_click(cx.listener(move |this, _, _, cx| {
@@ -389,7 +389,7 @@ impl Shell {
             .when(kind == 1 && !branches.is_empty(), |card| {
                 card.child(div().mt(px(8.0)).flex().flex_wrap().gap(px(4.0)).children(
                     branches.into_iter().take(12).enumerate().map(|(index, branch)| {
-                        popover::btn_ghost(&theme, &branch, &format!("native-review-branch-{index}"))
+                        popover::btn_ghost(&theme, &branch, format!("native-review-branch-{index}"))
                             .id(("native-review-branch", index))
                             .when(!sending, |button| button.on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(dialog) = this.native_review_dialog.as_mut() {
