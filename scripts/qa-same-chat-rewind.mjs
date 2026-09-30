@@ -206,7 +206,9 @@ try {
     assert.deepEqual(entries(after.messages).filter(entry => entry.role !== 'system'), entries(before.messages).filter(entry => entry.role !== 'system').slice(0, 2));
     assert.deepEqual(after.draft, before.draft); assert.deepEqual(after.fileHashes, before.fileHashes);
     assert.deepEqual(after.checkpoints, before.checkpoints);
-    await turn('What secret marker was in the first message of this conversation? Reply only with that exact marker. Do not use tools.', markers[0]);
+    // Exact equality proves the provider context omits the rewound markers
+    // (a stale warm runtime would still remember markers[1] and markers[2]).
+    await turn('List every secret marker you remember from this conversation, separated by single spaces. Reply only with the markers. Do not use tools.', markers[0]);
     const continued = await snapshot(manifest, 'continued');
     assert.equal(continued.identity.currentBinding.providerTaskId, manifest.providerTaskId);
     assert.equal(continued.turns.length, 2);
@@ -222,7 +224,7 @@ try {
     assert.equal(emptyResult.turns.length, 0);
     assert.equal(entries(emptyResult.messages).filter(entry => entry.role !== 'system').length, 0);
     assert.equal(emptyResult.identity.currentBinding.providerTaskId, manifest.providerTaskId);
-    await turn('Reply exactly EMPTY_REWIND_CONTINUED. Do not use tools.', 'EMPTY_REWIND_CONTINUED');
+    await turn('If any LUNA_REWIND_ secret marker appears earlier in this conversation, reply with it. Otherwise reply exactly EMPTY_REWIND_CONTINUED. Do not use tools.', 'EMPTY_REWIND_CONTINUED');
     const emptyContinued = await snapshot(manifest, 'empty-continued');
     assert.equal(emptyContinued.turns.length, 1);
     assert.equal(emptyContinued.identity.currentBinding.providerTaskId, manifest.providerTaskId);
@@ -230,7 +232,7 @@ try {
     assert.deepEqual(emptyContinued.draft, before.draft);
     save('result.json', { result: 'passed', taskId, providerTaskId: manifest.providerTaskId,
       assertions: ['same binding/session', 'exact retained prefix', 'duplicate does not revert twice',
-        'draft preserved', 'file hashes preserved', 'checkpoints preserved', 'real same-session continuation', 'first-turn empty prefix and continuation'],
+        'draft preserved', 'file hashes preserved', 'checkpoints preserved', 'real same-session continuation without rewound markers', 'first-turn empty prefix and continuation without prior markers'],
       pending: ['native UI screenshots', 'busy/stale/legacy/steer/unknown/restart scenarios'] });
     console.log(JSON.stringify({ result: 'passed', evidence, taskId, pending: 'see result.json' }));
   }

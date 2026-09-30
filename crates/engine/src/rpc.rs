@@ -5190,6 +5190,15 @@ impl EngineRpc {
                         "rewind review selected a different message".into(),
                     )));
                 }
+                // The revert runs in a separate native client. A parked warm
+                // runtime keeps the pre-rewind thread in memory and a routed
+                // follow-up would continue from it, so retire it and keep
+                // dispatch excluded until this arm commits or fails.
+                let _rewind_transition = self
+                    .sessions
+                    .prepare_native_rewind(task_id)
+                    .await
+                    .map_err(TaskProjectionError::Mutation)?;
                 let handle = self
                     .doc_host
                     .open(task_id)
@@ -5265,6 +5274,12 @@ impl EngineRpc {
                 if current_binding.binding_id != binding.binding_id {
                     return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
                         "rewind binding changed during preflight".into(),
+                    )));
+                }
+                if self.sessions.has_live_run(task_id) {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "a provider runtime started during rewind preflight; rewind was not sent"
+                            .into(),
                     )));
                 }
                 let cutoff = entries

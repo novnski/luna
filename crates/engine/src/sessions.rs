@@ -2351,11 +2351,33 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
     ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        self.release_idle_native_writer(chat_id, "archiving", "archive")
+            .await
+    }
+
+    /// Same-chat rewind mutates the provider thread through a separate native
+    /// client. A parked warm runtime still holds the pre-rewind history in
+    /// memory and would continue from it, so release it first and keep
+    /// dispatch excluded through the revert and its projection commit.
+    pub(crate) async fn prepare_native_rewind(
+        &self,
+        chat_id: &str,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        self.release_idle_native_writer(chat_id, "rewinding", "rewind")
+            .await
+    }
+
+    async fn release_idle_native_writer(
+        &self,
+        chat_id: &str,
+        gerund: &str,
+        operation: &str,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
         let transition = self.transition_gate(chat_id).lock_owned().await;
         if self.active_turn_id(chat_id).is_some() {
-            return Err(EngineError::Other(
-                "The task has an active or pending turn; stop it before archiving.".into(),
-            ));
+            return Err(EngineError::Other(format!(
+                "The task has an active or pending turn; stop it before {gerund}."
+            )));
         }
         let closing = {
             let mut runs = lock(&self.inner.runs);
@@ -2378,13 +2400,13 @@ impl SessionsEngine {
                 }
             })
             .await
-            .map_err(|_| EngineError::Other(
-                "The idle native writer did not close before the archive deadline; archive was not attempted.".into(),
-            ))?;
+            .map_err(|_| EngineError::Other(format!(
+                "The idle native writer did not close before the {operation} deadline; {operation} was not attempted.",
+            )))?;
             if !closed.load(Ordering::Acquire) {
-                return Err(EngineError::Other(
-                    "The native runtime ended without confirmed idle stream closure; archive was not attempted.".into(),
-                ));
+                return Err(EngineError::Other(format!(
+                    "The native runtime ended without confirmed idle stream closure; {operation} was not attempted.",
+                )));
             }
         }
         Ok(transition)

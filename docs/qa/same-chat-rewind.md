@@ -18,8 +18,12 @@ after, provider `thread/turns/list` full pages, LUNA `WatchDocMessages` reset,
 `GetTaskCommandSnapshot`, receipt, draft, checkpoint list, file hashes and
 screenshots of confirmation and result. IDs must remain equal; provider and
 LUNA must retain exactly turn one. Continue with a fourth marker and prove
-only retained history is visible to the provider. Restart the app and read
-back the same state. Rewind the first turn to prove empty-prefix handling.
+only retained history is visible to the provider. Rewind while the previous
+turn's warm Codex runtime is still parked: the engine must release that idle
+native writer first (no second app-server process may keep the pre-rewind
+thread loaded), and the continuation must not recall the removed markers.
+Restart the app and read back the same state. Rewind the first turn to prove
+empty-prefix handling.
 
 Repeat with active/queued work, a stale review, a legacy thread, a steered row,
 and an external appended provider turn: expect no mutation. Inject a dropped
