@@ -478,6 +478,25 @@ impl Composer {
         self.store_native_selections(selected);
     }
 
+    /// Navigation just replaced the editor text with the destination draft.
+    /// Bind its owner; exact parked anchors return when the bytes and typed
+    /// envelope still match, otherwise the destination's typed envelope
+    /// (`input_items[current_key]`, written only by anchored reconcile or
+    /// native-inputs' trusted restores, and cleared on every engine reset)
+    /// is hydrated. Raw link text alone never grants an identity.
+    pub(super) fn restore_native_after_navigation(&mut self, cx: &mut Context<Self>) {
+        let items = self
+            .input_items
+            .get(&self.current_key)
+            .cloned()
+            .unwrap_or_default();
+        self.ensure_native_editor_owner(cx);
+        if self.input.read(cx).native_input_items() != items {
+            let text = self.input.read(cx).text().to_owned();
+            self.restore_native_input_envelope(text, items, cx);
+        }
+    }
+
     /// Trusted durable restore (draft load, queue edit, failed-send/rejection
     /// recovery, stash). Call only after `current_key`/`canvas_draft_id` name
     /// the draft that owns this envelope. Replaces the editor text, anchors

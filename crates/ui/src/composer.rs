@@ -9095,9 +9095,9 @@ impl Composer {
                 self.route_snap_until = Some(Instant::now() + Duration::from_millis(ROUTE_SNAP_MS));
             }
             self.set_input_text_without_draft_edit(draft, cx);
-            // Bind the new owner now; byte-identical parked anchors return,
-            // anything else waits for a trusted durable restore.
-            self.ensure_native_editor_owner(cx);
+            // Bind the new owner now: exact parked anchors or the draft's
+            // trusted typed envelope return; raw link text never does.
+            self.restore_native_after_navigation(cx);
         }
 
         self.load_draft(self.current_key.clone(), cx);

@@ -593,6 +593,43 @@ pub async fn run_integrations_picker_e2e(
         "exact canvas anchors did not return: {back}"
     );
 
+    // Case 10: a trusted background restore into another task (for example a
+    // failed send while the canvas is open) hydrates when that task opens.
+    let background = format!("Retry {} later", native_link(&skill));
+    let background_text = background.clone();
+    let background_item = skill.clone();
+    act(window, cx, |_, cx| {
+        composer.update(cx, |this, _| {
+            this.drafts.insert("fixture-chat-c".into(), background_text);
+            this.input_items
+                .insert("fixture-chat-c".into(), vec![background_item]);
+        })
+    })?;
+    act(window, cx, |_, cx| {
+        state.update(cx, |state, cx| {
+            state.selected_chat = Some("fixture-chat-c".into());
+            cx.notify();
+        })
+    })?;
+    let background_opened = record!("background-restore-opened");
+    anyhow::ensure!(
+        items(&background_opened) == 1
+            && anchors(&background_opened).len() == 1
+            && background_opened["text"] == background.as_str(),
+        "trusted background envelope was not hydrated on open: {background_opened}"
+    );
+    act(window, cx, |_, cx| {
+        state.update(cx, |state, cx| {
+            state.selected_chat = None;
+            cx.notify();
+        })
+    })?;
+    let back_again = record!("navigated-back-to-canvas-again");
+    anyhow::ensure!(
+        items(&back_again) == 1 && anchors(&back_again) == canvas_anchor,
+        "canvas anchors changed across a second round trip: {back_again}"
+    );
+
     // Case 6: a new canvas UUID under the same empty key is a new owner.
     let old_draft = back["draftId"].as_str().unwrap_or_default().to_owned();
     let canvas_text = envelope.clone();
