@@ -217,6 +217,7 @@ impl LunaSendProposal {
                 ),
                 options: vec!["Deny".into(), "Allow once".into()],
                 multi_select: false,
+                mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: self.claim.provider_call_id.clone(),
                     provider: HarnessId::Codex,
