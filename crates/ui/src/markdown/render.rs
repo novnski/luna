@@ -1906,6 +1906,22 @@ fn render_code_block(
     render_code_block_source(language, code, top_ix, ix, opts, theme, highlight)
 }
 
+/// Native ghost-button semantics shared by diagram, copy and fit controls.
+/// GPUI handles keyboard activation through the existing click callback.
+fn code_action_button(
+    id: SharedString,
+    label: &'static str,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let accent = theme.accent;
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .focus_visible(move |style| style.bg(accent.opacity(0.18)).text_color(accent))
+}
+
 fn code_icon_action(
     id: SharedString,
     label: &'static str,
@@ -1914,8 +1930,7 @@ fn code_icon_action(
     theme: &Theme,
 ) -> AnyElement {
     let fade_key = id.to_string();
-    div()
-        .id(id)
+    code_action_button(id, label, theme)
         .size(px(CODE_ACTION_SIZE))
         .rounded(px(6.0))
         .flex()
@@ -1952,8 +1967,7 @@ fn code_copy_button(
         let code_text: SharedString = code.to_string().into();
         let handler = copy.handler.clone();
         let fade_key = format!("{}-copy{ix}", opts.row_key);
-        div()
-            .id(SharedString::from(fade_key.clone()))
+        code_action_button(SharedString::from(fade_key.clone()), "Copy code", theme)
             .h(px(CODE_ACTION_SIZE))
             .px(px(6.0))
             .rounded(px(5.0))
@@ -2139,14 +2153,18 @@ fn render_code_block_source_with_actions(
     let fit_button = code_ui.as_ref().map(|ui| {
         let toggle = ui.toggle_fit.clone();
         let fade_key = format!("{}-fit{ix}", opts.row_key);
+        let label = if fit_content {
+            "Use horizontal scrolling"
+        } else {
+            "Fit content"
+        };
         let base = if fit_content {
             crate::theme::ink(0.09)
         } else {
             gpui::transparent_black()
         };
         let hover = crate::theme::ink(if fit_content { 0.13 } else { 0.08 });
-        div()
-            .id(SharedString::from(fade_key.clone()))
+        code_action_button(SharedString::from(fade_key.clone()), label, theme)
             .size(px(CODE_ACTION_SIZE))
             .rounded(px(6.0))
             .flex()
@@ -2159,16 +2177,7 @@ fn render_code_block_source_with_actions(
                 cx.stop_propagation();
                 toggle(window, cx);
             })
-            .tooltip(move |_, cx| {
-                cx.new(move |_| {
-                    CodeBlockTooltip(if fit_content {
-                        "Use horizontal scrolling"
-                    } else {
-                        "Fit content"
-                    })
-                })
-                .into()
-            })
+            .tooltip(move |_, cx| cx.new(move |_| CodeBlockTooltip(label)).into())
             .child(
                 crate::icons::icon(crate::icons::WRAP_TEXT)
                     .size(px(13.0))
