@@ -55,6 +55,8 @@ use crate::syntax_cache::{DocumentHighlightKey, SyntaxHighlightCache};
 use crate::theme::Theme;
 use luna_syntax::LanguageId as Lang;
 
+mod diagrams;
+
 // ---------------------------------------------------------------------------
 // Constants (mugen ports)
 // ---------------------------------------------------------------------------
@@ -3000,6 +3002,7 @@ pub struct Transcript {
     /// rerenders keep their local scroll position without leaking state for
     /// blocks no longer present in the selected chat.
     code_fences: HashMap<SharedString, render::CodeFenceRuntime>,
+    diagrams: diagrams::DiagramCache,
     /// Entry whose hover action is showing transient copied-check feedback.
     copied_message: Option<SharedString>,
     copied_message_clear: Option<Task<()>>,
@@ -3146,6 +3149,7 @@ impl Transcript {
             })
             .ok();
         });
+        cx.on_release(|view, cx| view.diagrams.clear(cx)).detach();
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
         let text_changes = cx.subscribe(
             &state,
@@ -3235,6 +3239,7 @@ impl Transcript {
             copied_code: None,
             copied_clear: None,
             code_fences: HashMap::new(),
+            diagrams: diagrams::DiagramCache::default(),
             copied_message: None,
             copied_message_clear: None,
             history_target: None,
@@ -4346,6 +4351,7 @@ impl Transcript {
                 self.own_turn_kick = false;
                 self.own_turn_last_tick = None;
             }
+            self.diagrams.clear(cx);
             self.chat_id = selected;
             self.rows.clear();
             self.row_cache.clear();
@@ -4603,6 +4609,8 @@ impl Transcript {
         }
         self.tool_group_reveals
             .retain(|row_id, _| live_tool_groups.contains(row_id));
+
+        self.sync_diagrams(&new_rows, cx);
 
         // Runtime scroll handles follow the stable code rows exactly. A live
         // block keeps its handle through completion; deleted/reindexed tail
@@ -6259,9 +6267,10 @@ impl Transcript {
                     return gpui::Empty.into_any_element();
                 };
                 let code = self.code_uis_for(&row.id, &top.block, *block_ix, cx);
+                let media = self.diagram_ui_for(&row.id, cx);
                 let opts = RenderOptions {
                     tasks: None,
-                    media: None,
+                    media,
                     row_key: row.id.clone(),
                     veil: None,
                     cache: (!render_cache_disabled()).then(|| self.render_cache.clone()),
@@ -6309,9 +6318,10 @@ impl Transcript {
                         })
                         .clone()
                 });
+                let media = self.diagram_ui_for(&row.id, cx);
                 let opts = RenderOptions {
                     tasks: None,
-                    media: None,
+                    media,
                     row_key: row.id.clone(),
                     veil: veil.clone(),
                     cache: (!render_cache_disabled()).then(|| self.render_cache.clone()),
@@ -8810,6 +8820,7 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
 
 impl Render for Transcript {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.refresh_diagram_style(window, cx);
         if record_view_frame("transcript") {
             tracing::warn!(
                 distance = self.distance_from_bottom(),
