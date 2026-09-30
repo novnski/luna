@@ -4664,7 +4664,7 @@ impl EngineRpc {
                             && let Some(entry) =
                                 child.outcomes.iter_mut().find(|entry| entry.id == id)
                         {
-                            entry.summary = "Summary omitted to keep the synced task small; open the child chat.".into();
+                            entry.summary = child_threads::CHILD_SUMMARY_OMITTED.into();
                         }
                         if child_threads::child_row_bytes(&chat)
                             > child_threads::CHILD_ROW_BUDGET_BYTES

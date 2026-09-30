@@ -11,6 +11,8 @@ use std::sync::Arc;
 /// permanently wedges that device's registry sync. Keep child rows well below.
 pub(super) const CHILD_ROW_BUDGET_BYTES: usize = 12 * 1024;
 const CHILD_SUMMARY_CHARS: usize = 2_000;
+pub(super) const CHILD_SUMMARY_OMITTED: &str =
+    "Summary omitted to keep the synced task small; open the child chat.";
 /// Delivered outcomes are already in the parent transcript; keep a short tail.
 const CHILD_DELIVERED_HISTORY: usize = 16;
 
@@ -756,15 +758,36 @@ impl EngineRpc {
     async fn persist_child_outcome(
         &self,
         task_id: &str,
-        outcome: ChildThreadOutcome,
+        mut outcome: ChildThreadOutcome,
     ) -> Result<(), crate::EngineError> {
-        if self
-            .workspace
-            .chat(task_id)?
-            .and_then(|chat| chat.child_thread)
-            .is_some_and(|child| child.outcomes.iter().any(|entry| entry.id == outcome.id))
-        {
+        let Some(mut chat) = self.workspace.chat(task_id)? else {
             return Ok(());
+        };
+        let Some(child) = chat.child_thread.as_mut() else {
+            return Ok(());
+        };
+        if child.outcomes.iter().any(|entry| entry.id == outcome.id) {
+            return Ok(());
+        }
+        // Probe the synced size budget first. A refused command ID can never
+        // be reused, so defer (no command) until pending outcomes deliver.
+        child.outcomes.push(outcome.clone());
+        compact_child_outcomes(child);
+        if child_row_bytes(&chat) > CHILD_ROW_BUDGET_BYTES {
+            outcome.summary = CHILD_SUMMARY_OMITTED.into();
+            if let Some(child) = chat.child_thread.as_mut()
+                && let Some(entry) = child
+                    .outcomes
+                    .iter_mut()
+                    .find(|entry| entry.id == outcome.id)
+            {
+                entry.summary = outcome.summary.clone();
+            }
+            if child_row_bytes(&chat) > CHILD_ROW_BUDGET_BYTES {
+                return Err(crate::EngineError::Other(
+                    "Child outcome deferred: its synced row is at the size budget until pending results deliver".into(),
+                ));
+            }
         }
         let mut command = legacy_task_command(
             task_id.into(),
