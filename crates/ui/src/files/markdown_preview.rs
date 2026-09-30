@@ -1084,6 +1084,8 @@ impl MarkdownPreview {
                         render::DiagramUi {
                             body,
                             show_source: source_shown,
+                            can_toggle: true,
+                            diagnostic: None,
                             toggle_source: Rc::new(move |_, cx| {
                                 let _ = owner.update(cx, |view, cx| {
                                     if !view.source_visible.remove(&toggle_id) {
@@ -1095,14 +1097,11 @@ impl MarkdownPreview {
                             }),
                         }
                     })),
-                    image: Rc::new(move |image, id, theme| match images.get(&image.source) {
-                        Some(Ok(loaded)) => {
-                            let mut el =
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(4.0))
-                                    .child(Self::media_element(
+                    image: Some(Rc::new(move |image, id, theme| {
+                        match images.get(&image.source) {
+                            Some(Ok(loaded)) => {
+                                let mut el = div().flex().flex_col().gap(px(4.0)).child(
+                                    Self::media_element(
                                         loaded,
                                         id,
                                         if image.alt.is_empty() {
@@ -1111,11 +1110,15 @@ impl MarkdownPreview {
                                             image.alt.clone()
                                         },
                                         image_owner.clone(),
-                                    ));
-                            if let Some(target) = image.link.clone() {
-                                let link = image_link.clone();
-                                el = el.child(
-                                    super::toolbar_button("markdown-image-link", "Open image link")
+                                    ),
+                                );
+                                if let Some(target) = image.link.clone() {
+                                    let link = image_link.clone();
+                                    el = el.child(
+                                        super::toolbar_button(
+                                            "markdown-image-link",
+                                            "Open image link",
+                                        )
                                         .on_click(move |_, window, cx| {
                                             render::activate_link(
                                                 render::LinkTarget::new(&target, &target),
@@ -1130,51 +1133,52 @@ impl MarkdownPreview {
                                                 .size(px(crate::surface_chrome::ICON_SIZE))
                                                 .text_color(theme.text_muted),
                                         ),
-                                );
+                                    );
+                                }
+                                el.into_any_element()
                             }
-                            el.into_any_element()
-                        }
-                        state => {
-                            let text = if image.source.starts_with("https://")
-                                || image.source.starts_with("http://")
-                            {
-                                format!("{} — {}", image.alt, image.source)
-                            } else {
-                                format!(
-                                    "{} — {}",
-                                    image.alt,
-                                    state
-                                        .and_then(|s| s.as_ref().err())
-                                        .map(String::as_str)
-                                        .unwrap_or(if image_allowed.contains(&image.source) {
-                                            "Loading image…"
-                                        } else {
-                                            "Document image preview limit reached"
+                            state => {
+                                let text = if image.source.starts_with("https://")
+                                    || image.source.starts_with("http://")
+                                {
+                                    format!("{} — {}", image.alt, image.source)
+                                } else {
+                                    format!(
+                                        "{} — {}",
+                                        image.alt,
+                                        state
+                                            .and_then(|s| s.as_ref().err())
+                                            .map(String::as_str)
+                                            .unwrap_or(if image_allowed.contains(&image.source) {
+                                                "Loading image…"
+                                            } else {
+                                                "Document image preview limit reached"
+                                            })
+                                    )
+                                };
+                                let target = image.source.clone();
+                                let external =
+                                    target.starts_with("https://") || target.starts_with("http://");
+                                div()
+                                    .id(id)
+                                    .text_color(theme.text_muted)
+                                    .child(text)
+                                    .when(external, |el| {
+                                        let link = image_link.clone();
+                                        el.cursor_pointer().on_click(move |_, window, cx| {
+                                            render::activate_link(
+                                                render::LinkTarget::new(&target, &target),
+                                                render::LinkAction::Primary,
+                                                Some(&link),
+                                                window,
+                                                cx,
+                                            );
                                         })
-                                )
-                            };
-                            let target = image.source.clone();
-                            let external =
-                                target.starts_with("https://") || target.starts_with("http://");
-                            div()
-                                .id(id)
-                                .text_color(theme.text_muted)
-                                .child(text)
-                                .when(external, |el| {
-                                    let link = image_link.clone();
-                                    el.cursor_pointer().on_click(move |_, window, cx| {
-                                        render::activate_link(
-                                            render::LinkTarget::new(&target, &target),
-                                            render::LinkAction::Primary,
-                                            Some(&link),
-                                            window,
-                                            cx,
-                                        );
                                     })
-                                })
-                                .into_any_element()
+                                    .into_any_element()
+                            }
                         }
-                    }),
+                    })),
                 });
                 opts.link = Some(link.clone());
                 opts.copy = Some(self.copy_ui_for(&opts.row_key, cx));
