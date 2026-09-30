@@ -46,6 +46,10 @@ use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
 
 mod integrations;
+#[cfg(feature = "appshots-fixture")]
+mod integrations_e2e;
+#[cfg(feature = "appshots-fixture")]
+pub use integrations_e2e::run_integrations_picker_e2e;
 
 // ---------------------------------------------------------------------------
 // Constants + pure decision logic
@@ -1051,6 +1055,8 @@ const FILE_MENTION_SCHEME: &str = "luna-file:";
 /// selection sat when the edit landed.
 #[derive(Clone)]
 struct EditSnapshot {
+    native_owner: Option<integrations::NativeEditorOwner>,
+    native_spans: Vec<integrations::NativeLink>,
     content: String,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -1378,11 +1384,11 @@ struct MentionHit {
 
 impl TextProjection {
     fn new(raw: &str) -> Self {
-        Self::project(raw, false)
+        Self::project(raw, false, &[])
     }
 
     fn for_composer(raw: &str) -> Self {
-        Self::project(raw, true)
+        Self::project(raw, true, &[])
     }
 
     fn push_chip(
@@ -1413,7 +1419,7 @@ impl TextProjection {
         display
     }
 
-    fn project(raw: &str, with_icons: bool) -> Self {
+    fn project(raw: &str, with_icons: bool, native_spans: &[integrations::NativeLink]) -> Self {
         let links = file_mention_links(raw);
         let labels = mention_display_labels(&links);
         let mut projection = Self::default();
@@ -1441,7 +1447,7 @@ impl TextProjection {
                 (link.range.clone(), label, kind, Some(link))
             })
             .collect();
-        projected.extend(integrations::native_links(raw).into_iter().map(|link| {
+        projected.extend(native_spans.iter().cloned().map(|link| {
             let (name, _) = integrations::identity(&link.item);
             (link.range, name.to_owned(), ComposerChipKind::Skill, None)
         }));
@@ -2009,6 +2015,8 @@ pub struct ComposerInput {
     accessibility_role: Role,
     focus_handle: FocusHandle,
     content: String,
+    native_owner: Option<integrations::NativeEditorOwner>,
+    native_spans: Vec<integrations::NativeLink>,
     pub(crate) read_only: bool,
     placeholder: SharedString,
     selected_range: Range<usize>,
@@ -2110,6 +2118,8 @@ impl ComposerInput {
             accessibility_role: Role::MultilineTextInput,
             focus_handle: cx.focus_handle(),
             content: String::new(),
+            native_owner: None,
+            native_spans: Vec::new(),
             read_only: false,
             placeholder: placeholder.into(),
             selected_range: 0..0,
@@ -2247,7 +2257,7 @@ impl ComposerInput {
 
     fn refresh_projection(&mut self) {
         self.projection = if self.mentions_enabled {
-            TextProjection::for_composer(&self.content)
+            TextProjection::project(&self.content, true, &self.native_spans)
         } else {
             TextProjection {
                 display: self.content.clone(),
@@ -2278,6 +2288,7 @@ impl ComposerInput {
             format!("{path} ")
         };
         self.record_edit(&range, &inserted);
+        self.apply_native_edit(&range, inserted.len());
         self.content =
             self.content[..range.start].to_owned() + &inserted + &self.content[range.end..];
         self.refresh_projection();
@@ -2307,6 +2318,7 @@ impl ComposerInput {
         };
         self.invalidate_mention_tooltip();
         self.record_edit(&range, &inserted);
+        self.apply_native_edit(&range, inserted.len());
         self.content =
             self.content[..range.start].to_owned() + &inserted + &self.content[range.end..];
         self.refresh_projection();
@@ -2340,6 +2352,7 @@ impl ComposerInput {
             format!("{replacement} ")
         };
         self.record_edit(&range, &inserted);
+        self.apply_native_edit(&range, inserted.len());
         self.content =
             self.content[..range.start].to_owned() + &inserted + &self.content[range.end..];
         self.refresh_projection();
@@ -2392,6 +2405,7 @@ impl ComposerInput {
 
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
         self.invalidate_mention_tooltip();
+        self.native_spans.clear();
         self.content = text.into();
         if self.single_line {
             self.content = self.content.replace(['\r', '\n'], " ");
@@ -2544,6 +2558,8 @@ impl ComposerInput {
 
     fn snapshot(&self) -> EditSnapshot {
         EditSnapshot {
+            native_owner: self.native_owner.clone(),
+            native_spans: self.native_spans.clone(),
             content: self.content.clone(),
             selected_range: self.selected_range.clone(),
             selection_reversed: self.selection_reversed,
@@ -2591,6 +2607,10 @@ impl ComposerInput {
     }
 
     fn restore(&mut self, snapshot: EditSnapshot, cx: &mut Context<Self>) {
+        if snapshot.native_owner != self.native_owner {
+            return;
+        }
+        self.native_spans = snapshot.native_spans;
         self.invalidate_mention_tooltip();
         self.content = snapshot.content;
         self.refresh_projection();
@@ -3662,6 +3682,7 @@ impl EntityInputHandler for ComposerInput {
         if self.marked_range.is_none() {
             self.record_edit(&range, new_text);
         }
+        self.apply_native_edit(&range, new_text.len());
         self.content =
             self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
         self.refresh_projection();
@@ -3710,6 +3731,7 @@ impl EntityInputHandler for ComposerInput {
             self.redo_stack.clear();
             self.last_edit = None;
         }
+        self.apply_native_edit(&range, new_text.len());
         self.content =
             self.content[0..range.start].to_owned() + new_text + &self.content[range.end..];
         self.refresh_projection();
@@ -6786,6 +6808,7 @@ impl Composer {
         self.slash_cache.clear();
         self.canvas_draft_id = uuid::Uuid::new_v4().to_string();
         self.current_key = key;
+        self.reset_native_picker_owner(cx);
         self.last_canvas_draft_config = self.pickers.read(cx).draft().clone();
         self.input.update(cx, |input, cx| {
             input.read_only = false;

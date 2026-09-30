@@ -5,6 +5,12 @@ use luna_proto::{
     ComposerCatalogStatus as Status, ComposerInput as NativeInput,
 };
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NativeEditorOwner {
+    pub engine_generation: u64,
+    pub draft_id: String,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct NativeLink {
     pub range: Range<usize>,
@@ -123,14 +129,97 @@ pub(super) struct IntegrationPicker {
     force_refresh: bool,
     pub loading: bool,
     pub error: Option<SharedString>,
-    /// Selected/restored identities remain known to undo/redo. Pasted syntax
-    /// with an identity never selected in this draft cannot populate inputItems.
-    history: HashMap<String, Vec<NativeInput>>,
+    retry_focus: Option<FocusHandle>,
+    #[cfg(feature = "appshots-fixture")]
+    fixture_catalog: bool,
     send_task: Option<Task<()>>,
     send_verified: bool,
 }
 
 impl ComposerInput {
+    pub(super) fn bind_native_owner(&mut self, owner: NativeEditorOwner) -> bool {
+        if self.native_owner.as_ref() == Some(&owner) {
+            return false;
+        }
+        self.native_owner = Some(owner);
+        self.native_spans.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_edit = None;
+        self.refresh_projection();
+        self.needs_measure = true;
+        true
+    }
+
+    pub(super) fn native_input_items(&self) -> Vec<NativeInput> {
+        let mut items = Vec::new();
+        for span in &self.native_spans {
+            if self.content.get(span.range.clone()) == Some(native_link(&span.item).as_str())
+                && !items.contains(&span.item)
+            {
+                items.push(span.item.clone());
+            }
+        }
+        items
+    }
+
+    /// Edits can move an existing anchor, never grant authority to inserted text.
+    pub(super) fn apply_native_edit(&mut self, range: &Range<usize>, inserted: usize) {
+        let removed = range.end - range.start;
+        self.native_spans.retain_mut(|span| {
+            if span.range.end <= range.start {
+                return true;
+            }
+            if span.range.start >= range.end {
+                // An insertion inside a span invalidates it; either edge stays outside.
+                if range.is_empty() && span.range.start < range.start {
+                    return false;
+                }
+                span.range =
+                    (span.range.start - removed + inserted)..(span.range.end - removed + inserted);
+                return true;
+            }
+            false
+        });
+    }
+
+    fn set_text_with_native_inputs(
+        &mut self,
+        text: String,
+        items: Vec<NativeInput>,
+        cx: &mut Context<Self>,
+    ) {
+        // `set_text` clears history and spans. Hydrate only this trusted envelope.
+        self.set_text(text, cx);
+        let links = native_links(&self.content);
+        let mut seen = Vec::new();
+        for item in items {
+            if seen.contains(&item) {
+                continue;
+            }
+            seen.push(item.clone());
+            if let Some(link) = links.iter().find(|link| link.item == item) {
+                self.native_spans.push(link.clone());
+            } else {
+                if !self.content.is_empty() && !self.content.ends_with(char::is_whitespace) {
+                    self.content.push(' ');
+                }
+                let start = self.content.len();
+                self.content.push_str(&native_link(&item));
+                self.native_spans.push(NativeLink {
+                    range: start..self.content.len(),
+                    item,
+                });
+            }
+        }
+        self.native_spans.sort_by_key(|span| span.range.start);
+        self.refresh_projection();
+        let end = self.content.len();
+        self.selected_range = end..end;
+        self.needs_measure = true;
+        cx.notify();
+    }
+
     pub(super) fn replace_native_mention(
         &mut self,
         range: Range<usize>,
@@ -152,7 +241,13 @@ impl ComposerInput {
             format!("{link} ")
         };
         self.record_edit(&range, &inserted);
+        self.apply_native_edit(&range, inserted.len());
         self.content.replace_range(range.clone(), &inserted);
+        self.native_spans.push(NativeLink {
+            range: range.start..range.start + native_link(item).len(),
+            item: item.clone(),
+        });
+        self.native_spans.sort_by_key(|span| span.range.start);
         self.refresh_projection();
         let cursor = range.start + inserted.len() + separator.map(char::len_utf8).unwrap_or(0);
         self.selected_range = cursor..cursor;
@@ -200,26 +295,64 @@ impl Composer {
         Some((key, serde_json::Value::Object(params)))
     }
 
-    pub(super) fn reconcile_native_selections(&mut self, cx: &App) {
-        let key = self.current_key.clone();
-        let restored = self.input_items.get(&key).cloned().unwrap_or_default();
-        let history = self.integrations.history.entry(key.clone()).or_default();
-        for item in restored {
-            if !history.contains(&item) {
-                history.push(item);
-            }
+    fn native_editor_owner(&self, cx: &App) -> NativeEditorOwner {
+        NativeEditorOwner {
+            engine_generation: self.state.read(cx).engine_generation(),
+            draft_id: self.draft_id_for(&self.current_key),
         }
-        let links = native_links(self.input.read(cx).text());
-        let mut selected = Vec::new();
-        for link in links {
-            if history.contains(&link.item) && !selected.contains(&link.item) {
-                selected.push(link.item);
-            }
+    }
+
+    pub(super) fn ensure_native_editor_owner(&mut self, cx: &mut Context<Self>) {
+        let owner = self.native_editor_owner(cx);
+        if self
+            .input
+            .update(cx, |input, _| input.bind_native_owner(owner))
+        {
+            self.input_items.remove(&self.current_key);
         }
+    }
+
+    /// Trusted draft/queue/recovery hydration; never called for a plain text edit.
+    pub(crate) fn restore_native_input_envelope(
+        &mut self,
+        text: String,
+        items: Vec<NativeInput>,
+        cx: &mut Context<Self>,
+    ) {
+        self.ensure_native_editor_owner(cx);
+        self.suppress_next_draft_edit = true;
+        self.input.update(cx, |input, cx| {
+            input.set_text_with_native_inputs(text, items, cx)
+        });
+        self.reconcile_native_selections(cx);
+    }
+
+    pub(crate) fn hydrate_native_input_envelope(&mut self, cx: &mut Context<Self>) {
+        let text = self.input.read(cx).text().to_owned();
+        let items = self
+            .input_items
+            .get(&self.current_key)
+            .cloned()
+            .unwrap_or_default();
+        self.restore_native_input_envelope(text, items, cx);
+    }
+
+    pub(crate) fn reset_native_picker_owner(&mut self, cx: &mut Context<Self>) {
+        let generation = self.integrations.generation.wrapping_add(1);
+        self.integrations = IntegrationPicker {
+            generation,
+            ..Default::default()
+        };
+        self.ensure_native_editor_owner(cx);
+    }
+
+    pub(super) fn reconcile_native_selections(&mut self, cx: &mut Context<Self>) {
+        self.ensure_native_editor_owner(cx);
+        let selected = self.input.read(cx).native_input_items();
         if selected.is_empty() {
-            self.input_items.remove(&key);
+            self.input_items.remove(&self.current_key);
         } else {
-            self.input_items.insert(key, selected);
+            self.input_items.insert(self.current_key.clone(), selected);
         }
     }
 
@@ -303,13 +436,14 @@ impl Composer {
             params["refresh"] = true.into();
         }
         let generation = self.integrations.generation;
+        let owner = self.native_editor_owner(cx);
         self.integrations.task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(methods::LIST_COMPOSER_CATALOG, params)
                 .await;
             this.update(cx, |composer, cx| {
-                if composer.integrations.generation != generation
+                if composer.native_editor_owner(cx) != owner || composer.integrations.generation != generation
                     || composer.integrations.key.as_ref() != Some(&key)
                     || composer
                         .native_catalog_request(false, cx)
@@ -387,16 +521,11 @@ impl Composer {
             return;
         };
         let item = entry_input(&entry);
-        let selected = self
-            .input_items
-            .entry(self.current_key.clone())
-            .or_default();
-        if !selected.contains(&item) {
-            selected.push(item.clone());
-        }
+        self.ensure_native_editor_owner(cx);
         self.input.update(cx, |input, cx| {
             input.replace_native_mention(token.range, &item, cx)
         });
+        self.reconcile_native_selections(cx);
         self.reset_mention(None, cx);
         self.mark_draft_dirty(cx);
         cx.notify();
@@ -483,11 +612,14 @@ impl Composer {
             return false;
         };
         let key = self.current_key.clone();
+        let owner = self.native_editor_owner(cx);
+        let generation = self.integrations.generation;
         let submitted_text = text.to_owned();
         let raw = self.input.read(cx).text().to_owned();
         self.integrations.send_task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::LIST_COMPOSER_CATALOG, params).await;
             this.update(cx, |composer, cx| {
+                if composer.native_editor_owner(cx) != owner || composer.integrations.generation != generation { return; }
                 composer.integrations.send_task = None;
                 if composer.current_key != key || composer.input.read(cx).text() != raw
                     || composer.input_items.get(&key) != Some(&items)
