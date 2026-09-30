@@ -420,6 +420,9 @@ enum TaskCommandIntent {
     SetModel {
         config: ChatConfig,
     },
+    Goal {
+        operation: luna_proto::GoalOperation,
+    },
     CompactContext {},
     ClearContext {},
     SwitchProvider {
@@ -550,6 +553,7 @@ impl TaskCommandIntent {
             Self::SetHost { .. } => "setHost",
             Self::SetConfig { .. } => "setConfig",
             Self::SetModel { .. } => "setModel",
+            Self::Goal { .. } => "goal",
             Self::CompactContext {} => "compactContext",
             Self::ClearContext {} => "clearContext",
             Self::SwitchProvider { .. } => "switchProvider",
@@ -585,6 +589,7 @@ impl TaskCommandIntent {
                 | Self::SetHost { .. }
                 | Self::SetConfig { .. }
                 | Self::SetModel { .. }
+                | Self::Goal { .. }
                 | Self::CompactContext {}
                 | Self::ClearContext {}
                 | Self::SwitchProvider { .. }
@@ -3434,6 +3439,7 @@ impl EngineRpc {
             | TaskCommandIntent::SendQueuedNow { .. }
             | TaskCommandIntent::SteerQueuedNow { .. }
             | TaskCommandIntent::RetryRecovery { .. }
+            | TaskCommandIntent::Goal { .. }
             | TaskCommandIntent::CompactContext {} => false,
             _ => true,
         }
@@ -4052,6 +4058,104 @@ impl EngineRpc {
         )
         .map(Some)
         .map_err(|error| TaskProjectionError::Commit(crate::EngineError::Other(error.to_string())))
+    }
+
+    async fn apply_goal_operation(
+        &self,
+        command_id: &str,
+        task_id: &str,
+        operation: luna_proto::GoalOperation,
+    ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
+        operation.validate().map_err(|error| {
+            TaskProjectionError::Mutation(crate::EngineError::Other(error.into()))
+        })?;
+        let chat = self
+            .workspace
+            .chat(task_id)
+            .map_err(TaskProjectionError::Mutation)?
+            .ok_or_else(|| {
+                TaskProjectionError::Mutation(crate::EngineError::Other(
+                    "Goals require an existing task".into(),
+                ))
+            })?;
+        let config = chat.config.ok_or_else(|| {
+            TaskProjectionError::Mutation(crate::EngineError::Other(
+                "Goals require a provider configuration".into(),
+            ))
+        })?;
+        if config.harness != HarnessId::Codex {
+            return self.reject_context_command(
+                command_id,
+                CommandReasonCode::UnsupportedOperation,
+                "Goals are supported by Codex tasks.",
+                "Choose a Codex task with an accepted provider binding.",
+            );
+        }
+        let execution = self
+            .agent_accounts
+            .resolve_execution(HarnessId::Codex, config.provider_account_id.as_deref())
+            .map_err(TaskProjectionError::Mutation)?;
+        let home = execution.codex_home.ok_or_else(|| {
+            TaskProjectionError::Mutation(crate::EngineError::Other(
+                "Codex execution home is unavailable".into(),
+            ))
+        })?;
+        let mut cancellation_guard =
+            (!matches!(operation, luna_proto::GoalOperation::Get)).then(|| {
+                NativeMetadataCommandGuard {
+                    doc_host: &self.doc_host,
+                    command_id,
+                    armed: true,
+                }
+            });
+        let result = self
+            .task_identity
+            .goal_operation(
+                task_id,
+                &home,
+                execution.codex_file_auth,
+                chat.cwd.as_deref().unwrap_or("."),
+                &operation,
+            )
+            .await;
+        // Transport loss after dispatch is unknown; a correlated provider
+        // rejection proves this control did not apply and can be reported failed.
+        let readback = match result {
+            Ok(readback) => readback,
+            Err(error) => {
+                if let Some(guard) = &mut cancellation_guard {
+                    guard.armed = false;
+                }
+                return Err(
+                    if matches!(operation, luna_proto::GoalOperation::Get)
+                        || matches!(
+                            &error,
+                            crate::EngineError::Harness(
+                                luna_harness::HarnessError::RejectedBeforeAcceptance(_)
+                            )
+                        )
+                    {
+                        TaskProjectionError::Mutation(error)
+                    } else {
+                        TaskProjectionError::ProviderUnknown(error)
+                    },
+                );
+            }
+        };
+        let receipt = self
+            .doc_host
+            .complete_goal_operation(task_id, command_id, &readback)
+            .map_err(|error| {
+                if matches!(operation, luna_proto::GoalOperation::Get) {
+                    TaskProjectionError::Commit(error)
+                } else {
+                    TaskProjectionError::ProviderUnknown(error)
+                }
+            })?;
+        if let Some(guard) = &mut cancellation_guard {
+            guard.armed = false;
+        }
+        Ok(Some(receipt))
     }
 
     async fn apply_compact_context(
@@ -5775,6 +5879,10 @@ impl EngineRpc {
                     },
                 )?;
                 Ok(Some(receipt))
+            }
+            TaskCommandIntent::Goal { operation } => {
+                self.apply_goal_operation(command_id, task_id, operation)
+                    .await
             }
             TaskCommandIntent::CompactContext {} => {
                 self.apply_compact_context(command_id, task_id).await
