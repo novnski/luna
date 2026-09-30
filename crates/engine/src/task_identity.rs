@@ -2153,6 +2153,19 @@ impl TaskIdentityService {
         )
     }
 
+    pub(crate) fn rewind_client(
+        &self,
+        task_id: &str,
+        codex_home: &Path,
+        force_file_auth: bool,
+    ) -> Result<CodexNativeClient, EngineError> {
+        self.mutable_codex_binding(task_id)?;
+        Ok(self
+            .inner
+            .codex
+            .for_execution_home(codex_home, force_file_auth))
+    }
+
     pub async fn compact_task(
         &self,
         task_id: &str,

@@ -3075,6 +3075,11 @@ pub enum TranscriptEvent {
         message_id: String,
         boundary: ConversationForkBoundaryKind,
     },
+    RewindConversation {
+        task_id: String,
+        message_id: String,
+        text: String,
+    },
     EditEarlierMessage {
         task_id: String,
         message_id: String,
@@ -6627,6 +6632,56 @@ impl Transcript {
                             )
                     })
             });
+            let rewind = history_task_id.clone().and_then(|task_id| {
+                (history_provider == Some(luna_proto::HarnessId::Codex)
+                    && history_role == MessageRole::User)
+                    .then(|| {
+                        let message_id = copy_entry_id.to_string();
+                        let text = copy_text.clone().unwrap_or_default().to_string();
+                        let pending = self.state.read(cx).context_control.pending_rewind.is_some();
+                        let label = if pending {
+                            "Reconcile rewind"
+                        } else {
+                            "Rewind"
+                        };
+                        let emit = move |cx: &mut Context<Self>| {
+                            cx.emit(TranscriptEvent::RewindConversation {
+                                task_id: task_id.clone(),
+                                message_id: message_id.clone(),
+                                text: text.clone(),
+                            })
+                        };
+                        let keyboard_emit = emit.clone();
+                        div()
+                            .id(SharedString::from(format!(
+                                "rewind-message-{copy_entry_id}"
+                            )))
+                            .role(gpui::Role::Button)
+                            .aria_label(label)
+                            .tab_index(0)
+                            .px(px(6.0))
+                            .h(px(Theme::SPACE_MD * 2.0))
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .flex()
+                            .items_center()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text_muted)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(crate::theme::ink(0.08)))
+                            .child(label)
+                            .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
+                            .on_key_down(cx.listener(
+                                move |_, event: &gpui::KeyDownEvent, _, cx| {
+                                    if !event.is_held
+                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                    {
+                                        keyboard_emit(cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                    })
+            });
             let metadata = div()
                 .flex()
                 .flex_row()
@@ -6637,6 +6692,7 @@ impl Transcript {
                 .children(side_action)
                 .children(fork)
                 .children(edit)
+                .children(rewind)
                 .children(copy);
             div()
                 .h(px(Theme::SPACE_SM + Theme::SPACE_MD * 2.0))

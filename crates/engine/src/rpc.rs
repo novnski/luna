@@ -56,6 +56,7 @@ use base64::Engine as _;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Duration;
@@ -400,6 +401,17 @@ enum TaskCommandIntent {
         recovery_id: String,
         review: HistoryReviewToken,
     },
+    #[serde(rename_all = "camelCase")]
+    RewindConversation {
+        message_id: String,
+        /// Explicit conversation-only choice. File restore uses its own preview.
+        keep_files: bool,
+        review: HistoryReviewToken,
+    },
+    #[serde(rename_all = "camelCase")]
+    ReconcileConversationRewind {
+        rewind_command_id: String,
+    },
     Delete {},
     #[serde(rename_all = "camelCase")]
     SetBranch {
@@ -551,6 +563,8 @@ impl TaskCommandIntent {
             Self::ForkTask { .. } => "forkTask",
             Self::EditEarlierMessage { .. } => "editEarlierMessage",
             Self::RestoreHistoryRecovery { .. } => "restoreHistoryRecovery",
+            Self::RewindConversation { .. } => "rewindConversation",
+            Self::ReconcileConversationRewind { .. } => "reconcileConversationRewind",
             Self::Delete {} => "delete",
             Self::SetBranch { .. } => "setBranch",
             Self::SetCwd { .. } => "setCwd",
@@ -588,6 +602,8 @@ impl TaskCommandIntent {
                     | Self::ForkTask { .. }
                     | Self::EditEarlierMessage { .. }
                     | Self::RestoreHistoryRecovery { .. }
+                    | Self::RewindConversation { .. }
+                    | Self::ReconcileConversationRewind { .. }
                     | Self::Delete {}
                     | Self::SetBranch { .. }
                     | Self::SetCwd { .. }
@@ -628,6 +644,8 @@ impl TaskCommandIntent {
                     | Self::ForkTask { .. }
                     | Self::EditEarlierMessage { .. }
                     | Self::RestoreHistoryRecovery { .. }
+                    | Self::RewindConversation { .. }
+                    | Self::ReconcileConversationRewind { .. }
                     | Self::SetBranch { .. }
                     | Self::SetCwd { .. }
                     | Self::SetHost { .. }
@@ -3016,6 +3034,30 @@ impl EngineRpc {
             }
         }
 
+        if !matches!(&command.intent, TaskCommandIntent::CreateChat { .. })
+            && self
+                .doc_host
+                .context_control(&command.task_id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?
+                .pending_rewind
+                .is_some()
+            && !matches!(
+                &command.intent,
+                TaskCommandIntent::ReconcileConversationRewind { .. }
+                    | TaskCommandIntent::MarkSeen { .. }
+                    | TaskCommandIntent::SetRead { .. }
+            )
+        {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Conflict,
+                false,
+                CommandReasonCode::OperationFailed,
+                "Conversation rewind must be reconciled before another task mutation",
+                "Use Reconcile rewind; it reads provider history without repeating the revert.",
+            );
+        }
+
         let needs_turn_fence = command.intent.requires_turn()
             || (matches!(&command.intent, TaskCommandIntent::SendQueuedNow { .. })
                 && current.active_turn_id.is_some());
@@ -3465,6 +3507,8 @@ impl EngineRpc {
             | TaskCommandIntent::ForkTask { .. }
             | TaskCommandIntent::EditEarlierMessage { .. }
             | TaskCommandIntent::RestoreHistoryRecovery { .. }
+            | TaskCommandIntent::RewindConversation { .. }
+            | TaskCommandIntent::ReconcileConversationRewind { .. }
             | TaskCommandIntent::SendQueuedNow { .. }
             | TaskCommandIntent::SteerQueuedNow { .. }
             | TaskCommandIntent::RetryRecovery { .. }
@@ -3674,6 +3718,11 @@ impl EngineRpc {
             ));
         }
         let handle = self.doc_host.open(task_id)?;
+        if handle.doc().context_control().compact.blocks_new_turn() {
+            return Err(crate::EngineError::Other(
+                "resolve context compaction before changing history".into(),
+            ));
+        }
         if !handle.doc().read_queue()?.is_empty() {
             return Err(crate::EngineError::Other(
                 "send or remove queued messages before changing history".into(),
@@ -3790,6 +3839,127 @@ impl EngineRpc {
             }
         }
         Ok(())
+    }
+
+    fn rewind_reconciliation_ready(
+        &self,
+        task_id: &str,
+    ) -> Result<(Chat, luna_proto::ExecutionBinding), crate::EngineError> {
+        let chat = self
+            .workspace
+            .chat(task_id)?
+            .ok_or_else(|| crate::EngineError::Other("rewind task no longer exists".into()))?;
+        if chat.archived || self.sessions.active_turn_id(task_id).is_some() {
+            return Err(crate::EngineError::Other(
+                "wait for an idle, unarchived task before rewind reconciliation".into(),
+            ));
+        }
+        let binding = self
+            .task_identity
+            .view(task_id)
+            .and_then(|view| view.current_binding)
+            .ok_or_else(|| crate::EngineError::Other("rewind task has no binding".into()))?;
+        if binding.provider_id != HarnessId::Codex
+            || chat.config.as_ref().map(|config| config.harness) != Some(HarnessId::Codex)
+        {
+            return Err(crate::EngineError::Other(
+                "rewind task provider changed".into(),
+            ));
+        }
+        Ok((chat, binding))
+    }
+
+    fn conversation_rewind_client(
+        &self,
+        task_id: &str,
+        chat: &Chat,
+    ) -> Result<luna_harness::codex::native::CodexNativeClient, crate::EngineError> {
+        let config = chat.config.as_ref().ok_or_else(|| {
+            crate::EngineError::Other("task has no provider configuration".into())
+        })?;
+        let execution = self
+            .agent_accounts
+            .resolve_execution(HarnessId::Codex, config.provider_account_id.as_deref())?;
+        let home = execution.codex_home.ok_or_else(|| {
+            crate::EngineError::Other("Codex execution home is unavailable".into())
+        })?;
+        self.task_identity
+            .rewind_client(task_id, &home, execution.codex_file_auth)
+    }
+
+    fn commit_conversation_rewind(
+        &self,
+        task_id: &str,
+        command_id: &str,
+        record: &crate::history_operations::ConversationRewindRecord,
+        reverted: bool,
+    ) -> Result<CommandReceipt, TaskProjectionError> {
+        let (_, binding) = self
+            .rewind_reconciliation_ready(task_id)
+            .map_err(TaskProjectionError::ProviderUnknown)?;
+        if binding.binding_id != record.binding_id
+            || binding.generation != record.binding_generation
+        {
+            return Err(TaskProjectionError::ProviderUnknown(
+                crate::EngineError::Other(
+                    "rewind binding changed; retained history was not projected".into(),
+                ),
+            ));
+        }
+        let source_bytes = self
+            .store
+            .load_snapshot(&format!(
+                "{}:transcript",
+                crate::history_operations::rewind_record_id(task_id, &record.command_id)
+            ))
+            .map_err(|error| TaskProjectionError::ProviderUnknown(error.into()))?
+            .ok_or_else(|| {
+                TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                    "rewind source snapshot is unavailable".into(),
+                ))
+            })?;
+        let original = SessionDoc::from_snapshot(&source_bytes)
+            .map_err(crate::EngineError::from)
+            .map_err(TaskProjectionError::ProviderUnknown)?
+            .read_entries()
+            .map_err(crate::EngineError::from)
+            .map_err(TaskProjectionError::ProviderUnknown)?;
+        let marker = self.history_marker(format!("history-rewind:{}", record.command_id), format!(
+            "Rewound this conversation before message {} in the same provider session. Files and external effects were kept. Audit snapshot: {}.",
+            record.message_id, crate::history_operations::rewind_record_id(task_id, &record.command_id),
+        ));
+        let (_, receipt) = self.doc_host.commit_context_boundary(
+            task_id, command_id, Some(&binding.binding_id), Some(binding.generation),
+            None, None, &[], &[],
+            |doc| {
+                if doc.context_control().pending_rewind.as_deref() != Some(record.command_id.as_str()) {
+                    return Err(crate::EngineError::Other("rewind intent changed before projection".into()));
+                }
+                if reverted {
+                    if doc.read_entries()? != original {
+                        return Err(crate::EngineError::Other("LUNA transcript changed while rewind was pending; keep later rows visible".into()));
+                    }
+                    doc.replace_conversation_entries(&record.entries, &record.checkpoints)?;
+                    doc.push_message(&marker)?;
+                    doc.clear_context_usage()?;
+                }
+                let mut context = doc.context_control();
+                context.pending_rewind = None;
+                context.provider_summary = None;
+                context.notice = Some(if reverted {
+                    "Conversation rewound in the same Codex session. Files kept; Git checkpoint restore is a separate operation.".into()
+                } else {
+                    "Rewind readback verified the original conversation. No history was removed; files kept.".into()
+                });
+                doc.set_context_control(&context)?;
+                Ok(())
+            },
+            |_| Ok(()),
+        ).map_err(|error| TaskProjectionError::ProviderUnknown(crate::EngineError::Other(error.message().to_string())))?;
+        // The same binding and in-memory provider route remain current. Do not
+        // install the clear-context no-resume tombstone: continuation must use
+        // the existing Codex thread ID.
+        Ok(receipt)
     }
 
     async fn fork_provider_history(
@@ -5028,6 +5198,304 @@ impl EngineRpc {
                     let _ = self.doc_host.open(&new_task_id);
                 }
                 Ok(Some(receipt))
+            }
+            TaskCommandIntent::RewindConversation {
+                message_id,
+                keep_files,
+                review,
+            } => {
+                use crate::history_operations::{ConversationRewindRecord, save_rewind_record};
+                if !keep_files {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Choose Keep files for conversation rewind; preview and restore a Git checkpoint separately.".into(),
+                    )));
+                }
+                let (chat, binding) = self
+                    .ensure_history_operation_ready(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if binding.provider_id != HarnessId::Codex {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Same-chat native rewind is supported only for Codex.".into(),
+                    )));
+                }
+                self.validate_history_review(task_id, &chat, &binding, &review)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if review.message_id.as_deref() != Some(message_id.as_str()) {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "rewind review selected a different message".into(),
+                    )));
+                }
+                // The revert runs in a separate native client. A parked warm
+                // runtime keeps the pre-rewind thread in memory and a routed
+                // follow-up would continue from it, so retire it and keep
+                // dispatch excluded until this arm commits or fails.
+                let _rewind_transition = self
+                    .sessions
+                    .prepare_native_rewind(task_id)
+                    .await
+                    .map_err(TaskProjectionError::Mutation)?;
+                let handle = self
+                    .doc_host
+                    .open(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let plan = plan_history(
+                    handle.doc(),
+                    HarnessId::Codex,
+                    ConversationForkBoundaryKind::BeforeUserMessage,
+                    Some(&message_id),
+                )
+                .map_err(TaskProjectionError::Mutation)?;
+                let luna_proto::ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } =
+                    &plan.provider_boundary
+                else {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "rewind has no exact before-turn boundary".into(),
+                    )));
+                };
+                let client = self
+                    .conversation_rewind_client(task_id, &chat)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let cwd = chat.cwd.clone().unwrap_or_else(|| ".".into());
+                let native = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    client.prepare_rewind(&binding.provider_task_id, checkpoint_id, &cwd),
+                )
+                .await
+                .map_err(|_| {
+                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "rewind preflight timed out before mutation".into(),
+                    ))
+                })?
+                .map_err(|error| TaskProjectionError::Mutation(error.into()))?;
+                // Every native completed turn must have the same ordered LUNA
+                // checkpoint. External/legacy/mixed-binding history is refused.
+                let entries = handle
+                    .doc()
+                    .read_entries()
+                    .map_err(crate::EngineError::from)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let document_turns = entries
+                    .iter()
+                    .filter(|entry| entry.role == MessageRole::Assistant)
+                    .map(|entry| handle.doc().provider_checkpoint(&entry.id))
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "LUNA history lacks exact provider checkpoints".into(),
+                        ))
+                    })?;
+                let native_turns = native
+                    .original
+                    .iter()
+                    .filter_map(|turn| turn.get("id").and_then(Value::as_str))
+                    .collect::<Vec<_>>();
+                if document_turns
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    != native_turns
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Provider and LUNA turn history differ; rewind was not sent".into(),
+                    )));
+                }
+                // Check the current profile, queue and reviewed task again
+                // after asynchronous preflight, before durable staging.
+                let (current_chat, current_binding) = self
+                    .ensure_history_operation_ready(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                self.validate_history_review(task_id, &current_chat, &current_binding, &review)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if current_binding.binding_id != binding.binding_id {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "rewind binding changed during preflight".into(),
+                    )));
+                }
+                if self.sessions.has_live_run(task_id) {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "a provider runtime started during rewind preflight; rewind was not sent"
+                            .into(),
+                    )));
+                }
+                let cutoff = entries
+                    .iter()
+                    .position(|entry| entry.id == message_id)
+                    .ok_or_else(|| {
+                        TaskProjectionError::Mutation(crate::EngineError::Other(
+                            "rewind message vanished".into(),
+                        ))
+                    })?;
+                let reviewed_plan = plan_history(
+                    handle.doc(),
+                    HarnessId::Codex,
+                    ConversationForkBoundaryKind::BeforeUserMessage,
+                    Some(&message_id),
+                )
+                .map_err(TaskProjectionError::Mutation)?;
+                if reviewed_plan.provider_boundary != plan.provider_boundary {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "rewind turn boundary changed during preflight".into(),
+                    )));
+                }
+                let retained_checkpoints = entries[..cutoff]
+                    .iter()
+                    .filter_map(|entry| {
+                        handle
+                            .doc()
+                            .provider_checkpoint(&entry.id)
+                            .map(|id| (entry.id.clone(), id))
+                    })
+                    .collect::<HashMap<_, _>>();
+                let retained_ids = entries[..cutoff]
+                    .iter()
+                    .filter(|entry| entry.role == MessageRole::Assistant)
+                    .filter_map(|entry| retained_checkpoints.get(&entry.id).map(String::as_str))
+                    .collect::<Vec<_>>();
+                if retained_ids
+                    != native
+                        .retained
+                        .iter()
+                        .filter_map(|turn| turn.get("id").and_then(Value::as_str))
+                        .collect::<Vec<_>>()
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "rewind retained checkpoints differ from provider prefix".into(),
+                    )));
+                }
+                let current_client = self
+                    .conversation_rewind_client(task_id, &current_chat)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if client.codex_home() != current_client.codex_home() {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Codex execution account changed during preflight".into(),
+                    )));
+                }
+                let record = ConversationRewindRecord {
+                    command_id: command_id.into(),
+                    task_id: task_id.into(),
+                    binding_id: binding.binding_id.clone(),
+                    binding_generation: binding.generation,
+                    provider_account_id: chat
+                        .config
+                        .as_ref()
+                        .and_then(|config| config.provider_account_id.clone()),
+                    provider_home: client.codex_home().to_string_lossy().into_owned(),
+                    cwd: cwd.clone(),
+                    message_id,
+                    native,
+                    entries: entries[..cutoff].to_vec(),
+                    checkpoints: retained_checkpoints,
+                };
+                let snapshot = handle
+                    .doc()
+                    .export_snapshot()
+                    .map_err(crate::EngineError::from)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if SessionDoc::from_snapshot(&snapshot)
+                    .map_err(crate::EngineError::from)
+                    .map_err(TaskProjectionError::Mutation)?
+                    .read_entries()
+                    .map_err(crate::EngineError::from)
+                    .map_err(TaskProjectionError::Mutation)?
+                    != entries
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "LUNA transcript changed during rewind preflight".into(),
+                    )));
+                }
+                save_rewind_record(&self.store, &record, &snapshot)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let mut context = handle.doc().context_control();
+                context.pending_rewind = Some(command_id.into());
+                context.notice = Some("Conversation rewind is awaiting provider readback. Later history remains visible; new turns are blocked. Use Reconcile rewind after a restart or uncertain result.".into());
+                self.doc_host
+                    .persist_context_control(task_id, command_id, &context)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let progress_state = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let tracked = progress_state.clone();
+                let progress = move |_| {
+                    tracked.store(true, std::sync::atomic::Ordering::Release);
+                    Ok(())
+                };
+                let outcome = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    client.revert_thread(&record.native, &cwd, &progress),
+                )
+                .await;
+                match outcome {
+                    Ok(Ok(())) => Ok(Some(self.commit_conversation_rewind(task_id, command_id, &record, true)?)),
+                    Ok(Err(error)) if !progress_state.load(std::sync::atomic::Ordering::Acquire) => {
+                        let mut context = self.doc_host.context_control(task_id).map_err(TaskProjectionError::Mutation)?;
+                        context.pending_rewind = None;
+                        context.notice = Some(format!("Rewind was not sent: {error}"));
+                        self.doc_host.persist_context_control(task_id, command_id, &context).map_err(TaskProjectionError::Mutation)?;
+                        Err(TaskProjectionError::Mutation(error.into()))
+                    }
+                    Ok(Err(error)) => Err(TaskProjectionError::ProviderUnknown(error.into())),
+                    Err(_) => Err(TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                        "Rewind completion timed out; later history remains visible. Reconcile without repeating revert.".into(),
+                    ))),
+                }
+            }
+            TaskCommandIntent::ReconcileConversationRewind { rewind_command_id } => {
+                use luna_harness::codex::native::CodexRewindObservation;
+                let (chat, binding) = self
+                    .rewind_reconciliation_ready(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let context = self
+                    .doc_host
+                    .context_control(task_id)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if context.pending_rewind.as_deref() != Some(rewind_command_id.as_str()) {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "No matching unresolved rewind".into(),
+                    )));
+                }
+                let record = crate::history_operations::load_rewind_record(
+                    &self.store,
+                    task_id,
+                    &rewind_command_id,
+                )
+                .map_err(TaskProjectionError::Mutation)?;
+                if binding.binding_id != record.binding_id
+                    || binding.generation != record.binding_generation
+                    || binding.provider_task_id != record.native.thread_id
+                    || chat.cwd.as_deref().unwrap_or(".") != record.cwd
+                    || chat
+                        .config
+                        .as_ref()
+                        .and_then(|config| config.provider_account_id.as_ref())
+                        != record.provider_account_id.as_ref()
+                {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Rewind identity, account or workspace changed; keep later history visible"
+                            .into(),
+                    )));
+                }
+                let client = self
+                    .conversation_rewind_client(task_id, &chat)
+                    .map_err(TaskProjectionError::Mutation)?;
+                if client.codex_home() != std::path::Path::new(&record.provider_home) {
+                    return Err(TaskProjectionError::Mutation(crate::EngineError::Other("Codex execution account/home changed; reconcile using the original account".into())));
+                }
+                let observed = tokio::time::timeout(
+                    Duration::from_secs(30),
+                    client.observe_rewind(&record.native, &record.cwd),
+                )
+                .await
+                .map_err(|_| {
+                    TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Rewind readback timed out; sends remain blocked".into(),
+                    ))
+                })?
+                .map_err(|error| TaskProjectionError::Mutation(error.into()))?;
+                match observed {
+                    CodexRewindObservation::Reverted => Ok(Some(self.commit_conversation_rewind(task_id, command_id, &record, true)?)),
+                    CodexRewindObservation::Original => Ok(Some(self.commit_conversation_rewind(task_id, command_id, &record, false)?)),
+                    CodexRewindObservation::Diverged => Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                        "Provider history differs from both saved prefixes. Later LUNA history stays visible and sends remain blocked.".into(),
+                    ))),
+                }
             }
             TaskCommandIntent::EditEarlierMessage {
                 message_id,
