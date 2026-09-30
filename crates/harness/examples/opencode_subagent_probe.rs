@@ -50,6 +50,7 @@ async fn main() {
             .into()
     });
     let request = RunRequest {
+        input_items: Vec::new(),
         prompt,
         harness: None,
         provider_account_id: None,

@@ -4,6 +4,9 @@
 //! Code over stream-json, Codex over app-server JSON-RPC, and OpenCode over
 //! its HTTP/SSE server protocol.
 
+mod composer_input;
+pub use composer_input::validate_composer_inputs;
+
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -58,6 +61,8 @@ pub type ProviderForkProgressReporter =
 /// A steer prompt pushed into a live run; delivered at the harness's steering boundary.
 pub struct SteerMessage {
     pub prompt: String,
+    pub attachments: Vec<String>,
+    pub input_items: Vec<luna_proto::ComposerInput>,
     pub message_id: Option<String>,
     /// Ordinary warm routing may become a fresh provider turn when it loses
     /// the boundary race. Explicit queue steering must not.

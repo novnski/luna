@@ -100,6 +100,7 @@ fn complete_assistant_count(core: &EngineCore) -> usize {
 fn run_payload(message_id: &str) -> SessionCommandPayload {
     SessionCommandPayload::Run {
         request: RunRequest {
+            input_items: Vec::new(),
             prompt: "back from the archive".into(),
             harness: None,
             provider_account_id: None,

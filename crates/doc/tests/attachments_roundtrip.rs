@@ -7,6 +7,7 @@ use luna_doc::{SessionCommandEntry, SessionCommandPayload, SessionCommandStatus,
 fn run_request_attachments_survive_command_round_trip() {
     let doc = SessionDoc::init("chat-1").unwrap();
     let request = luna_proto::RunRequest {
+        input_items: Vec::new(),
         prompt: "p".into(),
         harness: None,
         provider_account_id: None,

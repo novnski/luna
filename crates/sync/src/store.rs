@@ -2115,6 +2115,9 @@ impl DocsStore {
             draft.revision = draft.revision.max(submission.revision).saturating_add(1);
             draft.updated_at_ms = now_ms();
             draft.text.clear();
+            // Typed identities are part of the matched submitted content; a
+            // newer draft with different selections never reaches this branch.
+            draft.input_items.clear();
             draft.attachments.clear();
             let removed_appshots = std::mem::take(&mut draft.appshots);
             draft.context = Default::default();
@@ -3711,6 +3714,86 @@ impl DocsStore {
         }
         tx.commit()?;
         Ok(confirmed)
+    }
+
+    /// Terminalize a Run whose adapter PROVED the provider never accepted the
+    /// user turn (`RejectedBeforeAcceptance` before `SessionStarted`).
+    ///
+    /// Only an exact `run` receipt for this task/correlation that is still
+    /// Pending and uncommitted is rejected, and only while the command's
+    /// admission workspace stamp, the task's current stamp and the caller's
+    /// expected stamp agree and any admission binding generation is still
+    /// current. Committed-unknown, accepted, terminal, other-intent and
+    /// fenced-out rows are left untouched, so a race with provider acceptance
+    /// keeps whichever outcome committed first and a repeat is a no-op.
+    ///
+    /// The same transaction marks this device's frozen draft submission for
+    /// the rejected command recoverable. Its snapshot (text, typed selections,
+    /// attachments) and blob owners are retained. The task's binding and
+    /// active turn are not changed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reject_run_before_acceptance(
+        &self,
+        device_id: &str,
+        task_id: &str,
+        correlation_id: &str,
+        expected_workspace_repair_revision: u64,
+        current_binding_generation: Option<u32>,
+        message: &str,
+        recovery_action: &str,
+    ) -> Result<Vec<CommandReceipt>, StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let rows = {
+            let mut stmt = tx.prepare(
+                "SELECT receipt_json FROM task_command_receipts WHERE task_id=?1 ORDER BY updated_at",
+            )?;
+            stmt.query_map(params![task_id], |row| row.get::<_, Vec<u8>>(0))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let task_workspace_revision = workspace_repair::workspace_repair_revision_in(&tx, task_id)?;
+        let mut rejected = Vec::new();
+        for bytes in rows {
+            let mut receipt: CommandReceipt = serde_json::from_slice(&bytes)?;
+            if receipt.task_id != task_id
+                || receipt.intent != "run"
+                || receipt.status != CommandReceiptStatus::Pending
+                || receipt.committed_at_ms.is_some()
+                || receipt.correlation_id.as_deref() != Some(correlation_id)
+                || task_workspace_revision != expected_workspace_repair_revision
+                || workspace_repair::command_workspace_revision_in(&tx, &receipt.command_id)?
+                    != Some(expected_workspace_repair_revision)
+                || receipt
+                    .snapshot
+                    .binding_generation
+                    .is_some_and(|expected| current_binding_generation != Some(expected))
+            {
+                continue;
+            }
+            // Keep the task's authoritative binding/turn: this outcome proves
+            // no provider effect, so it must not move the task projection.
+            let current = load_task_command_snapshot(&tx, task_id)?;
+            receipt.status = CommandReceiptStatus::Rejected;
+            receipt.snapshot.binding_id = current.binding_id;
+            receipt.snapshot.binding_generation = current.binding_generation;
+            receipt.snapshot.active_turn_id = current.active_turn_id;
+            receipt.reason = Some(CommandReceiptReason {
+                code: CommandReasonCode::OperationRejected,
+                message: message.into(),
+            });
+            receipt.recovery_action = Some(recovery_action.into());
+            receipt.committed_at_ms = Some(now_ms());
+            receipt.observed_at_ms = now_ms();
+            let receipt = commit_task_command_tx(&tx, receipt, false)?;
+            tx.execute(
+                "UPDATE composer_draft_submissions SET state='recoverable',updated_at=?3
+                 WHERE device_id=?1 AND command_id=?2 AND state='pending'",
+                params![device_id, receipt.command_id, now_ms()],
+            )?;
+            rejected.push(receipt);
+        }
+        tx.commit()?;
+        Ok(rejected)
     }
 
     pub fn task_command_receipt(
@@ -5691,6 +5774,7 @@ mod draft_tests {
 
     pub(super) fn draft(revision: u64, text: &str, path: &str) -> ComposerDraft {
         ComposerDraft {
+            input_items: Vec::new(),
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: "task-a".into(),
             task_id: Some("task-a".into()),

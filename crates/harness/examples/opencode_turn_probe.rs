@@ -23,6 +23,7 @@ async fn main() {
     let cwd = workspace.path().to_str().expect("UTF-8 workspace path");
     let (_steer_tx, steering) = mpsc::channel(8);
     let request = RunRequest {
+        input_items: Vec::new(),
         prompt,
         harness: None,
         provider_account_id: None,

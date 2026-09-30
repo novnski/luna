@@ -140,6 +140,7 @@ fn main() -> anyhow::Result<()> {
     let message = attachments::with_attachments(&body, &paths);
     let queue = vec![
         luna_doc::QueuedMessage {
+            input_items: Vec::new(),
             id: "queued-review".into(),
             text: body,
             attachments: paths.clone(),
@@ -155,6 +156,7 @@ fn main() -> anyhow::Result<()> {
             delivery_gate: None,
         },
         luna_doc::QueuedMessage {
+            input_items: Vec::new(),
             id: "queued-text".into(),
             text: "Then check the spacing and keyboard navigation.".into(),
             attachments: vec![],

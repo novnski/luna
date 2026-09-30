@@ -444,6 +444,8 @@ enum TaskCommandIntent {
         #[serde(default)]
         attachments: Vec<String>,
         #[serde(default)]
+        input_items: Vec<luna_proto::ComposerInput>,
+        #[serde(default)]
         hold_for_turn_end: bool,
         #[serde(default)]
         follow_up_behavior: FollowUpBehavior,
@@ -459,6 +461,8 @@ enum TaskCommandIntent {
         expected_text_hash: String,
         #[serde(default)]
         attachments: Vec<String>,
+        #[serde(default)]
+        input_items: Option<Vec<luna_proto::ComposerInput>>,
     },
     #[serde(rename_all = "camelCase")]
     RemoveQueuedMessage {
@@ -733,6 +737,8 @@ struct QueueMessageParams {
     text: String,
     #[serde(default)]
     attachments: Vec<String>,
+    #[serde(default)]
+    input_items: Vec<luna_proto::ComposerInput>,
     /// Keep this row visible during the current turn even when the harness
     /// supports mid-turn steering.
     #[serde(default)]
@@ -797,6 +803,8 @@ struct FinishQueuedMessageEditParams {
     expected_text_hash: Option<String>,
     #[serde(default)]
     attachments: Option<Vec<String>>,
+    #[serde(default)]
+    input_items: Option<Vec<luna_proto::ComposerInput>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3191,7 +3199,9 @@ impl EngineRpc {
                 .as_ref()
                 .map(|execution| execution.harness)
                 .unwrap_or_else(|| self.doc_host.harness_for(&command.task_id));
-            if !item.attachments.is_empty() || !self.sessions.steers_mid_turn(harness) {
+            if (!item.attachments.is_empty() && harness != HarnessId::Codex)
+                || !self.sessions.steers_mid_turn(harness)
+            {
                 return self.finish_task_command(
                     &command.command_id,
                     CommandReceiptStatus::Rejected,
@@ -3928,6 +3938,7 @@ impl EngineRpc {
         request.permission_mode = config.permission_mode;
         request.resume = Some(provider_session_id.to_string());
         request.attachments.clear();
+        request.input_items.clear();
         request.worktree = None;
         Ok(request)
     }
@@ -5882,6 +5893,7 @@ impl EngineRpc {
                 message_id,
                 text,
                 attachments,
+                input_items,
                 hold_for_turn_end,
                 follow_up_behavior,
                 execution,
@@ -5895,6 +5907,7 @@ impl EngineRpc {
                         &message_id,
                         &text,
                         attachments,
+                        input_items,
                         hold_for_turn_end,
                         follow_up_behavior,
                         execution,
@@ -5953,6 +5966,7 @@ impl EngineRpc {
                 text,
                 expected_text_hash,
                 attachments,
+                input_items,
             } => {
                 use crate::doc_host::FinishQueueEditOutcome;
                 let already_applied = self
@@ -5963,6 +5977,9 @@ impl EngineRpc {
                         item.revision == expected_queue_revision.saturating_add(1)
                             && item.text == text
                             && item.attachments == attachments
+                            && input_items
+                                .as_ref()
+                                .is_none_or(|inputs| &item.input_items == inputs)
                             && item.delivery_gate.is_none()
                             && matches!(item.status, luna_doc::QueueMessageStatus::Held)
                     });
@@ -5974,7 +5991,7 @@ impl EngineRpc {
                     (FinishQueueEditOutcome::Committed, None)
                 } else {
                     self.doc_host
-                        .finish_queued_message_edit_task(
+                        .finish_queued_message_edit_task_with_inputs(
                             command_id,
                             task_id,
                             &message_id,
@@ -5982,6 +5999,7 @@ impl EngineRpc {
                             &text,
                             &expected_text_hash,
                             &attachments,
+                            input_items.as_deref(),
                             expected_queue_revision,
                         )
                         .await
@@ -7125,6 +7143,7 @@ fn cross_task_queue_command(
         expected_turn_id: None,
         issued_at_ms: crate::now_ms(),
         intent: TaskCommandIntent::QueueMessage {
+            input_items: Vec::new(),
             message_id: request.idempotency_key.clone(),
             text: request.message.clone(),
             attachments: Vec::new(),
@@ -9183,6 +9202,7 @@ impl RpcService for EngineRpc {
                         message_id: id.clone(),
                         text: p.text,
                         attachments: p.attachments,
+                        input_items: p.input_items,
                         hold_for_turn_end: p.hold_for_turn_end,
                         follow_up_behavior: p.follow_up_behavior,
                         execution: None,
@@ -9257,6 +9277,7 @@ impl RpcService for EngineRpc {
                             text,
                             expected_text_hash,
                             attachments: p.attachments.unwrap_or_default(),
+                            input_items: p.input_items,
                         },
                     );
                     if let Some(command_id) = p.command_id {

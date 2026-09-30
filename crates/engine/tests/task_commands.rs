@@ -508,6 +508,7 @@ fn task_config(model: &str) -> ChatConfig {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,
@@ -555,6 +556,7 @@ fn codex_request(prompt: &str) -> RunRequest {
 
 fn composer_draft(task_id: &str, text: &str) -> ComposerDraft {
     ComposerDraft {
+        input_items: Vec::new(),
         version: COMPOSER_DRAFT_VERSION,
         draft_id: format!("task:{task_id}"),
         task_id: Some(task_id.to_string()),

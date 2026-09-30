@@ -14,6 +14,8 @@ pub struct PromptStashEntry {
     /// User-visible first-line preview. The full prompt remains in `text`.
     pub label: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<crate::ComposerInput>,
     #[serde(default)]
     pub attachments: Vec<DraftBlob>,
     #[serde(default)]

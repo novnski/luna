@@ -795,6 +795,7 @@ impl Harness for CodexHarness {
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
+        request.input_items.clear();
         request.model_options.clear();
         if let Some(codex_home) = codex_home {
             request
@@ -853,6 +854,7 @@ impl CodexHarness {
                 ));
             }
         }
+        crate::validate_composer_inputs(&request.attachments, &request.input_items)?;
         let exe = self.resolve_executable()?;
         // Title generation has no tools and remains read-only. Ordinary runs
         // keep the engine-resolved sandbox; never broaden it in the adapter.
@@ -938,7 +940,10 @@ impl CodexHarness {
 
         let (client, incoming) = RpcClient::new(stdin, stdout);
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
+        let (input_ready_tx, input_ready_rx) = tokio::sync::oneshot::channel();
+        let validate_selections = !request.input_items.is_empty();
         tokio::spawn(run_session(Session {
+            input_ready: validate_selections.then_some(input_ready_tx),
             title_only,
             catalog_home,
             catalog_connections: self.catalog_connections.clone(),
@@ -953,6 +958,9 @@ impl CodexHarness {
             stderr_tail,
         }));
 
+        if validate_selections {
+            input_ready_rx.await.map_err(|_| HarnessError::RejectedBeforeAcceptance("Codex stopped before validating the selected inputs; your input remains available".into()))??;
+        }
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))
         })
@@ -965,6 +973,7 @@ impl CodexHarness {
 // ---------------------------------------------------------------------------
 
 struct Session {
+    input_ready: Option<tokio::sync::oneshot::Sender<Result<(), HarnessError>>>,
     title_only: bool,
     catalog_home: Option<PathBuf>,
     catalog_connections: composer_catalog::CatalogConnections,
@@ -1109,6 +1118,7 @@ impl SessionLiveness<'_> {
 /// steering mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        mut input_ready,
         title_only,
         catalog_home,
         catalog_connections,
@@ -1373,10 +1383,10 @@ async fn run_session(session: Session) {
         .as_deref()
         .map(|home| catalog_connections.register(home, &catalog_cwd, &thread_id, client.clone()));
 
-    let turn_params = |text: &str| -> Value {
+    let turn_params = |input: Vec<Value>| -> Value {
         let mut p = serde_json::Map::new();
         p.insert("threadId".into(), Value::String(thread_id.clone()));
-        p.insert("input".into(), json!([{ "type": "text", "text": text }]));
+        p.insert("input".into(), Value::Array(input));
         p.insert("approvalPolicy".into(), approval_policy.into());
         p.insert("approvalsReviewer".into(), approvals_reviewer.into());
         p.insert(
@@ -1400,6 +1410,47 @@ async fn run_session(session: Session) {
         Value::Object(p)
     };
 
+    let initial_input = match crate::composer_input::codex_input(
+        &request.prompt,
+        &request.attachments,
+        &request.input_items,
+    ) {
+        Ok(input) => input,
+        Err(error) => {
+            if let Some(tx) = input_ready.take() {
+                let _ = tx.send(Err(error));
+            } else {
+                let _ = event_tx.send(Err(error)).await;
+            }
+            shutdown_child(&mut child, kill_grace).await;
+            return;
+        }
+    };
+    let Some(validation) = liveness
+        .wait(composer_catalog::validate_inputs(
+            &client,
+            std::path::Path::new(&request.cwd),
+            &thread_id,
+            &request.input_items,
+        ))
+        .await
+    else {
+        shutdown_child(&mut child, kill_grace).await;
+        return;
+    };
+    if let Err(error) = validation {
+        if let Some(tx) = input_ready.take() {
+            let _ = tx.send(Err(error));
+        } else {
+            let _ = event_tx.send(Err(error)).await;
+        }
+        shutdown_child(&mut child, kill_grace).await;
+        return;
+    }
+    if let Some(tx) = input_ready.take() {
+        let _ = tx.send(Ok(()));
+    }
+
     let mut assistant_message_id = new_message_id();
     if !send(
         &event_tx,
@@ -1421,7 +1472,7 @@ async fn run_session(session: Session) {
     let mut router = TurnRouter::default();
     let mut luna_call_ids = LunaCallIds::default();
     let Some(started) = liveness
-        .wait(start_turn(&client, turn_params(&request.prompt)))
+        .wait(start_turn(&client, turn_params(initial_input)))
         .await
     else {
         if !event_tx.is_closed() {
@@ -1483,7 +1534,7 @@ async fn run_session(session: Session) {
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
     // next `turn/start` when the expected turn's end notification arrives.
-    let mut queued_steers: VecDeque<String> = VecDeque::new();
+    let mut queued_steers: VecDeque<(Vec<Value>, Vec<luna_proto::ComposerInput>)> = VecDeque::new();
     // The Codex wire does not correlate echoed user items to `turn/steer`
     // request ids. Keep explicit steering single-flight and never manufacture
     // incorporation from a text match; a successful RPC response is only an
@@ -1765,10 +1816,11 @@ async fn run_session(session: Session) {
                         // Persistent session: a steer that lost the race with
                         // this turn's end becomes the next turn now; otherwise
                         // stay alive for the mailbox — the caller owns teardown.
-                        if let Some(text) = queued_steers.pop_front() {
+                        if let Some((input, selections)) = queued_steers.pop_front() {
                             if !steer_as_new_turn(
                                 &client,
-                                turn_params(&text),
+                                turn_params(input.clone()),
+                                &request.cwd, &thread_id, &selections,
                                 &mut router,
                                 &liveness,
                                 &mut assistant_message_id,
@@ -1911,7 +1963,21 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
-                    let text = msg.prompt;
+                    let Some(validation) = liveness.wait(composer_catalog::validate_inputs(&client, std::path::Path::new(&request.cwd), &thread_id, &msg.input_items)).await else { break 'main; };
+                    if let Err(error) = validation {
+                        if let Some(tx) = msg.acceptance { let _ = tx.send(SteerAcceptance::Rejected(error.to_string())); }
+                        else { terminal_error = Some(error.to_string()); break 'main; }
+                        continue 'main;
+                    }
+                    let selections = msg.input_items.clone();
+                    let input = match crate::composer_input::codex_input(&msg.prompt, &msg.attachments, &msg.input_items) {
+                        Ok(input) => input,
+                        Err(error) => {
+                            if let Some(tx) = msg.acceptance { let _ = tx.send(SteerAcceptance::Rejected(error.to_string())); }
+                            else { terminal_error = Some(error.to_string()); break 'main; }
+                            continue 'main;
+                        }
+                    };
                     let require_active =
                         msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let mut acceptance = msg.acceptance;
@@ -1928,7 +1994,7 @@ async fn run_session(session: Session) {
                         let steer_params = json!({
                             "threadId": thread_id,
                             "expectedTurnId": expected,
-                            "input": [{ "type": "text", "text": text }],
+                            "input": input,
                         });
                         let Some(reply) = liveness
                             .wait(client.request_classified("turn/steer", steer_params))
@@ -2016,10 +2082,11 @@ async fn run_session(session: Session) {
                                 if router.active.as_deref() == Some(expected.as_str())
                                     && !router.is_completed(&expected)
                                 {
-                                    queued_steers.push_back(text);
+                                    queued_steers.push_back((input, selections.clone()));
                                 } else if !steer_as_new_turn(
                                     &client,
-                                    turn_params(&text),
+                                    turn_params(input.clone()),
+                                    &request.cwd, &thread_id, &selections,
                                     &mut router,
                                     &liveness,
                                     &mut assistant_message_id,
@@ -2040,7 +2107,8 @@ async fn run_session(session: Session) {
                         }
                     } else if !steer_as_new_turn(
                         &client,
-                        turn_params(&text),
+                        turn_params(input.clone()),
+                        &request.cwd, &thread_id, &selections,
                         &mut router,
                         &liveness,
                         &mut assistant_message_id,
@@ -2188,16 +2256,41 @@ fn codex_permission_settings(
 /// Deliver a steer as a fresh `turn/start` on the same thread (the fallback
 /// leg of the steer race, and the between-turns delivery path). Returns false
 /// when the loop should end (turn/start failed or the consumer hung up).
+#[allow(clippy::too_many_arguments)]
 async fn steer_as_new_turn(
     client: &RpcClient,
     params: Value,
+    cwd: &str,
+    thread_id: &str,
+    selections: &[luna_proto::ComposerInput],
     router: &mut TurnRouter,
     liveness: &SessionLiveness<'_>,
     assistant_message_id: &mut String,
     done_current: &mut bool,
     computer_use_turn_cancel: &mut CancellationToken,
 ) -> bool {
-    let Some(started) = liveness.wait(start_turn(client, params)).await else {
+    let Some(started) = liveness
+        .wait(async {
+            let attachments: Vec<String> = params
+                .get("input")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("localImage"))
+                .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            crate::validate_composer_inputs(&attachments, selections)?;
+            composer_catalog::validate_inputs(
+                client,
+                std::path::Path::new(cwd),
+                thread_id,
+                selections,
+            )
+            .await?;
+            start_turn(client, params).await
+        })
+        .await
+    else {
         return false;
     };
     let event_tx = liveness.events;

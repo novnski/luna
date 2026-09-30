@@ -2202,6 +2202,8 @@ mod tests {
         let entry = SessionCommandEntry {
             id: "c1".into(),
             payload: SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "focus".into(),
                 message_id: None,
             },

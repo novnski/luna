@@ -38,6 +38,7 @@ type RequestLog = Arc<Mutex<Vec<RunRequest>>>;
 
 fn run_request(prompt: &str, cwd: &str) -> RunRequest {
     RunRequest {
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -885,6 +886,7 @@ async fn real_claude_remembers_codeword_across_engine_restart() {
     let cwd = cwd.to_string_lossy().to_string();
 
     let real_request = |prompt: &str| RunRequest {
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -1001,6 +1003,8 @@ async fn steer_after_restart_dispatches_new_turn_with_resume() {
         .queue_command(
             CHAT,
             SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "actually, also add tests".into(),
                 message_id: Some("msg-user-2".into()),
             },

@@ -37,6 +37,7 @@ fn assemble(root: &std::path::Path) -> EngineCore {
 
 fn rich_draft(path: String, bytes: &[u8]) -> ComposerDraft {
     ComposerDraft {
+        input_items: Vec::new(),
         version: luna_proto::COMPOSER_DRAFT_VERSION,
         draft_id: "task-l08".into(),
         task_id: Some("task-l08".into()),
@@ -91,6 +92,7 @@ async fn submission_retry_preserves_the_exact_destination_across_restart() {
     // Canvas content is frozen before the newly created task is published;
     // its destination belongs to the submission envelope, not the snapshot.
     let snapshot = ComposerDraft {
+        input_items: Vec::new(),
         version: luna_proto::COMPOSER_DRAFT_VERSION,
         draft_id: "canvas-destination-regression".into(),
         task_id: None,

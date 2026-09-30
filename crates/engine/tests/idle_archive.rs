@@ -225,6 +225,7 @@ async fn start(core: &EngineCore, root: &Path, id: &str) {
             id,
             HarnessId::Codex,
             RunRequest {
+                input_items: Vec::new(),
                 prompt: id.into(),
                 harness: Some(HarnessId::Codex),
                 provider_account_id: None,
