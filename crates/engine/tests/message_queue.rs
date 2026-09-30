@@ -233,6 +233,7 @@ impl Harness for HeldHarness {
                                     || steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn
                                 {
                                     AgentEvent::Steered {
+                                        user_message_id: None,
                                         assistant_message_id: Some("a-before-steer".into()),
                                         next_assistant_message_id: Some("a-after-steer".into()),
                                     }

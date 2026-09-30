@@ -501,6 +501,7 @@ impl Harness for PersistentHarness {
             while let Some(steer) = steering.recv().await {
                 n += 1;
                 let boundary = AgentEvent::Steered {
+                    user_message_id: None,
                     assistant_message_id: None,
                     next_assistant_message_id: steer.message_id.map(|id| format!("a-{id}")),
                 };

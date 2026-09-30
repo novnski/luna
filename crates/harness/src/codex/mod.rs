@@ -29,9 +29,10 @@
 //!   consumed so it can never settle the parent turn, and unknown methods
 //!   fall through to the parent path (fail open, never silent loss).
 //! - Steering: `turn/steer { expectedTurnId }` into the live turn; a rejected
-//!   steer (the turn-completed race) is queued and delivered as the next
+//!   ordinary warm input (the turn-completed race) is queued as the next
 //!   `turn/start` on the same thread. The session is persistent across turns
-//!   while the steering mailbox lives.
+//!   while the steering mailbox lives. Explicit steer never starts a new turn.
+//!   RPC acceptance is pending; native userMessage.clientId/readback records it.
 //! - Interrupt: cancelling [`RunControls::interrupt`] sends `turn/interrupt`,
 //!   escalating to SIGTERM → SIGKILL if the child is unresponsive; the stream
 //!   always ends with `Done { status: Interrupted }`.
@@ -68,13 +69,15 @@ use crate::{
 };
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, to_effort};
 use normalize::{
-    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_type,
-    notification_thread_id, route_child_notification, turn_error_message, turn_id, usage_event,
+    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_turn_id,
+    item_type, notification_thread_id, route_child_notification, turn_error_message, turn_id,
+    usage_event,
 };
 
 /// Engine-only model-option keys. They are consumed by this adapter and never
 /// forwarded as model configuration.
 pub const LUNA_NATIVE_THREAD_NAME_OPTION: &str = "lunaNativeThreadName";
+pub const LUNA_STEER_RECONCILE_OPTION: &str = "lunaSteerReconcileIds";
 pub const LUNA_STRICT_RESUME_OPTION: &str = "lunaStrictResume";
 pub const LUNA_CODEX_HOME_OPTION: &str = "lunaCodexHome";
 pub const LUNA_CODEX_FILE_AUTH_OPTION: &str = "lunaCodexFileAuth";
@@ -1025,10 +1028,106 @@ fn rotate(id: &mut String) -> (String, String) {
     (prev, id.clone())
 }
 
-fn clear_explicit_steer_turn(owner: &mut Option<String>, terminal_turn_id: &str) {
-    if owner.as_deref() == Some(terminal_turn_id) {
-        *owner = None;
+/// IDs correlate delivery; they never authorize retry or deduplicate upstream.
+#[derive(Default)]
+struct NativeSteers {
+    pending: HashMap<String, (Option<String>, Option<String>)>,
+}
+
+impl NativeSteers {
+    fn record(&mut self, item: &Value, turn_id: &str) -> Option<Option<String>> {
+        if !matches!(item_type(item), "userMessage" | "user_message") {
+            return None;
+        }
+        let id = item.get("clientId").and_then(Value::as_str)?;
+        let (expected, _) = self.pending.get(id)?;
+        if expected
+            .as_deref()
+            .is_some_and(|expected| expected != turn_id)
+        {
+            return None;
+        }
+        self.pending.remove(id).map(|(_, message_id)| message_id)
     }
+}
+
+async fn emit_recorded_steer(
+    event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    assistant_message_id: &mut String,
+    user_message_id: Option<String>,
+    historical: bool,
+) -> bool {
+    let (previous, next) = if historical {
+        (None, None)
+    } else {
+        let (prev, next) = rotate(assistant_message_id);
+        (Some(prev), Some(next))
+    };
+    send(
+        event_tx,
+        AgentEvent::Steered {
+            user_message_id,
+            assistant_message_id: previous,
+            next_assistant_message_id: next,
+        },
+    )
+    .await
+}
+
+/// A missing history item proves nothing. Read once with a bounded wait and
+/// retain every unresolved ID for late notifications or a later reconnect.
+async fn reconcile_native_steers(
+    client: &RpcClient,
+    thread_id: &str,
+    steers: &mut NativeSteers,
+    assistant_message_id: &mut String,
+    event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    historical: bool,
+) -> bool {
+    if steers.pending.is_empty() {
+        return true;
+    }
+    let read = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.request(
+            "thread/read",
+            json!({"threadId": thread_id, "includeTurns": true}),
+        ),
+    )
+    .await;
+    let Ok(Ok(value)) = read else {
+        return true;
+    };
+    let Some(thread) = value
+        .get("thread")
+        .filter(|thread| thread.get("id").and_then(Value::as_str) == Some(thread_id))
+    else {
+        return true;
+    };
+    for turn in thread
+        .get("turns")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(turn_id) = turn.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for item in turn
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(message_id) = steers.record(item, turn_id)
+                && !emit_recorded_steer(event_tx, assistant_message_id, message_id, historical)
+                    .await
+            {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 async fn send(tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>, ev: AgentEvent) -> bool {
@@ -1349,6 +1448,35 @@ async fn run_session(session: Session) {
         return;
     }
 
+    let mut native_steers = NativeSteers::default();
+    if request.resume.as_deref() == Some(thread_id.as_str()) {
+        for id in request
+            .model_options
+            .get(LUNA_STEER_RECONCILE_OPTION)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            native_steers
+                .pending
+                .insert(id.to_string(), (None, Some(id.to_string())));
+        }
+        if !reconcile_native_steers(
+            &client,
+            &thread_id,
+            &mut native_steers,
+            &mut assistant_message_id,
+            &event_tx,
+            true,
+        )
+        .await
+        {
+            shutdown_child(&mut child, kill_grace).await;
+            return;
+        }
+    }
+
     let mut router = TurnRouter::default();
     let mut luna_call_ids = LunaCallIds::default();
     let Some(started) = liveness
@@ -1414,12 +1542,8 @@ async fn run_session(session: Session) {
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
     // next `turn/start` when the expected turn's end notification arrives.
-    let mut queued_steers: VecDeque<String> = VecDeque::new();
-    // The Codex wire does not correlate echoed user items to `turn/steer`
-    // request ids. Keep explicit steering single-flight and never manufacture
-    // incorporation from a text match; a successful RPC response is only an
-    // accepted-but-unconfirmed delivery.
-    let mut explicit_steer_turn: Option<String> = None;
+    let mut queued_steers: VecDeque<(String, Option<String>)> = VecDeque::new();
+    // Acknowledged input remains pending until its exact clientId is recorded.
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
@@ -1528,6 +1652,16 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
+                        // Item notifications carry the root `turnId`, not `turn.id`.
+                        let item_turn = item_turn_id(&params);
+                        if let Some(message_id) = native_steers.record(item, &item_turn) {
+                            if !emit_recorded_steer(&event_tx, &mut assistant_message_id, message_id,
+                                router.active_id() != Some(item_turn.as_str())).await {
+                                break 'main;
+                            }
+                            continue;
+                        }
+
                         if interrupt.is_cancelled() {
                             // An OS action may already be running when Stop
                             // arrives. A late item completion cannot turn its
@@ -1650,7 +1784,8 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                        clear_explicit_steer_turn(&mut explicit_steer_turn, &id);
+                        if !reconcile_native_steers(&client, &thread_id, &mut native_steers,
+                            &mut assistant_message_id, &event_tx, false).await { break 'main; }
                         router.note_completed(&id);
                         // Item ids never span turns; without this the set grew
                         // one entry per message for a persistent session's life.
@@ -1668,12 +1803,13 @@ async fn run_session(session: Session) {
                                 == Some("failed"))
                             .then(|| "Codex turn failed".to_owned())
                         });
-                        let status = if interrupted {
-                            DoneStatus::Interrupted
-                        } else if error.is_some() {
-                            DoneStatus::Errored
-                        } else {
-                            DoneStatus::Completed
+                        let status = match params.pointer("/turn/status").and_then(Value::as_str) {
+                            Some("interrupted") => DoneStatus::Interrupted,
+                            Some("failed") => DoneStatus::Errored,
+                            Some("completed") => DoneStatus::Completed,
+                            _ if interrupted => DoneStatus::Interrupted,
+                            _ if error.is_some() => DoneStatus::Errored,
+                            _ => DoneStatus::Completed,
                         };
                         done_current = true;
                         if !send(
@@ -1689,17 +1825,19 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                        if interrupted {
+                        if interrupted || status == DoneStatus::Interrupted {
+                            interrupted = true;
                             done_after_interrupt = true;
                             break 'main;
                         }
                         // Persistent session: a steer that lost the race with
                         // this turn's end becomes the next turn now; otherwise
                         // stay alive for the mailbox — the caller owns teardown.
-                        if let Some(text) = queued_steers.pop_front() {
+                        if let Some((text, message_id)) = queued_steers.pop_front() {
                             if !steer_as_new_turn(
                                 &client,
                                 turn_params(&text),
+                                message_id,
                                 &mut router,
                                 &liveness,
                                 &mut assistant_message_id,
@@ -1731,6 +1869,8 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
+                        if !reconcile_native_steers(&client, &thread_id, &mut native_steers,
+                            &mut assistant_message_id, &event_tx, false).await { break 'main; }
                         router.note_completed(&id);
                         if let Some(usage) = pending_usage.take()
                             && !send(&event_tx, usage).await
@@ -1846,23 +1986,24 @@ async fn run_session(session: Session) {
                     let require_active =
                         msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let mut acceptance = msg.acceptance;
-                    if require_active && explicit_steer_turn.is_some() {
-                        if let Some(tx) = acceptance.take() {
-                            let _ = tx.send(SteerAcceptance::Rejected(
-                                "another Codex steer is accepted but incorporation is unconfirmed"
-                                    .into(),
-                            ));
-                        }
-                        continue 'main;
-                    }
+                    let message_id = msg.message_id;
+                    let wire_id = message_id.clone().unwrap_or_else(new_message_id);
                     if let Some(expected) = router.active.clone() {
                         let steer_params = json!({
                             "threadId": thread_id,
                             "expectedTurnId": expected,
+                            "clientUserMessageId": wire_id,
                             "input": [{ "type": "text", "text": text }],
                         });
+                        native_steers.pending.insert(wire_id.clone(),
+                            (Some(expected.clone()), message_id.clone()));
                         let Some(reply) = liveness
-                            .wait(client.request_classified("turn/steer", steer_params))
+                            .wait(async {
+                                tokio::time::timeout(Duration::from_secs(5),
+                                    client.request_classified("turn/steer", steer_params)).await
+                                    .unwrap_or_else(|_| Err(RpcRequestFailure::Unknown(
+                                        "Codex steer acknowledgement timed out".into())))
+                            })
                             .await
                         else {
                             if let Some(tx) = acceptance.take() {
@@ -1874,48 +2015,25 @@ async fn run_session(session: Session) {
                         };
                         match reply {
                             Ok(reply) => {
-                                // The response's turn id is the provider's
-                                // acknowledgement that this input joined the
-                                // expected turn. Split the assistant stream
-                                // here for explicit steers too: otherwise the
-                                // user input stays in the queue as unknown and
-                                // all later activity renders above it.
-                                if reply.get("turnId").and_then(Value::as_str)
-                                    != Some(expected.as_str())
-                                {
-                                    if let Some(tx) = acceptance.take() {
-                                        let _ = tx.send(SteerAcceptance::Unknown(
-                                            "Codex steer returned a different turn id".into(),
-                                        ));
-                                    }
-                                    continue 'main;
-                                }
-                                if require_active {
-                                    explicit_steer_turn = Some(expected.clone());
-                                }
-                                let (prev, next) = rotate(&mut assistant_message_id);
-                                if !send(
-                                    &event_tx,
-                                    AgentEvent::Steered {
-                                        assistant_message_id: Some(prev),
-                                        next_assistant_message_id: Some(next),
-                                    },
-                                )
-                                .await
-                                {
-                                    break 'main;
-                                }
-                                if require_active {
-                                    clear_explicit_steer_turn(&mut explicit_steer_turn, &expected);
-                                    if let Some(tx) = acceptance.take() {
-                                        let _ = tx.send(SteerAcceptance::Accepted);
-                                    }
+                                // RPC success acknowledges scheduling only. A clientId
+                                // notification/readback creates the transcript boundary.
+                                if let Some(tx) = acceptance.take() {
+                                    let outcome = if reply.get("turnId").and_then(Value::as_str)
+                                        == Some(expected.as_str()) {
+                                        SteerAcceptance::Accepted
+                                    } else {
+                                        SteerAcceptance::Unknown("Codex steer returned a different or missing turn id".into())
+                                    };
+                                    let _ = tx.send(outcome);
                                 }
                             }
                             // Only a correlated rejection authorizes ordinary
                             // warm input to fall back to the next turn. A lost
                             // reply may already have delivered the input.
                             Err(failure) => {
+                                if matches!(&failure, RpcRequestFailure::Rejected(_)) {
+                                    native_steers.pending.remove(&wire_id);
+                                }
                                 if require_active {
                                     if let Some(tx) = acceptance.take() {
                                         let outcome = match failure {
@@ -1937,7 +2055,9 @@ async fn run_session(session: Session) {
                                     terminal_error = Some(format!(
                                         "Codex steering delivery is unknown; input was not replayed: {message}"
                                     ));
-                                    break 'main;
+                                    // Notifications may already contain the exact native
+                                    // record. Keep consuming; never start a fallback turn.
+                                    continue 'main;
                                 }
                                 tracing::debug!(
                                     target: "luna_harness::codex",
@@ -1947,10 +2067,11 @@ async fn run_session(session: Session) {
                                 if router.active.as_deref() == Some(expected.as_str())
                                     && !router.is_completed(&expected)
                                 {
-                                    queued_steers.push_back(text);
+                                    queued_steers.push_back((text, message_id));
                                 } else if !steer_as_new_turn(
                                     &client,
                                     turn_params(&text),
+                                    message_id,
                                     &mut router,
                                     &liveness,
                                     &mut assistant_message_id,
@@ -1972,6 +2093,7 @@ async fn run_session(session: Session) {
                     } else if !steer_as_new_turn(
                         &client,
                         turn_params(&text),
+                        message_id,
                         &mut router,
                         &liveness,
                         &mut assistant_message_id,
@@ -2119,15 +2241,20 @@ fn codex_permission_settings(
 /// Deliver a steer as a fresh `turn/start` on the same thread (the fallback
 /// leg of the steer race, and the between-turns delivery path). Returns false
 /// when the loop should end (turn/start failed or the consumer hung up).
+#[allow(clippy::too_many_arguments)]
 async fn steer_as_new_turn(
     client: &RpcClient,
-    params: Value,
+    mut params: Value,
+    user_message_id: Option<String>,
     router: &mut TurnRouter,
     liveness: &SessionLiveness<'_>,
     assistant_message_id: &mut String,
     done_current: &mut bool,
     computer_use_turn_cancel: &mut CancellationToken,
 ) -> bool {
+    if let Some(id) = &user_message_id {
+        params["clientUserMessageId"] = json!(id);
+    }
     let Some(started) = liveness.wait(start_turn(client, params)).await else {
         return false;
     };
@@ -2144,6 +2271,7 @@ async fn steer_as_new_turn(
             if !send(
                 event_tx,
                 AgentEvent::Steered {
+                    user_message_id,
                     assistant_message_id: Some(prev),
                     next_assistant_message_id: Some(next),
                 },
@@ -2808,17 +2936,6 @@ mod tests {
         ordinary["delivery"] = json!("async");
         ordinary["questions"] = json!([]);
         assert!(async_questions_from_item(&ordinary).is_none());
-    }
-
-    #[test]
-    fn explicit_steer_owner_clears_only_on_its_terminal_turn() {
-        let mut owner = Some("turn-new".to_string());
-        clear_explicit_steer_turn(&mut owner, "turn-stale");
-        assert_eq!(owner.as_deref(), Some("turn-new"));
-        clear_explicit_steer_turn(&mut owner, "turn-new");
-        assert!(owner.is_none());
-        clear_explicit_steer_turn(&mut owner, "turn-new");
-        assert!(owner.is_none());
     }
 
     #[cfg(unix)]

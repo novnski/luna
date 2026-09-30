@@ -116,12 +116,11 @@ impl Harness for SyntheticCodex {
                         break;
                     }
                     steer = controls.steering.recv() => {
-                        if steer.is_none() {
-                            break;
-                        }
+                        let Some(steer) = steer else { break; };
                         let _ = tx.send(Ok(AgentEvent::Steered {
+                            user_message_id: steer.message_id,
                             assistant_message_id: None,
-                            next_assistant_message_id: None,
+                            next_assistant_message_id: Some(uuid::Uuid::new_v4().to_string()),
                         })).await;
                         let _ = tx.send(Ok(AgentEvent::Done {
                             status: DoneStatus::Completed,

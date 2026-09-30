@@ -126,7 +126,8 @@ pub enum QueueMessageStatus {
         claimed_at_ms: i64,
     },
     /// The provider acknowledged an explicit steer request, but has not yet
-    /// emitted evidence that the model incorporated it.
+    /// recorded the correlated native user message. Neither state proves
+    /// that a model request has sampled the input.
     SteeringAccepted {
         command_id: String,
         accepted_at_ms: i64,

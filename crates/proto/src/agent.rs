@@ -715,7 +715,13 @@ pub enum AgentEvent {
     /// same child transcript even if the provider does not echo the user text.
     #[serde(rename_all = "camelCase")]
     Steered {
+        /// Exact native client user-message correlation when available. Native
+        /// recording proves incorporation into history, not model sampling.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_message_id: Option<String>,
         assistant_message_id: Option<String>,
+        /// With an exact user_message_id, None denotes historical readback:
+        /// settle delivery without reopening a turn or rotating live output.
         next_assistant_message_id: Option<String>,
     },
     #[serde(rename_all = "camelCase")]

@@ -652,6 +652,7 @@ impl Harness for L09FixtureHarness {
                                         uuid::Uuid::new_v4()
                                     );
                                     let _ = tx.send(Ok(AgentEvent::Steered {
+                                        user_message_id: None,
                                         assistant_message_id: Some(assistant_message_id.clone()),
                                         next_assistant_message_id: Some(next.clone()),
                                     }));
