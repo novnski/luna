@@ -6136,20 +6136,44 @@ fn stop_after_journal_failure(
     inner.set_status(chat_id, SessionStatus::Errored, false);
 }
 
-/// The adapter proved this startup was rejected before any user turn was
-/// accepted. Terminalize only its own exact pending Run receipt (fenced in the
-/// store) and make the same-device frozen submission recoverable. When the
-/// durable receipt already proves acceptance or ambiguous delivery, or a fence
-/// refused the exact Run receipt, recovery keeps the stronger claim so the
-/// whole input is never replayed automatically.
-fn settle_startup_rejection(
+/// Recovery acceptance for a startup the adapter proved was rejected before
+/// any user turn. A durable receipt that already proves acceptance or
+/// ambiguous delivery keeps that stronger claim, so this rejection never makes
+/// the whole input replayable. Read-only; see [`reject_known_startup`].
+fn startup_rejection_acceptance(
     inner: &Arc<Inner>,
     chat_id: &str,
     correlation_id: &str,
-    message: &str,
 ) -> RecoveryAcceptance {
     let Some(host) = inner.doc_host() else {
         return RecoveryAcceptance::RejectedBeforeAcceptance;
+    };
+    match host.task_command_receipt_for_correlation(chat_id, correlation_id) {
+        Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => {
+            RecoveryAcceptance::Accepted
+        }
+        Ok(Some(receipt))
+            if receipt.status == CommandReceiptStatus::Pending
+                && receipt.committed_at_ms.is_some() =>
+        {
+            RecoveryAcceptance::Unknown
+        }
+        Ok(_) => RecoveryAcceptance::RejectedBeforeAcceptance,
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection receipt readback failed");
+            RecoveryAcceptance::Unknown
+        }
+    }
+}
+
+/// Terminalize the exact pending Run receipt of a known startup rejection that
+/// no automatic recovery will resend (a scheduled resend confirms the same
+/// correlation on its own `SessionStarted`). The store fences the receipt and
+/// marks the same-device frozen submission recoverable atomically; accepted,
+/// delivery-unknown, terminal and fenced-out receipts are left unchanged.
+fn reject_known_startup(inner: &Arc<Inner>, chat_id: &str, correlation_id: &str, message: &str) {
+    let Some(host) = inner.doc_host() else {
+        return;
     };
     let expected_w = match inner
         .recovery
@@ -6158,34 +6182,17 @@ fn settle_startup_rejection(
         Ok(revision) => revision,
         Err(error) => {
             tracing::error!(chat = %chat_id, %error, "startup rejection workspace fence unavailable");
-            return RecoveryAcceptance::Unknown;
+            return;
         }
     };
     match host.reject_run_before_acceptance(chat_id, correlation_id, expected_w, message) {
-        Ok(rejected) if !rejected.is_empty() => {
-            return RecoveryAcceptance::RejectedBeforeAcceptance;
+        Ok(rejected) if rejected.is_empty() => {
+            tracing::info!(chat = %chat_id, correlation = %correlation_id,
+                "startup rejection left the command receipt unchanged (terminal, unknown, accepted or fenced)");
         }
         Ok(_) => {}
         Err(error) => {
             tracing::error!(chat = %chat_id, %error, "startup rejection receipt could not be finalized");
-            return RecoveryAcceptance::Unknown;
-        }
-    }
-    match host.task_command_receipt_for_correlation(chat_id, correlation_id) {
-        Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => {
-            RecoveryAcceptance::Accepted
-        }
-        // Committed-unknown, or the exact Run receipt left pending by a fence.
-        Ok(Some(receipt))
-            if receipt.status == CommandReceiptStatus::Pending
-                && (receipt.committed_at_ms.is_some() || receipt.intent == "run") =>
-        {
-            RecoveryAcceptance::Unknown
-        }
-        Ok(_) => RecoveryAcceptance::RejectedBeforeAcceptance,
-        Err(error) => {
-            tracing::error!(chat = %chat_id, %error, "startup rejection receipt readback failed");
-            RecoveryAcceptance::Unknown
         }
     }
 }
@@ -6267,10 +6274,10 @@ async fn drive_run(
             }
             inner.remove_run(&chat_id, &run_id);
             // Recovery attempts keep their chain's own acceptance rules.
-            let acceptance = if acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
-                && resume_state.recovery.is_none()
-            {
-                settle_startup_rejection(&inner, &chat_id, &resume_state.user_message_id, &message)
+            let fresh_rejection = acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
+                && resume_state.recovery.is_none();
+            let acceptance = if fresh_rejection {
+                startup_rejection_acceptance(&inner, &chat_id, &resume_state.user_message_id)
             } else {
                 acceptance
             };
@@ -6278,18 +6285,28 @@ async fn drive_run(
             let engine = SessionsEngine {
                 inner: inner.clone(),
             };
-            if let Err(error) = engine.record_recovery_failure(
+            let correlation_id = resume_state.user_message_id.clone();
+            let recorded = engine.record_recovery_failure(
                 &chat_id,
                 harness_id,
                 recovery_request,
                 resume_state.user_message_id,
                 acceptance,
                 classify_failure(&message),
-                message,
+                message.clone(),
                 None,
                 resume_state.recovery.as_ref(),
-            ) {
+            );
+            let automatic_resend = matches!(&recorded, Ok(Some(view))
+                if view.automatic || view.status == RecoveryStatus::Scheduled);
+            if let Err(error) = recorded {
                 tracing::error!(chat = %chat_id, %error, "failed to record pre-accept recovery");
+            }
+            if fresh_rejection
+                && acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
+                && !automatic_resend
+            {
+                reject_known_startup(&inner, &chat_id, &correlation_id, &message);
             }
             return;
         }
