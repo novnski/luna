@@ -92,6 +92,17 @@ async function run(taskId, target) {
     intent: { kind: 'nativeReview', request, messageId: commandId } });
   return { receipt, commandId };
 }
+const receipts = [];
+// A success scenario must be admitted; a rejected receipt names the real cause.
+async function accepted(sent, label) {
+  const receipt = await until(async () => {
+    const current = await call('GetTaskCommandReceipt', { commandId: sent.commandId });
+    return current && current.status !== 'pending' ? current : null;
+  }, `${label} receipt`);
+  receipts.push({ label, receipt });
+  assert.equal(receipt.status, 'applied', `${label}: ${JSON.stringify(receipt.reason)}`);
+  return receipt;
+}
 async function messages(taskId) { return call('WatchDocMessages', { chatId: taskId }); }
 function capture() { const file = path.join(project, '.native-review-protocol.jsonl'); return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : []; }
 async function check(name, fn) { await fn(); checks.push(name); console.log(`PASS ${name}`); }
@@ -102,7 +113,7 @@ try {
   await mutate({ op: 'createChat', chatId: sourceId, spaceId: projectId, cwd: project, config });
   for (const target of [{ type: 'uncommittedChanges' }, { type: 'baseBranch', branch: 'main' }, { type: 'commit', sha, title: 'fixture' }, { type: 'custom', instructions: 'Inspect fixture.js' }]) {
     await check(`native ${target.type}, lifecycle and exactly one durable finding`, async () => {
-      await run(sourceId, target);
+      await accepted(await run(sourceId, target), target.type);
       await until(async () => JSON.stringify(await messages(sourceId)).includes(`Fixture finding for ${target.type}`), target.type);
       const text = JSON.stringify(await messages(sourceId));
       assert.equal(text.split(`Fixture finding for ${target.type}`).length - 1, 1);
@@ -116,7 +127,7 @@ try {
   await check('separate ordinary LUNA chat keeps source binding', async () => {
     const before = (await call('WatchChats')).find(chat => chat.id === sourceId);
     await mutate({ op: 'createChat', chatId: separateId, spaceId: projectId, cwd: project, config });
-    await run(separateId, { type: 'custom', instructions: 'Separate review' });
+    await accepted(await run(separateId, { type: 'custom', instructions: 'Separate review' }), 'separate');
     await until(async () => JSON.stringify(await messages(separateId)).includes('Fixture finding'), 'separate findings');
     const chats = await call('WatchChats');
     assert.equal(chats.find(chat => chat.id === sourceId).harnessSessionId, before.harnessSessionId);
@@ -171,6 +182,6 @@ finally {
   await new Promise(resolve => log.end(resolve));
   const files = ['engine.log', 'project/.native-review-protocol.jsonl'].filter(file => fs.existsSync(path.join(evidence, file)));
   const hashes = Object.fromEntries(files.map(file => [file, crypto.createHash('sha256').update(fs.readFileSync(path.join(evidence, file))).digest('hex')]));
-  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ proof: 'deterministic adapter/engine/document; no live provider or UI proof', checks, failure, sourceId, separateId, binary, hashes }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ proof: 'deterministic adapter/engine/document; no live provider or UI proof', checks, failure, receipts, sourceId, separateId, binary, hashes }, null, 2));
   console.log(`Evidence: ${evidence}`);
 }

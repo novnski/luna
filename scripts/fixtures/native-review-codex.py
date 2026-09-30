@@ -18,6 +18,13 @@ state_file = Path(os.environ.get("CODEX_HOME", ".")) / "native-review-fixture-th
 state_file.parent.mkdir(parents=True, exist_ok=True)
 threads = json.loads(state_file.read_text()) if state_file.exists() else {}
 
+def load_threads():
+    # Several fixture processes (runs, title/metadata clients) share this state.
+    return json.loads(state_file.read_text()) if state_file.exists() else {}
+
+def save_threads(value):
+    state_file.write_text(json.dumps(value))
+
 def emit(value):
     print(json.dumps(value), flush=True)
 
@@ -34,8 +41,12 @@ for line in sys.stdin:
         thread_id = params.get("threadId", thread_id)
         title_only = params.get("ephemeral", False)
         if not title_only:
-            threads[thread_id] = {"id": thread_id, "cwd": str(cwd), "turns": [], "status": {"type": "idle"}}
-            state_file.write_text(json.dumps(threads))
+            threads = load_threads()
+            # Resume keeps the persisted native name LUNA reconciles against.
+            entry = threads.get(thread_id, {"id": thread_id, "turns": []})
+            entry.update({"cwd": str(cwd), "status": {"type": "idle"}})
+            threads[thread_id] = entry
+            save_threads(threads)
     if cwd and request_id is not None and not title_only:
         with (cwd / ".native-review-protocol.jsonl").open("a") as capture:
             capture.write(json.dumps({"method": method, "params": params}) + "\n")
@@ -46,8 +57,13 @@ for line in sys.stdin:
         result = {"userAgent": "luna-native-review-fixture"}
     elif method in ("thread/start", "thread/resume", "thread/read"):
         requested_id = params.get("threadId", thread_id)
-        threads = json.loads(state_file.read_text()) if state_file.exists() else threads
+        threads = load_threads() or threads
         result = {"thread": threads.get(requested_id, {"id": requested_id, "turns": [], "cwd": str(cwd), "status": {"type": "idle"}})}
+    elif method == "thread/name/set":
+        threads = load_threads()
+        named = params["threadId"]
+        threads.setdefault(named, {"id": named, "turns": [], "status": {"type": "idle"}})["name"] = params.get("name")
+        save_threads(threads)
     elif method == "model/list":
         result = {"data": [], "nextCursor": None}
     elif method == "thread/list":
