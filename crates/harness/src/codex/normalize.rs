@@ -44,6 +44,32 @@ fn mcp_output(item: &Value) -> Option<String> {
     )
 }
 
+/// Computer-use results carry screenshots of the user's desktop. Keep their
+/// typed shape, text, structured content and errors on the host, but never
+/// let encoded screenshot/audio bytes into the event stream or run journal
+/// (the computer-use integration's standing privacy contract).
+fn computer_use_output(item: &Value) -> Option<String> {
+    let mut item = item.clone();
+    if let Some(blocks) = item
+        .pointer_mut("/result/content")
+        .and_then(Value::as_array_mut)
+    {
+        for block in blocks.iter_mut().filter_map(Value::as_object_mut) {
+            if let Some(data) = block.remove("data") {
+                let bytes = data.as_str().map_or(0, str::len);
+                block.insert("dataOmitted".into(), serde_json::json!({ "bytes": bytes }));
+            }
+            if let Some(resource) = block.get_mut("resource").and_then(Value::as_object_mut)
+                && let Some(blob) = resource.remove("blob")
+            {
+                let bytes = blob.as_str().map_or(0, str::len);
+                resource.insert("blobOmitted".into(), serde_json::json!({ "bytes": bytes }));
+            }
+        }
+    }
+    mcp_output(&item)
+}
+
 fn diagnostic_label(value: &str) -> String {
     value.chars().filter(|c| !c.is_control()).take(80).collect()
 }
@@ -420,7 +446,7 @@ impl ComputerUseStream {
                     AgentEvent::ToolResult {
                         id: id.to_owned(),
                         is_error: failed,
-                        output: mcp_output(item),
+                        output: computer_use_output(item),
                         diff: None,
                     },
                 ])
@@ -586,7 +612,7 @@ mod computer_use_tests {
                 ..
             }
         ));
-        assert!(!format!("{:?}", events[0]).contains("private pixels"));
+        assert!(!format!("{events:?}").contains("private pixels"));
         assert!(
             stream
                 .map_item(
@@ -1241,7 +1267,13 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 is_error: matches!(status.as_str(), "failed" | "errored" | "cancelled")
                     || item.get("error").is_some_and(|v| !v.is_null())
                     || item.pointer("/result/isError").and_then(Value::as_bool) == Some(true),
-                output: mcp_output(item),
+                // Child threads route computer-use items here, not through
+                // the root ComputerUseStream; keep their screenshots out too.
+                output: if is_computer_use(item) {
+                    computer_use_output(item)
+                } else {
+                    mcp_output(item)
+                },
                 diff: None,
             }],
         },

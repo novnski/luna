@@ -2062,16 +2062,20 @@ fn rich_output_display(text: &str) -> Option<String> {
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default()
         };
+        // Computer-use screenshots are omitted by the adapter, not retained.
+        let media = if block.get("dataOmitted").is_some() {
+            "media not retained"
+        } else {
+            "media retained in full result"
+        };
         match field("type") {
             "text" | "inputText" => sections.push(field("text").to_owned()),
-            "image" | "inputImage" => sections.push(format!(
-                "Image ({}) · media retained in full result",
-                field("mimeType")
-            )),
-            "audio" | "inputAudio" => sections.push(format!(
-                "Audio ({}) · media retained in full result",
-                field("mimeType")
-            )),
+            "image" | "inputImage" => {
+                sections.push(format!("Image ({}) · {media}", field("mimeType")))
+            }
+            "audio" | "inputAudio" => {
+                sections.push(format!("Audio ({}) · {media}", field("mimeType")))
+            }
             "resource_link" => {
                 sections.push(format!("Resource: {}\n{}", field("name"), field("uri")))
             }
