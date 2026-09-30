@@ -232,6 +232,11 @@ tid=$(rid "$turnline")
 
 case "$turnline" in
 
+*scenario:mcp-form:*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-mcp\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-mcp"}}}'
+  exec python3 "$(dirname "$0")/mcp-elicitation-peer.py" "$turnline"
+  ;;
 *scenario:computer-use:response-before-start*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t1\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t1"}}}'

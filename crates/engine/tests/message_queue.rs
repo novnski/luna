@@ -157,6 +157,7 @@ impl Harness for HeldHarness {
                 question: "which one?".into(),
                 options: vec!["a".into(), "b".into()],
                 multi_select: false,
+                mcp: None,
                 approval: self.approves.then(|| luna_proto::ApprovalRequest {
                     provider_request_id: "approval-1".into(),
                     provider: HarnessId::Mock,

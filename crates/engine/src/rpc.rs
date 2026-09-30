@@ -1009,6 +1009,13 @@ struct ReadAttachmentChunkParams {
     offset: u64,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpElicitationUrlParams {
+    chat_id: String,
+    request_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct FetchToolBlobParams {
@@ -6614,6 +6621,7 @@ fn forwardable(method: &str) -> bool {
             | methods::UPLOAD_COMMIT
             | methods::READ_ATTACHMENT_CHUNK
             | methods::FETCH_TOOL_BLOB
+            | methods::MCP_ELICITATION_URL
             // Updates report/apply on the device whose binary they concern.
             | methods::UPDATE_STATUS
             | methods::APPLY_UPDATE
@@ -10454,6 +10462,14 @@ impl RpcService for EngineRpc {
                         .map_err(|e| RpcError::Failed(e.to_string()))?,
                 };
                 RpcReply::value(&serde_json::json!({ "text": text }))
+            }
+            methods::MCP_ELICITATION_URL => {
+                let p: McpElicitationUrlParams = parse_params(params)?;
+                let url = self
+                    .sessions
+                    .mcp_elicitation_url(&p.chat_id, &p.request_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                RpcReply::value(&serde_json::json!({ "url": url }))
             }
             other => Err(RpcError::UnknownMethod(other.to_string())),
         }

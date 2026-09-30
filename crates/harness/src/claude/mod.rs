@@ -1019,6 +1019,7 @@ fn handle_control_request(
                 question: format!("{summary}. Target: {}.", permission_policy.machine_name),
                 options: vec!["Deny".into(), "Allow once".into(), "Cancel".into()],
                 multi_select: false,
+                mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: req.request_id.clone(),
                     provider: HarnessId::ClaudeCode,
@@ -1122,6 +1123,7 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
                             .into(),
                     })
                     .collect(),
+                mcp: None,
                 approval: None,
             }
         })

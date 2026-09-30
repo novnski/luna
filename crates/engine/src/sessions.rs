@@ -142,6 +142,7 @@ impl LunaSendProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.claim.provider_call_id.clone(),
                 provider: HarnessId::Codex,
@@ -200,6 +201,7 @@ impl LunaSyntheticArchiveProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.source_call_id.clone(),
                 provider: HarnessId::Codex,
@@ -315,6 +317,43 @@ pub enum LunaApprovalOutcome {
 }
 
 type PendingInputs = Arc<Mutex<HashMap<String, PendingInput>>>;
+
+// Adapter cancellation closes the receiver. Remove the corresponding UI
+// prompt promptly, including when the provider finishes a turn or disconnects.
+fn schedule_mcp_input_cleanup(
+    pending: PendingInputs,
+    engine_tx: mpsc::UnboundedSender<AgentEvent>,
+    request_id: String,
+    questions: &[UserInputQuestion],
+) {
+    let Some(expires_at_ms) = questions
+        .iter()
+        .filter_map(|q| q.mcp.as_ref().map(|m| m.expires_at_ms))
+        .min()
+    else {
+        return;
+    };
+    let pending = Arc::downgrade(&pending);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let Some(pending) = pending.upgrade() else {
+                break;
+            };
+            let invalid = {
+                let map = lock(&pending);
+                let Some(input) = map.get(&request_id) else {
+                    break;
+                };
+                input.resolver.is_closed() || now_ms() >= expires_at_ms
+            };
+            if invalid {
+                expire_pending_approval(&pending, &engine_tx, &request_id);
+                break;
+            }
+        }
+    });
+}
 
 fn schedule_approval_expiry(
     pending: PendingInputs,
@@ -628,6 +667,7 @@ impl LunaProspectiveInterruptProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: evidence.claim.provider_call_id.clone(),
                 provider: HarnessId::Codex,
@@ -3315,10 +3355,24 @@ impl SessionsEngine {
                         resolver: tx,
                     },
                 );
+                // The full URL stays only in the live pending resolver. Strip
+                // it even from in-memory events before journal/doc projection.
+                let mut visible_questions = questions.clone();
+                for question in &mut visible_questions {
+                    if let Some(meta) = &mut question.mcp {
+                        meta.launch_url = None;
+                    }
+                }
                 let _ = engine_tx.send(AgentEvent::InputRequested {
                     request_id: request_id.clone(),
-                    questions: questions.clone(),
+                    questions: visible_questions,
                 });
+                schedule_mcp_input_cleanup(
+                    pending.clone(),
+                    engine_tx.clone(),
+                    request_id.clone(),
+                    &questions,
+                );
                 schedule_approval_expiry(
                     pending.clone(),
                     engine_tx.clone(),
@@ -3649,20 +3703,79 @@ impl SessionsEngine {
         request_id: &str,
         answers: Vec<UserInputAnswer>,
     ) -> Result<bool, EngineError> {
-        let target = lock(&self.inner.runs)
-            .get(chat_id)
-            .map(|h| (h.pending_inputs.clone(), h.engine_tx.clone()));
-        let Some((pending, engine_tx)) = target else {
+        // Hold the run map through delivery so a replacement run cannot
+        // receive responses belonging to the old provider binding.
+        let runs = lock(&self.inner.runs);
+        let Some(handle) = runs.get(chat_id) else {
             return Ok(false);
         };
-        let Some(pending) = take_pending_ordinary_input(&pending, request_id) else {
+        {
+            let pending = lock(&handle.pending_inputs);
+            let Some(input) = pending.get(request_id) else {
+                return Ok(false);
+            };
+            if input.questions.iter().any(|q| q.mcp.is_some()) {
+                if handle.interrupt_token.is_cancelled()
+                    || *handle.cancel.subscribe().borrow()
+                    || input.resolver.is_closed()
+                    || input
+                        .questions
+                        .iter()
+                        .filter_map(|q| q.mcp.as_ref())
+                        .any(|m| now_ms() >= m.expires_at_ms)
+                {
+                    return Ok(false);
+                }
+                luna_proto::mcp_response(&input.questions, &answers)
+                    .map_err(|message| EngineError::Other(message.into()))?;
+            }
+        }
+        let Some(pending) = take_pending_ordinary_input(&handle.pending_inputs, request_id) else {
             return Ok(false);
         };
-        let _ = pending.resolver.send(answers);
-        let _ = engine_tx.send(AgentEvent::InputResolved {
+        let delivered = pending.resolver.send(answers).is_ok();
+        let _ = handle.engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_string(),
         });
-        Ok(true)
+        Ok(delivered)
+    }
+
+    /// Return the URL only for a live exact request. It is not a durable
+    /// command, does not accept the request, and is unavailable after restart.
+    pub fn mcp_elicitation_url(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+    ) -> Result<String, EngineError> {
+        let runs = lock(&self.inner.runs);
+        let handle = runs
+            .get(chat_id)
+            .ok_or_else(|| EngineError::Other("MCP request is no longer pending".into()))?;
+        let pending = lock(&handle.pending_inputs);
+        let input = pending
+            .get(request_id)
+            .ok_or_else(|| EngineError::Other("MCP request is no longer pending".into()))?;
+        if !matches!(input.kind, PendingInputKind::Provider)
+            || handle.interrupt_token.is_cancelled()
+            || *handle.cancel.subscribe().borrow()
+            || input.resolver.is_closed()
+        {
+            return Err(EngineError::Other(
+                "MCP request is no longer pending".into(),
+            ));
+        }
+        let meta = input
+            .questions
+            .iter()
+            .filter_map(|q| q.mcp.as_ref())
+            .find(|meta| matches!(meta.kind, luna_proto::McpInputKind::Url { .. }))
+            .filter(|meta| now_ms() < meta.expires_at_ms)
+            .ok_or_else(|| {
+                EngineError::Other("MCP URL request expired or is unavailable".into())
+            })?;
+        meta.launch_url
+            .clone()
+            .ok_or_else(|| EngineError::Other("MCP URL request is unavailable".into()))
     }
 
     /// A live server-owned kind, independent of the serialized question's
@@ -7311,7 +7424,27 @@ async fn drive_run(
                 );
             }
             AgentEvent::InputResolved { .. } => {
-                inner.set_status(&chat_id, SessionStatus::Working, false);
+                // One completed form must not hide another concurrent prompt.
+                let remaining = lock(&inner.runs)
+                    .get(&chat_id)
+                    .map(|handle| handle.pending_inputs.clone());
+                let status = remaining
+                    .as_ref()
+                    .and_then(|pending| {
+                        let pending = lock(pending);
+                        if pending
+                            .values()
+                            .any(|input| input.questions.iter().any(|q| q.approval.is_some()))
+                        {
+                            Some(SessionStatus::AwaitingApproval)
+                        } else if !pending.is_empty() {
+                            Some(SessionStatus::AwaitingInput)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(SessionStatus::Working);
+                inner.set_status(&chat_id, status, false);
             }
             _ => {}
         }
@@ -8521,6 +8654,7 @@ mod tests {
             question: "Allow?".into(),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: "provider-1".into(),
                 provider: HarnessId::ClaudeCode,
@@ -8538,6 +8672,7 @@ mod tests {
         assert!(
             approval_answer(
                 &luna_proto::UserInputQuestion {
+                    mcp: None,
                     approval: None,
                     ..question
                 },
@@ -8654,6 +8789,7 @@ mod tests {
                     question: "Allow?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-1".into(),
                         provider: HarnessId::Codex,
@@ -8689,6 +8825,7 @@ mod tests {
             question: "Allow?".into(),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: "claimed-local-ui".into(),
                 provider: HarnessId::Codex,
@@ -8762,6 +8899,7 @@ mod tests {
                     question: "Which?".into(),
                     options: vec!["A".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }],
                 resolver: ordinary_tx,
@@ -11907,6 +12045,7 @@ mod tests {
                     question: "Allow?".into(),
                     options: vec!["Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "claimed-local-ui".into(),
                         provider: HarnessId::Codex,

@@ -7234,6 +7234,24 @@ impl DocHost {
                         Some("LUNA approval requires a trusted local UI response".into()),
                     ));
                 }
+                if questions.iter().any(|question| question.mcp.is_some()) {
+                    // A restart cannot recreate the server's exact resolver or
+                    // authorization URL. Close the stale UI only on an explicit
+                    // decline/cancel; never resume the model with form values.
+                    let action = luna_proto::mcp_response(&questions, answers)
+                        .map_err(|message| EngineError::Other(message.into()))?;
+                    if action.get("action").and_then(serde_json::Value::as_str) == Some("accept") {
+                        return Ok((
+                            SessionCommandStatus::Rejected,
+                            Some("MCP request expired; run the tool again".into()),
+                        ));
+                    }
+                    handle.doc.resolve_input(request_id)?;
+                    return Ok((
+                        SessionCommandStatus::Applied,
+                        Some("provider disconnected; MCP request closed locally".into()),
+                    ));
+                }
                 if questions.iter().any(|question| question.approval.is_some()) {
                     // A recovered approval has no provider response channel.
                     // Only RespondApproval may close it (as a safe denial);
@@ -7789,6 +7807,7 @@ mod luna_approval_recovery_tests {
             question: "Allow?".into(),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: "claimed-local-ui".into(),
                 provider: HarnessId::Codex,

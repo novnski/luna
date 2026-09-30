@@ -3109,3 +3109,127 @@ async fn real_image_generation_smoke() {
     assert!(std::path::Path::new(path).is_file());
     assert!(serde_json::to_vec(&events).unwrap().len() < 64 * 1024);
 }
+
+// Failure scenarios were recorded before this fixture/implementation in the
+// wave's evidence/mcp-prompts/failure-scenarios.md. This is synthetic adapter
+// E2E, not proof of an actual MCP server, model or native UI.
+#[tokio::test]
+async fn generic_mcp_elicitation_roundtrips_typed_fields_and_actions() {
+    let mut proof = Vec::new();
+    for scenario in [
+        "accept",
+        "decline",
+        "cancel",
+        "url-accept",
+        "url-cancel",
+        "foreign",
+        "bad-schema",
+        "concurrent",
+        "defaults",
+        "formats",
+        "foreign-thread",
+        "null-turn",
+        "bad-default",
+        "bad-required",
+        "too-many",
+        "unsupported-mode",
+        "url-bad-scheme",
+        "url-credentials",
+        "duplicate",
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let mut req = computer_use_request(&format!("scenario:mcp-form:{scenario}"), home.path());
+        req.auto_approve = false;
+        let (mut controls, _steer, _token) = controls("unused");
+        let observed = Arc::new(Mutex::new(Vec::<Vec<UserInputQuestion>>::new()));
+        let seen = observed.clone();
+        let response_scenario = scenario.to_string();
+        controls.request_input = Box::new(move |questions| {
+            seen.lock().unwrap().push(questions.clone());
+            let (tx, rx) = oneshot::channel();
+            let answers = questions
+                .iter()
+                .map(|q| {
+                    let label = match q.header.as_str() {
+                        "name" => "Ada",
+                        "email" => "ada@example.invalid",
+                        "date" => "2026-09-30",
+                        "time" => "2026-09-30T12:34:56Z",
+                        "uri" => "https://example.invalid/path",
+                        "decimal" => "1.25",
+                        "count" => "0",
+                        "enabled" => "false",
+                        "color" => "Blue (blue)",
+                        "tags" => "Alpha (a)",
+                        _ if response_scenario.contains("cancel") => "Cancel",
+                        _ if response_scenario == "decline" => "Decline",
+                        _ => "Accept",
+                    };
+                    let labels = if response_scenario == "defaults"
+                        && q.mcp.as_ref().is_some_and(|m| {
+                            matches!(m.kind, luna_proto::McpInputKind::Field { .. })
+                        }) {
+                        vec![]
+                    } else {
+                        vec![label.into()]
+                    };
+                    UserInputAnswer {
+                        question_id: q.id.clone(),
+                        labels,
+                    }
+                })
+                .collect();
+            let _ = tx.send(answers);
+            rx
+        });
+        let events = run_to_end(&harness(), req, controls).await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                })
+            ),
+            "{events:?}"
+        );
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::TextDelta { text } if text.contains("mcp-fixture-verified"))), "fixture did not verify response: {events:?}");
+        let seen = observed.lock().unwrap();
+        proof.push(
+            serde_json::json!({"scenario":scenario,"questionSets":seen.len(),"events":events}),
+        );
+        if matches!(
+            scenario,
+            "foreign"
+                | "bad-schema"
+                | "foreign-thread"
+                | "null-turn"
+                | "bad-default"
+                | "bad-required"
+                | "too-many"
+                | "unsupported-mode"
+                | "url-bad-scheme"
+                | "url-credentials"
+        ) {
+            assert!(seen.is_empty());
+        } else {
+            assert!(!seen.is_empty());
+            if scenario == "duplicate" {
+                assert_eq!(seen.len(), 1);
+            }
+            // Raw authorization URL is transient and cannot serialize to docs.
+            let encoded = serde_json::to_string(&*seen).unwrap();
+            assert!(!encoded.contains("private-url-token"));
+        }
+    }
+    if let Some(directory) = std::env::var_os("LUNA_MCP_E2E_ARTIFACT_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("adapter.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"scenarios":proof}))
+                .unwrap(),
+        )
+        .unwrap();
+    }
+}

@@ -37,6 +37,7 @@
 //!   always ends with `Done { status: Interrupted }`.
 
 pub(crate) mod catalog;
+mod elicitation;
 pub mod native;
 mod normalize;
 mod subagents;
@@ -950,6 +951,7 @@ struct TurnRouter {
 struct LunaCallIds {
     turn_id: Option<String>,
     seen: HashSet<String>,
+    mcp_seen: HashSet<String>,
 }
 
 impl LunaCallIds {
@@ -962,6 +964,7 @@ impl LunaCallIds {
         if self.turn_id.as_deref() != Some(turn_id) {
             self.turn_id = Some(turn_id.to_owned());
             self.seen.clear();
+            self.mcp_seen.clear();
         }
         self.seen.len() < MAX_CALLS_PER_TURN && self.seen.insert(call_id.to_owned())
     }
@@ -2267,6 +2270,7 @@ fn handle_server_request(
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: id.to_string(),
                 provider: HarnessId::Codex,
@@ -2314,6 +2318,66 @@ fn handle_server_request(
         });
         return;
     }
+    if method == "mcpServer/elicitation/request"
+        && params.get("serverName").and_then(Value::as_str) != Some("computer-use")
+    {
+        let exact_context = !interrupt.is_cancelled()
+            && !computer_use_turn_cancel.is_cancelled()
+            && active_turn_id.is_some()
+            && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+            && params.get("turnId").and_then(Value::as_str) == active_turn_id
+            && runtime_contract.is_some_and(|contract| {
+                !contract.context.thread_id.is_empty() && !contract.context.machine_id.is_empty()
+            });
+        if !exact_context {
+            client.respond(&id, json!({ "action": "decline" }));
+            return;
+        }
+        let turn = active_turn_id.unwrap();
+        if call_ids.turn_id.as_deref() != Some(turn) {
+            call_ids.turn_id = Some(turn.to_owned());
+            call_ids.seen.clear();
+            call_ids.mcp_seen.clear();
+        }
+        let wire_id = id.to_string();
+        // A retransmitted opaque request ID shares the original resolver.
+        // Do not send a competing decline response to the same pending ID.
+        if call_ids.mcp_seen.contains(&wire_id) {
+            return;
+        }
+        if call_ids.mcp_seen.len() >= 32 {
+            client.respond(&id, json!({ "action": "decline" }));
+            return;
+        }
+        let Ok(questions) = elicitation::questions(params, &id) else {
+            client.respond(&id, json!({ "action": "decline" }));
+            return;
+        };
+        call_ids.mcp_seen.insert(wire_id);
+        let client = client.clone();
+        let request_input = Arc::clone(request_input);
+        let interrupt = interrupt.clone();
+        let turn_cancel = computer_use_turn_cancel.clone();
+        tokio::spawn(async move {
+            let receiver = (request_input)(questions.clone());
+            let answers = tokio::select! {
+                biased;
+                _ = interrupt.cancelled() => None,
+                _ = turn_cancel.cancelled() => None,
+                result = tokio::time::timeout(Duration::from_secs(120), receiver) => result.ok().and_then(Result::ok),
+            };
+            let response = if interrupt.is_cancelled() || turn_cancel.is_cancelled() {
+                json!({ "action": "cancel" })
+            } else {
+                answers
+                    .as_ref()
+                    .and_then(|answers| luna_proto::mcp_response(&questions, answers).ok())
+                    .unwrap_or_else(|| json!({ "action": "cancel" }))
+            };
+            client.respond(&id, response);
+        });
+        return;
+    }
     if method == "mcpServer/elicitation/request" {
         let matching_context = !interrupt.is_cancelled()
             && !computer_use_turn_cancel.is_cancelled()
@@ -2347,6 +2411,7 @@ fn handle_server_request(
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: id.to_string(),
                 provider: HarnessId::Codex,
@@ -2689,6 +2754,7 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
                     .iter()
                     .find_map(|k| q.get(*k).and_then(Value::as_bool))
                     .unwrap_or(false),
+                mcp: None,
                 approval: None,
             };
             (wire_id, question)
@@ -2755,6 +2821,7 @@ fn approval_question(
             "Cancel".into(),
         ],
         multi_select: false,
+        mcp: None,
         approval: Some(luna_proto::ApprovalRequest {
             provider_request_id: provider_request_id.to_string(),
             provider: HarnessId::Codex,

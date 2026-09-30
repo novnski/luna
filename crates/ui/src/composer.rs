@@ -646,7 +646,7 @@ fn wizard_number_shortcut(key: &str, modified: bool, answer_focused: bool) -> Op
 pub fn pending_input_request(
     transcript: &[SessionMessageEntry],
 ) -> Option<(String, Vec<UserInputQuestion>)> {
-    transcript
+    let latest = transcript
         .iter()
         .rev()
         .find(|entry| entry.role == MessageRole::Assistant)
@@ -660,7 +660,26 @@ pub fn pending_input_request(
                 } => Some((request_id.clone(), questions.clone())),
                 _ => None,
             })
-        })
+        });
+    latest.or_else(|| {
+        transcript
+            .iter()
+            .rev()
+            .filter(|entry| entry.role == MessageRole::Assistant)
+            .find_map(|entry| {
+                entry.parts.iter().find_map(|part| match part {
+                    MessagePart::Input {
+                        request_id,
+                        questions,
+                        resolved: false,
+                        ..
+                    } if questions.iter().any(|q| q.mcp.is_some()) => {
+                        Some((request_id.clone(), questions.clone()))
+                    }
+                    _ => None,
+                })
+            })
+    })
 }
 
 fn approval_decision(
@@ -817,19 +836,56 @@ pub struct Wizard {
     pub page: usize,
     picked: Vec<Vec<usize>>,
     typed: Vec<String>,
+    url_opening: bool,
 }
 
 impl Wizard {
     pub fn new(request_id: String, questions: Vec<UserInputQuestion>) -> Self {
         let n = questions.len();
-        Self {
+        let mut wizard = Self {
             request_id,
             source: QuestionSource::Blocking,
             questions,
             page: 0,
             picked: vec![Vec::new(); n],
             typed: vec![String::new(); n],
+            url_opening: false,
+        };
+        for (index, question) in wizard.questions.iter().enumerate() {
+            if let Some(luna_proto::McpInputKind::Field { schema, .. }) =
+                question.mcp.as_ref().map(|m| &m.kind)
+                && let Some(default) = &schema.default
+            {
+                if !schema.choices.is_empty() {
+                    let values = default
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_else(|| vec![default.clone()]);
+                    wizard.picked[index] = values
+                        .iter()
+                        .filter_map(|value| {
+                            schema
+                                .choices
+                                .iter()
+                                .position(|choice| Some(choice.value.as_str()) == value.as_str())
+                        })
+                        .collect();
+                } else if schema.value_type == "boolean" {
+                    wizard.picked[index] = question
+                        .options
+                        .iter()
+                        .position(|label| label == &default.to_string())
+                        .into_iter()
+                        .collect();
+                } else {
+                    wizard.typed[index] = default
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| default.to_string());
+                }
+            }
         }
+        wizard
     }
 
     pub fn new_async(
@@ -847,6 +903,7 @@ impl Wizard {
                     question: question.title,
                     options: question.options.unwrap_or_default(),
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 })
                 .collect(),
@@ -896,7 +953,7 @@ impl Wizard {
             WizardStep::Stay
         } else {
             *picked = vec![option_ix];
-            if self.source == QuestionSource::Blocking {
+            if self.source == QuestionSource::Blocking && question.mcp.is_none() {
                 WizardStep::AutoAdvance
             } else {
                 WizardStep::Stay
@@ -923,7 +980,9 @@ impl Wizard {
     }
 
     pub fn page_has_answer(&self) -> bool {
-        self.page_has_pick() || !self.current_typed().trim().is_empty()
+        self.page_has_pick()
+            || if self.current().is_some_and(|q| q.mcp.is_some()) { !self.current_typed().is_empty() } else { !self.current_typed().trim().is_empty() }
+            || self.current().is_some_and(|q| q.mcp.as_ref().is_some_and(|m| matches!(&m.kind, luna_proto::McpInputKind::Field { schema, .. } if !schema.required || schema.default.is_some() || (schema.value_type == "string" && schema.choices.is_empty() && schema.min_length.unwrap_or(0) == 0))))
     }
 
     /// Explicit submit / auto-advance landing.
@@ -952,8 +1011,19 @@ impl Wizard {
             .iter()
             .enumerate()
             .map(|(ix, q)| {
-                let typed = self.typed.get(ix).map(|s| s.trim()).unwrap_or("");
-                let labels = if !typed.is_empty() {
+                let typed = self
+                    .typed
+                    .get(ix)
+                    .map(|s| {
+                        if q.mcp.is_some() {
+                            s.as_str()
+                        } else {
+                            s.trim()
+                        }
+                    })
+                    .unwrap_or("");
+                let required_empty = q.mcp.as_ref().is_some_and(|m| matches!(&m.kind, luna_proto::McpInputKind::Field { schema, .. } if schema.required && schema.value_type == "string" && schema.choices.is_empty() && schema.default.is_none() && schema.min_length.unwrap_or(0) == 0));
+                let labels = if !typed.is_empty() || required_empty {
                     vec![typed.to_string()]
                 } else {
                     self.picked
@@ -8917,8 +8987,9 @@ impl Composer {
                 if !same {
                     self.wizard = Some(candidate.clone());
                     self.advance_task = None;
+                    let initial = candidate.current_typed().to_string();
                     self.answer_input
-                        .update(cx, |input, cx| input.set_text("", cx));
+                        .update(cx, |input, cx| input.set_text(initial, cx));
                 }
             }
             _ => {
@@ -10196,11 +10267,26 @@ impl Composer {
         {
             return;
         }
-        let typed = self.answer_input.read(cx).text().trim().to_string();
+        let typed = self.answer_input.read(cx).text().to_string();
         let Some(wizard) = self.wizard.as_mut() else {
             return;
         };
         wizard.set_typed(typed);
+        if let Some(luna_proto::McpInputKind::Field { schema, .. }) = wizard
+            .current()
+            .and_then(|q| q.mcp.as_ref())
+            .map(|m| &m.kind)
+        {
+            let answers = wizard.answers();
+            if let Err(message) = schema.value_for_labels(&answers[wizard.page].labels) {
+                self.failure = Some(message.into());
+                self.failure_key = Some(self.current_key.clone());
+                cx.notify();
+                return;
+            }
+            self.failure = None;
+            self.failure_key = None;
+        }
         if !wizard.page_has_answer() {
             return;
         }
@@ -10232,6 +10318,65 @@ impl Composer {
                 .update(cx, |input, cx| input.set_text(previous, cx));
             cx.notify();
         }
+    }
+
+    fn wizard_mcp_action(&mut self, action: &str, cx: &mut Context<Self>) {
+        let Some(wizard) = &self.wizard else {
+            return;
+        };
+        let Some(question) = wizard.questions.iter().find(|q| {
+            q.mcp.as_ref().is_some_and(|m| {
+                matches!(
+                    m.kind,
+                    luna_proto::McpInputKind::FormAction | luna_proto::McpInputKind::Url { .. }
+                )
+            })
+        }) else {
+            return;
+        };
+        let answer = UserInputAnswer {
+            question_id: question.id.clone(),
+            labels: vec![action.to_owned()],
+        };
+        self.wizard_finish(vec![answer], cx);
+    }
+
+    fn wizard_open_mcp_url(&mut self, cx: &mut Context<Self>) {
+        let Some(wizard) = self.wizard.as_mut() else {
+            return;
+        };
+        if wizard.url_opening || self.answered_requests.contains(&wizard.request_id) {
+            return;
+        }
+        let request_id = wizard.request_id.clone();
+        let chat_id = self.current_key.clone();
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let target = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .map(|chat| chat.device_id.clone());
+        if let Some(wizard) = self.wizard.as_mut() {
+            wizard.url_opening = true;
+        }
+        self.action_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call(luna_rpc::methods::MCP_ELICITATION_URL, serde_json::json!({ "chatId": chat_id, "requestId": request_id, "targetDeviceId": target })).await;
+            this.update(cx, |composer, cx| {
+                if composer.current_key != chat_id || composer.wizard.as_ref().is_none_or(|w| w.request_id != request_id) { return; }
+                if let Some(wizard) = composer.wizard.as_mut() { wizard.url_opening = false; }
+                match result {
+                    Ok(value) => {
+                        if let Some(url) = value.get("url").and_then(serde_json::Value::as_str)
+                            && luna_proto::mcp_url_destination(url).is_ok() { cx.open_url(url); }
+                        else { composer.failure = Some("Authorization URL is unavailable".into()); composer.failure_key = Some(chat_id.clone()); }
+                    }
+                    Err(error) => { composer.failure = Some(error.to_string().into()); composer.failure_key = Some(chat_id.clone()); }
+                }
+                cx.notify();
+            }).ok();
+        }));
     }
 
     fn wizard_skip(&mut self, cx: &mut Context<Self>) {
@@ -10338,6 +10483,14 @@ impl Composer {
         let Some(wizard) = self.wizard.clone() else {
             return;
         };
+        if wizard.questions.iter().any(|q| q.mcp.is_some())
+            && let Err(message) = luna_proto::mcp_response(&wizard.questions, &answers)
+        {
+            self.failure = Some(message.into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return;
+        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.failure = Some("Engine not connected".into());
             self.failure_key = Some(self.current_key.clone());
@@ -10464,8 +10617,17 @@ impl Composer {
             if let Err(err) = result {
                 this.update(cx, |composer, cx| {
                     composer.failure = Some(format!("Answer failed: {err}").into());
-                    composer.failure_key = Some(failure_chat);
+                    composer.failure_key = Some(failure_chat.clone());
                     composer.answered_requests.remove(&request_id);
+                    if wizard.questions.iter().any(|q| q.mcp.is_some())
+                        && composer.current_key == failure_chat
+                    {
+                        let current = wizard.current_typed().to_string();
+                        composer.wizard = Some(wizard.clone());
+                        composer
+                            .answer_input
+                            .update(cx, |input, cx| input.set_text(current, cx));
+                    }
                     composer.on_state_changed(cx);
                     cx.notify();
                 })
@@ -10496,7 +10658,9 @@ impl Composer {
         // Keys bubbling out of the free-text input must not double-handle:
         // digits select options only while the input is empty, and Enter is the
         // input's own Submit action when it has focus.
-        let input_focused = self.answer_input.read(cx).focus_handle.is_focused(window);
+        let input_visible = self.wizard.as_ref().and_then(Wizard::current).is_none_or(|q| q.mcp.as_ref().is_none_or(|m| matches!(&m.kind, luna_proto::McpInputKind::Field { schema, .. } if schema.choices.is_empty() && schema.value_type != "boolean")));
+        let input_focused =
+            input_visible && self.answer_input.read(cx).focus_handle.is_focused(window);
         let input_empty = self.answer_input.read(cx).is_empty();
         let key = event.keystroke.key.as_str();
         // A bare digit picks an option only while focus is on the card, not
@@ -10544,7 +10708,19 @@ impl Composer {
             .get(&(self.current_key.clone(), wizard.request_id.clone()))
             .map(|submission| submission.state);
         let retryable = delivery_state == Some(AsyncDeliveryState::Uncertain);
-        let can_advance = retryable || (!submitting && (wizard.page_has_pick() || !typed_empty));
+        let mcp_prompt = wizard.questions.iter().any(|q| q.mcp.is_some());
+        let url_prompt = question
+            .mcp
+            .as_ref()
+            .is_some_and(|m| matches!(m.kind, luna_proto::McpInputKind::Url { .. }));
+        let mcp_field = question.mcp.as_ref().and_then(|m| match &m.kind {
+            luna_proto::McpInputKind::Field { schema, .. } => Some(schema),
+            _ => None,
+        });
+        let text_input = !mcp_prompt
+            || mcp_field
+                .is_some_and(|schema| schema.choices.is_empty() && schema.value_type != "boolean");
+        let can_advance = retryable || (!submitting && (wizard.page_has_answer() || !typed_empty));
         let surface_radius =
             composer_surface_radius(self.dock_frame.map_or(0.0, |frame| frame.amount));
 
@@ -10697,6 +10873,9 @@ impl Composer {
                     )
                     .child(
                         div()
+                            .id("wizard-question-text")
+                            .max_h(px(160.0))
+                            .overflow_y_scroll()
                             .mt(px(6.0))
                             .text_size(crate::typography::ui_rems(15.0))
                             .line_height(crate::typography::ui_rems(20.0))
@@ -10715,6 +10894,9 @@ impl Composer {
                     })
                     .child(
                         div()
+                            .id("wizard-options")
+                            .max_h(px(220.0))
+                            .overflow_y_scroll()
                             .mt(px(12.0))
                             .flex()
                             .flex_col()
@@ -10723,23 +10905,39 @@ impl Composer {
                     )
                     // Same compact pill surface and input-row geometry as the
                     // ordinary composer; the input entity stays shared.
-                    .child(
-                        div().mt(px(12.0)).pb(px(4.0)).px(px(4.0)).child(
-                            composer_surface(&theme, surface_radius)
-                                .id("wizard-answer-surface")
-                                .w_full()
-                                .h(px(COMPACT_TOTAL_HEIGHT))
-                                .child(
-                                    div()
-                                        .h(px(COMPACT_TOTAL_HEIGHT - PILL_BORDER_V))
-                                        .flex()
-                                        .items_center()
-                                        .min_w_0()
-                                        .px(px(8.0))
-                                        .child(self.answer_input.clone()),
-                                ),
-                        ),
-                    ),
+                    .when(text_input, |el| {
+                        el.child(
+                            div().mt(px(12.0)).pb(px(4.0)).px(px(4.0)).child(
+                                composer_surface(&theme, surface_radius)
+                                    .id("wizard-answer-surface")
+                                    .w_full()
+                                    .h(px(COMPACT_TOTAL_HEIGHT))
+                                    .child(
+                                        div()
+                                            .h(px(COMPACT_TOTAL_HEIGHT - PILL_BORDER_V))
+                                            .flex()
+                                            .items_center()
+                                            .min_w_0()
+                                            .px(px(8.0))
+                                            .child(self.answer_input.clone()),
+                                    ),
+                            ),
+                        )
+                    })
+                    .when(url_prompt && !submitting, |el| {
+                        el.child(
+                            crate::popover::btn_ghost(
+                                &theme,
+                                if wizard.url_opening {
+                                    "Opening…"
+                                } else {
+                                    "Open website"
+                                },
+                                "wizard-open-url",
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.wizard_open_mcp_url(cx))),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -10764,6 +10962,28 @@ impl Composer {
                                         ),
                                 )
                             })
+                            .when(mcp_prompt && !submitting, |el| {
+                                el.child(
+                                    crate::popover::btn_ghost(
+                                        &theme,
+                                        "Decline",
+                                        "wizard-mcp-decline",
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| this.wizard_mcp_action("Decline", cx),
+                                    )),
+                                )
+                                .child(
+                                    crate::popover::btn_ghost(
+                                        &theme,
+                                        "Cancel",
+                                        "wizard-mcp-cancel",
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| this.wizard_mcp_action("Cancel", cx),
+                                    )),
+                                )
+                            })
                             .when(
                                 wizard.source == QuestionSource::Async && !submitting,
                                 |el| {
@@ -10786,6 +11006,16 @@ impl Composer {
                                 "Sending…"
                             } else if last {
                                 "Send"
+                            } else if mcp_field.is_some_and(|schema| schema.default.is_some())
+                                && typed_empty
+                                && !wizard.page_has_pick()
+                            {
+                                "Use default"
+                            } else if mcp_field.is_some_and(|schema| !schema.required)
+                                && typed_empty
+                                && !wizard.page_has_pick()
+                            {
+                                "Skip"
                             } else {
                                 "Next"
                             },
@@ -14062,6 +14292,7 @@ mod tests {
             question: format!("Question {id}"),
             options: options.iter().map(|s| s.to_string()).collect(),
             multi_select: multi,
+            mcp: None,
             approval: None,
         }
     }
