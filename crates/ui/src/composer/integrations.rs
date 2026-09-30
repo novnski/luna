@@ -401,7 +401,8 @@ impl Composer {
         if let Some(chat) = state.selected_chat_row() {
             params.insert("chatId".into(), chat.id.clone().into());
             params.insert("targetDeviceId".into(), chat.device_id.clone().into());
-        } else if let Some(space) = state.selected_space_row() {
+        } else {
+            let space = state.selected_space_row()?;
             params.insert("spaceId".into(), space.id.clone().into());
             params.insert("targetDeviceId".into(), space.device_id.clone().into());
             if let crate::pickers::CheckoutPlan::ReuseWorktree { path, .. } =
@@ -409,8 +410,6 @@ impl Composer {
             {
                 params.insert("path".into(), path.into());
             }
-        } else {
-            return None;
         }
         params.insert(
             "providerAccountId".into(),

@@ -211,8 +211,9 @@ fn capture(window: AnyWindowHandle, cx: &mut AsyncApp, path: &Path) -> anyhow::R
 }
 
 /// AccessKit's macOS subclassing adapter activates on the first AX query to
-/// the window's content view. A headless fixture has no screen reader, so it
-/// issues that query itself; the next frame builds the real a11y tree.
+/// the window's content view (GPUI's view is a subview of it). A headless
+/// fixture has no screen reader, so it issues that query itself; the next
+/// frame builds the real a11y tree.
 #[cfg(target_os = "macos")]
 fn activate_accessibility(window: &Window) -> anyhow::Result<()> {
     use objc2::runtime::AnyObject;
@@ -223,8 +224,13 @@ fn activate_accessibility(window: &Window) -> anyhow::Result<()> {
         anyhow::bail!("fixture window is not an AppKit window");
     };
     let view = appkit.ns_view.as_ptr().cast::<AnyObject>();
-    // SAFETY: the view belongs to this live window on the main thread.
-    let _children: *mut AnyObject = unsafe { objc2::msg_send![view, accessibilityChildren] };
+    // SAFETY: the view belongs to this live window on the main thread; each
+    // returned pointer is checked before it is messaged.
+    let ns_window: *mut AnyObject = unsafe { objc2::msg_send![view, window] };
+    anyhow::ensure!(!ns_window.is_null(), "fixture view has no NSWindow");
+    let content: *mut AnyObject = unsafe { objc2::msg_send![ns_window, contentView] };
+    anyhow::ensure!(!content.is_null(), "fixture NSWindow has no content view");
+    let _children: *mut AnyObject = unsafe { objc2::msg_send![content, accessibilityChildren] };
     Ok(())
 }
 

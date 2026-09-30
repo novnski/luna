@@ -104,9 +104,11 @@ fn main() -> anyhow::Result<()> {
             ) {
                 Ok(window) => window.into(),
                 Err(error) => {
-                    *failure_for_ui.lock().unwrap() = Some(format!("open window: {error:#}"));
-                    cx.quit();
-                    return;
+                    eprintln!("Integrations picker fixture failed: open window: {error:#}");
+                    let _ = std::fs::write(output.join("failure.txt"), format!("open window: {error:#}\n"));
+                    drop(profile);
+                    // AppKit termination from inside `run` exits 0; fail explicitly.
+                    std::process::exit(1);
                 }
             };
             cx.spawn(async move |cx| {
@@ -126,12 +128,16 @@ fn main() -> anyhow::Result<()> {
                     Ok(())
                 }
                 .await;
+                let _ = window.update(cx, |_, window, _| window.remove_window());
                 if let Err(error) = result {
                     eprintln!("Integrations picker fixture failed: {error:#}");
                     let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
                     *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                    drop(profile);
+                    // AppKit termination from inside `run` exits 0; fail explicitly.
+                    std::process::exit(1);
                 }
-                let _ = window.update(cx, |_, window, _| window.remove_window());
+                drop(profile);
                 cx.update(|cx| cx.quit());
             })
             .detach();
