@@ -28,6 +28,10 @@ read()  # initialized
 thread = read()
 result(thread, {'thread': {'id': 'permission-thread'}})
 turn = read()
+if turn.get('method') == 'thread/goal/get':
+    # Installed Codex 0.159 startup goal readback (goal-controls branch).
+    result(turn, {'goal': None})
+    turn = read()
 scenario = turn['params']['input'][0]['text']
 result(turn, {'turn': {'id': 'permission-turn'}})
 emit({'method': 'turn/started', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'permission-turn'}}})
