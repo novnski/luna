@@ -10358,7 +10358,7 @@ impl Shell {
                     } else {
                         "Remove this message and every later turn from this same Codex conversation. The provider's removed history cannot be restored by LUNA; an audit snapshot is kept. Your draft, files and external effects are kept."
                     }))
-                .when(!pending, |card| card.child(div().mt(px(10.0)).max_h(px(100.0)).overflow_y_scroll()
+                .when(!pending, |card| card.child(div().id("history-rewind-message-preview").mt(px(10.0)).max_h(px(100.0)).overflow_y_scroll()
                     .text_size(crate::typography::ui_rems(11.0)).child(SharedString::from(text))))
                 .child(div().mt(px(12.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
                     .child("Files: keep current files. To restore files, review a Git checkpoint separately in Changes. Unsaved files must be saved before restoring."))
