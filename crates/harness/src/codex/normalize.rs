@@ -1377,9 +1377,22 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
         // feed's userMessage items are echoes of prompts we sent (already in
         // the doc). A CHILD thread's userMessage is different — the parent
         // steering its subagent — and is mapped where child items route
-        // (mod.rs child branch), not here.
-        "userMessage" | "user_message" | "agentMessage" | "agent_message" | "reasoning"
-        | "plan" | "contextCompaction" | "context_compaction" => Vec::new(),
+        // (mod.rs child branch), not here. Hook prompts and review-mode
+        // markers are known narrative items, not tools: no diagnostic chip.
+        "userMessage"
+        | "user_message"
+        | "agentMessage"
+        | "agent_message"
+        | "reasoning"
+        | "plan"
+        | "contextCompaction"
+        | "context_compaction"
+        | "hookPrompt"
+        | "hook_prompt"
+        | "enteredReviewMode"
+        | "entered_review_mode"
+        | "exitedReviewMode"
+        | "exited_review_mode" => Vec::new(),
         _ if !id.is_empty() => {
             let mut events = tool_lifecycle(
                 phase,

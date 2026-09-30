@@ -4414,6 +4414,10 @@ impl Transcript {
         }
 
         let mut new_rows: Vec<Row> = Vec::new();
+        // A fetched snapshot of a still-running tool is stale on the next
+        // update. Once the run ends, an unresolved tool is frozen (interrupted
+        // or errored run), so a fetched full output may stay cached.
+        let run_live = self.chat_run_live(cx);
         // Borrow the transcript only while deriving rows. Cloning the entity
         // handle lets rows_for mutate our caches without copying every text
         // and tool payload on each app-state notification.
@@ -4426,12 +4430,13 @@ impl Transcript {
             };
             for entry in entries {
                 for part in &entry.parts {
-                    if let MessagePart::Tool {
-                        resolved: false,
-                        output_ref,
-                        diff_ref,
-                        ..
-                    } = part
+                    if run_live
+                        && let MessagePart::Tool {
+                            resolved: false,
+                            output_ref,
+                            diff_ref,
+                            ..
+                        } = part
                     {
                         for blob_ref in [output_ref, diff_ref].into_iter().flatten() {
                             self.blob_details.remove(blob_ref.as_str());
@@ -4779,6 +4784,21 @@ impl Transcript {
         }
         self.apply_history_target(cx);
         cx.notify();
+    }
+
+    /// Whether the displayed chat still has a live run. Unresolved tools are
+    /// only in flight while it does; after an interrupted or errored run they
+    /// never settle, but their received output remains on the owning host.
+    fn chat_run_live(&self, cx: &gpui::App) -> bool {
+        use crate::state::Indicator;
+        self.chat_id.as_deref().is_some_and(|chat_id| {
+            matches!(
+                self.state
+                    .read(cx)
+                    .indicator_for(chat_id, chrono::Utc::now()),
+                Indicator::Working | Indicator::AwaitingApproval | Indicator::AwaitingInput
+            )
+        })
     }
 
     /// Cached row build for one entry (streaming entries bypass the cache).
@@ -6913,12 +6933,15 @@ impl Transcript {
         // upgrade), then the output — a fetched ref hands the affordance to
         // the NEXT unfetched one instead of retiring it (both must stay
         // reachable when a tool has both).
+        let run_live = self.chat_run_live(cx);
         let affordances: Vec<Option<ChipAffordance>> = tools
             .iter()
             .map(|tool| {
                 // The live preview updates continuously. Fetch once settled,
                 // so a cached live snapshot cannot masquerade as final output.
-                if !tool.resolved {
+                // A tool left unresolved by an ended run is frozen: its
+                // received output stays retrievable from the host journal.
+                if !tool.resolved && run_live {
                     return None;
                 }
                 // The currently-displayed ref (same recency rule as
