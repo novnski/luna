@@ -25,8 +25,9 @@ A pasted link alone never grants a native selection. Names can collide; IDs cann
 - Popup rows are `ListBoxOption`s named by kind, name and (for duplicates) ID,
   described by exact identity and availability. Stale, loading or
   unavailable rows expose no Click action and report Disabled. Retry is a
-  focusable tab-stop `Button` (Enter/Space when focused) and the last item in
-  the popup's arrow-key order; it is never auto-selected.
+  focusable `Button` (Enter/Space when focused; the completion stays open
+  while it has focus) and the last item in the popup's arrow-key order; it is
+  never auto-selected.
 
 ## Headless GPUI fixture
 
