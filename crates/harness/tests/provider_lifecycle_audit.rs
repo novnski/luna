@@ -240,9 +240,12 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
         assert!(dispatch.contains("turn/steer"));
     }
     if mode == "lost-steer" {
+        // Steering's exact-ID reconciliation may read thread state after the
+        // lost ACK. Only a second dispatch of the input is a replay.
+        eprintln!("lost-steer lines after the lost reply: {replayed:?}");
         assert!(
-            !home.path().join("replayed").exists(),
-            "uncertain steer was dispatched a second time"
+            !replayed.contains("\"turn/steer\"") && !replayed.contains("\"turn/start\""),
+            "uncertain steer was dispatched a second time: {replayed}"
         );
     }
 }

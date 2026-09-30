@@ -634,6 +634,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
     assert_eq!(
         attached_names,
         HashSet::from([
+            "create_thread",
             "list_threads",
             "read_thread",
             "wait_threads",
