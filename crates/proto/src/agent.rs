@@ -782,6 +782,18 @@ pub enum AgentEvent {
     AvailableCommands {
         commands: Vec<SlashCommand>,
     },
+    /// Authoritative native turn boundary, including autonomous goal turns.
+    #[serde(rename_all = "camelCase")]
+    ProviderTurnStarted {
+        thread_id: String,
+        turn_id: String,
+    },
+    /// Provider goal snapshots never imply a transcript/turn completion.
+    #[serde(rename_all = "camelCase")]
+    GoalChanged {
+        thread_id: String,
+        goal: Option<crate::ThreadGoal>,
+    },
     /// Internal supported-provider notification that asks the engine to
     /// refresh task metadata. It is consumed before journal/doc publication.
     #[serde(rename_all = "camelCase")]

@@ -27,6 +27,11 @@ read -r line || exit 1
 read -r line || exit 1
 emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"audit-thread\"}}}"
 read -r line || exit 1
+case "$line" in *'"method":"thread/goal/get"'*)
+  # Startup goal readback (installed 0.159 ThreadGoalGetResponse).
+  emit "{\"id\":$(rid "$line"),\"result\":{\"goal\":null}}"
+  read -r line || exit 1 ;;
+esac
 [ "$mode" != first ] || block
 emit "{\"id\":$(rid "$line"),\"result\":{\"turn\":{\"id\":\"audit-turn\"}}}"
 if [ "$mode" = followup ]; then

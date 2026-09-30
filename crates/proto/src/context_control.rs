@@ -104,6 +104,9 @@ pub struct ContextBoundary {
 #[serde(rename_all = "camelCase")]
 pub struct ContextControlState {
     pub schema_version: u32,
+    /// Native goal snapshot; transported with task-local provider controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<crate::GoalReadback>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_generation: Option<u32>,
     #[serde(default)]
@@ -131,6 +134,7 @@ impl Default for ContextControlState {
     fn default() -> Self {
         Self {
             schema_version: CONTEXT_CONTROL_SCHEMA_VERSION,
+            goal: None,
             binding_generation: None,
             compact: CompactOperation::default(),
             pending_rewind: None,

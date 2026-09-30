@@ -4560,7 +4560,10 @@ struct PendingDraftOwnerStage {
     target_seen: bool,
 }
 
+mod goals;
+
 pub struct Composer {
+    goal_ui: goals::GoalUi,
     pub(crate) state: Entity<AppState>,
     pub(crate) input: Entity<ComposerInput>,
     answer_input: Entity<ComposerInput>,
@@ -4989,6 +4992,7 @@ impl Composer {
             });
         let current_key = state.read(cx).selected_chat.clone().unwrap_or_default();
         let mut composer = Self {
+            goal_ui: goals::GoalUi::default(),
             state,
             input,
             answer_input,
@@ -12555,6 +12559,7 @@ impl Render for Composer {
         } else {
             container
         };
+        let container = container.children(self.render_goal_controls(cx));
         // Full-size preview of a staged thumbnail (AttachmentPreviewDialog).
         if let Some(preview) = self.preview.clone() {
             if std::mem::take(&mut self.preview_focus_pending) {

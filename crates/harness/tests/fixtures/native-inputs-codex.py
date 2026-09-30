@@ -44,6 +44,9 @@ for line in sys.stdin:
         result = {'account': {'type': 'apiKey'}}
     elif method == 'thread/read':
         result = {'thread': {'id': 'native-input-thread', 'disabledPluginIds': []}}
+    elif method == 'thread/goal/get':
+        # Installed Codex 0.159 ThreadGoalGetResponse: no goal on this thread.
+        result = {'goal': None}
     elif method == 'plugin/installed':
         result = {'marketplaces': [{'plugins': [{'id':'native-plugin-id', 'name':'Same name', 'installed':True, 'enabled':True}]}]}
     elif method == 'app/installed':

@@ -229,6 +229,12 @@ if has "$turnline" '"method":"thread/name/set"'; then
   emit "{\"id\":$(rid "$turnline"),\"result\":{}}"
   read -r turnline || exit 1
 fi
+# Installed Codex 0.159 answers the adapter's startup goal readback
+# (ThreadGoalGetResponse); these scenarios have no goal.
+if has "$turnline" '"method":"thread/goal/get"'; then
+  emit "{\"id\":$(rid "$turnline"),\"result\":{\"goal\":null}}"
+  read -r turnline || exit 1
+fi
 if has "$turnline" '"method":"thread/read"' && has "$turnline" '"threadId":"th-resumed"'; then
   emit "{\"id\":$(rid "$turnline"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"id\":\"prior-turn\",\"items\":[{\"type\":\"userMessage\",\"clientId\":\"prior-steer\"},{\"type\":\"userMessage\",\"clientId\":\"unrelated-input\"}]}]}}}"
   read -r turnline || exit 1

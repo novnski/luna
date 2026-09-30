@@ -40,6 +40,7 @@
 pub(crate) mod catalog;
 pub(crate) mod composer_catalog;
 mod elicitation;
+mod goals;
 pub mod native;
 mod normalize;
 mod subagents;
@@ -1532,6 +1533,34 @@ async fn run_session(session: Session) {
         .as_deref()
         .map(|home| catalog_connections.register(home, &catalog_cwd, &thread_id, client.clone()));
 
+    // Retained for the entire warm subscription; generation-aware Drop cannot
+    // unregister a replacement session. Never register ephemeral title work.
+    let _goal_connection = if title_only {
+        None
+    } else {
+        catalog_home
+            .as_ref()
+            .map(|home| goals::register(home, &thread_id, &client))
+    };
+    if !title_only
+        && let Some(Ok(Ok(reply))) = liveness
+            .wait(tokio::time::timeout(
+                Duration::from_secs(5),
+                client.request("thread/goal/get", json!({"threadId": thread_id})),
+            ))
+            .await
+        && let Ok(goal) = goals::decode(&thread_id, &reply)
+    {
+        let _ = send(
+            &event_tx,
+            AgentEvent::GoalChanged {
+                thread_id: thread_id.clone(),
+                goal,
+            },
+        )
+        .await;
+    }
+
     let turn_params = |input: Vec<Value>| -> Value {
         let mut p = serde_json::Map::new();
         p.insert("threadId".into(), Value::String(thread_id.clone()));
@@ -1758,6 +1787,16 @@ async fn run_session(session: Session) {
                     }
                 }
                 match method.as_str() {
+                    "thread/goal/updated" | "thread/goal/cleared" => {
+                        if notification_thread_id(&method, &params).as_deref() != Some(thread_id.as_str()) { continue; }
+                        let goal = if method == "thread/goal/cleared" { None } else {
+                            match goals::decode(&thread_id, &params) {
+                                Ok(goal) => goal,
+                                Err(error) => { tracing::warn!(%error, "invalid goal notification"); continue; }
+                            }
+                        };
+                        if !send(&event_tx, AgentEvent::GoalChanged { thread_id: thread_id.clone(), goal }).await { break 'main; }
+                    }
                     "turn/started" => {
                         let id = turn_id(&params);
                         let previous = router.active_id().map(str::to_owned);
@@ -1769,6 +1808,7 @@ async fn run_session(session: Session) {
                         }
                         if previous.as_deref() != Some(id.as_str()) {
                             done_current = false;
+                            if !send(&event_tx, AgentEvent::ProviderTurnStarted { thread_id: thread_id.clone(), turn_id: id.clone() }).await { break 'main; }
                         }
                         if computer_use_turn_cancel.is_cancelled() || previous.as_deref() != Some(id.as_str()) {
                             computer_use_turn_cancel.cancel();

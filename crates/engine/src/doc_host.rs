@@ -1134,6 +1134,75 @@ impl DocHost {
         Ok(self.open(chat_id)?.doc().context_control())
     }
 
+    pub fn persist_goal_readback(
+        &self,
+        chat_id: &str,
+        event_id: &str,
+        goal: &luna_proto::GoalReadback,
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        let goal = goal.clone();
+        self.persist_queue_projection(&handle, event_id, move |doc| {
+            let mut state = doc.context_control();
+            if goal.supersedes(state.goal.as_ref()) {
+                state.goal = Some(goal);
+            }
+            doc.set_context_control(&state)?;
+            Ok(())
+        })?;
+        handle.publish_messages();
+        Ok(())
+    }
+
+    /// Install native goal readback and its receipt atomically without replacing
+    /// other provider control state that changed while the RPC was in flight.
+    pub fn complete_goal_operation(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+        goal: &luna_proto::GoalReadback,
+    ) -> Result<CommandReceipt, EngineError> {
+        let handle = self.open(chat_id)?;
+        let _projection = lock(&handle.queue_projection_lock);
+        let goal = goal.clone();
+        let prepared = self.prepare_queue_projection(&handle, command_id, move |doc| {
+            let mut state = doc.context_control();
+            if goal.supersedes(state.goal.as_ref()) {
+                state.goal = Some(goal);
+            }
+            doc.set_context_control(&state)?;
+            Ok(())
+        })?;
+        let pending = self
+            .inner
+            .store
+            .task_command_receipt(command_id)?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
+        let updates = Self::queue_projection_updates(&handle, &prepared);
+        let receipt = self
+            .inner
+            .store
+            .complete_task_command_with_snapshot_changes_updates_and_authority(
+                command_id,
+                CommandReceiptStatus::Applied,
+                true,
+                pending.snapshot.binding_id.as_deref(),
+                pending.snapshot.binding_generation,
+                pending.snapshot.active_turn_id.as_deref(),
+                None,
+                None,
+                &snapshots,
+                &[],
+                &updates,
+                &prepared.authority_changes,
+            )?
+            .ok_or_else(|| EngineError::Other("task command receipt vanished".into()))?;
+        self.install_queue_projection(&handle, prepared)?;
+        handle.publish_messages();
+        Ok(receipt)
+    }
+
     /// Persist a non-terminal context operation marker before contacting the
     /// provider. A crash after this point is conservatively delivery-unknown;
     /// the operation is never replayed from the pending receipt.

@@ -7275,6 +7275,64 @@ async fn drive_run(
             }
             continue;
         }
+        // Goal status is provider control state, including updates while warm
+        // and parked. It never synthesizes a user message or a terminal turn.
+        if let AgentEvent::GoalChanged { thread_id, goal } = &event {
+            if harness_id == HarnessId::Codex
+                && let (Some(binding), Some(host)) =
+                    (inner.current_codex_binding_key(&chat_id), inner.doc_host())
+                && binding.provider_thread_id == *thread_id
+            {
+                let readback = luna_proto::GoalReadback {
+                    thread_id: thread_id.clone(),
+                    binding_generation: binding.generation,
+                    goal: goal.clone(),
+                    checked_at_ms: now_ms(),
+                    continuation_ready: true,
+                };
+                if let Err(error) = host.persist_goal_readback(&chat_id, &new_id(), &readback) {
+                    tracing::warn!(chat = %chat_id, %error, "goal snapshot persistence failed");
+                }
+            }
+            continue;
+        }
+        // Native autonomous turns can begin immediately after Done. The
+        // one-second parked-output gate is for unowned ACP noise, not an
+        // authoritative Codex turn boundary.
+        if let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event {
+            if harness_id != HarnessId::Codex
+                || inner
+                    .current_codex_binding_key(&chat_id)
+                    .is_none_or(|binding| binding.provider_thread_id != *thread_id)
+            {
+                continue;
+            }
+            inner.rearm_codex_checkpoint_after_done(&chat_id, &run_id, Some(thread_id));
+            if !inner.observe_codex_checkpoint(&chat_id, &run_id, Some(thread_id), turn_id) {
+                continue;
+            }
+            provider_checkpoint_id = Some(turn_id.clone());
+            if idle_since.take().is_some() {
+                self_continued_turn = true;
+                entry_id = new_id();
+                segment_started = now_ms();
+                last_stream_activity = tokio::time::Instant::now();
+                inner.set_status(&chat_id, SessionStatus::Working, true);
+                let turn_cwd = lock(&inner.last_requests)
+                    .get(&chat_id)
+                    .map(|request| request.cwd.clone());
+                if let Some(cwd) = turn_cwd.as_deref() {
+                    if let Some(checkpoints) = inner.git_checkpoints.get() {
+                        checkpoints.start(&chat_id, &run_id, cwd).await;
+                    }
+                    SessionsEngine {
+                        inner: inner.clone(),
+                    }
+                    .note_turn_start(&chat_id, cwd);
+                }
+            }
+            continue;
+        }
         if let AgentEvent::ContextCompaction {
             operation_id,
             status,
@@ -8242,6 +8300,16 @@ async fn drive_run(
         .filter(|h| h.run_id == run_id)
         .map(|h| std::mem::take(&mut *lock(&h.routed_steers)).into())
         .unwrap_or_default();
+    if harness_id == HarnessId::Codex
+        && let Some(host) = inner.doc_host()
+        && let Ok(state) = host.context_control(&chat_id)
+        && let Some(mut goal) = state.goal
+    {
+        goal.continuation_ready = false;
+        if let Err(error) = host.persist_goal_readback(&chat_id, &new_id(), &goal) {
+            tracing::warn!(chat = %chat_id, %error, "goal subscription retirement persistence failed");
+        }
+    }
     inner.remove_run(&chat_id, &run_id);
     inner.set_status_with_completion(&chat_id, final_status, false, final_completed_turn);
     let (redispatch, explicit): (Vec<_>, Vec<_>) = orphans.into_iter().partition(|steer| {

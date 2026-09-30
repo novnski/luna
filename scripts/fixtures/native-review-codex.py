@@ -64,6 +64,9 @@ for line in sys.stdin:
         named = params["threadId"]
         threads.setdefault(named, {"id": named, "turns": [], "status": {"type": "idle"}})["name"] = params.get("name")
         save_threads(threads)
+    elif method == "thread/goal/get":
+        # Installed Codex 0.159 ThreadGoalGetResponse: no goal on this thread.
+        result = {"goal": None}
     elif method == "model/list":
         result = {"data": [], "nextCursor": None}
     elif method == "thread/list":

@@ -29,6 +29,9 @@ for line in sys.stdin:
         emit({"id": rid, "result": {"userAgent": "offline-tool-output-fixture"}})
     elif method in ("thread/start", "thread/resume"):
         emit({"id": rid, "result": {"thread": {"id": "tool-output-thread"}}})
+    elif method == "thread/goal/get":
+        # Installed Codex 0.159 ThreadGoalGetResponse: no goal on this thread.
+        emit({"id": rid, "result": {"goal": None}})
     elif method == "turn/start":
         started = True
         emit({"id": rid, "result": {"turn": {"id": "tool-output-turn"}}})

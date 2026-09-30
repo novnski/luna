@@ -152,6 +152,25 @@ impl CodexNativeClient {
         result?
     }
 
+    /// Do not cold-retry a failed live mutation: its delivery can be unknown.
+    /// Cold controls do not load/resume a thread or start a model turn.
+    pub async fn goal_operation(
+        &self,
+        thread: &str,
+        cwd: &str,
+        operation: &luna_proto::GoalOperation,
+    ) -> Result<(Option<luna_proto::ThreadGoal>, bool), HarnessError> {
+        if let Some(client) = super::goals::live_client(&self.codex_home, thread) {
+            return super::goals::execute(&client, thread, operation)
+                .await
+                .map(|goal| (goal, true));
+        }
+        let mut connection = self.connect(Some(cwd)).await?;
+        let result = super::goals::execute(&connection.client, thread, operation).await;
+        connection.close().await;
+        result.map(|goal| (goal, false))
+    }
+
     /// Read the provider's native catalog for one explicit workspace and home.
     /// No thread is started or resumed. The result never asserts attachment.
     pub async fn read_skill_catalog(

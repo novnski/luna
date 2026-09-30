@@ -867,6 +867,8 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::ProviderCheckpoint { .. }
         | AgentEvent::AvailableCommands { .. }
         | AgentEvent::ProviderTaskChanged { .. }
+        | AgentEvent::ProviderTurnStarted { .. }
+        | AgentEvent::GoalChanged { .. }
         | AgentEvent::ChildStatus { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
