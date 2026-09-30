@@ -323,6 +323,60 @@ pub fn load_recovery(
     Ok((record.view, snapshot))
 }
 
+/// A rewind destroys later provider history. Its snapshot is retained for
+/// audit/reconciliation, never advertised as a restorable native fork.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ConversationRewindRecord {
+    pub command_id: String,
+    pub task_id: String,
+    pub binding_id: String,
+    pub binding_generation: u32,
+    pub provider_account_id: Option<String>,
+    pub provider_home: String,
+    pub cwd: String,
+    pub message_id: String,
+    pub native: luna_harness::codex::native::CodexRewindPlan,
+    pub entries: Vec<SessionMessageEntry>,
+    pub checkpoints: HashMap<String, String>,
+}
+
+pub(crate) fn rewind_record_id(task_id: &str, command_id: &str) -> String {
+    format!("luna-conversation-rewind-v1:{task_id}:{command_id}")
+}
+
+pub(crate) fn save_rewind_record(
+    store: &DocsStore,
+    record: &ConversationRewindRecord,
+    source_snapshot: &[u8],
+) -> Result<(), EngineError> {
+    let id = rewind_record_id(&record.task_id, &record.command_id);
+    // Both writes complete before the doc-owned send blocker or provider RPC.
+    store.save_snapshot(&format!("{id}:transcript"), source_snapshot)?;
+    let bytes = serde_json::to_vec(record)
+        .map_err(|error| EngineError::Other(format!("rewind intent: {error}")))?;
+    store.save_snapshot(&id, &bytes)?;
+    Ok(())
+}
+
+pub(crate) fn load_rewind_record(
+    store: &DocsStore,
+    task_id: &str,
+    command_id: &str,
+) -> Result<ConversationRewindRecord, EngineError> {
+    let bytes = store
+        .load_snapshot(&rewind_record_id(task_id, command_id))?
+        .ok_or_else(|| {
+            EngineError::Other("rewind intent is unavailable; keep later history visible".into())
+        })?;
+    let record: ConversationRewindRecord = serde_json::from_slice(&bytes)
+        .map_err(|error| EngineError::Other(format!("rewind intent: {error}")))?;
+    if record.task_id != task_id || record.command_id != command_id {
+        return Err(EngineError::Other("rewind intent identity differs".into()));
+    }
+    Ok(record)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

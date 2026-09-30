@@ -1174,6 +1174,16 @@ struct EditEarlierMessageDialog {
     _events: Subscription,
 }
 
+struct ConversationRewindDialog {
+    task_id: String,
+    message_id: String,
+    text: String,
+    snapshot: TaskCommandSnapshot,
+    review: serde_json::Value,
+    origin: HistoryEngineOrigin,
+    pending_rewind: Option<String>,
+}
+
 struct HistoryRecoveryDialog {
     task_id: String,
     recoveries: Vec<HistoryRecoveryView>,
@@ -1953,6 +1963,7 @@ pub struct Shell {
     rename_dialog: Option<RenameChatDialog>,
     history_fork_dialog: Option<HistoryForkDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
+    conversation_rewind_dialog: Option<ConversationRewindDialog>,
     history_recovery_dialog: Option<HistoryRecoveryDialog>,
     history_flow_generation: u64,
     /// Last AppState runtime identity observed by this shell. Any change
@@ -2436,6 +2447,7 @@ impl Shell {
             rename_dialog: None,
             history_fork_dialog: None,
             edit_earlier_message_dialog: None,
+            conversation_rewind_dialog: None,
             history_recovery_dialog: None,
             history_flow_generation: 0,
             history_engine_generation,
@@ -3796,6 +3808,18 @@ impl Shell {
                 message_id,
                 boundary,
             } => self.open_history_fork(task_id.clone(), *boundary, Some(message_id.clone()), cx),
+            TranscriptEvent::RewindConversation {
+                task_id,
+                message_id,
+                text,
+            } => {
+                self.open_conversation_rewind(
+                    task_id.clone(),
+                    message_id.clone(),
+                    text.clone(),
+                    cx,
+                );
+            }
             TranscriptEvent::EditEarlierMessage {
                 task_id,
                 message_id,
@@ -5147,6 +5171,7 @@ impl Shell {
         self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
         self.history_fork_dialog = None;
         self.edit_earlier_message_dialog = None;
+        self.conversation_rewind_dialog = None;
         self.history_recovery_dialog = None;
         cx.notify();
     }
@@ -5447,6 +5472,143 @@ impl Shell {
             dialog.origin,
             cx,
         );
+        cx.notify();
+    }
+
+    fn open_conversation_rewind(
+        &mut self,
+        task_id: String,
+        message_id: String,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_history_flow(cx);
+        let generation = self.history_flow_generation;
+        let (engine, origin, chat, reviewed_text) = {
+            let state = self.state.read(cx);
+            (
+                state.engine().cloned(),
+                HistoryEngineOrigin::capture(&state),
+                state.chats.iter().find(|chat| chat.id == task_id).cloned(),
+                state
+                    .transcript
+                    .iter()
+                    .find(|entry| entry.id == message_id)
+                    .map(|entry| {
+                        entry
+                            .parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                luna_doc::MessagePart::Text { text, .. } => Some(text.trim()),
+                                _ => None,
+                            })
+                            .filter(|text| !text.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }),
+            )
+        };
+        let Some(engine) = engine else {
+            self.sidebar_notice = Some("Engine not connected".into());
+            return;
+        };
+        let Some(chat) = chat else {
+            self.sidebar_notice = Some("Task no longer exists".into());
+            return;
+        };
+        let Some(reviewed_text) = reviewed_text else {
+            self.sidebar_notice =
+                Some("The selected message is no longer in this conversation.".into());
+            return;
+        };
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let read = engine
+                .client()
+                .call_as::<luna_proto::TaskCommandRead>(
+                    methods::GET_TASK_COMMAND_SNAPSHOT,
+                    serde_json::json!({ "taskId": task_id }),
+                )
+                .await;
+            this.update(cx, |shell, cx| {
+                if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                if !origin.is_current(&shell.state.read(cx)) {
+                    return;
+                }
+                let current = shell
+                    .state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|candidate| candidate.id == chat.id);
+                let unchanged = history_review_profile_unchanged(
+                    &chat.harness_session_id,
+                    &chat.cwd,
+                    &chat.config,
+                    current,
+                );
+                let Ok(read) = read else {
+                    shell.sidebar_notice = Some("Could not review the current task state.".into());
+                    return;
+                };
+                let Some(config) = chat.config.as_ref() else {
+                    shell.sidebar_notice = Some("Task has no provider configuration.".into());
+                    return;
+                };
+                let Some(provider_session_id) = chat.harness_session_id.clone() else {
+                    shell.sidebar_notice = Some("Task has no provider history yet.".into());
+                    return;
+                };
+                let Some(binding_generation) = read.snapshot.binding_generation else {
+                    shell.sidebar_notice = Some("Task binding is not materialized.".into());
+                    return;
+                };
+                if !unchanged {
+                    shell.sidebar_notice =
+                        Some("Task changed while opening the rewind review.".into());
+                    return;
+                }
+                let review = serde_json::json!({
+                    "taskRevision": read.snapshot.task_revision,
+                    "bindingGeneration": binding_generation,
+                    "providerSessionId": provider_session_id,
+                    "providerAccountId": config.provider_account_id,
+                    "cwd": chat.cwd.clone().unwrap_or_else(|| ".".into()),
+                    "messageId": message_id,
+                    "messageText": reviewed_text,
+                });
+                let pending_rewind = shell.state.read(cx).context_control.pending_rewind.clone();
+                shell.conversation_rewind_dialog = Some(ConversationRewindDialog {
+                    task_id: chat.id,
+                    message_id,
+                    text,
+                    snapshot: read.snapshot,
+                    review,
+                    origin,
+                    pending_rewind,
+                });
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn submit_conversation_rewind(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.conversation_rewind_dialog.take() else {
+            return;
+        };
+        if !self.require_history_origin(dialog.origin, cx) {
+            return;
+        }
+        let intent = if let Some(command_id) = dialog.pending_rewind {
+            serde_json::json!({ "kind": "reconcileConversationRewind", "rewindCommandId": command_id })
+        } else {
+            serde_json::json!({ "kind": "rewindConversation", "messageId": dialog.message_id,
+                "keepFiles": true, "review": dialog.review })
+        };
+        self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+        self.mutate_task_reviewed(dialog.task_id, dialog.snapshot, intent, dialog.origin, cx);
         cx.notify();
     }
 
@@ -9515,6 +9677,10 @@ impl Shell {
             self.cancel_history_flow(cx);
             return true;
         }
+        if self.conversation_rewind_dialog.is_some() {
+            self.cancel_history_flow(cx);
+            return true;
+        }
         if self.edit_earlier_message_dialog.is_some() {
             self.cancel_history_flow(cx);
             return true;
@@ -10176,6 +10342,40 @@ impl Shell {
                 )
                 .into_any_element();
             overlays.push(popover::modal("history-fork-dialog", viewport, card));
+        }
+
+        if let Some(dialog) = &self.conversation_rewind_dialog {
+            let pending = dialog.pending_rewind.is_some();
+            let text = dialog.text.chars().take(500).collect::<String>();
+            let card = popover::dialog_card(&theme)
+                .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" { this.cancel_history_flow(cx); cx.stop_propagation(); }
+                }))
+                .child(popover::dialog_title(&theme, if pending { "Reconcile conversation rewind" } else { "Rewind this conversation" }))
+                .child(div().mt(px(8.0)).text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted)
+                    .child(if pending {
+                        "Read the saved provider history to finish or dismiss the unresolved rewind. Revert will not be sent again. Later LUNA rows stay visible until the retained prefix is verified."
+                    } else {
+                        "Remove this message and every later turn from this same Codex conversation. The provider's removed history cannot be restored by LUNA; an audit snapshot is kept. Your draft, files and external effects are kept."
+                    }))
+                .when(!pending, |card| card.child(div().mt(px(10.0)).max_h(px(100.0)).overflow_y_scroll()
+                    .text_size(crate::typography::ui_rems(11.0)).child(SharedString::from(text))))
+                .child(div().mt(px(12.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
+                    .child("Files: keep current files. To restore files, review a Git checkpoint separately in Changes. Unsaved files must be saved before restoring."))
+                .child(div().mt(px(16.0)).flex().justify_end().gap(px(8.0))
+                    .child(popover::btn_ghost(&theme, "Cancel", "history-rewind-cancel")
+                        .id("history-rewind-cancel").on_click(cx.listener(|this, _, _, cx| this.cancel_history_flow(cx))))
+                    .when(!pending, |buttons| buttons.child(popover::btn_ghost(&theme, "Preview file checkpoints", "history-rewind-files")
+                        .id("history-rewind-files").on_click(cx.listener(|this, _, _, cx| {
+                            this.cancel_history_flow(cx);
+                            let changes = cx.new(|cx| Changes::new(this.state.clone(), cx));
+                            this.register_diff_surface(changes.clone(), cx);
+                            changes.update(cx, |changes, cx| changes.open_file_checkpoints(cx));
+                        }))))
+                    .child(popover::btn_primary(&theme, if pending { "Reconcile rewind" } else { "Rewind conversation · keep files" })
+                        .id("history-rewind-confirm").on_click(cx.listener(|this, _, _, cx| this.submit_conversation_rewind(cx)))))
+                .into_any_element();
+            overlays.push(popover::modal("history-rewind-dialog", viewport, card));
         }
 
         if let Some(dialog) = &mut self.edit_earlier_message_dialog {

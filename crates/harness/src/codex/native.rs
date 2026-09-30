@@ -30,6 +30,8 @@ pub const NATIVE_CAPABILITIES: &[&str] = &[
     "thread/archive",
     "thread/unarchive",
     "thread/fork",
+    "thread/revert",
+    "thread/turns/list",
     "thread/compact/start",
 ];
 
@@ -93,6 +95,33 @@ pub struct CodexSkillCatalogEntry {
 pub struct CodexMcpConfigEntry {
     pub name: String,
     pub enabled: bool,
+}
+
+/// Durable, exact history expectations for a same-thread revert. Stored only
+/// on the execution host; raw provider items never enter synced transcript text.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRewindPlan {
+    pub thread_id: String,
+    pub before_turn_id: String,
+    pub original: Vec<Value>,
+    pub retained: Vec<Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexRewindProgress {
+    MutationStarted,
+    Acknowledged,
+}
+
+pub type CodexRewindProgressReporter =
+    dyn Fn(CodexRewindProgress) -> Result<(), HarnessError> + Send + Sync;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CodexRewindObservation {
+    Original,
+    Reverted,
+    Diverged,
 }
 
 /// Short-lived supported-API client scoped to one provider home.
@@ -396,6 +425,111 @@ impl CodexNativeClient {
         })
     }
 
+    /// Read the entire bounded persisted history in ascending order. The
+    /// metadata read proves paginated/non-ephemeral history before mutation.
+    pub async fn prepare_rewind(
+        &self,
+        thread_id: &str,
+        before_turn_id: &str,
+        cwd: &str,
+    ) -> Result<CodexRewindPlan, HarnessError> {
+        let mut connection = self.connect(Some(cwd)).await?;
+        let outcome = async {
+            let original = read_rewind_history(&connection.client, thread_id).await?;
+            let retained = codex_fork_prefix(
+                &original,
+                &ProviderForkBoundary::BeforeCheckpoint {
+                    checkpoint_id: before_turn_id.into(),
+                },
+            )?;
+            Ok(CodexRewindPlan {
+                thread_id: thread_id.into(),
+                before_turn_id: before_turn_id.into(),
+                original,
+                retained,
+            })
+        }
+        .await;
+        connection.close().await;
+        outcome
+    }
+
+    /// The engine persists the plan and a send blocker before this call.
+    /// Once MutationStarted is reported, any failure is conservatively unknown.
+    pub async fn revert_thread(
+        &self,
+        plan: &CodexRewindPlan,
+        cwd: &str,
+        progress: &CodexRewindProgressReporter,
+    ) -> Result<(), HarnessError> {
+        let mut connection = self.connect(Some(cwd)).await?;
+        let outcome = async {
+            let resumed = connection
+                .client
+                .request(
+                    "thread/resume",
+                    json!({
+                        "threadId": plan.thread_id, "cwd": cwd, "excludeTurns": true
+                    }),
+                )
+                .await?;
+            validate_compaction_resume(&plan.thread_id, &resumed)?;
+            let observed = read_rewind_history(&connection.client, &plan.thread_id).await?;
+            if !same_rewind_history(&observed, &plan.original) {
+                return Err(HarnessError::Protocol(
+                    "Codex history changed after rewind review; revert was not sent".into(),
+                ));
+            }
+            progress(CodexRewindProgress::MutationStarted)?;
+            let response = connection
+                .client
+                .request(
+                    "thread/revert",
+                    json!({
+                        "threadId": plan.thread_id, "beforeTurnId": plan.before_turn_id
+                    }),
+                )
+                .await?;
+            if response.pointer("/thread/id").and_then(Value::as_str)
+                != Some(plan.thread_id.as_str())
+            {
+                return Err(HarnessError::Protocol(
+                    "thread/revert returned a different thread".into(),
+                ));
+            }
+            progress(CodexRewindProgress::Acknowledged)?;
+            let observed = read_rewind_history(&connection.client, &plan.thread_id).await?;
+            if !same_rewind_history(&observed, &plan.retained) {
+                return Err(HarnessError::Protocol(
+                    "Codex retained history did not match the exact rewind prefix".into(),
+                ));
+            }
+            Ok(())
+        }
+        .await;
+        connection.close().await;
+        outcome
+    }
+
+    /// Restart/lost-response recovery is read-only. Never resubmit thread/revert.
+    pub async fn observe_rewind(
+        &self,
+        plan: &CodexRewindPlan,
+        cwd: &str,
+    ) -> Result<CodexRewindObservation, HarnessError> {
+        let mut connection = self.connect(Some(cwd)).await?;
+        let outcome = read_rewind_history(&connection.client, &plan.thread_id).await;
+        connection.close().await;
+        let observed = outcome?;
+        Ok(if same_rewind_history(&observed, &plan.retained) {
+            CodexRewindObservation::Reverted
+        } else if same_rewind_history(&observed, &plan.original) {
+            CodexRewindObservation::Original
+        } else {
+            CodexRewindObservation::Diverged
+        })
+    }
+
     async fn thread_turns(&self, thread_id: &str) -> Result<Vec<Value>, HarnessError> {
         let value = self
             .call(
@@ -687,6 +821,105 @@ fn parse_mcp_config(response: &Value) -> Result<Vec<CodexMcpConfigEntry>, Harnes
         });
     }
     Ok(entries)
+}
+
+async fn read_rewind_history(
+    client: &RpcClient,
+    thread_id: &str,
+) -> Result<Vec<Value>, HarnessError> {
+    let metadata = client
+        .request(
+            "thread/read",
+            json!({"threadId": thread_id, "includeTurns": false}),
+        )
+        .await?;
+    let thread = metadata.get("thread").unwrap_or(&metadata);
+    if thread.get("id").and_then(Value::as_str) != Some(thread_id)
+        || thread.get("historyMode").and_then(Value::as_str) != Some("paginated")
+        || thread.get("ephemeral").and_then(Value::as_bool) == Some(true)
+    {
+        return Err(HarnessError::Protocol(
+            "Same-chat rewind requires a persisted paginated Codex thread; legacy history cannot be reverted".into(),
+        ));
+    }
+    if thread.pointer("/status/type").and_then(Value::as_str) == Some("active") {
+        return Err(HarnessError::Protocol(
+            "Codex thread is active in another client".into(),
+        ));
+    }
+    let mut turns = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = std::collections::HashSet::new();
+    let mut seen_turns = std::collections::HashSet::new();
+    let mut bytes = 0usize;
+    for _ in 0..100 {
+        let page = client
+            .request(
+                "thread/turns/list",
+                json!({
+                    "threadId": thread_id, "cursor": cursor, "limit": 100,
+                    "sortDirection": "asc", "itemsView": "full"
+                }),
+            )
+            .await?;
+        let data = page
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| HarnessError::Protocol("Codex turn page has no data".into()))?;
+        if data.len() > 100 {
+            return Err(HarnessError::Protocol(
+                "Codex turn page exceeded requested size".into(),
+            ));
+        }
+        for turn in data {
+            let id = codex_turn_id(turn)
+                .ok_or_else(|| HarnessError::Protocol("Codex turn page has no turn id".into()))?;
+            if !seen_turns.insert(id.to_owned())
+                || turn.get("status").and_then(Value::as_str) != Some("completed")
+            {
+                return Err(HarnessError::Protocol(
+                    "Codex rewind history contains duplicate or incomplete turns".into(),
+                ));
+            }
+            bytes += serde_json::to_vec(turn)
+                .map_err(|e| HarnessError::Protocol(e.to_string()))?
+                .len();
+            if bytes > 32 * 1024 * 1024 {
+                return Err(HarnessError::Protocol(
+                    "Codex rewind history exceeds 32 MiB verification limit".into(),
+                ));
+            }
+            turns.push(turn.clone());
+        }
+        cursor = match page.get("nextCursor") {
+            Some(Value::Null) => None,
+            Some(Value::String(value)) => Some(value.clone()),
+            _ => {
+                return Err(HarnessError::Protocol(
+                    "Codex turn page omitted its pagination cursor".into(),
+                ));
+            }
+        };
+        let Some(next) = cursor.as_ref() else {
+            return Ok(turns);
+        };
+        if next.is_empty() || !seen_cursors.insert(next.clone()) {
+            return Err(HarnessError::Protocol(
+                "Codex turn pagination repeated a cursor".into(),
+            ));
+        }
+    }
+    Err(HarnessError::Protocol(
+        "Codex rewind history exceeds 100 pages".into(),
+    ))
+}
+
+fn same_rewind_history(left: &[Value], right: &[Value]) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            codex_turn_id(left) == codex_turn_id(right)
+                && codex_history_signature(left) == codex_history_signature(right)
+        })
 }
 
 fn fork_params(request: &ProviderForkRequest) -> serde_json::Map<String, Value> {

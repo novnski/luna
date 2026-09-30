@@ -2909,6 +2909,11 @@ impl SessionsEngine {
             .model_options
             .remove(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION);
         let context_control = self.doc_handle(chat_id)?.doc().context_control();
+        if context_control.pending_rewind.is_some() {
+            return Err(EngineError::Other(
+                "Conversation rewind is unresolved. Reconcile its provider history before sending another turn.".into(),
+            ));
+        }
         if context_control.compact.blocks_new_turn() {
             return Err(EngineError::Other(
                 context_control

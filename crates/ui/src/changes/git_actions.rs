@@ -132,6 +132,14 @@ impl Changes {
         true
     }
 
+    /// Entry point from conversation rewind's separate filesystem choice.
+    /// Opens the existing preview/token guarded checkpoint workflow.
+    pub(crate) fn open_file_checkpoints(&mut self, cx: &mut Context<Self>) {
+        self.git_open = true;
+        self.load_git(cx);
+        cx.notify();
+    }
+
     pub(super) fn load_git(&mut self, cx: &mut Context<Self>) {
         self.reconcile_git_context(cx);
         if self.git_write_owner.is_some() {

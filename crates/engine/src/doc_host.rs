@@ -5407,6 +5407,9 @@ impl DocHost {
         if handle.queue_paused.load(Ordering::Acquire) {
             return;
         }
+        if handle.doc.context_control().pending_rewind.is_some() {
+            return;
+        }
         if handle.doc.context_control().compact.blocks_new_turn() {
             return;
         }
