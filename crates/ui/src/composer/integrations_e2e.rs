@@ -855,9 +855,20 @@ pub async fn run_integrations_picker_e2e(
         focus_state["retryFocused"] == true,
         "Retry did not take keyboard focus: {focus_state}"
     );
+    std::fs::write(
+        output.join("focused-retry-tree.json"),
+        serde_json::to_vec_pretty(&focused_tree)?,
+    )?;
+    let retry_ids: Vec<&str> = retry_nodes(&focused_tree)
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
     anyhow::ensure!(
         focused_retry,
-        "focused Retry is not the AccessKit focus node: {focus_state}; focus node {focus_node}"
+        "focused Retry is not the AccessKit focus node: {focus_state}; gpui_focus {} \
+         active_descendant {} retry nodes {retry_ids:?}; focus node {focus_node}",
+        focused_tree["gpui_focus"],
+        focused_tree["active_descendant_focus"]
     );
     let before_click = cx.update(|cx| composer.read(cx).integrations.generation);
     key_press(window, cx, "enter")?;
