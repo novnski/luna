@@ -129,6 +129,9 @@ impl Shell {
         from_activity: bool,
         cx: &mut Context<Self>,
     ) {
+        // Opening a child reveals its ancestors. Persist only a real change;
+        // ordinary chat opens must not rewrite settings.
+        let collapsed_before = self.settings.collapsed_child_chats.len();
         let mut cursor = Some(chat_id.clone());
         let mut seen = std::collections::HashSet::new();
         while let Some(id) = cursor {
@@ -150,7 +153,9 @@ impl Shell {
                         .map(|child| child.parent_task_id.clone())
                 });
         }
-        self.schedule_save(cx);
+        if self.settings.collapsed_child_chats.len() != collapsed_before {
+            self.schedule_save(cx);
+        }
         self.dismiss_command_palette(cx);
         self.route = Route::Chat;
         self.focus_composer(cx);
