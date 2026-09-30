@@ -833,14 +833,31 @@ pub async fn run_integrations_picker_e2e(
         window.focus(&focus, cx);
     })?;
     let focused_tree = a11y_tree(window, cx)?;
+    let focus_state = window.update(cx, |_, window, cx| {
+        let this = composer.read(cx);
+        let focused = window.focused(cx);
+        json!({
+            "retryFocused": this.integrations.retry_focus.as_ref().is_some_and(|focus| focus.is_focused(window)),
+            "inputFocused": this.input.read(cx).focus_handle.is_focused(window),
+            "anyFocus": focused.is_some(),
+        })
+    })?;
+    let focus_node = focused_tree["gpui_focus"]
+        .as_str()
+        .map(|id| focused_tree["nodes"][id]["aria"].clone())
+        .unwrap_or(Value::Null);
     let focused_retry = focused_tree["gpui_focus"].as_str().is_some_and(|focus| {
         retry_nodes(&focused_tree)
             .iter()
             .any(|(id, _)| *id == focus)
     });
     anyhow::ensure!(
+        focus_state["retryFocused"] == true,
+        "Retry did not take keyboard focus: {focus_state}"
+    );
+    anyhow::ensure!(
         focused_retry,
-        "focused Retry is not the AccessKit focus node"
+        "focused Retry is not the AccessKit focus node: {focus_state}; focus node {focus_node}"
     );
     let before_click = cx.update(|cx| composer.read(cx).integrations.generation);
     key_press(window, cx, "enter")?;
