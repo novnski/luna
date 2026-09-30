@@ -340,6 +340,13 @@ enum TaskCommandIntent {
         #[serde(default)]
         transfers: Vec<crate::uploads::AttachmentTransfer>,
     },
+    /// Distinct admission kind makes older execution hosts reject native
+    /// review instead of ignoring RunRequest.review and starting a text turn.
+    #[serde(rename_all = "camelCase")]
+    NativeReview {
+        request: luna_proto::RunRequest,
+        message_id: String,
+    },
     Rename {
         title: String,
     },
@@ -534,6 +541,7 @@ impl TaskCommandIntent {
                 SessionCommandPayload::RespondAsyncQuestion { .. } => "respondAsyncQuestion",
                 SessionCommandPayload::RespondApproval { .. } => "respondApproval",
             },
+            Self::NativeReview { .. } => "nativeReview",
             Self::Rename { .. } => "rename",
             Self::SetPinned { .. } => "setPinned",
             Self::SetRead { .. } => "setRead",
@@ -2879,6 +2887,22 @@ impl EngineRpc {
         legacy: bool,
         send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
     ) -> Result<CommandReceipt, RpcError> {
+        if let TaskCommandIntent::NativeReview {
+            request,
+            message_id,
+        } = &command.intent
+        {
+            if request.review.is_none() {
+                return Err(RpcError::Failed("Native review target is missing".into()));
+            }
+            command.intent = TaskCommandIntent::Session {
+                command: SessionCommandPayload::Run {
+                    request: request.clone(),
+                    message_id: message_id.clone(),
+                },
+                transfers: Vec::new(),
+            };
+        }
         if self.is_side_chat(&command.task_id) {
             let owned_delete = matches!(command.intent, TaskCommandIntent::Delete {})
                 && self
@@ -3430,6 +3454,7 @@ impl EngineRpc {
                 !self.task_identity.has_native_codex_binding(task_id)
             }
             TaskCommandIntent::Session { .. }
+            | TaskCommandIntent::NativeReview { .. }
             | TaskCommandIntent::ForkTask { .. }
             | TaskCommandIntent::EditEarlierMessage { .. }
             | TaskCommandIntent::RestoreHistoryRecovery { .. }
@@ -6358,6 +6383,9 @@ impl EngineRpc {
                         Ok(())
                     })?;
                 Ok(Some(receipt))
+            }
+            TaskCommandIntent::NativeReview { .. } => {
+                unreachable!("native review normalized at admission")
             }
             TaskCommandIntent::Session { .. } => unreachable!("session handled by command queue"),
         }

@@ -89,7 +89,7 @@ async function run(taskId, target) {
     sandbox: 'workspace-write', permissionMode: 'ask', autoApprove: false, resume: null, attachments: [], worktree: null };
   const receipt = await call('ExecuteTaskCommand', { commandId, taskId, actorId: 'review-qa', clientId: 'review-qa', clientSessionId: 'review-qa',
     expectedTaskRevision: s.taskRevision, expectedBindingId: s.bindingId ?? null, expectedBindingGeneration: s.bindingGeneration ?? null,
-    intent: { kind: 'session', command: { kind: 'run', request, messageId: commandId } } });
+    intent: { kind: 'nativeReview', request, messageId: commandId } });
   return { receipt, commandId };
 }
 async function messages(taskId) { return call('WatchDocMessages', { chatId: taskId }); }

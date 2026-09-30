@@ -280,9 +280,7 @@ impl Shell {
                     worktree: None,
                 };
                 let message_id = uuid::Uuid::new_v4().to_string();
-                let intent = json!({ "kind": "session", "command": {
-                    "kind": "run", "request": request, "messageId": message_id,
-                }});
+                let intent = json!({ "kind": "nativeReview", "request": request, "messageId": message_id });
                 let current = this
                     .update(cx, |shell, cx| origin.is_current(shell.state.read(cx)))
                     .unwrap_or(false);

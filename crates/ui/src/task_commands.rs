@@ -16,7 +16,8 @@ fn revision_fenced_kind(kind: Option<&str>) -> bool {
     matches!(
         kind,
         Some(
-            "rename"
+            "nativeReview"
+                | "rename"
                 | "setPinned"
                 | "setRead"
                 | "setSettled"
@@ -46,6 +47,7 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
         kind,
         Some(
             "session"
+                | "nativeReview"
                 | "queueMessage"
                 | "editQueuedMessage"
                 | "removeQueuedMessage"
