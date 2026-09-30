@@ -118,7 +118,7 @@ fn closed_sources(source: &str) -> HashSet<Arc<str>> {
 }
 
 impl Transcript {
-    fn sync_diagrams(&mut self, rows: &[Row], cx: &mut Context<Self>) {
+    pub(super) fn sync_diagrams(&mut self, rows: &[Row], cx: &mut Context<Self>) {
         let mut allowed = HashSet::new();
         let mut limit_reached = false;
         let mut eligible = HashMap::new();
@@ -194,7 +194,7 @@ impl Transcript {
         self.diagrams.eligible = eligible;
     }
 
-    fn refresh_diagram_style(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(super) fn refresh_diagram_style(&mut self, window: &Window, cx: &mut Context<Self>) {
         let style = crate::theme::style_generation();
         if self.diagrams.style != style {
             self.diagrams.epoch = self.diagrams.epoch.wrapping_add(1);
@@ -303,7 +303,7 @@ impl Transcript {
         }));
     }
 
-    fn diagram_ui_for(
+    pub(super) fn diagram_ui_for(
         &mut self,
         row_id: &SharedString,
         cx: &mut Context<Self>,
