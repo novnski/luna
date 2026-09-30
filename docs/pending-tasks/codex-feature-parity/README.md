@@ -15,6 +15,7 @@ This document and its supporting audits preserve research for future implementat
 - Allow users to select installed Codex plugins and connected apps in the composer, similar to the Codex picker shown during the review. Installation and management can remain in the CLI or Codex app; a plugin manager is outside this feature.
 - Preserve native plugin/app/skill identity and image inputs through drafts, queued messages, steering, remote dispatch, and account selection.
 - Prioritise useful everyday capabilities. Internal maintenance, terminal themes, and unrelated experimental endpoints do not define the product backlog.
+- Keep research and planning in ordinary chat, including requests to write a plan file. The explicit Plan/Build feature was cancelled by the user on 2026-09-30; do not implement or reintroduce it.
 - Use meaningful E2E verification with retained, repeatable evidence. Follow the repository's build, one-app, data-preservation, and handoff instructions when implementing.
 
 ## Evidence baseline and limits
@@ -66,7 +67,7 @@ The original local evidence bundle is under `Documents/Codex/2026-09-30/luna-cod
 | LUNA dynamic tool execution | Supported | Most cross-task call/result activity is hidden in the transcript |
 | Native plugin/app selection | Missing | Current `@` picker searches files, and Codex input is text-only |
 | Explicit native skill selection | Partial | Slash picker inserts text rather than a guaranteed native Skill item |
-| Native Plan workflow | Missing | Plan text/todos can exist, but mode and structured native plan events are not exposed |
+| Native Plan/Build workflow | Dropped by user | Ordinary chat, plan files and existing todo activity remain; no added mode switch or replacement slash command |
 | Native Review workflow | Missing | No `review/start` dispatch or review-mode item mapping |
 | Native same-thread conversation revert | Missing | LUNA has provider forks and local file checkpoint restore instead |
 | Goal engine | Potentially inherited | Dedicated controls/status are missing; continuation integration needs E2E verification |
@@ -78,9 +79,9 @@ The original local evidence bundle is under `Documents/Codex/2026-09-30/luna-cod
 1. **Native composer inputs:** unify image, plugin/app and explicit skill selection, retain their identity durably, and support ordinary send, queue, and native steer.
 2. **Tool activity fidelity:** retain complete received results on the host, add live command activity, expose dynamic tools, and preserve rich MCP/unknown item information.
 3. **Steering delivery semantics:** retain native scheduling, separate acceptance from later recording/incorporation, correlate messages, and verify error/Stop/reconnect races.
-4. **Common workflows:** implement native Plan and Review, then general MCP prompts, conversation revert, Mermaid chat rendering, and goal controls/readback in focused features.
+4. **Common workflows:** implement native Review, then general MCP prompts, conversation revert, Mermaid chat rendering, and goal controls/readback in focused features. Explicit Plan/Build modes are dropped.
 
-Generic MCP prompts may need to move earlier when testing selected plugins: an installed integration that requires a form or URL prompt cannot complete reliably through LUNA's current narrow handler. Plan/Review can be separate milestones rather than a prerequisite for the input/output work.
+Generic MCP prompts may need to move earlier when testing selected plugins: an installed integration that requires a form or URL prompt cannot complete reliably through LUNA's current narrow handler. Native Review can be a separate milestone rather than a prerequisite for the input/output work.
 
 ## Tool activity and result preservation
 
@@ -189,9 +190,11 @@ Full evidence and extension points: [plugin mention research](plugin-mentions-re
 
 ## Other valuable workflows
 
-### Native Plan and Review
+### Native Plan/Build feature — dropped
 
-LUNA does not send collaborationMode or map native plan progress/proposals. A model can still write a plan in text or use existing todo activity, but that is not the native Plan workflow. T3 provides a full reference: optional mode toggle, native plan/default turn settings, structured steps, proposal display, refine and implement actions. The collaborationMode field is experimental in 0.159; LUNA already opts into experimental APIs for other integration capabilities.
+The user cancelled this feature on 2026-09-30 before it reached main. Keep the existing ordinary chat workflow: users can ask the model for a deep dive, research, or a plan written to a file. Do not add Plan/Build switches, mode-specific proposal actions, or a replacement `/plan` command as part of this backlog. The supporting source audits remain historical reference material, not an active implementation request.
+
+### Native Review
 
 Native review/start supports working changes, branch comparison, a commit and custom instructions, with inline or detached delivery. LUNA lacks the dispatch and entered/exited review item mapping. A Git diff panel or asking for a review in prose is a different affordance. Neither T3 nor BB exposes the native reviewer in the inspected integration.
 
