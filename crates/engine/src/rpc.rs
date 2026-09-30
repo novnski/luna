@@ -4652,7 +4652,27 @@ impl EngineRpc {
                         .as_mut()
                         .ok_or_else(|| crate::EngineError::Other("Task is not a child".into()))?;
                     if !child.outcomes.iter().any(|entry| entry.id == outcome.id) {
+                        let id = outcome.id.clone();
                         child.outcomes.push(outcome);
+                        child_threads::compact_child_outcomes(child);
+                        // Undelivered outcomes accumulate while a parent is
+                        // unavailable; drop the summary before exceeding the
+                        // synced row budget, and refuse rather than wedge sync.
+                        if child_threads::child_row_bytes(&chat)
+                            > child_threads::CHILD_ROW_BUDGET_BYTES
+                            && let Some(child) = chat.child_thread.as_mut()
+                            && let Some(entry) =
+                                child.outcomes.iter_mut().find(|entry| entry.id == id)
+                        {
+                            entry.summary = "Summary omitted to keep the synced task small; open the child chat.".into();
+                        }
+                        if child_threads::child_row_bytes(&chat)
+                            > child_threads::CHILD_ROW_BUDGET_BYTES
+                        {
+                            return Err(crate::EngineError::Other(
+                                "Child outcome history is at its synced size limit; open the parent to deliver pending results".into(),
+                            ));
+                        }
                     }
                     doc.upsert_chat(&chat)?;
                     Ok(())
@@ -4674,6 +4694,7 @@ impl EngineRpc {
                     {
                         outcome.delivered = true;
                     }
+                    child_threads::compact_child_outcomes(child);
                     doc.upsert_chat(&chat)?;
                     Ok(())
                 })

@@ -263,6 +263,10 @@ pub struct ChildThread {
     pub continue_parent: bool,
     #[serde(default)]
     pub outcomes: Vec<ChildThreadOutcome>,
+    /// Transcript turns created at or before this time were reported and
+    /// their delivered outcomes compacted away, keeping the synced row bounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_floor_ms: Option<i64>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
