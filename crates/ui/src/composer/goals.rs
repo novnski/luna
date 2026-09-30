@@ -386,7 +386,7 @@ impl Composer {
             .as_ref()
             .filter(|(owner, _)| owner == &chat_id)
         {
-            row = row.child(crate::settings::widgets::error_strip(&theme, error.clone()));
+            row = row.child(crate::settings::widgets::error_strip(theme, error.clone()));
         }
         Some(row.into_any_element())
     }
