@@ -2948,6 +2948,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                         .as_millis() as i64
                         + 120_000,
                     supports_task_allowance,
+                    details: None,
                 }),
             };
             tokio::spawn(async move {

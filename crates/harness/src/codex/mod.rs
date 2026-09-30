@@ -36,6 +36,7 @@
 //!   escalating to SIGTERM → SIGKILL if the child is unresponsive; the stream
 //!   always ends with `Done { status: Interrupted }`.
 
+mod approvals;
 pub(crate) mod catalog;
 pub mod native;
 mod normalize;
@@ -1410,6 +1411,7 @@ async fn run_session(session: Session) {
             .map(|contract| contract.context.thread_id.as_str()),
     );
     let mut computer_use_turn_cancel = CancellationToken::new();
+    let mut pending_approvals = approvals::PendingApprovals::new();
     // Token usage is held until the turn ends, emitted just before Done.
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
@@ -1458,6 +1460,13 @@ async fn run_session(session: Session) {
                     }
                 }
                 match method.as_str() {
+                    "serverRequest/resolved" => {
+                        if params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str()) {
+                            if let Some(id) = params.get("requestId") {
+                                if let Some(cancel) = pending_approvals.remove(&id.to_string()) { cancel.cancel(); }
+                            }
+                        }
+                    }
                     "turn/started" => {
                         let id = turn_id(&params);
                         let previous = router.active_id().map(str::to_owned);
@@ -1816,6 +1825,7 @@ async fn run_session(session: Session) {
                 }
 
                 Some(Incoming::Request { id, method, params }) => {
+                    pending_approvals.retain(|_, token| !token.is_cancelled());
                     handle_server_request(
                         &client,
                         id,
@@ -1832,6 +1842,7 @@ async fn run_session(session: Session) {
                             call_ids: &mut luna_call_ids,
                             interrupt: &interrupt,
                             computer_use_turn_cancel: &computer_use_turn_cancel,
+                            pending_approvals: &mut pending_approvals,
                         },
                     );
                 }
@@ -2204,6 +2215,7 @@ struct ServerRequestContext<'a> {
     call_ids: &'a mut LunaCallIds,
     interrupt: &'a CancellationToken,
     computer_use_turn_cancel: &'a CancellationToken,
+    pending_approvals: &'a mut approvals::PendingApprovals,
 }
 
 /// Serve one server→client request. Approval requests round-trip through the
@@ -2215,8 +2227,19 @@ fn handle_server_request(
     params: &Value,
     context: ServerRequestContext<'_>,
 ) {
+    if matches!(
+        method,
+        "item/permissions/requestApproval"
+            | "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+    ) {
+        let mut pending = std::mem::take(context.pending_approvals);
+        approvals::handle(client, id, method, params, &context, &mut pending);
+        *context.pending_approvals = pending;
+        return;
+    }
     let ServerRequestContext {
-        auto_approve,
+        auto_approve: _,
         permission_policy,
         request_input,
         thread_id,
@@ -2226,94 +2249,8 @@ fn handle_server_request(
         call_ids,
         interrupt,
         computer_use_turn_cancel,
+        pending_approvals: _,
     } = context;
-    if method == "item/permissions/requestApproval" {
-        let permission = params
-            .get("permissions")
-            .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
-        let exact_context = !interrupt.is_cancelled()
-            && !computer_use_turn_cancel.is_cancelled()
-            && active_turn_id.is_some()
-            && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
-            && params.get("turnId").and_then(Value::as_str) == active_turn_id
-            && params
-                .get("itemId")
-                .and_then(Value::as_str)
-                .is_some_and(|id| !id.is_empty())
-            && runtime_contract.is_some_and(|contract| {
-                !contract.context.thread_id.is_empty() && !contract.context.machine_id.is_empty()
-            });
-        let Some(permission) = permission
-            .filter(|value| exact_context && value.to_string().len() <= 1024)
-            .cloned()
-        else {
-            client.respond(&id, json!({ "permissions": {} }));
-            return;
-        };
-        let task_id = runtime_contract
-            .map(|contract| contract.context.thread_id.as_str())
-            .unwrap_or("");
-        let reason = params
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("Provider permission requested");
-        let reason: String = reason.chars().take(200).collect();
-        let question = UserInputQuestion {
-            id: new_message_id(),
-            header: "Approve provider permission".into(),
-            question: format!(
-                "Codex in LUNA task {task_id} requests this permission on {}: {}. Reason: {reason}. Allow once?",
-                permission_policy.machine_name, permission
-            ),
-            options: vec!["Deny".into(), "Allow once".into()],
-            multi_select: false,
-            approval: Some(luna_proto::ApprovalRequest {
-                provider_request_id: id.to_string(),
-                provider: HarnessId::Codex,
-                turn_id: active_turn_id.map(str::to_owned),
-                machine_name: permission_policy.machine_name.clone(),
-                action_kind: luna_proto::ApprovalActionKind::Tool,
-                summary: "Provider permission request".into(),
-                requested_scope: permission_policy.scope,
-                expires_at_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64
-                    + 120_000,
-                supports_task_allowance: false,
-            }),
-        };
-        let client = client.clone();
-        let request_input = Arc::clone(request_input);
-        let interrupt = interrupt.clone();
-        let turn_cancel = computer_use_turn_cancel.clone();
-        tokio::spawn(async move {
-            let receiver = (request_input)(vec![question.clone()]);
-            let answers = tokio::select! {
-                biased;
-                _ = interrupt.cancelled() => None,
-                _ = turn_cancel.cancelled() => None,
-                result = tokio::time::timeout(Duration::from_secs(120), receiver) => result.ok().and_then(Result::ok),
-            };
-            let allowed = !interrupt.is_cancelled()
-                && !turn_cancel.is_cancelled()
-                && answers.as_ref().is_some_and(|answers| {
-                    answers.iter().any(|answer| {
-                        answer.question_id == question.id
-                            && answer.labels.as_slice() == ["Allow once"]
-                    })
-                });
-            client.respond(
-                &id,
-                if allowed {
-                    json!({ "permissions": permission })
-                } else {
-                    json!({ "permissions": {} })
-                },
-            );
-        });
-        return;
-    }
     if method == "mcpServer/elicitation/request" {
         let matching_context = !interrupt.is_cancelled()
             && !computer_use_turn_cancel.is_cancelled()
@@ -2361,6 +2298,7 @@ fn handle_server_request(
                     .as_millis() as i64
                     + 120_000,
                 supports_task_allowance: false,
+                details: None,
             }),
         };
         let client = client.clone();
@@ -2473,58 +2411,8 @@ fn handle_server_request(
         });
         return;
     }
-    let is_approval = matches!(
-        method,
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
-    );
-    if !is_approval {
-        tracing::debug!(
-            target: "luna_harness::codex",
-            "unhandled server request: {method}"
-        );
-        client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
-        return;
-    }
-    if auto_approve {
-        client.respond(&id, json!({ "decision": "accept" }));
-        return;
-    }
-
-    let question = approval_question(method, params, &id, &permission_policy);
-    let client = client.clone();
-    let request_input = Arc::clone(request_input);
-    tokio::spawn(async move {
-        // The engine's input bridge owns the `InputRequested`/`InputResolved`
-        // lifecycle (it mints the request id the resolver is parked under);
-        // emitting our own copy here doubled the doc's input part with an id
-        // `respond_input` could never match.
-        //
-        // A dropped sender (caller went away) degrades to a decline so the
-        // agent is unblocked — never silently allowed.
-        let answers = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            (request_input)(vec![question.clone()]),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or_default();
-        let decision = answers
-            .iter()
-            .find(|answer| answer.question_id == question.id)
-            .and_then(|answer| answer.labels.first())
-            .map(String::as_str);
-        client.respond(
-            &id,
-            json!({
-                "decision": match decision {
-                    Some("Allow once") => "accept",
-                    Some("Allow for task") => "acceptForSession",
-                    _ => "decline",
-                }
-            }),
-        );
-    });
+    tracing::debug!(target: "luna_harness::codex", "unhandled server request: {method}");
+    client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
 }
 
 /// Only a form choice explicitly advertising a one-request approval can be
@@ -2697,83 +2585,14 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
 }
 
 /// Synthesize the yes/no question an approval request surfaces to the user.
+#[cfg(test)]
 fn approval_question(
     method: &str,
     params: &Value,
     provider_request_id: &Value,
     policy: &luna_proto::PermissionPolicy,
 ) -> UserInputQuestion {
-    let (header, question) = if method.contains("commandExecution") {
-        let command = match params.get("command") {
-            Some(Value::String(s)) => s.clone(),
-            Some(Value::Array(parts)) => parts
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" "),
-            _ => String::new(),
-        };
-        (
-            "Approve command".to_owned(),
-            if command.is_empty() {
-                "Codex wants to run a command. Allow it?".to_owned()
-            } else {
-                format!("Codex wants to run `{command}`. Allow it?")
-            },
-        )
-    } else {
-        let paths: Vec<&str> = params
-            .get("changes")
-            .and_then(Value::as_array)
-            .map(|a| a.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|c| c.get("path").and_then(Value::as_str))
-            .collect();
-        (
-            "Approve file change".to_owned(),
-            if paths.is_empty() {
-                "Codex wants to modify files. Allow it?".to_owned()
-            } else {
-                format!("Codex wants to modify {}. Allow it?", paths.join(", "))
-            },
-        )
-    };
-    let action_kind = if method.contains("commandExecution") {
-        luna_proto::ApprovalActionKind::Command
-    } else {
-        luna_proto::ApprovalActionKind::FileChange
-    };
-    UserInputQuestion {
-        id: new_message_id(),
-        header,
-        question: format!("{question} Target: {}.", policy.machine_name),
-        options: vec![
-            "Deny".into(),
-            "Allow once".into(),
-            "Allow for task".into(),
-            "Cancel".into(),
-        ],
-        multi_select: false,
-        approval: Some(luna_proto::ApprovalRequest {
-            provider_request_id: provider_request_id.to_string(),
-            provider: HarnessId::Codex,
-            turn_id: params
-                .get("turnId")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            machine_name: policy.machine_name.clone(),
-            action_kind,
-            summary: question,
-            requested_scope: policy.scope,
-            expires_at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64
-                + 120_000,
-            supports_task_allowance: true,
-        }),
-    }
+    approvals::legacy_question(method, params, provider_request_id, policy)
 }
 
 use crate::{Signal, send_signal, shutdown_child};
@@ -2871,7 +2690,7 @@ mod tests {
         assert!(q.question.contains("rm -rf /tmp/x"));
         assert_eq!(
             q.options,
-            vec!["Deny", "Allow once", "Allow for task", "Cancel"]
+            vec!["Deny", "Allow once", "Allow for session", "Cancel turn"]
         );
         assert!(!q.multi_select);
         assert_eq!(q.approval.unwrap().machine_name, "test-machine");

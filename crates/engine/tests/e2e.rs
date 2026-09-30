@@ -1348,6 +1348,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }])
                 .await
@@ -1492,6 +1493,238 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
 }
 
 #[tokio::test]
+async fn structured_approval_preserves_details_and_rejects_unadvertised_choice() {
+    struct ApprovalHarness;
+    #[async_trait]
+    impl Harness for ApprovalHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Approval"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            _request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            tokio::spawn(async move {
+                let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
+                    id: "approval-question".into(),
+                    header: "Approve command".into(),
+                    question: "Allow echo safe?".into(),
+                    options: vec!["Deny".into(), "Allow once".into()],
+                    multi_select: false,
+                    approval: Some(luna_proto::ApprovalRequest {
+                        provider_request_id: "provider-approval".into(),
+                        provider: HarnessId::Mock,
+                        turn_id: None,
+                        machine_name: "test-machine".into(),
+                        action_kind: luna_proto::ApprovalActionKind::Command,
+                        summary: "echo safe".into(),
+                        requested_scope: luna_proto::PermissionScope::Workspace,
+                        expires_at_ms: i64::MAX,
+                        supports_task_allowance: false,
+                        details: Some(luna_proto::ApprovalDetails {
+                            cwd: Some("/tmp/permission-fixture".into()),
+                            command: Some("echo safe".into()),
+                            choices: vec![
+                                luna_proto::ApprovalChoice {
+                                    label: "Deny".into(),
+                                    scope: "none".into(),
+                                    description: "Reject".into(),
+                                },
+                                luna_proto::ApprovalChoice {
+                                    label: "Allow once".into(),
+                                    scope: "request".into(),
+                                    description: "Only this request".into(),
+                                },
+                            ],
+                            ..Default::default()
+                        }),
+                    }),
+                }])
+                .await
+                .unwrap_or_default();
+                let picked = answers
+                    .first()
+                    .and_then(|answer| answer.labels.first())
+                    .cloned()
+                    .unwrap_or_else(|| "none".into());
+                let _ = tx
+                    .send(Ok(AgentEvent::TextDelta {
+                        text: format!("approval {picked}"),
+                    }))
+                    .await;
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(dir.path(), Arc::new(ApprovalHarness));
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-run-approval",
+        SessionCommandPayload::Run {
+            request: run_request("approve"),
+            message_id: "m-approval".into(),
+        },
+    );
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).map(|s| s.status)
+                == Some(SessionStatus::AwaitingApproval)
+        },
+        "awaiting typed approval",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        MessagePart::Input {
+                            resolved: false,
+                            ..
+                        }
+                    )
+                })
+            })
+        },
+        "typed approval part appears",
+    )
+    .await;
+    let request_id = entries(&core)
+        .iter()
+        .find_map(|entry| {
+            entry.parts.iter().find_map(|part| match part {
+                MessagePart::Input {
+                    request_id,
+                    resolved: false,
+                    ..
+                } => Some(request_id.clone()),
+                _ => None,
+            })
+        })
+        .unwrap();
+
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-bypass",
+        SessionCommandPayload::RespondInput {
+            request_id: request_id.clone(),
+            answers: vec![luna_proto::UserInputAnswer {
+                question_id: "approval-question".into(),
+                labels: vec!["Allow once".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "cmd-approval-bypass")
+                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
+        },
+        "ordinary input bypass rejected",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-bypass"),
+        Some((
+            SessionCommandStatus::Rejected,
+            Some("no pending input request".into())
+        ))
+    );
+    assert_eq!(
+        core.sessions.session_status(CHAT).map(|s| s.status),
+        Some(SessionStatus::AwaitingApproval)
+    );
+    assert!(
+        entries(&core)
+            .iter()
+            .any(|entry| entry.parts.iter().any(|part| matches!(
+                part,
+                MessagePart::Input {
+                    resolved: false,
+                    ..
+                }
+            )))
+    );
+
+    let stored = entries(&core)
+        .into_iter()
+        .flat_map(|entry| entry.parts)
+        .find_map(|part| match part {
+            MessagePart::Input {
+                questions,
+                resolved: false,
+                ..
+            } => questions.into_iter().find_map(|question| question.approval),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        stored.details.as_ref().unwrap().cwd.as_deref(),
+        Some("/tmp/permission-fixture")
+    );
+    assert!(
+        !core
+            .sessions
+            .respond_approval(
+                CHAT,
+                &request_id,
+                luna_proto::ApprovalDecision::ProviderChoice { index: u32::MAX }
+            )
+            .unwrap()
+    );
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-right",
+        SessionCommandPayload::RespondApproval {
+            request_id,
+            decision: luna_proto::ApprovalDecision::ProviderChoice { index: 1 },
+        },
+    );
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(
+                    |part| matches!(part, MessagePart::Text { text, .. } if text == "approval Allow once"),
+                )
+            })
+        },
+        "typed approval completes",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-right"),
+        Some((SessionCommandStatus::Applied, None))
+    );
+}
+
+#[tokio::test]
 async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_can() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(
@@ -1597,6 +1830,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }],
                 resolved: false,

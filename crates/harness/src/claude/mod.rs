@@ -1037,6 +1037,7 @@ fn handle_control_request(
                         .as_millis() as i64
                         + 120_000,
                     supports_task_allowance: false,
+                    details: None,
                 }),
             };
             let allowed = tokio::time::timeout(

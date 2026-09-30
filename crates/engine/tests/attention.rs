@@ -65,6 +65,7 @@ fn input(id: &str, request: &str, approval: bool, device_id: &str) -> SessionMes
                     requested_scope: luna_proto::PermissionScope::Workspace,
                     expires_at_ms: 1_900_000_000_000,
                     supports_task_allowance: false,
+                    details: None,
                 }),
             }],
             resolved: false,

@@ -672,6 +672,23 @@ fn approval_decision(
         .find(|answer| answer.question_id == question.id)
         .and_then(|answer| answer.labels.first())
         .map(String::as_str);
+    if let Some(details) = question
+        .approval
+        .as_ref()
+        .and_then(|approval| approval.details.as_ref())
+    {
+        if let Some(index) = selected.and_then(|label| {
+            details
+                .choices
+                .iter()
+                .position(|choice| choice.label == label)
+        }) {
+            return luna_proto::ApprovalDecision::ProviderChoice {
+                index: index as u32,
+            };
+        }
+        return luna_proto::ApprovalDecision::Deny;
+    }
     match selected {
         Some("Allow once") => luna_proto::ApprovalDecision::AllowOnce,
         Some("Allow for task") => luna_proto::ApprovalDecision::AllowTask,
@@ -10621,7 +10638,29 @@ impl Composer {
                         } else {
                             theme.text.opacity(0.9)
                         })
-                        .child(SharedString::from(label.clone())),
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(SharedString::from(label.clone()))
+                        .when_some(
+                            question
+                                .approval
+                                .as_ref()
+                                .and_then(|approval| approval.details.as_ref())
+                                .and_then(|details| details.choices.get(ix)),
+                            |el, choice| {
+                                el.child(
+                                    div()
+                                        .text_size(crate::typography::ui_rems(11.5))
+                                        .font_weight(gpui::FontWeight::NORMAL)
+                                        .text_color(theme.readable_muted(0.65))
+                                        .child(format!(
+                                            "{} · {}",
+                                            choice.scope, choice.description
+                                        )),
+                                )
+                            },
+                        ),
                 )
                 .when(ix < 9, |el| {
                     el.child(
@@ -10704,6 +10743,49 @@ impl Composer {
                             .text_color(theme.text)
                             .child(SharedString::from(question.question.clone())),
                     )
+                    .when_some(question.approval.as_ref(), |el, approval| {
+                        let expires =
+                            chrono::DateTime::from_timestamp_millis(approval.expires_at_ms)
+                                .map(|time| {
+                                    time.with_timezone(&chrono::Local)
+                                        .format("%H:%M:%S")
+                                        .to_string()
+                                })
+                                .unwrap_or_else(|| "unknown".into());
+                        let mut rows = approval
+                            .details
+                            .as_ref()
+                            .map(|details| details.display_rows())
+                            .unwrap_or_default();
+                        rows.push(("Approval expires".into(), expires));
+                        let context = div()
+                            .id("approval-context")
+                            .mt(px(8.0))
+                            .max_h(px(220.0))
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap(px(6.0))
+                            .children(rows.into_iter().map(|(label, value)| {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(2.0))
+                                    .child(
+                                        div()
+                                            .text_size(crate::typography::ui_rems(10.5))
+                                            .text_color(theme.readable_muted(0.65))
+                                            .child(label),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(crate::typography::ui_rems(12.0))
+                                            .text_color(theme.text)
+                                            .child(value),
+                                    )
+                            }));
+                        el.child(context)
+                    })
                     .when(question.multi_select, |el| {
                         el.child(
                             div()
@@ -14079,6 +14161,7 @@ mod tests {
             requested_scope: luna_proto::PermissionScope::Workspace,
             expires_at_ms: i64::MAX,
             supports_task_allowance: false,
+            details: None,
         });
         assert!(
             luna_approval_question(&[provider.clone()])

@@ -227,6 +227,122 @@ pub struct ApprovalRequest {
     pub requested_scope: PermissionScope,
     pub expires_at_ms: i64,
     pub supports_task_allowance: bool,
+    /// Optional provider context and exact advertised decision choices. Older
+    /// provider records retain the legacy approval path when this is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<ApprovalDetails>,
+}
+
+/// Display-only metadata. Grants/rules are held by the adapter, never accepted
+/// from a client-supplied copy of this structure.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalDetails {
+    pub provider_thread_id: Option<String>,
+    pub item_id: Option<String>,
+    pub approval_id: Option<String>,
+    pub kind: Option<String>,
+    pub environment_id: Option<String>,
+    pub cwd: Option<String>,
+    pub command: Option<String>,
+    pub reason: Option<String>,
+    pub command_actions: Option<serde_json::Value>,
+    pub file_changes: Option<serde_json::Value>,
+    pub grant_root: Option<String>,
+    pub network: Option<ApprovalNetworkContext>,
+    pub permissions: Option<serde_json::Value>,
+    pub proposed_exec_policy_amendment: Option<serde_json::Value>,
+    #[serde(default)]
+    pub proposed_network_policy_amendments: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub choices: Vec<ApprovalChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalNetworkContext {
+    pub host: String,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalChoice {
+    pub label: String,
+    /// Native lifetime, e.g. request, turn, session, or persistent policy.
+    pub scope: String,
+    pub description: String,
+}
+
+impl ApprovalDetails {
+    /// Shared rendering for the composer and side-chat panels. JSON context
+    /// remains exact so filesystem deny entries and host rules stay visible.
+    pub fn display_rows(&self) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        for (label, value) in [
+            ("Action", self.kind.as_ref()),
+            ("Command / input", self.command.as_ref()),
+            ("Working directory", self.cwd.as_ref()),
+            ("Environment", self.environment_id.as_ref()),
+            ("Reason", self.reason.as_ref()),
+            ("Provider thread", self.provider_thread_id.as_ref()),
+            ("Item", self.item_id.as_ref()),
+            ("Approval callback", self.approval_id.as_ref()),
+            ("Proposed write root", self.grant_root.as_ref()),
+        ] {
+            if let Some(value) = value {
+                rows.push((label.into(), value.clone()));
+            }
+        }
+        if let Some(network) = &self.network {
+            rows.push((
+                "Network host".into(),
+                format!("{} ({})", network.host, network.protocol),
+            ));
+        }
+        for (label, value) in [
+            ("Parsed command actions", self.command_actions.as_ref()),
+            ("File changes", self.file_changes.as_ref()),
+            (
+                "Proposed command rule",
+                self.proposed_exec_policy_amendment.as_ref(),
+            ),
+        ] {
+            if let Some(value) = value {
+                rows.push((
+                    label.into(),
+                    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
+                ));
+            }
+        }
+        if let Some(permissions) = &self.permissions {
+            if let Some(categories) = permissions.as_object() {
+                for (category, value) in categories {
+                    let label = match category.as_str() {
+                        "network" => "Network permissions",
+                        "fileSystem" => "Filesystem permissions",
+                        _ => category,
+                    };
+                    if !value.is_null() {
+                        rows.push((
+                            label.into(),
+                            serde_json::to_string_pretty(value)
+                                .unwrap_or_else(|_| value.to_string()),
+                        ));
+                    }
+                }
+            } else {
+                rows.push(("Requested permissions".into(), permissions.to_string()));
+            }
+        }
+        for (index, value) in self.proposed_network_policy_amendments.iter().enumerate() {
+            rows.push((
+                format!("Proposed network rule {}", index + 1),
+                value.to_string(),
+            ));
+        }
+        rows
+    }
 }
 
 impl ApprovalRequest {
@@ -244,6 +360,11 @@ pub enum ApprovalDecision {
     AllowTask,
     Deny,
     Cancel,
+    /// Index in the authoritative pending request's advertised choices. The
+    /// client cannot submit permission objects or policy amendment payloads.
+    ProviderChoice {
+        index: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

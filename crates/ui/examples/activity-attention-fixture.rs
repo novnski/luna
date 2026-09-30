@@ -94,6 +94,7 @@ fn request_entry(id: &str, approval: bool, device: &str) -> SessionMessageEntry 
                     requested_scope: PermissionScope::Workspace,
                     expires_at_ms: 1_900_000_000_000,
                     supports_task_allowance: false,
+                    details: None,
                 }),
             }],
             resolved: false,

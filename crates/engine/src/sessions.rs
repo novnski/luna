@@ -152,6 +152,7 @@ impl LunaSendProposal {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.fence.expires_at_ms,
                 supports_task_allowance: false,
+                details: None,
             }),
         }
     }
@@ -210,6 +211,7 @@ impl LunaSyntheticArchiveProposal {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.expires_at_ms,
                 supports_task_allowance: false,
+                details: None,
             }),
         }
     }
@@ -334,9 +336,36 @@ fn schedule_approval_expiry(
     else {
         return;
     };
+    let native_choices = questions.iter().any(|question| {
+        question
+            .approval
+            .as_ref()
+            .is_some_and(|approval| approval.details.is_some())
+    });
     tokio::spawn(async move {
         let delay_ms = expires_at_ms.saturating_sub(now_ms()).max(0) as u64;
-        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        if native_choices {
+            // The adapter closes its answer receiver on remote resolution or
+            // turn replacement. Retire that exact UI request promptly too.
+            let deadline = tokio::time::sleep(std::time::Duration::from_millis(delay_ms));
+            tokio::pin!(deadline);
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => break,
+                    _ = interval.tick() => {
+                        let closed = lock(&pending).get(&request_id).map(|input| input.resolver.is_closed());
+                        match closed {
+                            None => return,
+                            Some(true) => break,
+                            Some(false) => {},
+                        }
+                    }
+                }
+            }
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
         expire_pending_approval(&pending, &engine_tx, &request_id);
     });
 }
@@ -641,6 +670,7 @@ impl LunaProspectiveInterruptProposal {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.expires_at_ms,
                 supports_task_allowance: false,
+                details: None,
             }),
         }
     }
@@ -3766,7 +3796,9 @@ impl SessionsEngine {
                 ("Allow once", LunaApprovalOutcome::AllowedOnce)
             }
             luna_proto::ApprovalDecision::Cancel => ("Cancel", LunaApprovalOutcome::Denied),
-            luna_proto::ApprovalDecision::Deny | luna_proto::ApprovalDecision::AllowTask => {
+            luna_proto::ApprovalDecision::Deny
+            | luna_proto::ApprovalDecision::AllowTask
+            | luna_proto::ApprovalDecision::ProviderChoice { .. } => {
                 ("Deny", LunaApprovalOutcome::Denied)
             }
         };
@@ -3914,7 +3946,8 @@ impl SessionsEngine {
             let Some(pending) = pending_inputs.get(request_id) else {
                 return Ok(false);
             };
-            if !matches!(&pending.kind, PendingInputKind::Provider) {
+            if !matches!(&pending.kind, PendingInputKind::Provider) || pending.resolver.is_closed()
+            {
                 return Ok(false);
             }
             let Some(question) = pending.questions.iter().find(|question| {
@@ -3935,11 +3968,11 @@ impl SessionsEngine {
             };
             (pending, answer)
         };
-        let _ = pending.resolver.send(vec![answer]);
+        let delivered = pending.resolver.send(vec![answer]).is_ok();
         let _ = engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_string(),
         });
-        Ok(true)
+        Ok(delivered)
     }
 
     fn automatic_retries_enabled(&self) -> bool {
@@ -5064,11 +5097,49 @@ fn approval_answer(
         }
         decision => decision,
     };
-    let label = match decision {
-        luna_proto::ApprovalDecision::AllowOnce => "Allow once",
-        luna_proto::ApprovalDecision::AllowTask => "Allow for task",
-        luna_proto::ApprovalDecision::Deny => "Deny",
-        luna_proto::ApprovalDecision::Cancel => "Cancel",
+    let label = if let Some(details) = &approval.details {
+        let index = match decision {
+            luna_proto::ApprovalDecision::ProviderChoice { index } => {
+                usize::try_from(index).ok()?
+            }
+            // Old clients may still send these fixed decisions. They can only
+            // select a stored exact once/session/deny/cancel choice.
+            luna_proto::ApprovalDecision::AllowOnce => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Allow once")?,
+            luna_proto::ApprovalDecision::AllowTask => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Allow for session")?,
+            luna_proto::ApprovalDecision::Deny => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Deny")?,
+            luna_proto::ApprovalDecision::Cancel => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Cancel turn")
+                .or_else(|| {
+                    details
+                        .choices
+                        .iter()
+                        .position(|choice| choice.label == "Deny")
+                })?,
+        };
+        let choice = details.choices.get(index)?;
+        if question.options.get(index) != Some(&choice.label) {
+            return None;
+        }
+        choice.label.as_str()
+    } else {
+        match decision {
+            luna_proto::ApprovalDecision::AllowOnce => "Allow once",
+            luna_proto::ApprovalDecision::AllowTask => "Allow for task",
+            luna_proto::ApprovalDecision::Deny => "Deny",
+            luna_proto::ApprovalDecision::Cancel => "Cancel",
+            luna_proto::ApprovalDecision::ProviderChoice { .. } => return None,
+        }
     };
     Some(UserInputAnswer {
         question_id: question.id.clone(),
@@ -8531,6 +8602,7 @@ mod tests {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: i64::MAX,
                 supports_task_allowance: false,
+                details: None,
             }),
         };
         let answer = approval_answer(&question, luna_proto::ApprovalDecision::AllowTask).unwrap();
@@ -8664,6 +8736,7 @@ mod tests {
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: true,
+                        details: None,
                     }),
                 }],
                 resolver,
@@ -8699,6 +8772,7 @@ mod tests {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: i64::MAX,
                 supports_task_allowance: false,
+                details: None,
             }),
         };
         let pending = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -11917,6 +11991,7 @@ mod tests {
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: crate::now_ms() + 30_000,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }],
                 resolver: forged_tx,
