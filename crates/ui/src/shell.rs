@@ -10171,7 +10171,7 @@ impl Shell {
                 .child(div().mt(px(8.0)).text_xs().text_color(theme.text_muted).child("Fresh context in the parent's existing checkout. Project execution defaults apply within the parent's permission ceiling. Results appear in the parent without starting another turn."))
                 .child(div().mt(px(12.0)).child(popover::dialog_field(prompt.into_any_element())))
                 .child(div().mt(px(12.0)).flex().justify_end().gap(px(8.0))
-                    .child(popover::btn_secondary(&theme, "Cancel").id("child-chat-cancel").on_click(cx.listener(|this, _, _, cx| { this.child_thread_dialog = None; cx.notify(); })))
+                    .child(popover::btn_ghost(&theme, "Cancel", "child-chat-cancel").id("child-chat-cancel").on_click(cx.listener(|this, _, _, cx| { this.child_thread_dialog = None; cx.notify(); })))
                     .child(popover::btn_primary(&theme, if busy { "Creating…" } else { "Create child" }).id("child-chat-create").on_click(cx.listener(|this, _, _, cx| this.submit_child_thread(cx)))))
                 .into_any_element();
             overlays.push(popover::modal("child-thread-dialog", viewport, card));
