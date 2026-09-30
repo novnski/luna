@@ -11326,8 +11326,17 @@ impl Render for Composer {
         }
         let theme = Theme::of(cx).clone();
         let wizard_active = self.wizard.is_some();
-        if self.mention.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
+        // Focus on the popup's own Retry control keeps the completion open;
+        // anywhere else closes it. Never leave focus on a vanished Retry.
+        let retry_focused = self.native_retry_focused(window);
+        if self.mention.token.is_some()
+            && !retry_focused
+            && !self.input.focus_handle(cx).is_focused(window)
+        {
             self.reset_mention(None, cx);
+        } else if self.mention.token.is_none() && retry_focused {
+            let focus = self.input.focus_handle(cx);
+            window.focus(&focus, cx);
         }
         if self.slash.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
             self.reset_slash(None, cx);
