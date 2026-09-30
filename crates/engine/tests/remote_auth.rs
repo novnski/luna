@@ -468,3 +468,54 @@ async fn same_machine_different_profile_has_distinct_remote_authority() {
     );
     second.shutdown().await;
 }
+
+#[tokio::test]
+async fn mcp_authorization_urls_are_owner_only_even_with_remote_read_scopes() {
+    let root = TempDir::new().unwrap();
+    let core = open_core(root.path());
+    let local = luna_rpc::memory_client(core.rpc_service());
+    let remote = luna_rpc::memory_client(core.remote_rpc_service().unwrap());
+    let params = json!({"chatId":"unrelated", "requestId":"stale"});
+    let before = remote
+        .call(methods::MCP_ELICITATION_URL, params.clone())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        before.starts_with("remote authorization denied:"),
+        "{before}"
+    );
+    let pairing = issue(
+        &local,
+        "MCP read-only fixture",
+        vec![
+            RemoteScope::EnvironmentRead,
+            RemoteScope::TasksRead,
+            RemoteScope::FilesRead,
+            RemoteScope::TerminalOperate,
+        ],
+        300,
+    )
+    .await;
+    let _session = redeem(&remote, &pairing, "MCP read-only fixture").await;
+    let after = remote
+        .call(methods::MCP_ELICITATION_URL, params.clone())
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(after.starts_with("remote authorization denied:"), "{after}");
+    let owner = local
+        .call(methods::MCP_ELICITATION_URL, params)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(owner.contains("no longer pending"), "{owner}");
+    assert!(
+        !before.contains("https://") && !after.contains("https://") && !owner.contains("https://")
+    );
+    if let Some(directory) = std::env::var_os("LUNA_MCP_E2E_ARTIFACT_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("remote-authorization.json"), serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"unauthenticated":before,"authenticatedReadScopes":after,"staleOwner":owner})).unwrap()).unwrap();
+    }
+}

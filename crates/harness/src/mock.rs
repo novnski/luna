@@ -29,6 +29,7 @@ fn question_script() -> Vec<UserInputQuestion> {
                 "Hybrid: event-driven with a polling fallback".into(),
             ],
             multi_select: false,
+            mcp: None,
             approval: None,
         },
         UserInputQuestion {
@@ -41,6 +42,7 @@ fn question_script() -> Vec<UserInputQuestion> {
                 "Golden screenshots".into(),
             ],
             multi_select: true,
+            mcp: None,
             approval: None,
         },
     ]

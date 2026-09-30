@@ -84,6 +84,7 @@ fn request_entry(id: &str, approval: bool, device: &str) -> SessionMessageEntry 
                     vec!["private option".into()]
                 },
                 multi_select: false,
+                mcp: None,
                 approval: approval.then(|| ApprovalRequest {
                     provider_request_id: request.into(),
                     provider: HarnessId::Mock,

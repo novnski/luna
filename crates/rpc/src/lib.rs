@@ -299,6 +299,8 @@ pub mod methods {
     /// Lazy full-tool-output fetch by doc-resident ref: read the owning
     /// host's journal first, then a legacy R2 sidecar. Relay-forwardable.
     pub const FETCH_TOOL_BLOB: &str = "FetchToolBlob";
+    /// Owner-only live prompt URL fetch; remote read scopes cannot retrieve it.
+    pub const MCP_ELICITATION_URL: &str = "McpElicitationUrl";
     // Updates (ControlRpc, relay-forwardable — a device reports/applies its own
     // binary's update). Stream: current UpdateStatus, then every change.
     pub const UPDATE_STATUS: &str = "UpdateStatus";
@@ -467,6 +469,7 @@ pub mod methods {
         UPLOAD_COMMIT,
         READ_ATTACHMENT_CHUNK,
         FETCH_TOOL_BLOB,
+        MCP_ELICITATION_URL,
         UPDATE_STATUS,
         APPLY_UPDATE,
     ];

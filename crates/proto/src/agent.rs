@@ -554,6 +554,9 @@ pub struct UserInputQuestion {
     /// marker; live authorization is held separately by the engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalRequest>,
+    /// Generic MCP form/URL input; not a permission grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<crate::McpInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

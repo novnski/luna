@@ -2927,6 +2927,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 question: format!("{summary}. Target: {}.", permission_policy.machine_name),
                 options: opencode_approval_options(protocol),
                 multi_select: false,
+                mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: id.to_owned(),
                     provider: HarnessId::Opencode,
@@ -3501,6 +3502,7 @@ fn map_questions(props: &Value) -> Vec<UserInputQuestion> {
                             })
                             .unwrap_or_default(),
                         multi_select: q.get("multiple").and_then(Value::as_bool).unwrap_or(false),
+                        mcp: None,
                         approval: None,
                     })
                 })

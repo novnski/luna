@@ -1186,6 +1186,7 @@ async fn respond_input_resolves_pending_question() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }])
                 .await
@@ -1338,6 +1339,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
                     question: "Allow echo safe?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-approval".into(),
                         provider: HarnessId::Mock,
@@ -1530,6 +1532,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }],
                 resolved: false,
@@ -1587,6 +1590,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                     question: "Allow?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-request".into(),
                         provider: HarnessId::Mock,
@@ -2344,6 +2348,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }])
                 .await
@@ -2539,6 +2544,7 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
                         question: "Which one?".into(),
                         options: vec!["a".into(), "b".into()],
                         multi_select: false,
+                        mcp: None,
                         approval: None,
                     }])
                     .await;
@@ -2689,6 +2695,7 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 };
                 // The pre-fix Claude/Codex shape: surface the question under
@@ -3907,4 +3914,428 @@ async fn real_image_generation_profile_smoke() {
             .contains("generated_images/")
     );
     core.sessions.shutdown().await;
+}
+
+/// Synthetic harness → engine pending map → journal/document → owner commands
+/// and live URL RPC. Native UI/provider evidence is a separate coordinator step.
+#[tokio::test]
+async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
+    use luna_proto::{McpFieldSchema, McpInput, McpInputKind, UserInputAnswer, UserInputQuestion};
+    use std::sync::Mutex;
+    struct McpHarness {
+        observed: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+    #[async_trait]
+    impl Harness for McpHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "MCP fixture"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            let observed = self.observed.clone();
+            let stop_scenario = request.prompt.contains("stop");
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            tokio::spawn(async move {
+                let expires_at_ms = chrono::Utc::now().timestamp_millis() + 120_000;
+                let binding = |id: &str, kind| McpInput {
+                    server_name: "synthetic-server".into(),
+                    provider_request_id: id.into(),
+                    thread_id: "synthetic-native-thread".into(),
+                    turn_id: "synthetic-native-turn".into(),
+                    expires_at_ms,
+                    kind,
+                    launch_url: None,
+                };
+                let schema = McpFieldSchema::parse(
+                    &serde_json::json!({"type":"integer", "minimum":0, "maximum":4}),
+                    true,
+                )
+                .unwrap();
+                let form = vec![
+                    UserInputQuestion {
+                        id: "field".into(),
+                        header: "Count".into(),
+                        question: "Count".into(),
+                        options: vec![],
+                        multi_select: false,
+                        approval: None,
+                        mcp: Some(binding(
+                            "form",
+                            McpInputKind::Field {
+                                name: "count".into(),
+                                schema: Box::new(schema),
+                            },
+                        )),
+                    },
+                    UserInputQuestion {
+                        id: "form-action".into(),
+                        header: "MCP".into(),
+                        question: "Submit?".into(),
+                        options: vec!["Accept".into(), "Decline".into(), "Cancel".into()],
+                        multi_select: false,
+                        approval: None,
+                        mcp: Some(binding("form", McpInputKind::FormAction)),
+                    },
+                ];
+                let mut url_meta = binding(
+                    "url",
+                    McpInputKind::Url {
+                        destination: "https://example.invalid".into(),
+                        elicitation_id: "synthetic-flow".into(),
+                    },
+                );
+                url_meta.launch_url = Some(
+                    "https://example.invalid/auth?token=private-url-token#fragment-secret".into(),
+                );
+                let url = vec![UserInputQuestion {
+                    id: "url-action".into(),
+                    header: "MCP URL".into(),
+                    question: "Open example.invalid".into(),
+                    options: vec!["Accept".into(), "Decline".into(), "Cancel".into()],
+                    multi_select: false,
+                    approval: None,
+                    mcp: Some(url_meta),
+                }];
+                assert!(!format!("{url:?}").contains("private-url-token"));
+                let form_rx = (controls.request_input)(form.clone());
+                let url_rx = (controls.request_input)(url.clone());
+                if stop_scenario {
+                    controls.interrupt.cancelled().await;
+                    drop(form_rx);
+                    drop(url_rx);
+                    let _ = tx.send(Ok(done(DoneStatus::Interrupted))).await;
+                    return;
+                }
+                let answers = form_rx.await.unwrap();
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(luna_proto::mcp_response(&form, &answers).unwrap());
+                let answers = url_rx.await.unwrap();
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(luna_proto::mcp_response(&url, &answers).unwrap());
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        dir.path(),
+        Arc::new(McpHarness {
+            observed: observed.clone(),
+        }),
+    );
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-run",
+        SessionCommandPayload::Run {
+            request: run_request("MCP fixture"),
+            message_id: "mcp-user".into(),
+        },
+    );
+    let pending = || {
+        entries_now(&core)
+            .iter()
+            .flat_map(|e| &e.parts)
+            .filter_map(|part| match part {
+                MessagePart::Input {
+                    request_id,
+                    questions,
+                    resolved: false,
+                    ..
+                } => Some((request_id.clone(), questions.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    wait_for(|| pending().len() == 2, "two concurrent MCP prompts").await;
+    let prompts = pending();
+    let form_id = prompts
+        .iter()
+        .find(|(_, q)| q.len() == 2)
+        .unwrap()
+        .0
+        .clone();
+    let url_id = prompts
+        .iter()
+        .find(|(_, q)| q.len() == 1)
+        .unwrap()
+        .0
+        .clone();
+    let visible = serde_json::to_string(&prompts).unwrap();
+    assert!(!visible.contains("private-url-token") && !visible.contains("fragment-secret"));
+    assert!(
+        prompts
+            .iter()
+            .flat_map(|(_, q)| q)
+            .all(|q| q.mcp.as_ref().unwrap().launch_url.is_none())
+    );
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let url_params = serde_json::json!({"chatId":CHAT, "requestId":url_id});
+    // Repeated read-only fetches do not answer or replace the resolver.
+    for _ in 0..2 {
+        let result = client
+            .call(luna_rpc::methods::MCP_ELICITATION_URL, url_params.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            result["url"],
+            "https://example.invalid/auth?token=private-url-token#fragment-secret"
+        );
+    }
+    assert!(observed.lock().unwrap().is_empty());
+    for params in [
+        serde_json::json!({"chatId":"foreign", "requestId":url_id}),
+        serde_json::json!({"chatId":CHAT, "requestId":"foreign"}),
+        serde_json::json!({"chatId":CHAT, "requestId":form_id}),
+    ] {
+        let error = client
+            .call(luna_rpc::methods::MCP_ELICITATION_URL, params)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("private-url-token"));
+    }
+    let form_answers = |value: &str| {
+        vec![
+            UserInputAnswer {
+                question_id: "field".into(),
+                labels: vec![value.into()],
+            },
+            UserInputAnswer {
+                question_id: "form-action".into(),
+                labels: vec!["Accept".into()],
+            },
+        ]
+    };
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-invalid",
+        SessionCommandPayload::RespondInput {
+            request_id: form_id.clone(),
+            answers: form_answers("99"),
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "mcp-invalid")
+                .is_some_and(|(s, _)| s == SessionCommandStatus::Rejected)
+        },
+        "invalid MCP answer rejection",
+    )
+    .await;
+    assert_eq!(pending().len(), 2);
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-valid",
+        SessionCommandPayload::RespondInput {
+            request_id: form_id,
+            answers: form_answers("0"),
+        },
+    );
+    wait_for(
+        || observed.lock().unwrap().len() == 1 && pending().len() == 1,
+        "first prompt resolves independently",
+    )
+    .await;
+    assert_eq!(
+        observed.lock().unwrap()[0],
+        serde_json::json!({"action":"accept", "content":{"count":0}})
+    );
+    assert_eq!(
+        core.sessions.session_status(CHAT).unwrap().status,
+        SessionStatus::AwaitingInput
+    );
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-cancel",
+        SessionCommandPayload::RespondInput {
+            request_id: url_id,
+            answers: vec![UserInputAnswer {
+                question_id: "url-action".into(),
+                labels: vec!["Cancel".into()],
+            }],
+        },
+    );
+    wait_for(
+        || observed.lock().unwrap().len() == 2 && pending().is_empty(),
+        "second prompt cancels independently",
+    )
+    .await;
+    assert_eq!(
+        observed.lock().unwrap()[1],
+        serde_json::json!({"action":"cancel"})
+    );
+    assert!(
+        client
+            .call(luna_rpc::methods::MCP_ELICITATION_URL, url_params)
+            .await
+            .is_err()
+    );
+    let journal_path = dir
+        .path()
+        .join("orgs/dev-org/dev-user/journals")
+        .join(format!("{CHAT}.jsonl"));
+    let journal = std::fs::read_to_string(&journal_path).unwrap();
+    assert!(!journal.contains("private-url-token") && !journal.contains("fragment-secret"));
+    if let Some(output) = std::env::var_os("LUNA_MCP_E2E_ARTIFACT_DIR") {
+        let output = std::path::PathBuf::from(output);
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("engine-form-url.json"), serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"responses":*observed.lock().unwrap(),"prompts":prompts,"journal":journal,"checks":["concurrent","invalid-answer-retained","exact-request","repeat-url-read","raw-url-not-durable","cancel"]})).unwrap()).unwrap();
+    }
+    // Stop then reopen a real engine data root with unanswered MCP prompts.
+    // A stale Accept must not dispatch the orphan fallback as another run.
+    wait_for(
+        || {
+            core.sessions
+                .session_status(CHAT)
+                .is_some_and(|s| s.status == SessionStatus::Idle)
+        },
+        "initial MCP run settles",
+    )
+    .await;
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-stop-run",
+        SessionCommandPayload::Run {
+            request: run_request("stop MCP fixture"),
+            message_id: "mcp-stop-user".into(),
+        },
+    );
+    wait_for(|| pending().len() == 2, "MCP prompts before stop").await;
+    let stale_prompts = pending();
+    let crash_snapshot_entries = entries(&core);
+    let stale_form_id = stale_prompts
+        .iter()
+        .find(|(_, q)| q.len() == 2)
+        .unwrap()
+        .0
+        .clone();
+    let stale_url_id = stale_prompts
+        .iter()
+        .find(|(_, q)| q.len() == 1)
+        .unwrap()
+        .0
+        .clone();
+    core.sessions.interrupt_for_stop(CHAT).await.unwrap();
+    wait_for(|| !core.sessions.has_live_run(CHAT), "stopped MCP run").await;
+    assert!(
+        client
+            .call(
+                luna_rpc::methods::MCP_ELICITATION_URL,
+                serde_json::json!({"chatId":CHAT,"requestId":stale_url_id})
+            )
+            .await
+            .is_err()
+    );
+    core.shutdown().await;
+    drop(client);
+    drop(handle);
+    drop(core);
+    // Model the last durable snapshot of an abrupt disconnect. A graceful
+    // stop resolves its inputs, so retain the pre-stop input projection in a
+    // settled synthetic snapshot to exercise the actual orphan recovery path.
+    let crash_doc = SessionDoc::init(CHAT).unwrap();
+    for mut entry in crash_snapshot_entries {
+        if entry.status == Some(MessageStatus::Streaming) {
+            entry.status = Some(MessageStatus::Aborted);
+        }
+        crash_doc.push_message(&entry).unwrap();
+    }
+    let store = DocsStore::open(dir.path().join("orgs/dev-org/dev-user")).unwrap();
+    store
+        .save_snapshot(CHAT, &crash_doc.export_snapshot().unwrap())
+        .unwrap();
+    drop(store);
+    let restarted = assemble(
+        dir.path(),
+        Arc::new(McpHarness {
+            observed: observed.clone(),
+        }),
+    );
+    let recovered = restarted.doc_host.open(CHAT).unwrap();
+    queue_as_owner(
+        &restarted,
+        recovered.doc(),
+        "mcp-stale-accept",
+        SessionCommandPayload::RespondInput {
+            request_id: stale_form_id.clone(),
+            answers: form_answers("0"),
+        },
+    );
+    wait_for(
+        || {
+            command_status(&restarted, "mcp-stale-accept")
+                .is_some_and(|(s, _)| s == SessionCommandStatus::Rejected)
+        },
+        "stale MCP acceptance rejected after restart",
+    )
+    .await;
+    assert!(!restarted.sessions.has_live_run(CHAT));
+    assert_eq!(observed.lock().unwrap().len(), 2);
+    let restart_client = luna_rpc::memory_client(restarted.rpc_service());
+    let error = restart_client
+        .call(
+            luna_rpc::methods::MCP_ELICITATION_URL,
+            serde_json::json!({"chatId":CHAT,"requestId":stale_url_id}),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("private-url-token"));
+    queue_as_owner(
+        &restarted,
+        recovered.doc(),
+        "mcp-stale-decline",
+        SessionCommandPayload::RespondInput {
+            request_id: stale_form_id,
+            answers: vec![UserInputAnswer {
+                question_id: "form-action".into(),
+                labels: vec!["Decline".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&restarted, "mcp-stale-decline")
+                .is_some_and(|(s, _)| s == SessionCommandStatus::Applied)
+        },
+        "stale prompt closes without provider replay",
+    )
+    .await;
+    if let Some(output) = std::env::var_os("LUNA_MCP_E2E_ARTIFACT_DIR") {
+        std::fs::write(std::path::PathBuf::from(output).join("engine-stop-restart.json"), serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"checks":["stop-invalidates-url","restart-invalidates-url","stale-accept-rejected","no-orphan-model-turn","stale-decline-local-only"],"entries":entries(&restarted),"error":error})).unwrap()).unwrap();
+    }
+    restarted.shutdown().await;
 }
