@@ -3977,7 +3977,7 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
                             "form",
                             McpInputKind::Field {
                                 name: "count".into(),
-                                schema,
+                                schema: Box::new(schema),
                             },
                         )),
                     },

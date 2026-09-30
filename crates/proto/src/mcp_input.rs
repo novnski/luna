@@ -32,7 +32,8 @@ pub struct McpInput {
 pub enum McpInputKind {
     Field {
         name: String,
-        schema: McpFieldSchema,
+        /// Boxed: the schema dwarfs the other variants.
+        schema: Box<McpFieldSchema>,
     },
     FormAction,
     Url {

@@ -143,7 +143,7 @@ pub(super) fn questions(
                     options,
                     McpInputKind::Field {
                         name: name.clone(),
-                        schema,
+                        schema: Box::new(schema),
                     },
                     multi,
                 ));
