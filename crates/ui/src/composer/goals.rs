@@ -18,8 +18,18 @@ struct GoalEditor {
     _subscriptions: Vec<Subscription>,
 }
 
+enum GoalAction {
+    Edit,
+    Save,
+    Cancel,
+    Operation(GoalOperation),
+}
+
 impl Composer {
     fn open_goal_editor(&mut self, cx: &mut Context<Self>) {
+        if self.goal_ui.pending.is_some() {
+            return;
+        }
         let state = self.state.read(cx);
         let Some(chat_id) = state.selected_chat.clone() else {
             return;
@@ -137,29 +147,61 @@ impl Composer {
         id: &'static str,
         label: &'static str,
         enabled: bool,
-        operation: Option<GoalOperation>,
+        action: GoalAction,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::of(cx);
-        div()
-            .id(id)
+        let owner = self.state.read(cx).selected_chat.clone();
+        let accessible_label = match id {
+            "goal-refresh" => "Refresh goal status",
+            "goal-toggle" if label == "Pause" => "Pause goal",
+            "goal-toggle" => "Resume goal",
+            "goal-complete" => "Mark goal complete",
+            "goal-cancel" => "Cancel goal edit",
+            _ => label,
+        };
+        gpui_base::Button::new(id)
+            .role(Role::Button)
+            .accessibility_id(id)
+            .accessibility_label(accessible_label)
+            .disabled(!enabled)
+            .tab_index(0)
+            .tab_stop(enabled)
             .px(px(8.0))
             .py(px(4.0))
             .rounded(px(6.0))
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .opacity(if enabled { 1.0 } else { 0.5 })
-            .when(enabled, |el| {
-                el.cursor_pointer()
-                    .hover(|el| el.bg(theme.surface_raised_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(operation) = operation.clone() {
-                            this.submit_goal_operation(operation, cx);
-                        } else {
-                            this.open_goal_editor(cx);
-                        }
-                    }))
+            .when(enabled, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.surface_raised_hover))
+                    .focus_visible(move |style| {
+                        style
+                            .bg(theme.accent.opacity(0.18))
+                            .text_color(theme.accent)
+                    })
             })
+            .when(!enabled, |button| {
+                button.aria_description("This goal action is currently unavailable.")
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.goal_ui.pending.is_some() || this.state.read(cx).selected_chat != owner {
+                    return;
+                }
+                match &action {
+                    GoalAction::Edit => this.open_goal_editor(cx),
+                    GoalAction::Save => this.save_goal_editor(cx),
+                    GoalAction::Cancel => {
+                        this.goal_ui.editor = None;
+                        cx.notify();
+                    }
+                    GoalAction::Operation(operation) => {
+                        this.submit_goal_operation(operation.clone(), cx)
+                    }
+                }
+            }))
             .child(label)
             .into_any_element()
     }
@@ -245,14 +287,14 @@ impl Composer {
                     "Create goal"
                 },
                 !pending,
-                None,
+                GoalAction::Edit,
                 cx,
             ))
             .child(self.goal_button(
                 "goal-refresh",
                 "Refresh",
                 !pending,
-                Some(GoalOperation::Get),
+                GoalAction::Operation(GoalOperation::Get),
                 cx,
             ));
         if let Some(goal) = goal {
@@ -266,7 +308,7 @@ impl Composer {
                     "goal-toggle",
                     label,
                     !pending,
-                    Some(GoalOperation::Set {
+                    GoalAction::Operation(GoalOperation::Set {
                         objective: None,
                         status: Some(status),
                         token_budget: None,
@@ -277,7 +319,7 @@ impl Composer {
                     "goal-complete",
                     "Mark complete",
                     !pending && goal.status != GoalStatus::Complete,
-                    Some(GoalOperation::Set {
+                    GoalAction::Operation(GoalOperation::Set {
                         objective: None,
                         status: Some(GoalStatus::Complete),
                         token_budget: None,
@@ -288,7 +330,7 @@ impl Composer {
                     "goal-clear",
                     "Clear goal",
                     !pending,
-                    Some(GoalOperation::Clear),
+                    GoalAction::Operation(GoalOperation::Clear),
                     cx,
                 ));
         }
@@ -320,35 +362,20 @@ impl Composer {
                         div()
                             .flex()
                             .gap(px(8.0))
-                            .child(
-                                div()
-                                    .id("goal-save")
-                                    .px(px(8.0))
-                                    .py(px(4.0))
-                                    .rounded(px(6.0))
-                                    .child("Save goal")
-                                    .when(!pending, |el| {
-                                        el.cursor_pointer()
-                                            .hover(|el| el.bg(theme.surface_raised_hover))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.save_goal_editor(cx)
-                                            }))
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("goal-cancel")
-                                    .px(px(8.0))
-                                    .py(px(4.0))
-                                    .rounded(px(6.0))
-                                    .child("Cancel")
-                                    .cursor_pointer()
-                                    .hover(|el| el.bg(theme.surface_raised_hover))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.goal_ui.editor = None;
-                                        cx.notify();
-                                    })),
-                            ),
+                            .child(self.goal_button(
+                                "goal-save",
+                                "Save goal",
+                                !pending,
+                                GoalAction::Save,
+                                cx,
+                            ))
+                            .child(self.goal_button(
+                                "goal-cancel",
+                                "Cancel",
+                                !pending,
+                                GoalAction::Cancel,
+                                cx,
+                            )),
                     ),
             );
         }

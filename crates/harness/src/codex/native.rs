@@ -117,7 +117,7 @@ impl CodexNativeClient {
                 .await
                 .map(|goal| (goal, true));
         }
-        let connection = self.connect(Some(cwd)).await?;
+        let mut connection = self.connect(Some(cwd)).await?;
         let result = super::goals::execute(&connection.client, thread, operation).await;
         connection.close().await;
         result.map(|goal| (goal, false))
