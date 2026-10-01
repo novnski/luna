@@ -86,12 +86,18 @@ pub enum RuntimeDelivery {
     CodexInstructionsOnly,
     ClaudeInstructionsOnly,
     Unsupported,
+    /// The same per-process `luna` MCP endpoint, attached to every Claude CLI
+    /// spawn through an inline `--mcp-config` entry (fresh and resumed).
+    ClaudeMcpTools,
 }
 
 impl RuntimeDelivery {
     /// Whether engine-executed LUNA tools reach the provider on this path.
     pub fn attaches_luna_tools(self) -> bool {
-        matches!(self, Self::CodexMcpTools | Self::CodexDynamicTools)
+        matches!(
+            self,
+            Self::CodexMcpTools | Self::CodexDynamicTools | Self::ClaudeMcpTools
+        )
     }
 }
 

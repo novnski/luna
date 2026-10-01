@@ -31,6 +31,7 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod luna_tools;
 mod normalize;
 mod wire;
 
@@ -194,7 +195,11 @@ impl ClaudeHarness {
             })
             .filter(|contract| {
                 contract.context.harness == HarnessId::ClaudeCode
-                    && contract.delivery == luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
+                    && matches!(
+                        contract.delivery,
+                        luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
+                            | luna_proto::RuntimeDelivery::ClaudeMcpTools
+                    )
             })
         {
             for (name, value) in &contract.environment {
@@ -397,8 +402,10 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
 
 #[async_trait]
 impl Harness for ClaudeHarness {
+    /// LUNA tools ride the shared per-process `luna` MCP endpoint
+    /// (`luna_tools`), on fresh and resumed sessions alike.
     fn luna_runtime_delivery(&self) -> luna_proto::RuntimeDelivery {
-        luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
+        luna_proto::RuntimeDelivery::ClaudeMcpTools
     }
     fn id(&self) -> HarnessId {
         HarnessId::ClaudeCode
@@ -491,6 +498,7 @@ impl ClaudeHarness {
                 .model_options
                 .remove(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION);
         }
+        let mut luna = None;
         if let Some(value) = request
             .model_options
             .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
@@ -499,13 +507,32 @@ impl ClaudeHarness {
                 serde_json::from_value(value.clone()).map_err(|error| {
                     HarnessError::Protocol(format!("invalid LUNA runtime contract: {error}"))
                 })?;
+            let tools_deliverable = contract.delivery
+                == luna_proto::RuntimeDelivery::ClaudeMcpTools
+                && controls.invoke_luna_tool.is_some();
             if contract.context.harness != HarnessId::ClaudeCode
-                || contract.delivery != luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
-                || !contract.tools.is_empty()
+                || !matches!(
+                    contract.delivery,
+                    luna_proto::RuntimeDelivery::ClaudeInstructionsOnly
+                        | luna_proto::RuntimeDelivery::ClaudeMcpTools
+                )
+                || (!contract.tools.is_empty() && !tools_deliverable)
             {
                 return Err(HarnessError::Protocol(
                     "Claude LUNA runtime contract advertises unsupported tools".into(),
                 ));
+            }
+            // Bound before the spawn so the CLI connects at MCP startup.
+            if let (false, Some(executor)) = (contract.tools.is_empty(), &controls.invoke_luna_tool)
+            {
+                luna = Some(
+                    luna_tools::ClaudeLunaBridge::bind(
+                        contract,
+                        Arc::clone(executor),
+                        controls.interrupt.clone(),
+                    )
+                    .await?,
+                );
             }
         }
         request
@@ -513,6 +540,14 @@ impl ClaudeHarness {
             .remove(crate::LUNA_PROVIDER_AUTH_INSTANCE_OPTION);
         let exe = self.resolve_executable()?;
         let mut cmd = self.build_command(&exe, &request);
+        let (luna_endpoint, luna) = match luna {
+            Some((endpoint, attachment, bridge)) => {
+                cmd.args(&attachment.args);
+                cmd.env(attachment.env.0, &attachment.env.1);
+                (Some(endpoint), Some(bridge))
+            }
+            None => (None, None),
+        };
         if title_only {
             cmd.args([
                 "--system-prompt",
@@ -588,6 +623,8 @@ impl ClaudeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            luna_endpoint,
+            luna,
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -737,6 +774,9 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    /// This process's `luna` MCP endpoint; dropping it retires the token.
+    luna_endpoint: Option<crate::codex::luna_mcp::LunaMcpEndpoint>,
+    luna: Option<luna_tools::ClaudeLunaBridge>,
 }
 
 /// The per-run event loop: one task multiplexing stdout frames, the steering
@@ -755,6 +795,8 @@ async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        mut luna_endpoint,
+        mut luna,
     } = session;
     let RunControls {
         request_input,
@@ -777,6 +819,9 @@ async fn run_session(session: Session) {
     let mut escalation: Option<tokio::task::JoinHandle<()>> = None;
 
     'main: loop {
+        let luna_deadline = luna
+            .as_ref()
+            .and_then(luna_tools::ClaudeLunaBridge::next_deadline);
         tokio::select! {
             line = stdout_lines.next_line() => match line {
                 Ok(Some(line)) => {
@@ -792,7 +837,10 @@ async fn run_session(session: Session) {
                         }
                     };
                     if let Frame::ControlRequest(req) = frame {
-                        if title_only {
+                        if luna.as_ref().is_some_and(|luna| luna.preapproved(&req)) {
+                            let line = control_response_line(&req.request_id, allow_response(req.request.input));
+                            let _ = stdin_tx.send(StdinMsg::line(line));
+                        } else if title_only {
                             let line = control_response_line(&req.request_id, serde_json::json!({
                                 "behavior": "deny", "message": "Tools are disabled for title generation"
                             }));
@@ -808,7 +856,8 @@ async fn run_session(session: Session) {
                         }
                         continue;
                     }
-                    for ev in norm.normalize(frame, interrupted) {
+                    let luna_turn = luna.as_mut().and_then(|luna| luna.observe(&frame));
+                    for ev in norm.normalize(frame, interrupted).into_iter().chain(luna_turn) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
                         if is_done {
                             // Stream-json result frames are the authoritative
@@ -938,6 +987,18 @@ async fn run_session(session: Session) {
                         tokio::time::sleep(kill_grace).await;
                         send_signal(&pid, Signal::Kill);
                     }));
+                }
+            },
+
+            Some(call) = luna_tools::next_call(&mut luna_endpoint) => {
+                if let Some(luna) = luna.as_mut() {
+                    luna.on_call(call);
+                }
+            },
+
+            _ = luna_tools::parked_deadline(luna_deadline) => {
+                if let Some(luna) = luna.as_mut() {
+                    luna.expire();
                 }
             },
 

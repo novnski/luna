@@ -220,7 +220,7 @@ impl LunaSendProposal {
                 mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: self.claim.provider_call_id.clone(),
-                    provider: HarnessId::Codex,
+                    provider: self.claim.source_provider,
                     turn_id: Some(self.claim.provider_turn_id.clone()),
                     machine_name: self.environment_id.clone(),
                     action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
@@ -249,7 +249,7 @@ impl LunaSendProposal {
             mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.claim.provider_call_id.clone(),
-                provider: HarnessId::Codex,
+                provider: self.claim.source_provider,
                 turn_id: Some(self.claim.provider_turn_id.clone()),
                 machine_name: self.environment_id.clone(),
                 action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
@@ -362,7 +362,7 @@ impl LunaSyntheticArchiveProposal {
         current_binding: Option<&ProviderBindingKey>,
     ) -> bool {
         self.source_run_id == run.run_id
-            && run.runtime_config.harness_id == HarnessId::Codex
+            && provider_turn_fence(run.runtime_config.harness_id)
             && current_binding == Some(&self.source_binding)
             && run.run_provider_binding.as_ref() == Some(&self.source_binding)
             && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
@@ -752,6 +752,8 @@ struct ClaimedProviderCall {
     source_task_id: String,
     source_run_id: String,
     source_binding: ProviderBindingKey,
+    /// The adapter that supplied the turn/call evidence (Codex or Claude).
+    source_provider: HarnessId,
     provider_turn_id: String,
     provider_call_id: String,
 }
@@ -760,7 +762,8 @@ impl ClaimedProviderCall {
     fn matches_live(&self, run: &RunHandle, binding: Option<&ProviderBindingKey>) -> bool {
         self.source_run_id == run.run_id
             && self.source_binding.task_id == self.source_task_id
-            && run.runtime_config.harness_id == HarnessId::Codex
+            && run.runtime_config.harness_id == self.source_provider
+            && provider_turn_fence(self.source_provider)
             && binding == Some(&self.source_binding)
             && run.run_provider_binding.as_ref() == Some(&self.source_binding)
             && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
@@ -831,7 +834,7 @@ impl LunaProspectiveInterruptProposal {
             mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: evidence.claim.provider_call_id.clone(),
-                provider: HarnessId::Codex,
+                provider: evidence.claim.source_provider,
                 turn_id: Some(evidence.claim.provider_turn_id.clone()),
                 machine_name: evidence.source_environment_id.clone(),
                 action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
@@ -895,6 +898,14 @@ impl LunaProspectiveInterruptProposal {
 }
 
 /// A checkpoint is evidence for one active provider turn, never authorization.
+/// Adapters whose native turn evidence arms the provider-turn fence below:
+/// Codex (`turn/started`, checkpoints) and Claude (`system:init` .. `result`,
+/// with each call's `tool_use` id matched in `claude::luna_tools`). Other
+/// providers never attach LUNA tools, so their claims fail closed.
+fn provider_turn_fence(harness: HarnessId) -> bool {
+    matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode)
+}
+
 /// Claiming a call ID only reserves it for a future engine-owned proposal; it
 /// does not mint a grant or dispatch a tool.
 #[derive(Debug)]
@@ -932,7 +943,7 @@ impl RunHandle {
             return false;
         }
         let ready = binding.is_some_and(|binding| {
-            self.runtime_config.harness_id == HarnessId::Codex
+            provider_turn_fence(self.runtime_config.harness_id)
                 && !self.interrupt_token.is_cancelled()
                 && !*self.cancel.subscribe().borrow()
                 && binding.task_id == task_id
@@ -960,7 +971,7 @@ impl RunHandle {
         if self.run_id != run_id {
             return false;
         }
-        let ready = self.runtime_config.harness_id == HarnessId::Codex
+        let ready = provider_turn_fence(self.runtime_config.harness_id)
             && !self.interrupt_token.is_cancelled()
             && !*self.cancel.subscribe().borrow()
             && binding.is_some_and(|binding| {
@@ -992,7 +1003,7 @@ impl RunHandle {
             matches!(
                 *self.provider_turn_readiness.borrow(),
                 ProviderTurnReadiness::AwaitingCheckpoint | ProviderTurnReadiness::Ready
-            ) && self.runtime_config.harness_id == HarnessId::Codex
+            ) && provider_turn_fence(self.runtime_config.harness_id)
                 && !self.interrupt_token.is_cancelled()
                 && !*self.cancel.subscribe().borrow()
                 && self.run_provider_binding.as_ref() == Some(binding)
@@ -1036,7 +1047,7 @@ impl RunHandle {
         const MAX_CALL_ID_BYTES: usize = 256;
         const MAX_CLAIMS_PER_TURN: usize = 4_096;
         if self.run_id != run_id
-            || self.runtime_config.harness_id != HarnessId::Codex
+            || !provider_turn_fence(self.runtime_config.harness_id)
             || self.interrupt_token.is_cancelled()
             || *self.cancel.subscribe().borrow()
             || *self.provider_turn_readiness.borrow() != ProviderTurnReadiness::Ready
@@ -1476,7 +1487,9 @@ impl SessionsEngine {
         provider_call_id: &str,
     ) -> Option<ClaimedProviderCall> {
         let binding = self.inner.current_codex_binding_key(chat_id)?;
+        let mut source_provider = None;
         let claimed = lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
+            source_provider = Some(run.runtime_config.harness_id);
             run.claim_codex_invocation(
                 chat_id,
                 run_id,
@@ -1495,6 +1508,7 @@ impl SessionsEngine {
             source_task_id: chat_id.to_owned(),
             source_run_id: run_id.to_owned(),
             source_binding: binding,
+            source_provider: source_provider?,
             provider_turn_id: provider_turn_id.to_owned(),
             provider_call_id: provider_call_id.to_owned(),
         })
@@ -6072,7 +6086,7 @@ impl Inner {
             || view.workspace.environment_id != self.device_id
             || binding.task_id != chat_id
             || binding.environment_id != self.device_id
-            || binding.provider_id != HarnessId::Codex
+            || !provider_turn_fence(binding.provider_id)
             || binding.binding_id.is_empty()
             || binding.provider_task_id.is_empty()
         {
@@ -7435,6 +7449,20 @@ async fn drive_run(
             }
             continue;
         }
+        // Claude's adapter mints a turn id at each root `system:init`. It only
+        // arms the LUNA tool fence; wake turns keep their existing lifecycle.
+        if harness_id == HarnessId::ClaudeCode
+            && let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event
+        {
+            if inner
+                .current_codex_binding_key(&chat_id)
+                .is_some_and(|binding| binding.provider_thread_id == *thread_id)
+            {
+                inner.rearm_codex_checkpoint_after_done(&chat_id, &run_id, Some(thread_id));
+                inner.observe_codex_checkpoint(&chat_id, &run_id, Some(thread_id), turn_id);
+            }
+            continue;
+        }
         // Native autonomous turns can begin immediately after Done. The
         // one-second parked-output gate is for unowned ACP noise, not an
         // authoritative Codex turn boundary.
@@ -8087,7 +8115,7 @@ async fn drive_run(
                     }
                     return;
                 }
-                if harness_id == HarnessId::Codex {
+                if provider_turn_fence(harness_id) {
                     inner.observe_codex_binding(&chat_id, &run_id, session_id);
                 }
                 if let Some(contract) = runtime_contract.as_ref() {

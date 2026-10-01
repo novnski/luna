@@ -42,7 +42,8 @@ pub(crate) mod catalog;
 pub(crate) mod composer_catalog;
 mod elicitation;
 mod goals;
-mod luna_mcp;
+/// Shared with the Claude adapter (`claude::luna_tools`): one endpoint type.
+pub(crate) mod luna_mcp;
 pub mod native;
 mod normalize;
 mod subagents;
@@ -1074,7 +1075,7 @@ impl ReviewTurn {
 /// A provider call ID may be delivered more than once. Keep one bounded set
 /// for the active turn; an old turn cannot pass the router's active-turn check.
 #[derive(Default)]
-struct LunaCallIds {
+pub(crate) struct LunaCallIds {
     turn_id: Option<String>,
     seen: HashSet<String>,
     mcp_seen: HashSet<String>,

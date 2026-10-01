@@ -160,7 +160,7 @@ fn assemble(
                 name: "luna_status guidance".into(),
                 source: RuntimeInstructionSource::Tool,
                 provenance: "engine tool registry luna_status@1".into(),
-                text: if delivery == RuntimeDelivery::CodexMcpTools {
+                text: if matches!(delivery, RuntimeDelivery::CodexMcpTools | RuntimeDelivery::ClaudeMcpTools) {
                     "LUNA tools are served by the `luna` MCP server attached to this session. Use its luna_status tool when you need this task's current LUNA identity or granted scopes."
                 } else {
                     "Use luna_status when you need this task's current LUNA identity or granted scopes."
@@ -223,7 +223,9 @@ fn assemble(
             RuntimeDelivery::CodexInstructionsOnly => "Existing Codex session has no verified dynamic-tool registration; start a new provider session to attach tools.",
             RuntimeDelivery::ClaudeInstructionsOnly => "Claude MCP tool transport is not yet verified by this LUNA adapter.",
             RuntimeDelivery::Unsupported => "This provider has no verified LUNA instruction/tool delivery path.",
-            RuntimeDelivery::CodexDynamicTools | RuntimeDelivery::CodexMcpTools => unreachable!(),
+            RuntimeDelivery::CodexDynamicTools
+            | RuntimeDelivery::CodexMcpTools
+            | RuntimeDelivery::ClaudeMcpTools => unreachable!(),
         }.into(),
     }).into_iter().collect::<Vec<_>>();
     if tools_supported {
@@ -278,11 +280,15 @@ pub fn compile(input: CompileInput) -> Result<CompiledRuntime, EngineError> {
             requires_safe_boundary: false,
         });
     }
-    if candidate_delivery == RuntimeDelivery::CodexMcpTools {
+    if matches!(
+        candidate_delivery,
+        RuntimeDelivery::CodexMcpTools | RuntimeDelivery::ClaudeMcpTools
+    ) {
         // MCP tools are attached to every provider process, so a resumed
         // thread (new, pre-L23, or one with frozen dynamic tools) gets the
         // current catalog. Only changed instructions/context still need the
-        // active turn to settle first.
+        // active turn to settle first. Claude sessions acknowledged as
+        // instructions-only gain the tools on their next spawn the same way.
         let changed = input
             .acknowledged_contract
             .as_ref()
