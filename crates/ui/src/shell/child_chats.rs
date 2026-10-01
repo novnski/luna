@@ -177,6 +177,7 @@ pub(super) fn child_chat_rows(
                     HarnessId::Codex => "Codex",
                     HarnessId::ClaudeCode => "Claude Code",
                     HarnessId::Opencode => "OpenCode",
+                    HarnessId::Mock => "Mock",
                     _ => "Provider",
                 };
                 match config.model.as_deref().filter(|model| !model.is_empty()) {

@@ -2338,10 +2338,18 @@ impl Shell {
         let filter = self.settings.space_filter.clone();
         let mut rows: Vec<luna_proto::Chat> = {
             let state = self.state.read(cx);
+            let rows_by_id: std::collections::HashMap<&str, &luna_proto::Chat> = state
+                .chats
+                .iter()
+                .map(|chat| (chat.id.as_str(), chat))
+                .collect();
             state
                 .chats
                 .iter()
                 .filter(|c| c.archived)
+                // An archived child stays listed in its parent's Child chats
+                // pane; only children whose parent is gone keep a shelf row.
+                .filter(|chat| lineage_parent(&rows_by_id, chat).is_none())
                 .filter(|chat| {
                     self.pending_task_actions.get(&chat.id) != Some(&TaskConfirmation::Delete)
                 })

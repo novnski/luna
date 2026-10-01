@@ -573,12 +573,24 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(text.contains("tie-breaker") && !text.contains("Split the work"), "wrong transcript shown: {opened}");
                     record.insert("open".into(), opened);
 
-                    // 4. Back: list again, watch released.
-                    window.update(cx, |shell, _, cx| shell.fixture_child_chat_back(cx))?;
+                    // 4. Escape from the focused reply input: list again,
+                    // watch released (the Back button calls the same path).
+                    let escape = gpui::Keystroke::parse("escape")
+                        .map_err(|error| anyhow::anyhow!("escape keystroke: {error:?}"))?;
+                    gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                                keystroke: escape,
+                                is_held: false,
+                                prefer_character_input: false,
+                            }),
+                            cx,
+                        );
+                    })?;
                     settle(cx, 400).await;
                     capture(window, cx, output.join("04-child-back.png"))?;
                     let back = readback(window, cx)?;
-                    anyhow::ensure!(back["openChild"].is_null(), "Back did not return to the list: {back}");
+                    anyhow::ensure!(back["openChild"].is_null(), "Escape did not return to the list: {back}");
                     anyhow::ensure!(ids(&back["watchedDocs"]).is_empty(), "Back leaked the doc watch: {back}");
                     record.insert("back".into(), back);
 
