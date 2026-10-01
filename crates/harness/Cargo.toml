@@ -17,6 +17,10 @@ required-features = ["native-fixture"]
 [dependencies]
 luna-proto.workspace = true
 base64 = "0.22"
+# Per-process `luna` MCP endpoint for Codex (same versions as luna-preview).
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 reqwest.workspace = true
 tokio.workspace = true
 tokio-util = { workspace = true, features = ["io-util"] }

@@ -77,10 +77,22 @@ pub struct RuntimeToolDefinition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RuntimeDelivery {
+    /// Legacy: tools frozen into a provider thread by `thread/start`. Only
+    /// read back from journals of threads started before MCP delivery.
     CodexDynamicTools,
+    /// Tools served by the per-process `luna` MCP endpoint that the Codex
+    /// adapter attaches to every app-server spawn, including resumes.
+    CodexMcpTools,
     CodexInstructionsOnly,
     ClaudeInstructionsOnly,
     Unsupported,
+}
+
+impl RuntimeDelivery {
+    /// Whether engine-executed LUNA tools reach the provider on this path.
+    pub fn attaches_luna_tools(self) -> bool {
+        matches!(self, Self::CodexMcpTools | Self::CodexDynamicTools)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
