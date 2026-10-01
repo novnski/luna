@@ -690,10 +690,18 @@ impl RuntimeConfig {
             provider_account_id: request.provider_account_id.clone(),
             model: request.model.clone(),
             reasoning: request.reasoning,
+            // Per-message correlation is not runtime configuration: a stored
+            // first-message id must never force a warm runtime to restart.
             model_options: request
                 .model_options
                 .iter()
-                .filter(|(key, _)| key.as_str() != luna_harness::codex::LUNA_STEER_RECONCILE_OPTION)
+                .filter(|(key, _)| {
+                    !matches!(
+                        key.as_str(),
+                        luna_harness::codex::LUNA_STEER_RECONCILE_OPTION
+                            | luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION
+                    )
+                })
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
             cwd: request.cwd.clone(),
