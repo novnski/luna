@@ -508,6 +508,8 @@ fn main() -> anyhow::Result<()> {
                         eprintln!("Native agents fixture failed: {error:#}");
                         let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
                         *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                        // AppKit termination from inside `run` exits 0; fail explicitly.
+                        std::process::exit(1);
                     }
                 }
                 let _ = window.update(cx, |_, window, _| window.remove_window());
