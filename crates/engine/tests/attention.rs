@@ -55,6 +55,7 @@ fn input(id: &str, request: &str, approval: bool, device_id: &str) -> SessionMes
                 question: "Private question and secret must stay in the transcript".into(),
                 options: vec!["private option".into()],
                 multi_select: false,
+                mcp: None,
                 approval: approval.then(|| luna_proto::ApprovalRequest {
                     provider_request_id: request.into(),
                     provider: HarnessId::Mock,
@@ -65,6 +66,7 @@ fn input(id: &str, request: &str, approval: bool, device_id: &str) -> SessionMes
                     requested_scope: luna_proto::PermissionScope::Workspace,
                     expires_at_ms: 1_900_000_000_000,
                     supports_task_allowance: false,
+                    details: None,
                 }),
             }],
             resolved: false,

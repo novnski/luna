@@ -49,6 +49,8 @@ fn init_quiesce_env() {
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -150,6 +152,7 @@ impl Harness for FeedHarness {
                     steer = controls.steering.recv(), if steering_open => match steer {
                         Some(_) => {
                             let boundary = AgentEvent::Steered {
+                                user_message_id: None,
                                 assistant_message_id: None,
                                 next_assistant_message_id: None,
                             };

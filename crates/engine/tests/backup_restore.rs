@@ -92,6 +92,8 @@ fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
         updated_at_ms: 1,
     };
     let request = luna_proto::RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt: "old recovery".into(),
         harness: Some(HarnessId::Mock),
         provider_account_id: None,
@@ -591,6 +593,7 @@ fn add_synthetic_task(root: &Path, room_gen: Option<u32>) {
         .unwrap();
     registry
         .upsert_chat(&Chat {
+            child_thread: None,
             id: "synthetic-task".into(),
             device_id: "synthetic-device".into(),
             title: Some("Synthetic task".into()),

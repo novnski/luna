@@ -26,6 +26,8 @@ const CHAT: &str = "chat-e2e";
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -646,6 +648,8 @@ async fn steer_with_no_live_run_falls_back_to_new_turn() {
         handle.doc(),
         "cmd-steer-1",
         SessionCommandPayload::Steer {
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             prompt: "also do this".into(),
             message_id: Some("m-2".into()),
         },
@@ -1186,6 +1190,7 @@ async fn respond_input_resolves_pending_question() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }])
                 .await
@@ -1338,6 +1343,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
                     question: "Allow echo safe?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-approval".into(),
                         provider: HarnessId::Mock,
@@ -1348,6 +1354,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }])
                 .await
@@ -1492,6 +1499,367 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
 }
 
 #[tokio::test]
+async fn structured_approval_preserves_details_and_rejects_unadvertised_choice() {
+    struct ApprovalHarness {
+        prompts: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    #[async_trait]
+    impl Harness for ApprovalHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "Approval"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            self.prompts.lock().unwrap().push(request.prompt.clone());
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            // Like a real adapter, confirm the provider session first: that is
+            // what settles a claimed queue row into the transcript.
+            let started = AgentEvent::SessionStarted {
+                harness: HarnessId::Mock,
+                model: "mock-1".into(),
+                tools: vec![],
+                cwd: request.cwd.clone(),
+                session_id: "hs-1".into(),
+                assistant_message_id: format!("a-{}", request.prompt),
+            };
+            tokio::spawn(async move {
+                let _ = tx.send(Ok(started)).await;
+                let answers = (controls.request_input)(vec![luna_proto::UserInputQuestion {
+                    id: "approval-question".into(),
+                    header: "Approve command".into(),
+                    question: "Allow echo safe?".into(),
+                    options: vec!["Deny".into(), "Allow once".into(), "Cancel turn".into()],
+                    multi_select: false,
+                    mcp: None,
+                    approval: Some(luna_proto::ApprovalRequest {
+                        provider_request_id: "provider-approval".into(),
+                        provider: HarnessId::Mock,
+                        turn_id: None,
+                        machine_name: "test-machine".into(),
+                        action_kind: luna_proto::ApprovalActionKind::Command,
+                        summary: "echo safe".into(),
+                        requested_scope: luna_proto::PermissionScope::Workspace,
+                        expires_at_ms: i64::MAX,
+                        supports_task_allowance: false,
+                        details: Some(luna_proto::ApprovalDetails {
+                            cwd: Some("/tmp/permission-fixture".into()),
+                            command: Some("echo safe".into()),
+                            choices: vec![
+                                luna_proto::ApprovalChoice {
+                                    label: "Deny".into(),
+                                    scope: "none".into(),
+                                    description: "Reject".into(),
+                                },
+                                luna_proto::ApprovalChoice {
+                                    label: "Allow once".into(),
+                                    scope: "request".into(),
+                                    description: "Only this request".into(),
+                                },
+                                luna_proto::ApprovalChoice {
+                                    label: "Cancel turn".into(),
+                                    scope: "turn".into(),
+                                    description: "Interrupt this turn".into(),
+                                },
+                            ],
+                            ..Default::default()
+                        }),
+                    }),
+                }])
+                .await
+                .unwrap_or_default();
+                let picked = answers
+                    .first()
+                    .and_then(|answer| answer.labels.first())
+                    .cloned()
+                    .unwrap_or_else(|| "none".into());
+                if picked == "Cancel turn" {
+                    // Mirrors the Codex adapter: native Cancel ends the turn
+                    // with turn/completed status=interrupted and no local Stop.
+                    let _ = tx.send(Ok(done(DoneStatus::Interrupted))).await;
+                    return;
+                }
+                let _ = tx
+                    .send(Ok(AgentEvent::TextDelta {
+                        text: format!("approval {picked}"),
+                    }))
+                    .await;
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let prompts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let core = assemble(
+        dir.path(),
+        Arc::new(ApprovalHarness {
+            prompts: prompts.clone(),
+        }),
+    );
+    // A real chat row gives queued follow-ups the same local authority and
+    // run configuration the composer queue uses.
+    core.workspace
+        .create_space("space-approval", &core.device_id, "/tmp", None, false)
+        .expect("create project");
+    luna_rpc::memory_client(core.rpc_service())
+        .call(
+            luna_rpc::methods::MUTATE,
+            serde_json::json!({"op": "createChat", "chatId": CHAT, "spaceId": "space-approval"}),
+        )
+        .await
+        .expect("createChat");
+    core.workspace
+        .rename_chat(CHAT, "Pre-titled")
+        .expect("rename chat");
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-run-approval",
+        SessionCommandPayload::Run {
+            request: run_request("approve"),
+            message_id: "m-approval".into(),
+        },
+    );
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).map(|s| s.status)
+                == Some(SessionStatus::AwaitingApproval)
+        },
+        "awaiting typed approval",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(|part| {
+                    matches!(
+                        part,
+                        MessagePart::Input {
+                            resolved: false,
+                            ..
+                        }
+                    )
+                })
+            })
+        },
+        "typed approval part appears",
+    )
+    .await;
+    let request_id = entries(&core)
+        .iter()
+        .find_map(|entry| {
+            entry.parts.iter().find_map(|part| match part {
+                MessagePart::Input {
+                    request_id,
+                    resolved: false,
+                    ..
+                } => Some(request_id.clone()),
+                _ => None,
+            })
+        })
+        .unwrap();
+
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-bypass",
+        SessionCommandPayload::RespondInput {
+            request_id: request_id.clone(),
+            answers: vec![luna_proto::UserInputAnswer {
+                question_id: "approval-question".into(),
+                labels: vec!["Allow once".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "cmd-approval-bypass")
+                .is_some_and(|(status, _)| status != SessionCommandStatus::Pending)
+        },
+        "ordinary input bypass rejected",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-bypass"),
+        Some((
+            SessionCommandStatus::Rejected,
+            Some("no pending input request".into())
+        ))
+    );
+    assert_eq!(
+        core.sessions.session_status(CHAT).map(|s| s.status),
+        Some(SessionStatus::AwaitingApproval)
+    );
+    assert!(
+        entries(&core)
+            .iter()
+            .any(|entry| entry.parts.iter().any(|part| matches!(
+                part,
+                MessagePart::Input {
+                    resolved: false,
+                    ..
+                }
+            )))
+    );
+
+    let stored = entries(&core)
+        .into_iter()
+        .flat_map(|entry| entry.parts)
+        .find_map(|part| match part {
+            MessagePart::Input {
+                questions,
+                resolved: false,
+                ..
+            } => questions.into_iter().find_map(|question| question.approval),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        stored.details.as_ref().unwrap().cwd.as_deref(),
+        Some("/tmp/permission-fixture")
+    );
+    assert!(
+        !core
+            .sessions
+            .respond_approval(
+                CHAT,
+                &request_id,
+                luna_proto::ApprovalDecision::ProviderChoice { index: u32::MAX }
+            )
+            .unwrap()
+    );
+    // Queued behind the approval: a normal completion must still release it.
+    core.doc_host
+        .queue_message(CHAT, "after allow", Vec::new())
+        .expect("queue behind approval");
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-right",
+        SessionCommandPayload::RespondApproval {
+            request_id,
+            decision: luna_proto::ApprovalDecision::ProviderChoice { index: 1 },
+        },
+    );
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.parts.iter().any(
+                    |part| matches!(part, MessagePart::Text { text, .. } if text == "approval Allow once"),
+                )
+            })
+        },
+        "typed approval completes",
+    )
+    .await;
+    assert_eq!(
+        command_status(&core, "cmd-approval-right"),
+        Some((SessionCommandStatus::Applied, None))
+    );
+
+    // Normal completion drains the queue: the follow-up becomes the next turn.
+    wait_for(
+        || prompts.lock().unwrap().iter().any(|p| p == "after allow"),
+        "queued follow-up drains after a normal completion",
+    )
+    .await;
+    wait_for(
+        || {
+            core.sessions.session_status(CHAT).map(|s| s.status)
+                == Some(SessionStatus::AwaitingApproval)
+        },
+        "follow-up awaits approval",
+    )
+    .await;
+    let mut cancel_request = None;
+    wait_for(
+        || {
+            cancel_request = entries_now(&core).iter().find_map(|entry| {
+                entry.parts.iter().find_map(|part| match part {
+                    MessagePart::Input {
+                        request_id,
+                        resolved: false,
+                        ..
+                    } => Some(request_id.clone()),
+                    _ => None,
+                })
+            });
+            cancel_request.is_some()
+        },
+        "second typed approval part appears",
+    )
+    .await;
+    core.doc_host
+        .queue_message(CHAT, "held after cancel", Vec::new())
+        .expect("queue behind the cancelled turn");
+
+    // Native Cancel (no local Stop): the provider settles the turn as
+    // interrupted. The queue must be held exactly as after Stop.
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "cmd-approval-cancel",
+        SessionCommandPayload::RespondApproval {
+            request_id: cancel_request.unwrap(),
+            decision: luna_proto::ApprovalDecision::ProviderChoice { index: 2 },
+        },
+    );
+    wait_for(
+        || {
+            !core.sessions.turn_in_flight(CHAT)
+                && entries_now(&core).iter().any(|entry| {
+                    entry.role == MessageRole::Assistant
+                        && entry.status == Some(MessageStatus::Aborted)
+                })
+        },
+        "native Cancel settles the turn as aborted",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let queued = handle
+        .doc()
+        .read_queue()
+        .unwrap()
+        .into_iter()
+        .map(|item| item.text)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        queued,
+        vec!["held after cancel".to_string()],
+        "native Cancel must hold the queued message like Stop"
+    );
+    assert_eq!(
+        *prompts.lock().unwrap(),
+        vec!["approve".to_string(), "after allow".to_string()],
+        "native Cancel must neither replay the cancelled turn nor send the held row"
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test]
 async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_can() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(
@@ -1530,6 +1898,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }],
                 resolved: false,
@@ -1587,6 +1956,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                     question: "Allow?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-request".into(),
                         provider: HarnessId::Mock,
@@ -1597,6 +1967,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }],
                 resolved: false,
@@ -2210,6 +2581,7 @@ async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
                     .await;
                 let _ = tx
                     .send(Ok(AgentEvent::Steered {
+                        user_message_id: None,
                         assistant_message_id: None,
                         next_assistant_message_id: None,
                     }))
@@ -2343,6 +2715,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }])
                 .await
@@ -2538,6 +2911,7 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
                         question: "Which one?".into(),
                         options: vec!["a".into(), "b".into()],
                         multi_select: false,
+                        mcp: None,
                         approval: None,
                     }])
                     .await;
@@ -2688,6 +3062,7 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
                     question: "Which one?".into(),
                     options: vec!["a".into(), "b".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 };
                 // The pre-fix Claude/Codex shape: surface the question under
@@ -3044,6 +3419,8 @@ async fn real_claude_sees_uploaded_image_inline() {
          Attached images (local files — open them to view):\n- {path}"
     );
     let request = RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt,
         harness: None,
         provider_account_id: None,
@@ -3270,6 +3647,7 @@ async fn stale_tool_echo_after_steer_boundary_does_not_split_text() {
             },
         },
         AgentEvent::Steered {
+            user_message_id: None,
             assistant_message_id: Some("a-1".into()),
             next_assistant_message_id: Some("a-2".into()),
         },
@@ -3414,6 +3792,7 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
                 if let Some(_msg) = controls.steering.recv().await {
                     let _ = tx
                         .send(Ok(AgentEvent::Steered {
+                            user_message_id: None,
                             assistant_message_id: None,
                             next_assistant_message_id: None,
                         }))
@@ -3465,6 +3844,8 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
         handle.doc(),
         "cmd-steer-park-timer",
         SessionCommandPayload::Steer {
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             prompt: "next".into(),
             message_id: Some("m-2".into()),
         },
@@ -3679,6 +4060,7 @@ async fn pending_steer_handoff_does_not_publish_a_completion() {
             continue;
         }
         tx.send(AgentEvent::Steered {
+            user_message_id: None,
             assistant_message_id: Some("a-1".into()),
             next_assistant_message_id: Some("a-steered".into()),
         })
@@ -3903,4 +4285,428 @@ async fn real_image_generation_profile_smoke() {
             .contains("generated_images/")
     );
     core.sessions.shutdown().await;
+}
+
+/// Synthetic harness → engine pending map → journal/document → owner commands
+/// and live URL RPC. Native UI/provider evidence is a separate coordinator step.
+#[tokio::test]
+async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
+    use luna_proto::{McpFieldSchema, McpInput, McpInputKind, UserInputAnswer, UserInputQuestion};
+    use std::sync::Mutex;
+    struct McpHarness {
+        observed: Arc<Mutex<Vec<serde_json::Value>>>,
+    }
+    #[async_trait]
+    impl Harness for McpHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Mock
+        }
+        fn display_name(&self) -> &str {
+            "MCP fixture"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            let observed = self.observed.clone();
+            let stop_scenario = request.prompt.contains("stop");
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            tokio::spawn(async move {
+                let expires_at_ms = chrono::Utc::now().timestamp_millis() + 120_000;
+                let binding = |id: &str, kind| McpInput {
+                    server_name: "synthetic-server".into(),
+                    provider_request_id: id.into(),
+                    thread_id: "synthetic-native-thread".into(),
+                    turn_id: "synthetic-native-turn".into(),
+                    expires_at_ms,
+                    kind,
+                    launch_url: None,
+                };
+                let schema = McpFieldSchema::parse(
+                    &serde_json::json!({"type":"integer", "minimum":0, "maximum":4}),
+                    true,
+                )
+                .unwrap();
+                let form = vec![
+                    UserInputQuestion {
+                        id: "field".into(),
+                        header: "Count".into(),
+                        question: "Count".into(),
+                        options: vec![],
+                        multi_select: false,
+                        approval: None,
+                        mcp: Some(binding(
+                            "form",
+                            McpInputKind::Field {
+                                name: "count".into(),
+                                schema: Box::new(schema),
+                            },
+                        )),
+                    },
+                    UserInputQuestion {
+                        id: "form-action".into(),
+                        header: "MCP".into(),
+                        question: "Submit?".into(),
+                        options: vec!["Accept".into(), "Decline".into(), "Cancel".into()],
+                        multi_select: false,
+                        approval: None,
+                        mcp: Some(binding("form", McpInputKind::FormAction)),
+                    },
+                ];
+                let mut url_meta = binding(
+                    "url",
+                    McpInputKind::Url {
+                        destination: "https://example.invalid".into(),
+                        elicitation_id: "synthetic-flow".into(),
+                    },
+                );
+                url_meta.launch_url = Some(
+                    "https://example.invalid/auth?token=private-url-token#fragment-secret".into(),
+                );
+                let url = vec![UserInputQuestion {
+                    id: "url-action".into(),
+                    header: "MCP URL".into(),
+                    question: "Open example.invalid".into(),
+                    options: vec!["Accept".into(), "Decline".into(), "Cancel".into()],
+                    multi_select: false,
+                    approval: None,
+                    mcp: Some(url_meta),
+                }];
+                assert!(!format!("{url:?}").contains("private-url-token"));
+                let form_rx = (controls.request_input)(form.clone());
+                let url_rx = (controls.request_input)(url.clone());
+                if stop_scenario {
+                    controls.interrupt.cancelled().await;
+                    drop(form_rx);
+                    drop(url_rx);
+                    let _ = tx.send(Ok(done(DoneStatus::Interrupted))).await;
+                    return;
+                }
+                let answers = form_rx.await.unwrap();
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(luna_proto::mcp_response(&form, &answers).unwrap());
+                let answers = url_rx.await.unwrap();
+                observed
+                    .lock()
+                    .unwrap()
+                    .push(luna_proto::mcp_response(&url, &answers).unwrap());
+                let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
+            });
+            Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|event| (event, rx))
+            })
+            .boxed())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let core = assemble(
+        dir.path(),
+        Arc::new(McpHarness {
+            observed: observed.clone(),
+        }),
+    );
+    let handle = core.doc_host.open(CHAT).unwrap();
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-run",
+        SessionCommandPayload::Run {
+            request: run_request("MCP fixture"),
+            message_id: "mcp-user".into(),
+        },
+    );
+    let pending = || {
+        entries_now(&core)
+            .iter()
+            .flat_map(|e| &e.parts)
+            .filter_map(|part| match part {
+                MessagePart::Input {
+                    request_id,
+                    questions,
+                    resolved: false,
+                    ..
+                } => Some((request_id.clone(), questions.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    wait_for(|| pending().len() == 2, "two concurrent MCP prompts").await;
+    let prompts = pending();
+    let form_id = prompts
+        .iter()
+        .find(|(_, q)| q.len() == 2)
+        .unwrap()
+        .0
+        .clone();
+    let url_id = prompts
+        .iter()
+        .find(|(_, q)| q.len() == 1)
+        .unwrap()
+        .0
+        .clone();
+    let visible = serde_json::to_string(&prompts).unwrap();
+    assert!(!visible.contains("private-url-token") && !visible.contains("fragment-secret"));
+    assert!(
+        prompts
+            .iter()
+            .flat_map(|(_, q)| q)
+            .all(|q| q.mcp.as_ref().unwrap().launch_url.is_none())
+    );
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let url_params = serde_json::json!({"chatId":CHAT, "requestId":url_id});
+    // Repeated read-only fetches do not answer or replace the resolver.
+    for _ in 0..2 {
+        let result = client
+            .call(luna_rpc::methods::MCP_ELICITATION_URL, url_params.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            result["url"],
+            "https://example.invalid/auth?token=private-url-token#fragment-secret"
+        );
+    }
+    assert!(observed.lock().unwrap().is_empty());
+    for params in [
+        serde_json::json!({"chatId":"foreign", "requestId":url_id}),
+        serde_json::json!({"chatId":CHAT, "requestId":"foreign"}),
+        serde_json::json!({"chatId":CHAT, "requestId":form_id}),
+    ] {
+        let error = client
+            .call(luna_rpc::methods::MCP_ELICITATION_URL, params)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("private-url-token"));
+    }
+    let form_answers = |value: &str| {
+        vec![
+            UserInputAnswer {
+                question_id: "field".into(),
+                labels: vec![value.into()],
+            },
+            UserInputAnswer {
+                question_id: "form-action".into(),
+                labels: vec!["Accept".into()],
+            },
+        ]
+    };
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-invalid",
+        SessionCommandPayload::RespondInput {
+            request_id: form_id.clone(),
+            answers: form_answers("99"),
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "mcp-invalid")
+                .is_some_and(|(s, _)| s == SessionCommandStatus::Rejected)
+        },
+        "invalid MCP answer rejection",
+    )
+    .await;
+    assert_eq!(pending().len(), 2);
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-valid",
+        SessionCommandPayload::RespondInput {
+            request_id: form_id,
+            answers: form_answers("0"),
+        },
+    );
+    wait_for(
+        || observed.lock().unwrap().len() == 1 && pending().len() == 1,
+        "first prompt resolves independently",
+    )
+    .await;
+    assert_eq!(
+        observed.lock().unwrap()[0],
+        serde_json::json!({"action":"accept", "content":{"count":0}})
+    );
+    assert_eq!(
+        core.sessions.session_status(CHAT).unwrap().status,
+        SessionStatus::AwaitingInput
+    );
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-cancel",
+        SessionCommandPayload::RespondInput {
+            request_id: url_id,
+            answers: vec![UserInputAnswer {
+                question_id: "url-action".into(),
+                labels: vec!["Cancel".into()],
+            }],
+        },
+    );
+    wait_for(
+        || observed.lock().unwrap().len() == 2 && pending().is_empty(),
+        "second prompt cancels independently",
+    )
+    .await;
+    assert_eq!(
+        observed.lock().unwrap()[1],
+        serde_json::json!({"action":"cancel"})
+    );
+    assert!(
+        client
+            .call(luna_rpc::methods::MCP_ELICITATION_URL, url_params)
+            .await
+            .is_err()
+    );
+    let journal_path = dir
+        .path()
+        .join("orgs/dev-org/dev-user/journals")
+        .join(format!("{CHAT}.jsonl"));
+    let journal = std::fs::read_to_string(&journal_path).unwrap();
+    assert!(!journal.contains("private-url-token") && !journal.contains("fragment-secret"));
+    if let Some(output) = std::env::var_os("LUNA_MCP_E2E_ARTIFACT_DIR") {
+        let output = std::path::PathBuf::from(output);
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(output.join("engine-form-url.json"), serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"responses":*observed.lock().unwrap(),"prompts":prompts,"journal":journal,"checks":["concurrent","invalid-answer-retained","exact-request","repeat-url-read","raw-url-not-durable","cancel"]})).unwrap()).unwrap();
+    }
+    // Stop then reopen a real engine data root with unanswered MCP prompts.
+    // A stale Accept must not dispatch the orphan fallback as another run.
+    wait_for(
+        || {
+            core.sessions
+                .session_status(CHAT)
+                .is_some_and(|s| s.status == SessionStatus::Idle)
+        },
+        "initial MCP run settles",
+    )
+    .await;
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "mcp-stop-run",
+        SessionCommandPayload::Run {
+            request: run_request("stop MCP fixture"),
+            message_id: "mcp-stop-user".into(),
+        },
+    );
+    wait_for(|| pending().len() == 2, "MCP prompts before stop").await;
+    let stale_prompts = pending();
+    let crash_snapshot_entries = entries(&core);
+    let stale_form_id = stale_prompts
+        .iter()
+        .find(|(_, q)| q.len() == 2)
+        .unwrap()
+        .0
+        .clone();
+    let stale_url_id = stale_prompts
+        .iter()
+        .find(|(_, q)| q.len() == 1)
+        .unwrap()
+        .0
+        .clone();
+    core.sessions.interrupt_for_stop(CHAT).await.unwrap();
+    wait_for(|| !core.sessions.has_live_run(CHAT), "stopped MCP run").await;
+    assert!(
+        client
+            .call(
+                luna_rpc::methods::MCP_ELICITATION_URL,
+                serde_json::json!({"chatId":CHAT,"requestId":stale_url_id})
+            )
+            .await
+            .is_err()
+    );
+    core.shutdown().await;
+    drop(client);
+    drop(handle);
+    drop(core);
+    // Model the last durable snapshot of an abrupt disconnect. A graceful
+    // stop resolves its inputs, so retain the pre-stop input projection in a
+    // settled synthetic snapshot to exercise the actual orphan recovery path.
+    let crash_doc = SessionDoc::init(CHAT).unwrap();
+    for mut entry in crash_snapshot_entries {
+        if entry.status == Some(MessageStatus::Streaming) {
+            entry.status = Some(MessageStatus::Aborted);
+        }
+        crash_doc.push_message(&entry).unwrap();
+    }
+    let store = DocsStore::open(dir.path().join("orgs/dev-org/dev-user")).unwrap();
+    store
+        .save_snapshot(CHAT, &crash_doc.export_snapshot().unwrap())
+        .unwrap();
+    drop(store);
+    let restarted = assemble(
+        dir.path(),
+        Arc::new(McpHarness {
+            observed: observed.clone(),
+        }),
+    );
+    let recovered = restarted.doc_host.open(CHAT).unwrap();
+    queue_as_owner(
+        &restarted,
+        recovered.doc(),
+        "mcp-stale-accept",
+        SessionCommandPayload::RespondInput {
+            request_id: stale_form_id.clone(),
+            answers: form_answers("0"),
+        },
+    );
+    wait_for(
+        || {
+            command_status(&restarted, "mcp-stale-accept")
+                .is_some_and(|(s, _)| s == SessionCommandStatus::Rejected)
+        },
+        "stale MCP acceptance rejected after restart",
+    )
+    .await;
+    assert!(!restarted.sessions.has_live_run(CHAT));
+    assert_eq!(observed.lock().unwrap().len(), 2);
+    let restart_client = luna_rpc::memory_client(restarted.rpc_service());
+    let error = restart_client
+        .call(
+            luna_rpc::methods::MCP_ELICITATION_URL,
+            serde_json::json!({"chatId":CHAT,"requestId":stale_url_id}),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(!error.contains("private-url-token"));
+    queue_as_owner(
+        &restarted,
+        recovered.doc(),
+        "mcp-stale-decline",
+        SessionCommandPayload::RespondInput {
+            request_id: stale_form_id,
+            answers: vec![UserInputAnswer {
+                question_id: "form-action".into(),
+                labels: vec!["Decline".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&restarted, "mcp-stale-decline")
+                .is_some_and(|(s, _)| s == SessionCommandStatus::Applied)
+        },
+        "stale prompt closes without provider replay",
+    )
+    .await;
+    if let Some(output) = std::env::var_os("LUNA_MCP_E2E_ARTIFACT_DIR") {
+        std::fs::write(std::path::PathBuf::from(output).join("engine-stop-restart.json"), serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"checks":["stop-invalidates-url","restart-invalidates-url","stale-accept-rejected","no-orphan-model-turn","stale-decline-local-only"],"entries":entries(&restarted),"error":error})).unwrap()).unwrap();
+    }
+    restarted.shutdown().await;
 }

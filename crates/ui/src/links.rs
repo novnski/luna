@@ -120,6 +120,7 @@ mod tests {
 
     fn harness_chat(harness: HarnessId) -> Chat {
         Chat {
+            child_thread: None,
             id: "chat".into(),
             device_id: "device".into(),
             title: None,

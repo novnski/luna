@@ -58,3 +58,35 @@ impl ProjectExecutionDefaults {
         Ok(())
     }
 }
+
+/// Shared desktop/engine selection policy. A selected project provider with no
+/// model requests its catalog default; it never copies the source chat model.
+pub struct ResolvedProjectExecution<'a> {
+    pub harness: Option<HarnessId>,
+    pub model: Option<&'a str>,
+    pub permission_mode: Option<PermissionMode>,
+    pub checkout: ProjectCheckout,
+}
+impl ProjectExecutionDefaults {
+    pub fn resolve<'a>(
+        &'a self,
+        global_harness: Option<HarnessId>,
+        global_model: Option<&'a str>,
+        global_permission: Option<PermissionMode>,
+    ) -> ResolvedProjectExecution<'a> {
+        ResolvedProjectExecution {
+            harness: self
+                .provider
+                .as_ref()
+                .map(|provider| provider.harness)
+                .or(global_harness),
+            model: self
+                .provider
+                .as_ref()
+                .map(|provider| provider.model.as_deref())
+                .unwrap_or(global_model),
+            permission_mode: self.permission_mode.or(global_permission),
+            checkout: self.checkout.unwrap_or(ProjectCheckout::Local),
+        }
+    }
+}

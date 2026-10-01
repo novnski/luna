@@ -16,7 +16,8 @@ fn revision_fenced_kind(kind: Option<&str>) -> bool {
     matches!(
         kind,
         Some(
-            "rename"
+            "nativeReview"
+                | "rename"
                 | "setPinned"
                 | "setRead"
                 | "setSettled"
@@ -29,6 +30,7 @@ fn revision_fenced_kind(kind: Option<&str>) -> bool {
                 | "setHost"
                 | "setConfig"
                 | "setModel"
+                | "goal"
                 | "compactContext"
                 | "clearContext"
                 | "switchProvider"
@@ -46,6 +48,7 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
         kind,
         Some(
             "session"
+                | "nativeReview"
                 | "queueMessage"
                 | "editQueuedMessage"
                 | "removeQueuedMessage"
@@ -66,6 +69,7 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
                 | "setHost"
                 | "setConfig"
                 | "setModel"
+                | "goal"
                 | "compactContext"
                 | "clearContext"
                 | "switchProvider"
@@ -130,13 +134,26 @@ pub async fn execute_reviewed(
     snapshot: luna_proto::TaskCommandSnapshot,
     intent: serde_json::Value,
 ) -> Result<CommandReceipt, RpcError> {
+    execute_reviewed_on(engine, task_id, None, Some(snapshot), intent).await
+}
+
+/// Addressed to the task's execution host, so that host (not a possibly newer
+/// local engine that only queues the command) parses and admits the intent.
+/// Without a reviewed snapshot, the host's current snapshot supplies fences.
+pub async fn execute_reviewed_on(
+    engine: &EngineHandle,
+    task_id: &str,
+    target_device_id: Option<&str>,
+    snapshot: Option<luna_proto::TaskCommandSnapshot>,
+    intent: serde_json::Value,
+) -> Result<CommandReceipt, RpcError> {
     let receipt = execute_receipt_on_with_snapshot(
         engine,
         task_id,
-        None,
+        target_device_id,
         uuid::Uuid::new_v4().to_string(),
         intent,
-        Some(snapshot),
+        snapshot,
     )
     .await?;
     match receipt.status {
@@ -230,7 +247,11 @@ async fn execute_receipt_on_with_snapshot(
     let turn_fenced = (session_kind == Some("session")
         && matches!(control_kind, Some("steer" | "interrupt")))
         || matches!(session_kind, Some("sendQueuedNow" | "steerQueuedNow"));
-    let revision_fenced = revision_fenced_kind(session_kind);
+    let revision_fenced = revision_fenced_kind(session_kind)
+        || (session_kind == Some("session")
+            && intent
+                .pointer("/command/request/review")
+                .is_some_and(|review| !review.is_null()));
     let binding_fenced = binding_fenced_kind(session_kind);
     let mut params = serde_json::json!({
         "commandId": command_id,

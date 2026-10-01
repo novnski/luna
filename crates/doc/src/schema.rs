@@ -893,6 +893,36 @@ impl SessionDoc {
         output: Option<&str>,
         diff: Option<&luna_proto::ToolDiff>,
     ) -> Result<bool, DocError> {
+        self.apply_tool_event_in_entry(
+            message_id,
+            part_id,
+            &luna_proto::AgentEvent::ToolResult {
+                id: part_id.to_owned(),
+                is_error,
+                output: output.map(str::to_owned),
+                diff: diff.cloned(),
+            },
+        )
+    }
+
+    /// Apply late activity or a result to its original call site across a
+    /// steering boundary. Uses the ordinary fold and lazy-reference policy.
+    pub fn apply_tool_event_in_entry(
+        &self,
+        message_id: &str,
+        part_id: &str,
+        event: &luna_proto::AgentEvent,
+    ) -> Result<bool, DocError> {
+        let sanitized_call;
+        let event = if let luna_proto::AgentEvent::ToolCall { id, call } = event {
+            sanitized_call = luna_proto::AgentEvent::ToolCall {
+                id: id.clone(),
+                call: crate::parts::sanitize_tool_call(call),
+            };
+            &sanitized_call
+        } else {
+            event
+        };
         let messages = self.doc.get_list("messages");
         for i in (0..messages.len()).rev() {
             let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
@@ -928,21 +958,22 @@ impl SessionDoc {
                 let stored: DocPartJson =
                     serde_json::from_value(part.get_deep_value().to_json_value())?;
                 let mut folded = vec![from_doc_part(stored)];
-                crate::parts::fold_event_into_parts(
-                    &mut folded,
-                    &luna_proto::AgentEvent::ToolResult {
-                        id: part_id.to_owned(),
-                        is_error,
-                        output: output.map(str::to_owned),
-                        diff: diff.cloned(),
-                    },
-                );
+                crate::parts::fold_event_into_parts(&mut folded, event);
                 if let Some(chat_id) = self.chat_id() {
                     crate::parts::apply_journal_output_refs(&chat_id, &mut folded);
                 }
                 update_part_fields(&part, &folded[0])?;
                 self.doc.commit();
                 return Ok(true);
+            }
+            if matches!(event, luna_proto::AgentEvent::ToolCall { id, .. } if id == part_id) {
+                let mut folded = Vec::new();
+                crate::parts::fold_event_into_parts(&mut folded, event);
+                if let Some(part) = folded.first() {
+                    push_part(&parts, part)?;
+                    self.doc.commit();
+                    return Ok(true);
+                }
             }
             return Ok(false);
         }
@@ -2202,6 +2233,8 @@ mod tests {
         let entry = SessionCommandEntry {
             id: "c1".into(),
             payload: SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "focus".into(),
                 message_id: None,
             },

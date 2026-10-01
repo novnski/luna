@@ -47,6 +47,10 @@ pub enum SessionCommandPayload {
     },
     #[serde(rename_all = "camelCase")]
     Steer {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        input_items: Vec<luna_proto::ComposerInput>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<String>,
         prompt: String,
         message_id: Option<String>,
     },
@@ -213,6 +217,8 @@ mod tests {
         entry(
             id,
             SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "go".into(),
                 message_id: None,
             },
@@ -336,6 +342,8 @@ mod tests {
 
     fn run_request() -> RunRequest {
         RunRequest {
+            review: None,
+            input_items: Vec::new(),
             prompt: "hello".into(),
             harness: None,
             provider_account_id: None,

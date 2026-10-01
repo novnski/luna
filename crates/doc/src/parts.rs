@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use luna_proto::{AgentEvent, SUBAGENT_INPUT_KEEP, ToolCall, ToolDiff, UserInputQuestion};
+use luna_proto::{
+    AgentEvent, SUBAGENT_INPUT_KEEP, ToolActivityKind, ToolCall, ToolDiff, UserInputQuestion,
+};
 
 use crate::constants::MSG_INLINE_MAX;
 
@@ -62,6 +64,136 @@ pub fn summarize_tool_output(text: &str) -> Option<String> {
     let mut out = line[..end].to_owned();
     out.push('…');
     Some(out)
+}
+
+/// Bounded live display tail. Complete stdout/stdin is retained in the host
+/// journal, including control sequences that the transcript never executes.
+pub const TOOL_ACTIVITY_PREVIEW_BYTES: usize = 2048;
+
+fn activity_tail(previous: Option<&str>, text: &str, kind: ToolActivityKind) -> Option<String> {
+    let mut joined = previous.unwrap_or_default().to_owned();
+    if kind == ToolActivityKind::Stdin {
+        joined.push_str("\nstdin › ");
+    }
+    // Strip terminal escape/control sequences from the display-only copy.
+    let mut escape = 0;
+    for ch in text.chars() {
+        match escape {
+            1 if ch == '[' => {
+                escape = 2;
+                continue;
+            }
+            1 if ch == ']' => {
+                escape = 3;
+                continue;
+            }
+            1 => {
+                escape = 0;
+                continue;
+            }
+            2 => {
+                if ('@'..='~').contains(&ch) {
+                    escape = 0;
+                }
+                continue;
+            }
+            3 => {
+                if ch == '\x07' {
+                    escape = 0;
+                } else if ch == '\x1b' {
+                    escape = 4;
+                }
+                continue;
+            }
+            4 => {
+                escape = if ch == '\\' { 0 } else { 3 };
+                continue;
+            }
+            _ => {}
+        }
+        if ch == '\x1b' {
+            escape = 1;
+            continue;
+        }
+        if !ch.is_control() || ch == '\n' || ch == '\t' {
+            joined.push(ch);
+        }
+        // Trim while iterating so even a megabyte delta has a bounded preview.
+        if joined.len() > TOOL_ACTIVITY_PREVIEW_BYTES + 256 {
+            let mut start = joined.len() - TOOL_ACTIVITY_PREVIEW_BYTES;
+            while !joined.is_char_boundary(start) {
+                start += 1;
+            }
+            joined.drain(..start);
+        }
+    }
+    if joined.len() > TOOL_ACTIVITY_PREVIEW_BYTES {
+        let mut start = joined.len() - TOOL_ACTIVITY_PREVIEW_BYTES;
+        while !joined.is_char_boundary(start) {
+            start += 1;
+        }
+        joined.drain(..start);
+    }
+    (!joined.trim().is_empty()).then_some(joined)
+}
+
+/// Only type/count metadata enters the synced transcript for rich/private
+/// results. Arguments, result text, URIs, errors and encoded media stay local.
+pub fn rich_tool_output_summary(text: &str, is_error: bool) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    let payload = value.get("lunaToolOutput")?;
+    let kind = payload.get("kind")?.as_str()?;
+    if kind == "unsupported" {
+        return Some("Unsupported item · diagnostic available".into());
+    }
+    if !matches!(kind, "mcp" | "dynamic") {
+        return None;
+    }
+    let blocks = if kind == "mcp" {
+        payload.pointer("/result/content")
+    } else {
+        payload.get("contentItems")
+    };
+    let mut labels = Vec::new();
+    for (label, types) in [
+        ("text", &["text", "inputText"][..]),
+        ("image", &["image", "inputImage"][..]),
+        ("audio", &["audio", "inputAudio"][..]),
+        ("resource", &["resource", "resource_link"][..]),
+    ] {
+        let count = blocks
+            .and_then(serde_json::Value::as_array)
+            .map_or(0, |blocks| {
+                blocks
+                    .iter()
+                    .filter(|block| {
+                        block
+                            .get("type")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|t| types.contains(&t))
+                    })
+                    .count()
+            });
+        if count > 0 {
+            labels.push(format!("{count} {label}"));
+        }
+    }
+    if payload
+        .pointer("/result/structuredContent")
+        .or_else(|| payload.pointer("/result/structured_content"))
+        .is_some_and(|v| !v.is_null())
+    {
+        labels.push("structured content".into());
+    }
+    if payload.get("mcpAppUi").is_some_and(|v| !v.is_null()) {
+        labels.push("app resource".into());
+    }
+    let status = if is_error { "Failed" } else { "Completed" };
+    Some(if labels.is_empty() {
+        format!("{status} · result available")
+    } else {
+        format!("{status} · {}", labels.join(" · "))
+    })
 }
 
 /// Per-file diff stats persisted in place of inline diff text (t3's shape).
@@ -367,6 +499,53 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 });
             }
         }
+        AgentEvent::NativeReview {
+            id,
+            completed,
+            text,
+        } => {
+            let tool_id = format!("{id}:lifecycle");
+            if !completed || !out.iter().any(|part| part.id() == tool_id) {
+                fold_event_into_parts(
+                    out,
+                    &AgentEvent::ToolCall {
+                        id: tool_id.clone(),
+                        call: ToolCall::Unknown {
+                            name: "Native code review".into(),
+                            input: (!completed).then(|| serde_json::json!({ "target": text })),
+                        },
+                    },
+                );
+            }
+            if *completed {
+                fold_event_into_parts(
+                    out,
+                    &AgentEvent::ToolResult {
+                        id: tool_id,
+                        is_error: false,
+                        output: None,
+                        diff: None,
+                    },
+                );
+                let part_id = format!("{id}:findings");
+                let findings = if text.trim().is_empty() {
+                    "Review completed without findings text.".to_string()
+                } else {
+                    format!("### Review findings\n\n{text}")
+                };
+                if let Some(existing) = out.iter_mut().find(|part| part.id() == part_id) {
+                    *existing = MessagePart::Text {
+                        id: part_id,
+                        text: findings,
+                    };
+                } else {
+                    out.push(MessagePart::Text {
+                        id: part_id,
+                        text: findings,
+                    });
+                }
+            }
+        }
         AgentEvent::GeneratedImage {
             id,
             path,
@@ -428,6 +607,40 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 });
             }
         }
+        AgentEvent::ToolActivity { id, kind, text } => {
+            for part in out.iter_mut() {
+                if let MessagePart::Tool {
+                    id: pid,
+                    call,
+                    resolved,
+                    output,
+                    output_bytes,
+                    diff_stats,
+                    ..
+                } = part
+                    && pid == id
+                    && !*resolved
+                {
+                    if *kind == ToolActivityKind::Patch {
+                        if let Ok(diff) = serde_json::from_str::<ToolDiff>(text) {
+                            *diff_stats = Some(vec![diff_stat(&diff)]);
+                            *output = Some("Patch updated".into());
+                        }
+                    } else {
+                        *output_bytes =
+                            Some(output_bytes.unwrap_or(0).saturating_add(text.len() as u64));
+                        if !matches!(
+                            call,
+                            ToolCall::Mcp { .. }
+                                | ToolCall::ComputerUse { .. }
+                                | ToolCall::Unknown { .. }
+                        ) {
+                            *output = activity_tail(output.as_deref(), text, *kind);
+                        }
+                    }
+                }
+            }
+        }
         AgentEvent::ToolResult {
             id,
             is_error,
@@ -448,6 +661,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 } = p
                     && pid == id
                 {
+                    let already_resolved = *resolved;
                     *e = *is_error;
                     *resolved = true;
                     // Preserve a small synced preview for each tool kind;
@@ -458,17 +672,29 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                             | ToolCall::ComputerUse { .. }
                             | ToolCall::Unknown { .. }
                     );
-                    *out_slot = if private_result {
-                        None
-                    } else {
-                        output.as_deref().and_then(summarize_tool_output)
-                    };
-                    *output_bytes = output.as_ref().and_then(|full| {
-                        (private_result || out_slot.as_deref() != Some(full.trim()))
-                            .then_some(full.len() as u64)
-                    });
+                    if let Some(full) = output {
+                        *out_slot = if private_result {
+                            rich_tool_output_summary(full, *is_error)
+                        } else {
+                            summarize_tool_output(full)
+                        };
+                        *output_bytes = if output_bytes.is_some()
+                            || private_result
+                            || out_slot.as_deref() != Some(full.trim())
+                        {
+                            Some(if already_resolved {
+                                output_bytes.unwrap_or(0).max(full.len() as u64)
+                            } else {
+                                output_bytes.unwrap_or(0).saturating_add(full.len() as u64)
+                            })
+                        } else {
+                            None
+                        };
+                    }
                     *diff_slot = None;
-                    *diff_stats = diff.as_ref().map(|d| vec![diff_stat(d)]);
+                    if let Some(diff) = diff {
+                        *diff_stats = Some(vec![diff_stat(diff)]);
+                    }
                 }
             }
         }
@@ -519,7 +745,25 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 message: message.clone(),
             });
         }
-        AgentEvent::Done { error, .. } => {
+        AgentEvent::Done { error, status, .. } => {
+            // An interrupted/failed native review must not retain a running
+            // lifecycle chip or suggest that findings were delivered.
+            if let Some(MessagePart::Tool {
+                resolved, is_error, ..
+            }) = out
+                .iter_mut()
+                .find(|part| part.id() == "native-review:lifecycle")
+                && !*resolved
+            {
+                *resolved = true;
+                *is_error = true;
+                if *status == luna_proto::DoneStatus::Interrupted {
+                    out.push(MessagePart::Text {
+                        id: "native-review:outcome".into(),
+                        text: "Native review interrupted.".into(),
+                    });
+                }
+            }
             if let Some(message) = error {
                 let id = format!("e{}", out.len());
                 out.push(MessagePart::Error {
@@ -623,6 +867,8 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::ProviderCheckpoint { .. }
         | AgentEvent::AvailableCommands { .. }
         | AgentEvent::ProviderTaskChanged { .. }
+        | AgentEvent::ProviderTurnStarted { .. }
+        | AgentEvent::GoalChanged { .. }
         | AgentEvent::ChildStatus { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
@@ -638,7 +884,6 @@ pub fn apply_sidecar_refs(chat_id: &str, parts: &mut [MessagePart]) {
     for part in parts.iter_mut() {
         if let MessagePart::Tool {
             id,
-            resolved: true,
             output_ref,
             output_bytes,
             diff_ref,
@@ -661,7 +906,6 @@ pub fn apply_journal_output_refs(chat_id: &str, parts: &mut [MessagePart]) {
     for part in parts.iter_mut() {
         if let MessagePart::Tool {
             id,
-            resolved: true,
             output_ref,
             output_bytes,
             diff_ref,
@@ -1466,6 +1710,7 @@ mod tests {
             &AgentEvent::Subagent {
                 parent_tool_use_id: "toolu_sub".into(),
                 event: Box::new(AgentEvent::Steered {
+                    user_message_id: None,
                     assistant_message_id: None,
                     next_assistant_message_id: None,
                 }),
@@ -1572,6 +1817,7 @@ mod tests {
         fold_event_into_parts(
             &mut parts,
             &tagged(AgentEvent::Steered {
+                user_message_id: None,
                 assistant_message_id: None,
                 next_assistant_message_id: None,
             }),

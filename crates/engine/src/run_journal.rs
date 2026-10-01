@@ -392,26 +392,107 @@ impl RunJournal {
         part_id: &str,
         diff: bool,
     ) -> Result<Option<String>, JournalError> {
+        self.tool_blob_scoped(chat_id, part_id, diff, None)
+    }
+
+    pub(crate) fn subagent_tool_blob(
+        &self,
+        parent: &str,
+        subdoc: &str,
+        part_id: &str,
+        diff: bool,
+    ) -> Result<Option<String>, JournalError> {
+        self.tool_blob_scoped(parent, part_id, diff, Some(subdoc))
+    }
+
+    fn tool_blob_scoped(
+        &self,
+        chat_id: &str,
+        part_id: &str,
+        diff: bool,
+        subdoc: Option<&str>,
+    ) -> Result<Option<String>, JournalError> {
         let file = match File::open(self.path_for(chat_id)) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
         let mut found = None;
+        let mut activity = String::new();
+        let mut generation = 0u64;
+        let mut found_generation = None;
+        let mut after_done = true;
         for line in BufReader::new(file).lines() {
             let line = line?;
-            if !line.contains(part_id) {
+            if !line.contains(part_id)
+                && !line.contains("\"sessionStarted\"")
+                && !line.contains("\"done\"")
+            {
                 continue;
             }
             if let Ok(parsed) = serde_json::from_str::<JournalLine>(&line) {
-                if diff {
-                    if let Some(value) = tool_result_diff(&parsed.event, part_id) {
-                        found = serde_json::to_string(value).ok();
+                let leaf = if let Some(subdoc) = subdoc {
+                    match &parsed.event {
+                        AgentEvent::Subagent {
+                            parent_tool_use_id,
+                            event,
+                        } if crate::sessions::subagent_doc_id(chat_id, parent_tool_use_id)
+                            == subdoc =>
+                        {
+                            Some(event.as_ref())
+                        }
+                        _ => None,
                     }
-                } else if let Some(output) = tool_result_output(&parsed.event, part_id) {
-                    found = Some(output.to_owned());
+                } else {
+                    Some(&parsed.event)
+                };
+                if matches!(leaf, Some(AgentEvent::Done { .. })) {
+                    after_done = true;
+                }
+                if matches!(leaf, Some(AgentEvent::SessionStarted { .. })) && after_done {
+                    generation = generation.saturating_add(1);
+                    after_done = false;
+                }
+                let event = leaf.and_then(|event| tool_event_for_id(event, part_id));
+                if event.is_some() {
+                    if after_done {
+                        generation = generation.saturating_add(1);
+                        after_done = false;
+                    }
+                    if found_generation.is_some_and(|previous| previous != generation) {
+                        // Reused IDs start a new lifecycle after a root run ends.
+                        // Completion metadata refreshes within a run keep its live history.
+                        found = None;
+                        activity.clear();
+                    }
+                    found_generation = Some(generation);
+                }
+                if let Some(AgentEvent::ToolActivity { kind, text, .. }) = event {
+                    if diff && *kind == luna_proto::ToolActivityKind::Patch {
+                        found = Some(text.clone());
+                    } else if !diff && *kind != luna_proto::ToolActivityKind::Patch {
+                        if *kind == luna_proto::ToolActivityKind::Stdin {
+                            activity.push_str("\n[stdin]\n");
+                        }
+                        activity.push_str(text);
+                    }
+                }
+                if let Some(event) = event {
+                    if diff {
+                        if let Some(value) = tool_result_diff(event, part_id) {
+                            found = serde_json::to_string(value).ok();
+                        }
+                    } else if let Some(output) = tool_result_output(event, part_id) {
+                        found = Some(output.to_owned());
+                    }
                 }
             }
+        }
+        if !diff && !activity.is_empty() {
+            found = Some(match found {
+                Some(output) => format!("{output}\n\n[Live activity received]\n{activity}"),
+                None => activity,
+            });
         }
         Ok(found)
     }
@@ -472,6 +553,19 @@ impl RunJournal {
     }
 }
 
+fn tool_event_for_id<'a>(event: &'a AgentEvent, part_id: &str) -> Option<&'a AgentEvent> {
+    match event {
+        AgentEvent::ToolCall { id, .. }
+        | AgentEvent::ToolResult { id, .. }
+        | AgentEvent::ToolActivity { id, .. }
+            if id == part_id =>
+        {
+            Some(event)
+        }
+        _ => None,
+    }
+}
+
 fn tool_result_output<'a>(event: &'a AgentEvent, part_id: &str) -> Option<&'a str> {
     match event {
         AgentEvent::ToolResult {
@@ -479,7 +573,6 @@ fn tool_result_output<'a>(event: &'a AgentEvent, part_id: &str) -> Option<&'a st
             output: Some(output),
             ..
         } if id == part_id => Some(output),
-        AgentEvent::Subagent { event, .. } => tool_result_output(event, part_id),
         _ => None,
     }
 }
@@ -491,7 +584,6 @@ fn tool_result_diff<'a>(event: &'a AgentEvent, part_id: &str) -> Option<&'a luna
             diff: Some(diff),
             ..
         } if id == part_id => Some(diff),
-        AgentEvent::Subagent { event, .. } => tool_result_diff(event, part_id),
         _ => None,
     }
 }

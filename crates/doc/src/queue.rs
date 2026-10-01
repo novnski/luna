@@ -30,6 +30,8 @@ pub struct QueuedMessage {
     pub id: String,
     /// What the user typed. Never empty — emptying it deletes the row.
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<luna_proto::ComposerInput>,
     /// Committed upload paths, staged at queue time so the row never points at
     /// files that only exist on the device that typed it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -126,7 +128,8 @@ pub enum QueueMessageStatus {
         claimed_at_ms: i64,
     },
     /// The provider acknowledged an explicit steer request, but has not yet
-    /// emitted evidence that the model incorporated it.
+    /// recorded the correlated native user message. Neither state proves
+    /// that a model request has sampled the input.
     SteeringAccepted {
         command_id: String,
         accepted_at_ms: i64,
@@ -170,6 +173,7 @@ impl QueuedMessage {
         issued_by: impl Into<String>,
     ) -> Self {
         Self {
+            input_items: Vec::new(),
             id: id.into(),
             text: text.into(),
             attachments: Vec::new(),
@@ -395,6 +399,17 @@ impl SessionDoc {
         attachments: Option<&[String]>,
         now_ms: i64,
     ) -> Result<bool, DocError> {
+        self.finish_queued_edit_with_inputs(id, replacement, attachments, None, now_ms)
+    }
+
+    pub fn finish_queued_edit_with_inputs(
+        &self,
+        id: &str,
+        replacement: Option<&str>,
+        attachments: Option<&[String]>,
+        input_items: Option<&[luna_proto::ComposerInput]>,
+        now_ms: i64,
+    ) -> Result<bool, DocError> {
         if replacement.is_some_and(|text| text.trim().is_empty()) {
             return self.remove_queued(id);
         }
@@ -421,6 +436,13 @@ impl SessionDoc {
             map.insert(
                 "attachments",
                 crate::schema::loro_value_from_json(&serde_json::to_value(attachments)?),
+            )?;
+            map.insert("editedAt", now_ms)?;
+        }
+        if let Some(input_items) = input_items {
+            map.insert(
+                "inputItems",
+                crate::schema::loro_value_from_json(&serde_json::to_value(input_items)?),
             )?;
             map.insert("editedAt", now_ms)?;
         }
@@ -778,6 +800,12 @@ fn write_queued_map(map: &loro::LoroMap, item: &QueuedMessage) -> Result<(), Doc
             crate::schema::loro_value_from_json(&serde_json::to_value(&item.attachments)?),
         )?;
     }
+    if !item.input_items.is_empty() {
+        map.insert(
+            "inputItems",
+            crate::schema::loro_value_from_json(&serde_json::to_value(&item.input_items)?),
+        )?;
+    }
     if item.hold_for_turn_end {
         map.insert("holdForTurnEnd", true)?;
     }
@@ -826,7 +854,12 @@ fn queued_from_json(v: serde_json::Value) -> Option<QueuedMessage> {
     if text.trim().is_empty() {
         return None;
     }
+    let input_items = match v.get("inputItems") {
+        None => Vec::new(),
+        Some(value) => serde_json::from_value(value.clone()).ok()?,
+    };
     Some(QueuedMessage {
+        input_items,
         id,
         text,
         attachments: v
@@ -905,6 +938,7 @@ mod tests {
 
     fn item(id: &str, text: &str) -> QueuedMessage {
         QueuedMessage {
+            input_items: Vec::new(),
             id: id.into(),
             text: text.into(),
             attachments: Vec::new(),

@@ -1246,9 +1246,16 @@ impl TaskIdentityService {
             )?;
             return Ok(self.view(task_id).expect("task survives reconciliation"));
         }
+        // Only an archived task needs proof that its provider thread is
+        // unarchived; skipping that full-session search keeps cold resume
+        // (always required after a same-chat rewind) well inside the timeout.
+        let chat = self.inner.workspace.chat(task_id)?;
+        let task_archived = chat.as_ref().is_some_and(|chat| chat.archived);
         let observed = match tokio::time::timeout(
             PROVIDER_TIMEOUT,
-            self.inner.codex.observe_thread(&binding.provider_task_id),
+            self.inner
+                .codex
+                .observe_thread_for_task(&binding.provider_task_id, task_archived),
         )
         .await
         {
@@ -1282,7 +1289,8 @@ impl TaskIdentityService {
                     &binding.binding_id,
                     ReconciliationRecord {
                         state: ReconciliationState::Stale,
-                        reason: "provider read timed out".into(),
+                        reason: "provider read timed out; nothing reached the provider, resending retries the read"
+                            .into(),
                         observed_at_ms: now_ms(),
                         provider: binding.reconciliation.provider.clone(),
                     },
@@ -1291,7 +1299,6 @@ impl TaskIdentityService {
             }
         };
         let provider = provider_observation(observed);
-        let chat = self.inner.workspace.chat(task_id)?;
         let mut state = ReconciliationState::Current;
         let mut reason = "provider, task, and environment observations agree".to_string();
         if provider.ephemeral {
@@ -2153,6 +2160,63 @@ impl TaskIdentityService {
         )
     }
 
+    pub(crate) fn rewind_client(
+        &self,
+        task_id: &str,
+        codex_home: &Path,
+        force_file_auth: bool,
+    ) -> Result<CodexNativeClient, EngineError> {
+        self.mutable_codex_binding(task_id)?;
+        Ok(self
+            .inner
+            .codex
+            .for_execution_home(codex_home, force_file_auth))
+    }
+
+    /// Goal changes target the exact accepted binding and execution account.
+    pub async fn goal_operation(
+        &self,
+        task_id: &str,
+        codex_home: &Path,
+        force_file_auth: bool,
+        cwd: &str,
+        operation: &luna_proto::GoalOperation,
+    ) -> Result<luna_proto::GoalReadback, EngineError> {
+        operation
+            .validate()
+            .map_err(|error| EngineError::Other(error.into()))?;
+        let mutable = !matches!(operation, luna_proto::GoalOperation::Get);
+        let binding = self.codex_binding(task_id, mutable)?;
+        let client = self
+            .inner
+            .codex
+            .for_execution_home(codex_home, force_file_auth);
+        let (goal, continuation_ready) = tokio::time::timeout(
+            PROVIDER_TIMEOUT,
+            client.goal_operation(&binding.provider_task_id, cwd, operation),
+        )
+        .await
+        .map_err(|_| {
+            EngineError::Other(
+                "Codex goal operation timed out; read back before making another change".into(),
+            )
+        })?
+        .map_err(EngineError::Harness)?;
+        let current = self.codex_binding(task_id, mutable)?;
+        if current.binding_id != binding.binding_id || current.generation != binding.generation {
+            return Err(EngineError::Other(
+                "Provider binding changed during goal readback".into(),
+            ));
+        }
+        Ok(luna_proto::GoalReadback {
+            thread_id: binding.provider_task_id,
+            binding_generation: binding.generation,
+            goal,
+            checked_at_ms: crate::now_ms(),
+            continuation_ready,
+        })
+    }
+
     pub async fn compact_task(
         &self,
         task_id: &str,
@@ -2176,6 +2240,10 @@ impl TaskIdentityService {
     }
 
     fn mutable_codex_binding(&self, task_id: &str) -> Result<ExecutionBinding, EngineError> {
+        self.codex_binding(task_id, true)
+    }
+
+    fn codex_binding(&self, task_id: &str, mutable: bool) -> Result<ExecutionBinding, EngineError> {
         if !self.inner.native_codex_metadata {
             return Err(EngineError::Other(
                 "provider metadata mutations are disabled for this synthetic runtime".into(),
@@ -2195,7 +2263,7 @@ impl TaskIdentityService {
                 "provider-native mutation is unsupported for this task".into(),
             ));
         }
-        if binding.origin == BindingOrigin::ProviderImported {
+        if mutable && binding.origin == BindingOrigin::ProviderImported {
             return Err(EngineError::Other(
                 "provider-owned import is read-only until explicitly adopted".into(),
             ));

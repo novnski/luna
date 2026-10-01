@@ -3521,6 +3521,7 @@ mod tests {
             .unwrap()
             .to_utc();
         Chat {
+            child_thread: None,
             id: id.into(),
             device_id: "dev".into(),
             title: None,

@@ -74,6 +74,7 @@ use crate::workspace_links::resolve_workspace_file_link;
 mod activity_center;
 mod agents;
 mod command_palette;
+mod native_review;
 mod side_chats;
 mod spaces;
 mod tabs;
@@ -1113,6 +1114,15 @@ struct RenameChatDialog {
 }
 
 /// Confirmation surface for a provider-native independent task fork.
+struct ChildThreadDialog {
+    parent_id: String,
+    key: String,
+    prompt: Entity<ComposerInput>,
+    origin: HistoryEngineOrigin,
+    focus_pending: bool,
+    busy: bool,
+}
+
 struct HistoryForkDialog {
     source_task_id: String,
     boundary: ConversationForkBoundaryKind,
@@ -1172,6 +1182,16 @@ struct EditEarlierMessageDialog {
     origin: HistoryEngineOrigin,
     focus_pending: bool,
     _events: Subscription,
+}
+
+struct ConversationRewindDialog {
+    task_id: String,
+    message_id: String,
+    text: String,
+    snapshot: TaskCommandSnapshot,
+    review: serde_json::Value,
+    origin: HistoryEngineOrigin,
+    pending_rewind: Option<String>,
 }
 
 struct HistoryRecoveryDialog {
@@ -1951,8 +1971,12 @@ pub struct Shell {
     /// Session-row context menu, including the Copy submenu.
     chat_menu: popover::Popup<ChatMenuState>,
     rename_dialog: Option<RenameChatDialog>,
+    native_review_dialog: Option<native_review::NativeReviewDialog>,
+    native_review_task: Option<Task<()>>,
+    child_thread_dialog: Option<ChildThreadDialog>,
     history_fork_dialog: Option<HistoryForkDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
+    conversation_rewind_dialog: Option<ConversationRewindDialog>,
     history_recovery_dialog: Option<HistoryRecoveryDialog>,
     history_flow_generation: u64,
     /// Last AppState runtime identity observed by this shell. Any change
@@ -2434,8 +2458,12 @@ impl Shell {
             appearance_settings_sub: None,
             chat_menu: popover::Popup::default(),
             rename_dialog: None,
+            native_review_dialog: None,
+            native_review_task: None,
+            child_thread_dialog: None,
             history_fork_dialog: None,
             edit_earlier_message_dialog: None,
+            conversation_rewind_dialog: None,
             history_recovery_dialog: None,
             history_flow_generation: 0,
             history_engine_generation,
@@ -3796,6 +3824,18 @@ impl Shell {
                 message_id,
                 boundary,
             } => self.open_history_fork(task_id.clone(), *boundary, Some(message_id.clone()), cx),
+            TranscriptEvent::RewindConversation {
+                task_id,
+                message_id,
+                text,
+            } => {
+                self.open_conversation_rewind(
+                    task_id.clone(),
+                    message_id.clone(),
+                    text.clone(),
+                    cx,
+                );
+            }
             TranscriptEvent::EditEarlierMessage {
                 task_id,
                 message_id,
@@ -5144,9 +5184,12 @@ impl Shell {
     }
 
     fn cancel_history_flow(&mut self, cx: &mut Context<Self>) {
+        self.child_thread_dialog = None;
         self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+        self.native_review_dialog = None;
         self.history_fork_dialog = None;
         self.edit_earlier_message_dialog = None;
+        self.conversation_rewind_dialog = None;
         self.history_recovery_dialog = None;
         cx.notify();
     }
@@ -5411,6 +5454,68 @@ impl Shell {
         }));
     }
 
+    fn open_child_thread_dialog(&mut self, parent_id: String, cx: &mut Context<Self>) {
+        self.close_chat_menu(cx);
+        let origin = HistoryEngineOrigin::capture(self.state.read(cx));
+        let prompt =
+            cx.new(|cx| ComposerInput::with_context("Describe the child task…", "DialogInput", cx));
+        self.child_thread_dialog = Some(ChildThreadDialog {
+            parent_id,
+            key: uuid::Uuid::new_v4().to_string(),
+            prompt,
+            origin,
+            focus_pending: true,
+            busy: false,
+        });
+        cx.notify();
+    }
+
+    fn submit_child_thread(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.child_thread_dialog.as_mut() else {
+            return;
+        };
+        if dialog.busy {
+            return;
+        }
+        let prompt = dialog.prompt.read(cx).text().trim().to_string();
+        if prompt.is_empty() {
+            return;
+        }
+        let state = self.state.read(cx);
+        if !dialog.origin.is_current(state) {
+            self.child_thread_dialog = None;
+            cx.notify();
+            return;
+        }
+        let Some(engine) = state.engine().cloned() else {
+            return;
+        };
+        let origin = dialog.origin;
+        let device = state
+            .chats
+            .iter()
+            .find(|chat| chat.id == dialog.parent_id)
+            .map(|chat| chat.device_id.clone());
+        let params = serde_json::json!({"parentTaskId":dialog.parent_id, "targetDeviceId": device, "request":{"prompt":prompt,"idempotencyKey":dialog.key}});
+        dialog.busy = true;
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine.client().call(methods::CREATE_CHILD_THREAD, params).await;
+            this.update(cx, |shell, cx| {
+                if !origin.is_current(shell.state.read(cx)) { return; }
+                if let Some(dialog) = shell.child_thread_dialog.as_mut() { dialog.busy = false; }
+                match result {
+                    Ok(value) => match serde_json::from_value::<luna_proto::ChildThreadReceipt>(value) {
+                        Ok(receipt) => { shell.child_thread_dialog = None; shell.open_chat(receipt.task_id, cx); }
+                        Err(error) => shell.sidebar_notice = Some(format!("Child receipt could not be read; inspect the child before retrying: {error}").into()),
+                    },
+                    Err(error) => shell.sidebar_notice = Some(error.to_string().into()),
+                }
+                cx.notify();
+            }).ok();
+        }));
+        cx.notify();
+    }
+
     fn submit_history_fork(&mut self, cx: &mut Context<Self>) {
         let Some(dialog) = self.history_fork_dialog.take() else {
             return;
@@ -5447,6 +5552,143 @@ impl Shell {
             dialog.origin,
             cx,
         );
+        cx.notify();
+    }
+
+    fn open_conversation_rewind(
+        &mut self,
+        task_id: String,
+        message_id: String,
+        text: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.cancel_history_flow(cx);
+        let generation = self.history_flow_generation;
+        let (engine, origin, chat, reviewed_text) = {
+            let state = self.state.read(cx);
+            (
+                state.engine().cloned(),
+                HistoryEngineOrigin::capture(state),
+                state.chats.iter().find(|chat| chat.id == task_id).cloned(),
+                state
+                    .transcript
+                    .iter()
+                    .find(|entry| entry.id == message_id)
+                    .map(|entry| {
+                        entry
+                            .parts
+                            .iter()
+                            .filter_map(|part| match part {
+                                luna_doc::MessagePart::Text { text, .. } => Some(text.trim()),
+                                _ => None,
+                            })
+                            .filter(|text| !text.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    }),
+            )
+        };
+        let Some(engine) = engine else {
+            self.sidebar_notice = Some("Engine not connected".into());
+            return;
+        };
+        let Some(chat) = chat else {
+            self.sidebar_notice = Some("Task no longer exists".into());
+            return;
+        };
+        let Some(reviewed_text) = reviewed_text else {
+            self.sidebar_notice =
+                Some("The selected message is no longer in this conversation.".into());
+            return;
+        };
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
+            let read = engine
+                .client()
+                .call_as::<luna_proto::TaskCommandRead>(
+                    methods::GET_TASK_COMMAND_SNAPSHOT,
+                    serde_json::json!({ "taskId": task_id }),
+                )
+                .await;
+            this.update(cx, |shell, cx| {
+                if !history_flow_response_is_live(shell.history_flow_generation, generation) {
+                    return;
+                }
+                if !origin.is_current(shell.state.read(cx)) {
+                    return;
+                }
+                let current = shell
+                    .state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|candidate| candidate.id == chat.id);
+                let unchanged = history_review_profile_unchanged(
+                    &chat.harness_session_id,
+                    &chat.cwd,
+                    &chat.config,
+                    current,
+                );
+                let Ok(read) = read else {
+                    shell.sidebar_notice = Some("Could not review the current task state.".into());
+                    return;
+                };
+                let Some(config) = chat.config.as_ref() else {
+                    shell.sidebar_notice = Some("Task has no provider configuration.".into());
+                    return;
+                };
+                let Some(provider_session_id) = chat.harness_session_id.clone() else {
+                    shell.sidebar_notice = Some("Task has no provider history yet.".into());
+                    return;
+                };
+                let Some(binding_generation) = read.snapshot.binding_generation else {
+                    shell.sidebar_notice = Some("Task binding is not materialized.".into());
+                    return;
+                };
+                if !unchanged {
+                    shell.sidebar_notice =
+                        Some("Task changed while opening the rewind review.".into());
+                    return;
+                }
+                let review = serde_json::json!({
+                    "taskRevision": read.snapshot.task_revision,
+                    "bindingGeneration": binding_generation,
+                    "providerSessionId": provider_session_id,
+                    "providerAccountId": config.provider_account_id,
+                    "cwd": chat.cwd.clone().unwrap_or_else(|| ".".into()),
+                    "messageId": message_id,
+                    "messageText": reviewed_text,
+                });
+                let pending_rewind = shell.state.read(cx).context_control.pending_rewind.clone();
+                shell.conversation_rewind_dialog = Some(ConversationRewindDialog {
+                    task_id: chat.id,
+                    message_id,
+                    text,
+                    snapshot: read.snapshot,
+                    review,
+                    origin,
+                    pending_rewind,
+                });
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    fn submit_conversation_rewind(&mut self, cx: &mut Context<Self>) {
+        let Some(dialog) = self.conversation_rewind_dialog.take() else {
+            return;
+        };
+        if !self.require_history_origin(dialog.origin, cx) {
+            return;
+        }
+        let intent = if let Some(command_id) = dialog.pending_rewind {
+            serde_json::json!({ "kind": "reconcileConversationRewind", "rewindCommandId": command_id })
+        } else {
+            serde_json::json!({ "kind": "rewindConversation", "messageId": dialog.message_id,
+                "keepFiles": true, "review": dialog.review })
+        };
+        self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
+        self.mutate_task_reviewed(dialog.task_id, dialog.snapshot, intent, dialog.origin, cx);
         cx.notify();
     }
 
@@ -9511,7 +9753,20 @@ impl Shell {
             cx.notify();
             return true;
         }
+        if self.native_review_dialog.is_some() {
+            self.cancel_history_flow(cx);
+            return true;
+        }
+        if self.child_thread_dialog.is_some() {
+            self.child_thread_dialog = None;
+            cx.notify();
+            return true;
+        }
         if self.history_fork_dialog.is_some() {
+            self.cancel_history_flow(cx);
+            return true;
+        }
+        if self.conversation_rewind_dialog.is_some() {
             self.cancel_history_flow(cx);
             return true;
         }
@@ -9634,6 +9889,9 @@ impl Shell {
     ) -> Vec<AnyElement> {
         let theme = Theme::of(cx).for_popup();
         let mut overlays: Vec<AnyElement> = Vec::new();
+        if let Some(review) = self.render_native_review(viewport, window, cx) {
+            overlays.push(review);
+        }
 
         if let Some(menu_state) = self.chat_menu.get().cloned() {
             let chat_id = menu_state.chat_id;
@@ -9712,6 +9970,16 @@ impl Shell {
             let read_id = chat_id.clone();
             let settle_id = chat_id.clone();
             let move_project_id = chat_id.clone();
+            let review_task_id = chat_id.clone();
+            let native_review_available = self
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .find(|chat| chat.id == chat_id)
+                .and_then(|chat| chat.config.as_ref())
+                .is_some_and(|config| config.harness == HarnessId::Codex);
+            let child_parent_id = chat_id.clone();
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();
             let recover_task_id = chat_id.clone();
@@ -9724,6 +9992,16 @@ impl Shell {
                 .flex_col();
             let menu = match menu_state.page {
                 ChatMenuPage::Root => menu
+                    .when(!archived, |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-child-{chat_id}"))
+                                .id("chat-menu-child")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_child_thread_dialog(child_parent_id.clone(), cx)
+                                }))
+                                .child(SharedString::from("New child chat…")),
+                        )
+                    })
                     .when(!archived, |menu| {
                         menu.child(
                             popover::menu_row(&theme, false, format!("chat-menu-pin-{chat_id}"))
@@ -9831,6 +10109,21 @@ impl Shell {
                             )
                             .child(SharedString::from("Move to project…")),
                     )
+                    .when(native_review_available && !archived, |menu| {
+                        menu.child(
+                            popover::menu_row(&theme, false, format!("chat-menu-review-{chat_id}"))
+                                .id("chat-menu-review")
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.open_native_review(review_task_id.clone(), cx);
+                                }))
+                                .child(
+                                    icon(icons::GIT_BRANCH)
+                                        .size(px(16.0))
+                                        .text_color(theme.text_muted),
+                                )
+                                .child("Review code…"),
+                        )
+                    })
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-fork-{chat_id}"))
                             .id("chat-menu-fork")
@@ -10070,6 +10363,23 @@ impl Shell {
             overlays.push(popover::modal("rename-chat-dialog", viewport, card));
         }
 
+        if let Some(dialog) = &mut self.child_thread_dialog {
+            if std::mem::take(&mut dialog.focus_pending) {
+                window.focus(&dialog.prompt.focus_handle(cx), cx);
+            }
+            let prompt = dialog.prompt.clone();
+            let busy = dialog.busy;
+            let card = popover::dialog_card(&theme)
+                .child(popover::dialog_title(&theme, "New child chat"))
+                .child(div().mt(px(8.0)).text_xs().text_color(theme.text_muted).child("Fresh context in the parent's existing checkout. Project execution defaults apply within the parent's permission ceiling. Results appear in the parent without starting another turn."))
+                .child(div().mt(px(12.0)).child(popover::dialog_field(prompt.into_any_element())))
+                .child(div().mt(px(12.0)).flex().justify_end().gap(px(8.0))
+                    .child(popover::btn_ghost(&theme, "Cancel", "child-chat-cancel").id("child-chat-cancel").on_click(cx.listener(|this, _, _, cx| { this.child_thread_dialog = None; cx.notify(); })))
+                    .child(popover::btn_primary(&theme, if busy { "Creating…" } else { "Create child" }).id("child-chat-create").on_click(cx.listener(|this, _, _, cx| this.submit_child_thread(cx)))))
+                .into_any_element();
+            overlays.push(popover::modal("child-thread-dialog", viewport, card));
+        }
+
         if let Some(dialog) = &mut self.history_fork_dialog {
             if std::mem::take(&mut dialog.focus_pending) {
                 window.focus(&dialog.title.focus_handle(cx), cx);
@@ -10176,6 +10486,40 @@ impl Shell {
                 )
                 .into_any_element();
             overlays.push(popover::modal("history-fork-dialog", viewport, card));
+        }
+
+        if let Some(dialog) = &self.conversation_rewind_dialog {
+            let pending = dialog.pending_rewind.is_some();
+            let text = dialog.text.chars().take(500).collect::<String>();
+            let card = popover::dialog_card(&theme)
+                .on_key_down(cx.listener(|this, ev: &gpui::KeyDownEvent, _, cx| {
+                    if ev.keystroke.key == "escape" { this.cancel_history_flow(cx); cx.stop_propagation(); }
+                }))
+                .child(popover::dialog_title(&theme, if pending { "Reconcile conversation rewind" } else { "Rewind this conversation" }))
+                .child(div().mt(px(8.0)).text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted)
+                    .child(if pending {
+                        "Read the saved provider history to finish or dismiss the unresolved rewind. Revert will not be sent again. Later LUNA rows stay visible until the retained prefix is verified."
+                    } else {
+                        "Remove this message and every later turn from this same Codex conversation. The provider's removed history cannot be restored by LUNA; an audit snapshot is kept. Your draft, files and external effects are kept."
+                    }))
+                .when(!pending, |card| card.child(div().id("history-rewind-message-preview").mt(px(10.0)).max_h(px(100.0)).overflow_y_scroll()
+                    .text_size(crate::typography::ui_rems(11.0)).child(SharedString::from(text))))
+                .child(div().mt(px(12.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
+                    .child("Files: keep current files. To restore files, review a Git checkpoint separately in Changes. Unsaved files must be saved before restoring."))
+                .child(div().mt(px(16.0)).flex().justify_end().gap(px(8.0))
+                    .child(popover::btn_ghost(&theme, "Cancel", "history-rewind-cancel")
+                        .id("history-rewind-cancel").on_click(cx.listener(|this, _, _, cx| this.cancel_history_flow(cx))))
+                    .when(!pending, |buttons| buttons.child(popover::btn_ghost(&theme, "Preview file checkpoints", "history-rewind-files")
+                        .id("history-rewind-files").on_click(cx.listener(|this, _, _, cx| {
+                            this.cancel_history_flow(cx);
+                            let changes = cx.new(|cx| Changes::new(this.state.clone(), cx));
+                            this.register_diff_surface(changes.clone(), cx);
+                            changes.update(cx, |changes, cx| changes.open_file_checkpoints(cx));
+                        }))))
+                    .child(popover::btn_primary(&theme, if pending { "Reconcile rewind" } else { "Rewind conversation · keep files" })
+                        .id("history-rewind-confirm").on_click(cx.listener(|this, _, _, cx| this.submit_conversation_rewind(cx)))))
+                .into_any_element();
+            overlays.push(popover::modal("history-rewind-dialog", viewport, card));
         }
 
         if let Some(dialog) = &mut self.edit_earlier_message_dialog {
@@ -10837,8 +11181,50 @@ impl Shell {
             self.transcript
                 .update(cx, |transcript, cx| transcript.finish_route_exit(cx));
         }
+        let parent_navigation = self
+            .state
+            .read(cx)
+            .selected_chat_row()
+            .and_then(|chat| {
+                chat.child_thread
+                    .as_ref()
+                    .map(|child| child.parent_task_id.clone())
+            })
+            .and_then(|id| {
+                self.state
+                    .read(cx)
+                    .chats
+                    .iter()
+                    .find(|chat| chat.id == id)
+                    .map(|chat| {
+                        (
+                            id,
+                            chat.title.clone().unwrap_or_else(|| "Parent chat".into()),
+                        )
+                    })
+            });
         let outlet: AnyElement = if has_selection || departing_transcript {
             div()
+                .flex()
+                .flex_col()
+                .when_some(parent_navigation, |el, (parent_id, title)| {
+                    el.child(
+                        div()
+                            .id("child-parent-navigation")
+                            .role(gpui::Role::Button)
+                            .aria_label("Open parent chat")
+                            .h(px(26.0))
+                            .flex_none()
+                            .px(px(16.0))
+                            .cursor_pointer()
+                            .text_xs()
+                            .text_color(theme.text_muted)
+                            .child(format!("↑ {title}"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_chat(parent_id.clone(), cx)
+                            })),
+                    )
+                })
                 .relative()
                 .size_full()
                 .overflow_hidden()
@@ -13764,6 +14150,7 @@ mod tests {
 
     fn history_chat(session: &str, cwd: &str, permission_mode: PermissionMode) -> luna_proto::Chat {
         luna_proto::Chat {
+            child_thread: None,
             id: "history-task".into(),
             device_id: "device".into(),
             title: None,
@@ -15356,6 +15743,7 @@ mod exit_regressions {
         text: &str,
     ) -> ComposerDraft {
         ComposerDraft {
+            input_items: Vec::new(),
             version: luna_proto::COMPOSER_DRAFT_VERSION,
             draft_id: draft_id.into(),
             task_id: task_id.map(str::to_string),

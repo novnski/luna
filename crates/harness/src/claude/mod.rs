@@ -472,6 +472,7 @@ impl Harness for ClaudeHarness {
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
+        request.input_items.clear();
         request.model_options.clear();
         request.auto_approve = false;
         self.run_with_mode(request, controls, true).await
@@ -906,6 +907,7 @@ async fn run_session(session: Session) {
                         // boundary/follow-up behavior.
                         let (prev, next) = norm.rotate_for_steer();
                         let ev = AgentEvent::Steered {
+                            user_message_id: None,
                             assistant_message_id: Some(prev),
                             next_assistant_message_id: Some(next),
                         };
@@ -1019,6 +1021,7 @@ fn handle_control_request(
                 question: format!("{summary}. Target: {}.", permission_policy.machine_name),
                 options: vec!["Deny".into(), "Allow once".into(), "Cancel".into()],
                 multi_select: false,
+                mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: req.request_id.clone(),
                     provider: HarnessId::ClaudeCode,
@@ -1037,6 +1040,7 @@ fn handle_control_request(
                         .as_millis() as i64
                         + 120_000,
                     supports_task_allowance: false,
+                    details: None,
                 }),
             };
             let allowed = tokio::time::timeout(
@@ -1122,6 +1126,7 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
                             .into(),
                     })
                     .collect(),
+                mcp: None,
                 approval: None,
             }
         })

@@ -27,6 +27,11 @@ read -r line || exit 1
 read -r line || exit 1
 emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"audit-thread\"}}}"
 read -r line || exit 1
+case "$line" in *'"method":"thread/goal/get"'*)
+  # Startup goal readback (installed 0.159 ThreadGoalGetResponse).
+  emit "{\"id\":$(rid "$line"),\"result\":{\"goal\":null}}"
+  read -r line || exit 1 ;;
+esac
 [ "$mode" != first ] || block
 emit "{\"id\":$(rid "$line"),\"result\":{\"turn\":{\"id\":\"audit-turn\"}}}"
 if [ "$mode" = followup ]; then
@@ -97,6 +102,8 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
         }),
     };
     let mut request = RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt: "disposable QA".into(),
         harness: None,
         provider_account_id: None,
@@ -143,6 +150,8 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
         acceptance = Some(rx);
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: if mode == "claude" {
                     "x".repeat(4 * 1024 * 1024)
                 } else {
@@ -231,9 +240,12 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
         assert!(dispatch.contains("turn/steer"));
     }
     if mode == "lost-steer" {
+        // Steering's exact-ID reconciliation may read thread state after the
+        // lost ACK. Only a second dispatch of the input is a replay.
+        eprintln!("lost-steer lines after the lost reply: {replayed:?}");
         assert!(
-            !home.path().join("replayed").exists(),
-            "uncertain steer was dispatched a second time"
+            !replayed.contains("\"turn/steer\"") && !replayed.contains("\"turn/start\""),
+            "uncertain steer was dispatched a second time: {replayed}"
         );
     }
 }

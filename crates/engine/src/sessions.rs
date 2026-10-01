@@ -60,6 +60,74 @@ pub struct JournaledEvent {
     pub event: AgentEvent,
 }
 
+/// Transport previews are bounded independently of retained host payloads.
+fn tool_event_preview(event: &AgentEvent) -> AgentEvent {
+    fn cap(text: &str, limit: usize) -> String {
+        if text.len() <= limit {
+            return text.to_owned();
+        }
+        let mut end = limit;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{}\n… [preview limited; full received output is on the host]",
+            &text[..end]
+        )
+    }
+    fn diff_preview(diff: &luna_proto::ToolDiff) -> luna_proto::ToolDiff {
+        luna_proto::ToolDiff {
+            path: diff.path.clone(),
+            old_text: diff.old_text.as_deref().map(|t| cap(t, 64 * 1024)),
+            new_text: cap(&diff.new_text, 64 * 1024),
+            unified_diff: diff.unified_diff.as_deref().map(|t| cap(t, 64 * 1024)),
+        }
+    }
+    match event {
+        AgentEvent::ToolCall { id, call } => AgentEvent::ToolCall {
+            id: id.clone(),
+            call: sanitize_tool_call(call),
+        },
+        AgentEvent::ToolResult {
+            id,
+            is_error,
+            output,
+            diff,
+        } => AgentEvent::ToolResult {
+            id: id.clone(),
+            is_error: *is_error,
+            output: output.as_deref().map(|t| {
+                luna_doc::rich_tool_output_summary(t, *is_error)
+                    .unwrap_or_else(|| cap(t, 64 * 1024))
+            }),
+            diff: diff.as_ref().map(diff_preview),
+        },
+        AgentEvent::ToolActivity { id, kind, text } => {
+            let text = if *kind == luna_proto::ToolActivityKind::Patch {
+                serde_json::from_str::<luna_proto::ToolDiff>(text)
+                    .ok()
+                    .and_then(|d| serde_json::to_string(&diff_preview(&d)).ok())
+                    .unwrap_or_default()
+            } else {
+                cap(text, luna_doc::TOOL_ACTIVITY_PREVIEW_BYTES)
+            };
+            AgentEvent::ToolActivity {
+                id: id.clone(),
+                kind: *kind,
+                text,
+            }
+        }
+        AgentEvent::Subagent {
+            parent_tool_use_id,
+            event,
+        } => AgentEvent::Subagent {
+            parent_tool_use_id: parent_tool_use_id.clone(),
+            event: Box::new(tool_event_preview(event)),
+        },
+        _ => event.clone(),
+    }
+}
+
 /// Outcome of a steer attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SteerOutcome {
@@ -119,6 +187,7 @@ enum PendingInputKind {
 
 #[derive(Debug)]
 struct LunaSendProposal {
+    child_request: Option<luna_proto::CreateChildThreadRequest>,
     request_id: String,
     claim: ClaimedProviderCall,
     fence: crate::cross_task_tools::ApprovedSendFence,
@@ -128,6 +197,41 @@ struct LunaSendProposal {
 
 impl LunaSendProposal {
     fn question(&self) -> UserInputQuestion {
+        if let Some(request) = &self.child_request {
+            return UserInputQuestion {
+                id: format!("question-{}", self.request_id),
+                header: "LUNA approval".into(),
+                question: format!(
+                    "Create a fresh persistent child {} under {} in project {} on {}?\nExisting checkout: {}\nModel: {:?}; reasoning: {:?}; title: {:?}\nResults: {}; queue parent continuation: {}. Permissions are capped by the parent. Only the explicit prompt is copied.\n\n{}",
+                    self.fence.request.task_id,
+                    self.claim.source_task_id,
+                    self.project_id,
+                    self.environment_id,
+                    request.cwd.as_deref().unwrap_or("parent checkout"),
+                    request.model,
+                    request.reasoning,
+                    request.title,
+                    request.report_results,
+                    request.continue_parent,
+                    request.prompt
+                ),
+                options: vec!["Deny".into(), "Allow once".into()],
+                multi_select: false,
+                mcp: None,
+                approval: Some(luna_proto::ApprovalRequest {
+                    provider_request_id: self.claim.provider_call_id.clone(),
+                    provider: HarnessId::Codex,
+                    turn_id: Some(self.claim.provider_turn_id.clone()),
+                    machine_name: self.environment_id.clone(),
+                    action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
+                    summary: "Create a persistent child chat".into(),
+                    requested_scope: luna_proto::PermissionScope::Workspace,
+                    expires_at_ms: self.fence.expires_at_ms,
+                    supports_task_allowance: false,
+                    details: None,
+                }),
+            };
+        }
         UserInputQuestion {
             id: format!("question-{}", self.request_id),
             header: "LUNA approval".into(),
@@ -142,6 +246,7 @@ impl LunaSendProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.claim.provider_call_id.clone(),
                 provider: HarnessId::Codex,
@@ -152,6 +257,7 @@ impl LunaSendProposal {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.fence.expires_at_ms,
                 supports_task_allowance: false,
+                details: None,
             }),
         }
     }
@@ -200,6 +306,7 @@ impl LunaSyntheticArchiveProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.source_call_id.clone(),
                 provider: HarnessId::Codex,
@@ -210,6 +317,7 @@ impl LunaSyntheticArchiveProposal {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.expires_at_ms,
                 supports_task_allowance: false,
+                details: None,
             }),
         }
     }
@@ -316,6 +424,43 @@ pub enum LunaApprovalOutcome {
 
 type PendingInputs = Arc<Mutex<HashMap<String, PendingInput>>>;
 
+// Adapter cancellation closes the receiver. Remove the corresponding UI
+// prompt promptly, including when the provider finishes a turn or disconnects.
+fn schedule_mcp_input_cleanup(
+    pending: PendingInputs,
+    engine_tx: mpsc::UnboundedSender<AgentEvent>,
+    request_id: String,
+    questions: &[UserInputQuestion],
+) {
+    let Some(expires_at_ms) = questions
+        .iter()
+        .filter_map(|q| q.mcp.as_ref().map(|m| m.expires_at_ms))
+        .min()
+    else {
+        return;
+    };
+    let pending = Arc::downgrade(&pending);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let Some(pending) = pending.upgrade() else {
+                break;
+            };
+            let invalid = {
+                let map = lock(&pending);
+                let Some(input) = map.get(&request_id) else {
+                    break;
+                };
+                input.resolver.is_closed() || now_ms() >= expires_at_ms
+            };
+            if invalid {
+                expire_pending_approval(&pending, &engine_tx, &request_id);
+                break;
+            }
+        }
+    });
+}
+
 fn schedule_approval_expiry(
     pending: PendingInputs,
     engine_tx: mpsc::UnboundedSender<AgentEvent>,
@@ -334,9 +479,36 @@ fn schedule_approval_expiry(
     else {
         return;
     };
+    let native_choices = questions.iter().any(|question| {
+        question
+            .approval
+            .as_ref()
+            .is_some_and(|approval| approval.details.is_some())
+    });
     tokio::spawn(async move {
         let delay_ms = expires_at_ms.saturating_sub(now_ms()).max(0) as u64;
-        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        if native_choices {
+            // The adapter closes its answer receiver on remote resolution or
+            // turn replacement. Retire that exact UI request promptly too.
+            let deadline = tokio::time::sleep(std::time::Duration::from_millis(delay_ms));
+            tokio::pin!(deadline);
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => break,
+                    _ = interval.tick() => {
+                        let closed = lock(&pending).get(&request_id).map(|input| input.resolver.is_closed());
+                        match closed {
+                            None => return,
+                            Some(true) => break,
+                            Some(false) => {},
+                        }
+                    }
+                }
+            }
+        } else {
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+        }
         expire_pending_approval(&pending, &engine_tx, &request_id);
     });
 }
@@ -488,7 +660,12 @@ impl RuntimeConfig {
             provider_account_id: request.provider_account_id.clone(),
             model: request.model.clone(),
             reasoning: request.reasoning,
-            model_options: request.model_options.clone(),
+            model_options: request
+                .model_options
+                .iter()
+                .filter(|(key, _)| key.as_str() != luna_harness::codex::LUNA_STEER_RECONCILE_OPTION)
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
             cwd: request.cwd.clone(),
             sandbox: request.sandbox,
             auto_approve: request.auto_approve,
@@ -498,7 +675,12 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        request.attachments.is_empty() && self == &Self::from_request(harness_id, request)
+        // Codex's warm mailbox carries typed inputs and attachments; other
+        // harnesses take text only. Native review targets require a fresh
+        // adapter dispatch (resuming the same binding) at a safe boundary.
+        request.review.is_none()
+            && (harness_id == HarnessId::Codex || request.attachments.is_empty())
+            && self == &Self::from_request(harness_id, request)
     }
 }
 
@@ -628,6 +810,7 @@ impl LunaProspectiveInterruptProposal {
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: evidence.claim.provider_call_id.clone(),
                 provider: HarnessId::Codex,
@@ -641,6 +824,7 @@ impl LunaProspectiveInterruptProposal {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: self.expires_at_ms,
                 supports_task_allowance: false,
+                details: None,
             }),
         }
     }
@@ -861,11 +1045,13 @@ impl RunHandle {
 }
 
 /// One accepted-but-unconfirmed steer. `delivery` decides whether run exit may
-/// re-dispatch it (ordinary warm route) or must preserve it as unknown
-/// (explicit native steer).
+/// re-dispatch it (legacy warm route) or must preserve it as unknown.
+/// Codex correlation IDs never authorize automatic replay.
 #[derive(Debug, Clone)]
 struct RoutedSteer {
     prompt: String,
+    attachments: Vec<String>,
+    input_items: Vec<luna_proto::ComposerInput>,
     message_id: String,
     delivery: luna_harness::SteerDelivery,
 }
@@ -881,6 +1067,11 @@ struct Inner {
     doc_host: Mutex<Option<DocHost>>,
     /// chat_id → live run.
     runs: Mutex<HashMap<String, RunHandle>>,
+    /// Dispatches between run-ticket admission and run registration. Shutdown
+    /// waits for them so a run registered after its first sweep (for example
+    /// a queue drain already in flight) is still interrupted instead of
+    /// outliving the engine with its device-write ticket and InstanceLock.
+    dispatches_in_flight: std::sync::atomic::AtomicUsize,
     /// Serializes runtime replacement/start with permission-mode mutation for
     /// one chat. Without this, an async idle retirement can cancel a fresh run
     /// that started after the mutation returned.
@@ -931,6 +1122,22 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Counts one `dispatch_inner` call until it returns or is dropped.
+struct DispatchInFlight<'a>(&'a Inner);
+
+impl<'a> DispatchInFlight<'a> {
+    fn enter(inner: &'a Inner) -> Self {
+        inner.dispatches_in_flight.fetch_add(1, Ordering::AcqRel);
+        Self(inner)
+    }
+}
+
+impl Drop for DispatchInFlight<'_> {
+    fn drop(&mut self) {
+        self.0.dispatches_in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 #[derive(Clone)]
 pub struct SessionsEngine {
     inner: Arc<Inner>,
@@ -957,6 +1164,7 @@ impl SessionsEngine {
                 statuses: Mutex::new(HashMap::new()),
                 sessions_tx,
                 recovery_tasks: Mutex::new(HashMap::new()),
+                dispatches_in_flight: std::sync::atomic::AtomicUsize::new(0),
                 recovery_settings_path: Mutex::new(None),
                 last_requests: Mutex::new(HashMap::new()),
                 harness_sessions: Mutex::new(HashMap::new()),
@@ -1011,11 +1219,23 @@ impl SessionsEngine {
         {
             return Err(EngineError::Other("invalid tool output ref".into()));
         }
-        if let Some(part_id) = part_id.strip_suffix(".diff") {
-            Ok(self.inner.journal.tool_diff(chat_id, part_id)?)
+        let (part_id, diff) = part_id
+            .strip_suffix(".diff")
+            .map_or((part_id, false), |id| (id, true));
+        let output = if diff {
+            self.inner.journal.tool_diff(chat_id, part_id)?
         } else {
-            Ok(self.inner.journal.tool_output(chat_id, part_id)?)
+            self.inner.journal.tool_output(chat_id, part_id)?
+        };
+        if output.is_none()
+            && let Some((parent, _)) = chat_id.split_once("--sub--")
+        {
+            return Ok(self
+                .inner
+                .journal
+                .subagent_tool_blob(parent, chat_id, part_id, diff)?);
         }
+        Ok(output)
     }
 
     /// Bind generated-image intake to the same profile store used by attachment RPCs.
@@ -1349,12 +1569,33 @@ impl SessionsEngine {
         {
             return Err(fail(CrossTaskError::Scope));
         }
-        let request: CrossTaskSendRequest = serde_json::from_value(invocation.arguments)
-            .map_err(|_| fail(CrossTaskError::Input))?;
-        // The complete text appears in the local approval question.
+        let child_request = if invocation.name == "create_thread" {
+            let request: luna_proto::CreateChildThreadRequest =
+                serde_json::from_value(invocation.arguments.clone())
+                    .map_err(|_| fail(CrossTaskError::Input))?;
+            crate::cross_task_tools::validate_child_request(&request).map_err(fail)?;
+            Some(request)
+        } else {
+            None
+        };
+        let request: CrossTaskSendRequest = if let Some(child) = &child_request {
+            CrossTaskSendRequest {
+                task_id: crate::cross_task_tools::child_task_id(chat_id, &child.idempotency_key),
+                message: child.prompt.clone(),
+                mode: CrossTaskSendMode::Queue,
+                idempotency_key: child.idempotency_key.clone(),
+            }
+        } else {
+            serde_json::from_value(invocation.arguments).map_err(|_| fail(CrossTaskError::Input))?
+        };
         if request.mode != CrossTaskSendMode::Queue
             || request.message.trim().is_empty()
-            || request.message.chars().count() > crate::cross_task_tools::MAX_APPROVED_MESSAGE_CHARS
+            || request.message.chars().count()
+                > if child_request.is_some() {
+                    crate::cross_task_tools::MAX_CHILD_PROMPT_CHARS
+                } else {
+                    crate::cross_task_tools::MAX_APPROVED_MESSAGE_CHARS
+                }
             || request.idempotency_key.is_empty()
             || request.idempotency_key.len() > 128
             || !request
@@ -1376,29 +1617,54 @@ impl SessionsEngine {
             )
             .await
             .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
-        let evidence = self
-            .prepare_luna_control_evidence(claim, &authority, &request.task_id)
-            .await
-            .map_err(fail)?;
+        let (claim, target_snapshot, project_id, environment_id) =
+            if let Some(child) = &child_request {
+                let snapshot = backend
+                    .child_creation_snapshot(child, &authority)
+                    .await
+                    .map_err(fail)?;
+                (
+                    claim,
+                    snapshot,
+                    contract
+                        .context
+                        .project_id
+                        .clone()
+                        .ok_or_else(|| fail(CrossTaskError::TargetScope))?,
+                    contract.context.environment_id.clone(),
+                )
+            } else {
+                let evidence = self
+                    .prepare_luna_control_evidence(claim, &authority, &request.task_id)
+                    .await
+                    .map_err(fail)?;
+                (
+                    evidence.claim,
+                    evidence.target_snapshot,
+                    evidence.source_project_id,
+                    evidence.source_environment_id,
+                )
+            };
         let expires_at_ms = now_ms().saturating_add(30_000);
         let fence = ApprovedSendFence {
-            source_task_id: evidence.claim.source_task_id.clone(),
-            source_run_id: evidence.claim.source_run_id.clone(),
-            source_binding_id: evidence.claim.source_binding.binding_id.clone(),
-            source_binding_generation: evidence.claim.source_binding.generation,
-            source_provider_thread_id: evidence.claim.source_binding.provider_thread_id.clone(),
-            source_provider_turn_id: evidence.claim.provider_turn_id.clone(),
-            source_provider_call_id: evidence.claim.provider_call_id.clone(),
-            target_snapshot: evidence.target_snapshot,
+            source_task_id: claim.source_task_id.clone(),
+            source_run_id: claim.source_run_id.clone(),
+            source_binding_id: claim.source_binding.binding_id.clone(),
+            source_binding_generation: claim.source_binding.generation,
+            source_provider_thread_id: claim.source_binding.provider_thread_id.clone(),
+            source_provider_turn_id: claim.provider_turn_id.clone(),
+            source_provider_call_id: claim.provider_call_id.clone(),
+            target_snapshot,
             request: request.clone(),
             expires_at_ms,
         };
         let proposal = LunaSendProposal {
+            child_request: child_request.clone(),
             request_id: new_id(),
-            claim: evidence.claim,
+            claim,
             fence,
-            project_id: evidence.source_project_id,
-            environment_id: evidence.source_environment_id,
+            project_id,
+            environment_id,
         };
         let request_id = proposal.request_id.clone();
         let question = proposal.question();
@@ -1449,6 +1715,17 @@ impl SessionsEngine {
         expire_pending_approval(&pending, &engine_tx, &request_id);
         let fence = grant.map_err(fail)?;
         self.with_live_approved_send(&fence, || Ok(()))?;
+        if let Some(child) = child_request {
+            let child_fence = crate::cross_task_tools::ApprovedChildFence {
+                source: fence,
+                request: child.clone(),
+            };
+            let receipt = backend
+                .create_child(child, &authority, &child_fence)
+                .await
+                .map_err(fail)?;
+            return serde_json::to_value(receipt).map_err(Into::into);
+        }
         let tools = CrossTaskTools::new(backend);
         tools
             .revalidate_control_target_snapshot(
@@ -2351,11 +2628,33 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
     ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        self.release_idle_native_writer(chat_id, "archiving", "archive")
+            .await
+    }
+
+    /// Same-chat rewind mutates the provider thread through a separate native
+    /// client. A parked warm runtime still holds the pre-rewind history in
+    /// memory and would continue from it, so release it first and keep
+    /// dispatch excluded through the revert and its projection commit.
+    pub(crate) async fn prepare_native_rewind(
+        &self,
+        chat_id: &str,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        self.release_idle_native_writer(chat_id, "rewinding", "rewind")
+            .await
+    }
+
+    async fn release_idle_native_writer(
+        &self,
+        chat_id: &str,
+        gerund: &str,
+        operation: &str,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
         let transition = self.transition_gate(chat_id).lock_owned().await;
         if self.active_turn_id(chat_id).is_some() {
-            return Err(EngineError::Other(
-                "The task has an active or pending turn; stop it before archiving.".into(),
-            ));
+            return Err(EngineError::Other(format!(
+                "The task has an active or pending turn; stop it before {gerund}."
+            )));
         }
         let closing = {
             let mut runs = lock(&self.inner.runs);
@@ -2378,13 +2677,13 @@ impl SessionsEngine {
                 }
             })
             .await
-            .map_err(|_| EngineError::Other(
-                "The idle native writer did not close before the archive deadline; archive was not attempted.".into(),
-            ))?;
+            .map_err(|_| EngineError::Other(format!(
+                "The idle native writer did not close before the {operation} deadline; {operation} was not attempted.",
+            )))?;
             if !closed.load(Ordering::Acquire) {
-                return Err(EngineError::Other(
-                    "The native runtime ended without confirmed idle stream closure; archive was not attempted.".into(),
-                ));
+                return Err(EngineError::Other(format!(
+                    "The native runtime ended without confirmed idle stream closure; {operation} was not attempted.",
+                )));
             }
         }
         Ok(transition)
@@ -2657,7 +2956,10 @@ impl SessionsEngine {
             .journal
             .replay(chat_id, after_seq)?
             .into_iter()
-            .map(|(seq, event)| JournaledEvent { seq, event })
+            .map(|(seq, event)| JournaledEvent {
+                seq,
+                event: tool_event_preview(&event),
+            })
             .collect();
         Ok((replay, rx))
     }
@@ -2855,6 +3157,13 @@ impl SessionsEngine {
         recovery: Option<RecoveryAttemptContext>,
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
+        let _in_flight = DispatchInFlight::enter(&self.inner);
+        if !request.input_items.is_empty() && harness_id != HarnessId::Codex {
+            return Err(EngineError::Other("Native plugin, app and skill selections require Codex. Keep the draft and choose Codex or remove the selections.".into()));
+        }
+        if harness_id == HarnessId::Codex {
+            luna_harness::validate_composer_inputs(&request.attachments, &request.input_items)?;
+        }
         if recovery.is_some()
             && self
                 .inner
@@ -2865,6 +3174,24 @@ impl SessionsEngine {
             return Err(EngineError::Other(
                 "Side chat recovery never replays a send".into(),
             ));
+        }
+        if let Some(review) = request.review.as_ref() {
+            if harness_id != HarnessId::Codex {
+                return Err(EngineError::Other(
+                    "Native code review requires Codex".into(),
+                ));
+            }
+            review.target.validate().map_err(EngineError::Other)?;
+            if self.turn_in_flight(chat_id) {
+                return Err(EngineError::Other(
+                    "Wait for the active turn to finish before starting a native review".into(),
+                ));
+            }
+            if !request.attachments.is_empty() || request.worktree.is_some() {
+                return Err(EngineError::Other(
+                    "A native review uses the task's existing checkout without attachments".into(),
+                ));
+            }
         }
         // A run owns one ticket for its entire lifetime, including parked
         // persistent sessions. Acquire before account/chat gates and before
@@ -2879,6 +3206,29 @@ impl SessionsEngine {
         let _account_transition = self.inner.account_transition.lock().await;
         let transition_gate = self.transition_gate(chat_id);
         let _transition = transition_gate.lock().await;
+        if request.review.is_some() && self.turn_in_flight(chat_id) {
+            return Err(EngineError::Other(
+                "Wait for the active turn to finish before starting a native review".into(),
+            ));
+        }
+        if request.review.is_some()
+            && let Some(workspace) = self.inner.workspace()
+        {
+            let chat = workspace
+                .chat(chat_id)?
+                .ok_or_else(|| EngineError::Other("Review task is unavailable".into()))?;
+            let config = chat.config.ok_or_else(|| {
+                EngineError::Other("Review task has no provider configuration".into())
+            })?;
+            if config.harness != HarnessId::Codex
+                || config.provider_account_id != request.provider_account_id
+                || chat.cwd.as_deref() != Some(request.cwd.as_str())
+            {
+                return Err(EngineError::Other(
+                    "Review account or checkout changed; reopen the review picker".into(),
+                ));
+            }
+        }
         if self.inner.recovery.workspace_repair_revision(chat_id)? != workspace_repair_revision {
             return Err(EngineError::Other("Workspace association changed after dispatch admission; review and submit a new message.".into()));
         }
@@ -2909,6 +3259,11 @@ impl SessionsEngine {
             .model_options
             .remove(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION);
         let context_control = self.doc_handle(chat_id)?.doc().context_control();
+        if context_control.pending_rewind.is_some() {
+            return Err(EngineError::Other(
+                "Conversation rewind is unresolved. Reconcile its provider history before sending another turn.".into(),
+            ));
+        }
         if context_control.compact.blocks_new_turn() {
             return Err(EngineError::Other(
                 context_control
@@ -2919,6 +3274,9 @@ impl SessionsEngine {
                             .into()
                     }),
             ));
+        }
+        if request.review.is_some() && context_control.pending_handoff.is_some() {
+            return Err(EngineError::Other("Send the pending context handoff in an ordinary turn before starting a native review".into()));
         }
         if let Some(handoff) = context_control.pending_handoff.as_ref()
             && !request
@@ -3016,6 +3374,26 @@ impl SessionsEngine {
                 format!("{harness_id:?}").to_lowercase()
             )));
         }
+        let child = self
+            .inner
+            .workspace()
+            .and_then(|workspace| workspace.chat(chat_id).ok().flatten())
+            .and_then(|chat| chat.child_thread);
+        if let Some(child) = &child {
+            let current_parent_ceiling = self
+                .inner
+                .workspace()
+                .and_then(|workspace| workspace.chat(&child.parent_task_id).ok().flatten())
+                .and_then(|parent| parent.config)
+                .map(|config| config.effective_permission_mode)
+                .unwrap_or(child.permission_ceiling);
+            let ceiling = std::cmp::min(child.permission_ceiling, current_parent_ceiling);
+            request.parent_permission_ceiling = Some(
+                request
+                    .parent_permission_ceiling
+                    .map_or(ceiling, |requested| std::cmp::min(requested, ceiling)),
+            );
+        }
         // Side conversations preserve even a legacy stricter sandbox. The
         // ordinary resolver intentionally derives sandbox from product mode;
         // carrying a parent's ReadOnly value through that resolver would
@@ -3026,7 +3404,8 @@ impl SessionsEngine {
             .side_chat_lookup
             .get()
             .filter(|lookup| lookup(chat_id))
-            .map(|_| request.sandbox);
+            .map(|_| request.sandbox)
+            .or_else(|| child.as_ref().and_then(|child| child.sandbox_ceiling));
         if side_sandbox == Some(SandboxLevel::ReadOnly) {
             if !matches!(harness_id, HarnessId::Codex | HarnessId::Mock) {
                 return Err(EngineError::Other(
@@ -3150,6 +3529,8 @@ impl SessionsEngine {
                 // Register acceptance before a fast boundary can retire it.
                 let mut pending = lock(&ledger);
                 let message = SteerMessage {
+                    input_items: request.input_items.clone(),
+                    attachments: request.attachments.clone(),
                     prompt: request.prompt.clone(),
                     message_id: Some(user_id.clone()),
                     delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -3157,6 +3538,8 @@ impl SessionsEngine {
                 };
                 if steer_tx.try_send(message).is_ok() {
                     pending.push_back(RoutedSteer {
+                        attachments: request.attachments.clone(),
+                        input_items: request.input_items.clone(),
                         prompt: request.prompt.clone(),
                         message_id: user_id.clone(),
                         delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -3180,6 +3563,11 @@ impl SessionsEngine {
                     self.set_status(chat_id, SessionStatus::Working, false);
                     self.inner.note_message(chat_id, &request.prompt);
                     return Ok(run_id);
+                }
+                if harness_id == HarnessId::Codex {
+                    return Err(EngineError::Other(
+                        "Native steering delivery is unknown after runtime exit; reconcile provider history before retrying. Input was not replayed.".into(),
+                    ));
                 }
                 // The run died around the send. If its exit drain already
                 // claimed the entry, that re-dispatch owns the message —
@@ -3291,6 +3679,28 @@ impl SessionsEngine {
                 format!("[LUNA] {title}").into(),
             );
         }
+        if harness_id == HarnessId::Codex && request.resume.is_some() {
+            let ids = handle
+                .doc()
+                .read_queue()?
+                .into_iter()
+                .filter(|row| {
+                    matches!(
+                        row.status,
+                        luna_doc::QueueMessageStatus::Claimed { .. }
+                            | luna_doc::QueueMessageStatus::SteeringAccepted { .. }
+                            | luna_doc::QueueMessageStatus::DeliveryUnknown { .. }
+                    )
+                })
+                .map(|row| row.id)
+                .collect::<Vec<_>>();
+            if !ids.is_empty() {
+                request.model_options.insert(
+                    luna_harness::codex::LUNA_STEER_RECONCILE_OPTION.into(),
+                    serde_json::json!(ids),
+                );
+            }
+        }
         lock(&self.inner.last_requests).insert(chat_id.to_string(), request.clone());
 
         let run_id = new_id();
@@ -3315,10 +3725,24 @@ impl SessionsEngine {
                         resolver: tx,
                     },
                 );
+                // The full URL stays only in the live pending resolver. Strip
+                // it even from in-memory events before journal/doc projection.
+                let mut visible_questions = questions.clone();
+                for question in &mut visible_questions {
+                    if let Some(meta) = &mut question.mcp {
+                        meta.launch_url = None;
+                    }
+                }
                 let _ = engine_tx.send(AgentEvent::InputRequested {
                     request_id: request_id.clone(),
-                    questions: questions.clone(),
+                    questions: visible_questions,
                 });
+                schedule_mcp_input_cleanup(
+                    pending.clone(),
+                    engine_tx.clone(),
+                    request_id.clone(),
+                    &questions,
+                );
                 schedule_approval_expiry(
                     pending.clone(),
                     engine_tx.clone(),
@@ -3363,7 +3787,10 @@ impl SessionsEngine {
                         let chat_id = chat_id.clone();
                         let run_id = run_id.clone();
                         Box::pin(async move {
-                            let result = if invocation.name == "send_message_to_thread" {
+                            let result = if matches!(
+                                invocation.name.as_str(),
+                                "send_message_to_thread" | "create_thread"
+                            ) {
                                 sessions
                                     .invoke_approved_luna_send(
                                         &chat_id, &run_id, &contract, invocation, &cancel, backend,
@@ -3506,6 +3933,27 @@ impl SessionsEngine {
         message_id: Option<String>,
         workspace_repair_revision: u64,
     ) -> Result<SteerOutcome, EngineError> {
+        self.steer_with_inputs_at_workspace_revision(
+            chat_id,
+            prompt,
+            &[],
+            &[],
+            message_id,
+            workspace_repair_revision,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn steer_with_inputs_at_workspace_revision(
+        &self,
+        chat_id: &str,
+        prompt: &str,
+        attachments: &[String],
+        input_items: &[luna_proto::ComposerInput],
+        message_id: Option<String>,
+        workspace_repair_revision: u64,
+    ) -> Result<SteerOutcome, EngineError> {
         let _transition = self.transition_gate(chat_id).lock_owned().await;
         if self.inner.recovery.workspace_repair_revision(chat_id)? != workspace_repair_revision {
             return Err(EngineError::Other("Workspace association changed after steer admission; review and submit a new message.".into()));
@@ -3525,14 +3973,21 @@ impl SessionsEngine {
             })
             .map(|h| {
                 (
+                    h.runtime_config.harness_id,
                     h.run_id.clone(),
                     h.steer_tx.clone(),
                     h.routed_steers.clone(),
                 )
             });
-        let Some((run_id, steer_tx, ledger)) = target else {
+        let Some((harness_id, run_id, steer_tx, ledger)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
+        if (!attachments.is_empty() || !input_items.is_empty()) && harness_id != HarnessId::Codex {
+            return Ok(SteerOutcome::Rejected);
+        }
+        if harness_id == HarnessId::Codex {
+            luna_harness::validate_composer_inputs(attachments, input_items)?;
+        }
         let user_id = message_id.unwrap_or_else(new_id);
         self.inner
             .recovery
@@ -3543,6 +3998,8 @@ impl SessionsEngine {
             )?;
         let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
         let message = SteerMessage {
+            input_items: input_items.to_vec(),
+            attachments: attachments.to_vec(),
             prompt: prompt.to_string(),
             message_id: Some(user_id.clone()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -3551,18 +4008,18 @@ impl SessionsEngine {
         {
             // Serialize mailbox acceptance with confirmation and Done-time
             // inspection: a fast consumer must never outrun its ledger entry.
-            // Explicit native steering is intentionally single-flight. The
-            // native Codex/Claude wires expose no correlation id on echoed
-            // user content, so allowing a second pending row would let an
-            // identity-free boundary retire the wrong durable receipt.
+            // Codex confirms exact client IDs and can accept multiple pending
+            // inputs. Legacy identity-free adapters remain single-flight.
             let mut pending = lock(&ledger);
-            if !pending.is_empty() {
+            if harness_id != HarnessId::Codex && !pending.is_empty() {
                 return Ok(SteerOutcome::Busy);
             }
             if steer_tx.try_send(message).is_err() {
                 return Ok(SteerOutcome::Busy);
             }
             pending.push_back(RoutedSteer {
+                attachments: attachments.to_vec(),
+                input_items: input_items.to_vec(),
                 prompt: prompt.to_string(),
                 message_id: user_id.clone(),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -3649,20 +4106,79 @@ impl SessionsEngine {
         request_id: &str,
         answers: Vec<UserInputAnswer>,
     ) -> Result<bool, EngineError> {
-        let target = lock(&self.inner.runs)
-            .get(chat_id)
-            .map(|h| (h.pending_inputs.clone(), h.engine_tx.clone()));
-        let Some((pending, engine_tx)) = target else {
+        // Hold the run map through delivery so a replacement run cannot
+        // receive responses belonging to the old provider binding.
+        let runs = lock(&self.inner.runs);
+        let Some(handle) = runs.get(chat_id) else {
             return Ok(false);
         };
-        let Some(pending) = take_pending_ordinary_input(&pending, request_id) else {
+        {
+            let pending = lock(&handle.pending_inputs);
+            let Some(input) = pending.get(request_id) else {
+                return Ok(false);
+            };
+            if input.questions.iter().any(|q| q.mcp.is_some()) {
+                if handle.interrupt_token.is_cancelled()
+                    || *handle.cancel.subscribe().borrow()
+                    || input.resolver.is_closed()
+                    || input
+                        .questions
+                        .iter()
+                        .filter_map(|q| q.mcp.as_ref())
+                        .any(|m| now_ms() >= m.expires_at_ms)
+                {
+                    return Ok(false);
+                }
+                luna_proto::mcp_response(&input.questions, &answers)
+                    .map_err(|message| EngineError::Other(message.into()))?;
+            }
+        }
+        let Some(pending) = take_pending_ordinary_input(&handle.pending_inputs, request_id) else {
             return Ok(false);
         };
-        let _ = pending.resolver.send(answers);
-        let _ = engine_tx.send(AgentEvent::InputResolved {
+        let delivered = pending.resolver.send(answers).is_ok();
+        let _ = handle.engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_string(),
         });
-        Ok(true)
+        Ok(delivered)
+    }
+
+    /// Return the URL only for a live exact request. It is not a durable
+    /// command, does not accept the request, and is unavailable after restart.
+    pub fn mcp_elicitation_url(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+    ) -> Result<String, EngineError> {
+        let runs = lock(&self.inner.runs);
+        let handle = runs
+            .get(chat_id)
+            .ok_or_else(|| EngineError::Other("MCP request is no longer pending".into()))?;
+        let pending = lock(&handle.pending_inputs);
+        let input = pending
+            .get(request_id)
+            .ok_or_else(|| EngineError::Other("MCP request is no longer pending".into()))?;
+        if !matches!(input.kind, PendingInputKind::Provider)
+            || handle.interrupt_token.is_cancelled()
+            || *handle.cancel.subscribe().borrow()
+            || input.resolver.is_closed()
+        {
+            return Err(EngineError::Other(
+                "MCP request is no longer pending".into(),
+            ));
+        }
+        let meta = input
+            .questions
+            .iter()
+            .filter_map(|q| q.mcp.as_ref())
+            .find(|meta| matches!(meta.kind, luna_proto::McpInputKind::Url { .. }))
+            .filter(|meta| now_ms() < meta.expires_at_ms)
+            .ok_or_else(|| {
+                EngineError::Other("MCP URL request expired or is unavailable".into())
+            })?;
+        meta.launch_url
+            .clone()
+            .ok_or_else(|| EngineError::Other("MCP URL request is unavailable".into()))
     }
 
     /// A live server-owned kind, independent of the serialized question's
@@ -3766,7 +4282,9 @@ impl SessionsEngine {
                 ("Allow once", LunaApprovalOutcome::AllowedOnce)
             }
             luna_proto::ApprovalDecision::Cancel => ("Cancel", LunaApprovalOutcome::Denied),
-            luna_proto::ApprovalDecision::Deny | luna_proto::ApprovalDecision::AllowTask => {
+            luna_proto::ApprovalDecision::Deny
+            | luna_proto::ApprovalDecision::AllowTask
+            | luna_proto::ApprovalDecision::ProviderChoice { .. } => {
                 ("Deny", LunaApprovalOutcome::Denied)
             }
         };
@@ -3914,7 +4432,8 @@ impl SessionsEngine {
             let Some(pending) = pending_inputs.get(request_id) else {
                 return Ok(false);
             };
-            if !matches!(&pending.kind, PendingInputKind::Provider) {
+            if !matches!(&pending.kind, PendingInputKind::Provider) || pending.resolver.is_closed()
+            {
                 return Ok(false);
             }
             let Some(question) = pending.questions.iter().find(|question| {
@@ -3935,11 +4454,11 @@ impl SessionsEngine {
             };
             (pending, answer)
         };
-        let _ = pending.resolver.send(vec![answer]);
+        let delivered = pending.resolver.send(vec![answer]).is_ok();
         let _ = engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_string(),
         });
-        Ok(true)
+        Ok(delivered)
     }
 
     fn automatic_retries_enabled(&self) -> bool {
@@ -4435,8 +4954,10 @@ impl SessionsEngine {
                     "Recovery needs a same-session continuation contract that this adapter does not provide.",
                 );
             }
+            request.review = None;
             request.prompt = "Continue from the preserved provider session. Do not repeat completed tool or external effects; first inspect the current state and resume only unfinished work.".into();
             request.attachments.clear();
+            request.input_items.clear();
             request.resume = Some(session_id);
         }
         let context = RecoveryAttemptContext {
@@ -5028,11 +5549,38 @@ impl SessionsEngine {
         for (_, timer) in lock(&self.inner.recovery_tasks).drain() {
             timer.abort();
         }
-        let chats: Vec<String> = lock(&self.inner.runs).keys().cloned().collect();
-        for chat_id in chats {
-            if let Err(err) = self.interrupt(&chat_id).await {
-                tracing::warn!(chat = %chat_id, error = %err, "shutdown interrupt failed");
+        // A dispatch admitted before shutdown can register its run after the
+        // first sweep. Interrupt each run once, then wait (bounded) for
+        // in-flight dispatches and sweep again until no new run appears.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut interrupted: HashSet<String> = HashSet::new();
+        loop {
+            let runs: Vec<(String, String)> = lock(&self.inner.runs)
+                .iter()
+                .map(|(chat, handle)| (chat.clone(), handle.run_id.clone()))
+                .collect();
+            let mut swept = false;
+            for (chat_id, run_id) in runs {
+                if !interrupted.insert(run_id) {
+                    continue;
+                }
+                swept = true;
+                if let Err(err) = self.interrupt(&chat_id).await {
+                    tracing::warn!(chat = %chat_id, error = %err, "shutdown interrupt failed");
+                    clean = false;
+                }
+            }
+            let idle = self.inner.dispatches_in_flight.load(Ordering::Acquire) == 0;
+            if idle && !swept {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!("shutdown left a run dispatch unsettled");
                 clean = false;
+                break;
+            }
+            if !idle {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }
         clean
@@ -5064,11 +5612,49 @@ fn approval_answer(
         }
         decision => decision,
     };
-    let label = match decision {
-        luna_proto::ApprovalDecision::AllowOnce => "Allow once",
-        luna_proto::ApprovalDecision::AllowTask => "Allow for task",
-        luna_proto::ApprovalDecision::Deny => "Deny",
-        luna_proto::ApprovalDecision::Cancel => "Cancel",
+    let label = if let Some(details) = &approval.details {
+        let index = match decision {
+            luna_proto::ApprovalDecision::ProviderChoice { index } => {
+                usize::try_from(index).ok()?
+            }
+            // Old clients may still send these fixed decisions. They can only
+            // select a stored exact once/session/deny/cancel choice.
+            luna_proto::ApprovalDecision::AllowOnce => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Allow once")?,
+            luna_proto::ApprovalDecision::AllowTask => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Allow for session")?,
+            luna_proto::ApprovalDecision::Deny => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Deny")?,
+            luna_proto::ApprovalDecision::Cancel => details
+                .choices
+                .iter()
+                .position(|choice| choice.label == "Cancel turn")
+                .or_else(|| {
+                    details
+                        .choices
+                        .iter()
+                        .position(|choice| choice.label == "Deny")
+                })?,
+        };
+        let choice = details.choices.get(index)?;
+        if question.options.get(index) != Some(&choice.label) {
+            return None;
+        }
+        choice.label.as_str()
+    } else {
+        match decision {
+            luna_proto::ApprovalDecision::AllowOnce => "Allow once",
+            luna_proto::ApprovalDecision::AllowTask => "Allow for task",
+            luna_proto::ApprovalDecision::Deny => "Deny",
+            luna_proto::ApprovalDecision::Cancel => "Cancel",
+            luna_proto::ApprovalDecision::ProviderChoice { .. } => return None,
+        }
     };
     Some(UserInputAnswer {
         question_id: question.id.clone(),
@@ -5190,7 +5776,7 @@ impl Inner {
         if let Some(hub) = lock(&self.hubs).get(chat_id) {
             let _ = hub.send(JournaledEvent {
                 seq,
-                event: event.clone(),
+                event: tool_event_preview(event),
             });
         }
         Ok(seq)
@@ -6090,6 +6676,67 @@ fn stop_after_journal_failure(
     inner.set_status(chat_id, SessionStatus::Errored, false);
 }
 
+/// Recovery acceptance for a startup the adapter proved was rejected before
+/// any user turn. A durable receipt that already proves acceptance or
+/// ambiguous delivery keeps that stronger claim, so this rejection never makes
+/// the whole input replayable. Read-only; see [`reject_known_startup`].
+fn startup_rejection_acceptance(
+    inner: &Arc<Inner>,
+    chat_id: &str,
+    correlation_id: &str,
+) -> RecoveryAcceptance {
+    let Some(host) = inner.doc_host() else {
+        return RecoveryAcceptance::RejectedBeforeAcceptance;
+    };
+    match host.task_command_receipt_for_correlation(chat_id, correlation_id) {
+        Ok(Some(receipt)) if receipt.status == CommandReceiptStatus::Applied => {
+            RecoveryAcceptance::Accepted
+        }
+        Ok(Some(receipt))
+            if receipt.status == CommandReceiptStatus::Pending
+                && receipt.committed_at_ms.is_some() =>
+        {
+            RecoveryAcceptance::Unknown
+        }
+        Ok(_) => RecoveryAcceptance::RejectedBeforeAcceptance,
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection receipt readback failed");
+            RecoveryAcceptance::Unknown
+        }
+    }
+}
+
+/// Terminalize the exact pending Run receipt of a known startup rejection that
+/// no automatic recovery will resend (a scheduled resend confirms the same
+/// correlation on its own `SessionStarted`). The store fences the receipt and
+/// marks the same-device frozen submission recoverable atomically; accepted,
+/// delivery-unknown, terminal and fenced-out receipts are left unchanged.
+fn reject_known_startup(inner: &Arc<Inner>, chat_id: &str, correlation_id: &str, message: &str) {
+    let Some(host) = inner.doc_host() else {
+        return;
+    };
+    let expected_w = match inner
+        .recovery
+        .execution_workspace_repair_revision(chat_id, correlation_id)
+    {
+        Ok(revision) => revision,
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection workspace fence unavailable");
+            return;
+        }
+    };
+    match host.reject_run_before_acceptance(chat_id, correlation_id, expected_w, message) {
+        Ok(rejected) if rejected.is_empty() => {
+            tracing::info!(chat = %chat_id, correlation = %correlation_id,
+                "startup rejection left the command receipt unchanged (terminal, unknown, accepted or fenced)");
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::error!(chat = %chat_id, %error, "startup rejection receipt could not be finalized");
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn drive_run(
     inner: Arc<Inner>,
@@ -6166,22 +6813,40 @@ async fn drive_run(
                 return;
             }
             inner.remove_run(&chat_id, &run_id);
+            // Recovery attempts keep their chain's own acceptance rules.
+            let fresh_rejection = acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
+                && resume_state.recovery.is_none();
+            let acceptance = if fresh_rejection {
+                startup_rejection_acceptance(&inner, &chat_id, &resume_state.user_message_id)
+            } else {
+                acceptance
+            };
             inner.set_status(&chat_id, SessionStatus::Errored, false);
             let engine = SessionsEngine {
                 inner: inner.clone(),
             };
-            if let Err(error) = engine.record_recovery_failure(
+            let correlation_id = resume_state.user_message_id.clone();
+            let recorded = engine.record_recovery_failure(
                 &chat_id,
                 harness_id,
                 recovery_request,
                 resume_state.user_message_id,
                 acceptance,
                 classify_failure(&message),
-                message,
+                message.clone(),
                 None,
                 resume_state.recovery.as_ref(),
-            ) {
+            );
+            let automatic_resend = matches!(&recorded, Ok(Some(view))
+                if view.automatic || view.status == RecoveryStatus::Scheduled);
+            if let Err(error) = recorded {
                 tracing::error!(chat = %chat_id, %error, "failed to record pre-accept recovery");
+            }
+            if fresh_rejection
+                && acceptance == RecoveryAcceptance::RejectedBeforeAcceptance
+                && !automatic_resend
+            {
+                reject_known_startup(&inner, &chat_id, &correlation_id, &message);
             }
             return;
         }
@@ -6644,6 +7309,7 @@ async fn drive_run(
                 }
                 if !metadata_only {
                     luna_doc::fold_event_into_parts(&mut sink.folded, sub_event);
+                    luna_doc::apply_journal_output_refs(&sub_id, &mut sink.folded);
                     sink.dirty = true;
                 }
                 if !chip_streaming
@@ -6728,6 +7394,64 @@ async fn drive_run(
         if let AgentEvent::ContextUsage { tokens, window } = &event {
             if let Err(err) = doc_ref.update_context_usage(*tokens, *window) {
                 tracing::warn!(%chat_id, error = %err, "context usage write failed");
+            }
+            continue;
+        }
+        // Goal status is provider control state, including updates while warm
+        // and parked. It never synthesizes a user message or a terminal turn.
+        if let AgentEvent::GoalChanged { thread_id, goal } = &event {
+            if harness_id == HarnessId::Codex
+                && let (Some(binding), Some(host)) =
+                    (inner.current_codex_binding_key(&chat_id), inner.doc_host())
+                && binding.provider_thread_id == *thread_id
+            {
+                let readback = luna_proto::GoalReadback {
+                    thread_id: thread_id.clone(),
+                    binding_generation: binding.generation,
+                    goal: goal.clone(),
+                    checked_at_ms: now_ms(),
+                    continuation_ready: true,
+                };
+                if let Err(error) = host.persist_goal_readback(&chat_id, &new_id(), &readback) {
+                    tracing::warn!(chat = %chat_id, %error, "goal snapshot persistence failed");
+                }
+            }
+            continue;
+        }
+        // Native autonomous turns can begin immediately after Done. The
+        // one-second parked-output gate is for unowned ACP noise, not an
+        // authoritative Codex turn boundary.
+        if let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event {
+            if harness_id != HarnessId::Codex
+                || inner
+                    .current_codex_binding_key(&chat_id)
+                    .is_none_or(|binding| binding.provider_thread_id != *thread_id)
+            {
+                continue;
+            }
+            inner.rearm_codex_checkpoint_after_done(&chat_id, &run_id, Some(thread_id));
+            if !inner.observe_codex_checkpoint(&chat_id, &run_id, Some(thread_id), turn_id) {
+                continue;
+            }
+            provider_checkpoint_id = Some(turn_id.clone());
+            if idle_since.take().is_some() {
+                self_continued_turn = true;
+                entry_id = new_id();
+                segment_started = now_ms();
+                last_stream_activity = tokio::time::Instant::now();
+                inner.set_status(&chat_id, SessionStatus::Working, true);
+                let turn_cwd = lock(&inner.last_requests)
+                    .get(&chat_id)
+                    .map(|request| request.cwd.clone());
+                if let Some(cwd) = turn_cwd.as_deref() {
+                    if let Some(checkpoints) = inner.git_checkpoints.get() {
+                        checkpoints.start(&chat_id, &run_id, cwd).await;
+                    }
+                    SessionsEngine {
+                        inner: inner.clone(),
+                    }
+                    .note_turn_start(&chat_id, cwd);
+                }
             }
             continue;
         }
@@ -6840,9 +7564,18 @@ async fn drive_run(
         // self-continued turn starts a whole new agent round trip (seconds
         // at minimum, minutes in the incident). Inside the gate everything
         // non-boundary stays inert, exactly as before.
+        let historical_steer = harness_id == HarnessId::Codex
+            && matches!(
+                &event,
+                AgentEvent::Steered {
+                    user_message_id: Some(_),
+                    next_assistant_message_id: None,
+                    ..
+                }
+            );
         let turn_was_active = idle_since.is_none();
         const RESUME_GATE: std::time::Duration = std::time::Duration::from_secs(1);
-        if idle_since.is_some() {
+        if idle_since.is_some() && !historical_steer {
             let self_continued = idle_since
                 .is_some_and(|parked_at| parked_at.elapsed() >= RESUME_GATE)
                 && (matches!(
@@ -6912,8 +7645,8 @@ async fn drive_run(
         // PRIOR segment (the fold reset at a steer or park since) belongs to
         // a chip that already rendered in its own entry. Folding the echo
         // would splice a phantom chip into the middle of the current
-        // segment's streaming text (the mid-word transcript splits). Dropped;
-        // same-segment refreshes still land in place.
+        // segment's streaming text (the mid-word transcript splits). Refresh
+        // its original entry; same-segment updates still fold in place.
         let in_segment = |folded: &[MessagePart], id: &str| {
             folded
                 .iter()
@@ -6928,13 +7661,55 @@ async fn drive_run(
             AgentEvent::ToolCall { id, .. } if id == luna_proto::LIVE_PLAN_TOOL_ID => {}
             AgentEvent::ToolResult { id, .. } if id == luna_proto::LIVE_PLAN_TOOL_ID => {}
             AgentEvent::ToolCall { id, .. } => {
-                if !in_segment(&folded, id) && seen_tools.contains(id) {
+                let owner = tool_entry_by_id.get(id).cloned().or_else(|| {
+                    // Per-file chips discovered by patchUpdated inherit the
+                    // original patch's entry, including after a steer split.
+                    id.rsplit_once('#')
+                        .filter(|(_, suffix)| {
+                            !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+                        })
+                        .and_then(|(root, _)| tool_entry_by_id.get(root))
+                        .cloned()
+                });
+                if !in_segment(&folded, id)
+                    && owner
+                        .as_deref()
+                        .is_some_and(|owner| owner != entry_id.as_str())
+                {
+                    let owner = owner.expect("checked above");
+                    seen_tools.insert(id.clone());
+                    tool_entry_by_id
+                        .entry(id.clone())
+                        .or_insert_with(|| owner.clone());
+                    if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                        journal_failure = Some(error);
+                        break SessionStatus::Errored;
+                    }
+                    if let Err(error) = doc_ref.apply_tool_event_in_entry(&owner, id, &event) {
+                        tracing::warn!(chat = %chat_id, tool = %id, %error, "prior tool call could not be refreshed");
+                    }
                     continue;
                 }
                 seen_tools.insert(id.clone());
                 tool_entry_by_id
                     .entry(id.clone())
                     .or_insert_with(|| entry_id.clone());
+            }
+            AgentEvent::ToolActivity { id, .. }
+                if !in_segment(&folded, id) && seen_tools.contains(id) =>
+            {
+                if let Some(original_entry) = tool_entry_by_id.get(id) {
+                    if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                        journal_failure = Some(error);
+                        break SessionStatus::Errored;
+                    }
+                    if let Err(error) =
+                        doc_ref.apply_tool_event_in_entry(original_entry, id, &event)
+                    {
+                        tracing::warn!(chat = %chat_id, tool = %id, %error, "prior tool activity could not be folded");
+                    }
+                }
+                continue;
             }
             AgentEvent::ToolResult {
                 id,
@@ -6971,11 +7746,55 @@ async fn drive_run(
 
         // A steer boundary splits the assistant entry exactly where the fold resets.
         if let AgentEvent::Steered {
+            user_message_id,
             next_assistant_message_id,
             ..
         } = &event
         {
-            if harness_id == HarnessId::Codex {
+            // Identity-bearing boundaries match the exact ledger entry. A late
+            // native record can recover a durable unknown claim after Done/restart.
+            let confirmed_steer = lock(&inner.runs)
+                .get(&chat_id)
+                .filter(|h| h.run_id == run_id)
+                .and_then(|h| {
+                    let mut pending = lock(&h.routed_steers);
+                    if let Some(id) = user_message_id {
+                        let position = pending.iter().position(|steer| &steer.message_id == id)?;
+                        if harness_id == HarnessId::Codex {
+                            pending.get(position).cloned()
+                        } else {
+                            pending.remove(position)
+                        }
+                    } else if harness_id != HarnessId::Codex {
+                        pending.pop_front()
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    let id = user_message_id.as_deref()?;
+                    let row = inner.doc_host()?.queued_message(&chat_id, id).ok()??;
+                    if !matches!(
+                        row.status,
+                        luna_doc::QueueMessageStatus::Claimed { .. }
+                            | luna_doc::QueueMessageStatus::SteeringAccepted { .. }
+                            | luna_doc::QueueMessageStatus::DeliveryUnknown { .. }
+                    ) {
+                        return None;
+                    }
+                    // Restore typed durable content from the same exact row.
+                    Some(RoutedSteer {
+                        prompt: row.text,
+                        attachments: row.attachments,
+                        input_items: row.input_items,
+                        message_id: row.id,
+                        delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                    })
+                });
+            if harness_id == HarnessId::Codex && confirmed_steer.is_none() {
+                continue;
+            }
+            if harness_id == HarnessId::Codex && !historical_steer {
                 inner.rearm_codex_checkpoint_after_done(
                     &chat_id,
                     &run_id,
@@ -6986,46 +7805,41 @@ async fn drive_run(
                 journal_failure = Some(error);
                 break SessionStatus::Errored;
             }
-            // A steer boundary means a real prompt owns the turn again — its
-            // Done will come; the short self-continued window stands down.
-            self_continued_turn = false;
-            if let Err(err) = finish_segment(
-                doc_ref,
-                writer.take(),
-                &entry_id,
-                &device_id,
-                segment_started,
-                &folded,
-                MessageStatus::Complete,
-            ) {
-                tracing::warn!(chat = %chat_id, error = %err, "segment finish failed");
+            if !historical_steer {
+                // A steer boundary means a real prompt owns the turn again — its
+                // Done will come; the short self-continued window stands down.
+                self_continued_turn = false;
+                if let Err(err) = finish_segment(
+                    doc_ref,
+                    writer.take(),
+                    &entry_id,
+                    &device_id,
+                    segment_started,
+                    &folded,
+                    MessageStatus::Complete,
+                ) {
+                    tracing::warn!(chat = %chat_id, error = %err, "segment finish failed");
+                }
+                inner.note_message(&chat_id, &folded_text(&folded));
+                folded.clear();
+                dirty = false;
+                entry_id = next_assistant_message_id.clone().unwrap_or_else(new_id);
+                segment_started = now_ms();
+                // The elapsed timer is per user message, not per child process: a
+                // steer boundary restarts it (matches the parked-resume path and
+                // the composer's optimistic overlay, which already reads 0:00).
+                inner.set_status(&chat_id, SessionStatus::Working, true);
             }
-            inner.note_message(&chat_id, &folded_text(&folded));
-            folded.clear();
-            dirty = false;
-            entry_id = next_assistant_message_id.clone().unwrap_or_else(new_id);
-            segment_started = now_ms();
-            // The elapsed timer is per user message, not per child process: a
-            // steer boundary restarts it (matches the parked-resume path and
-            // the composer's optimistic overlay, which already reads 0:00).
-            inner.set_status(&chat_id, SessionStatus::Working, true);
-            // The boundary confirms delivery of the oldest accepted steer —
-            // retire its at-least-once ledger entry.
-            let confirmed_steer = if let Some(h) = lock(&inner.runs)
-                .get(&chat_id)
-                .filter(|h| h.run_id == run_id)
-            {
-                lock(&h.routed_steers).pop_front()
-            } else {
-                None
-            };
+            // Native recording confirms this exact input in history, not that
+            // a model request has sampled it.
             if let Some(steer) = confirmed_steer
                 && let Some(host) = inner.doc_host()
             {
                 let turn_cwd = lock(&inner.last_requests)
                     .get(&chat_id)
                     .map(|request| request.cwd.clone());
-                if let Some(cwd) = turn_cwd.as_deref()
+                if !historical_steer
+                    && let Some(cwd) = turn_cwd.as_deref()
                     && let Some(checkpoints) = inner.git_checkpoints.get()
                 {
                     checkpoints.end(&chat_id, &run_id, "steered").await;
@@ -7055,7 +7869,7 @@ async fn drive_run(
                         }
                         continue;
                     }
-                    if let Some(cwd) = turn_cwd.as_deref() {
+                    if !historical_steer && let Some(cwd) = turn_cwd.as_deref() {
                         SessionsEngine {
                             inner: inner.clone(),
                         }
@@ -7076,7 +7890,17 @@ async fn drive_run(
                     binding.as_ref().map(|binding| binding.generation),
                 ) {
                     tracing::error!(chat = %chat_id, run = %run_id, %error,
-                        "steer acceptance receipt finalization failed");
+                        "steer recording receipt finalization failed");
+                } else if harness_id == HarnessId::Codex
+                    && host
+                        .queued_message(&chat_id, &steer.message_id)
+                        .is_ok_and(|row| row.is_none())
+                    && let Some(handle) = lock(&inner.runs)
+                        .get(&chat_id)
+                        .filter(|h| h.run_id == run_id)
+                {
+                    lock(&handle.routed_steers)
+                        .retain(|pending| pending.message_id != steer.message_id);
                 }
             }
             continue;
@@ -7120,6 +7944,31 @@ async fn drive_run(
         }
         if matches!(&event, AgentEvent::Done { .. }) {
             inner.clear_codex_checkpoint(&chat_id, &run_id);
+        }
+        // A provider-side interruption of the running turn (native approval
+        // Cancel reports turn/completed status=interrupted) holds follow-up
+        // work exactly like a local Stop: freeze the durable queue through
+        // the Stop fence before the Idle transition can drain it, and treat
+        // the run as interrupted so unconfirmed mailbox steers are not
+        // re-dispatched as fresh turns at run exit. Local Stop already set
+        // `interrupted` through the cancel channel and keeps its own path.
+        if turn_was_active
+            && !interrupted
+            && matches!(
+                &event,
+                AgentEvent::Done {
+                    status: DoneStatus::Interrupted,
+                    ..
+                }
+            )
+        {
+            interrupted = true;
+            if let Some(host) = inner.doc_host()
+                && let Err(error) = host.fence_queue_for_stop(&chat_id).await
+            {
+                tracing::warn!(chat = %chat_id, run = %run_id, %error,
+                    "provider interruption could not hold the queue");
+            }
         }
 
         match &event {
@@ -7311,7 +8160,27 @@ async fn drive_run(
                 );
             }
             AgentEvent::InputResolved { .. } => {
-                inner.set_status(&chat_id, SessionStatus::Working, false);
+                // One completed form must not hide another concurrent prompt.
+                let remaining = lock(&inner.runs)
+                    .get(&chat_id)
+                    .map(|handle| handle.pending_inputs.clone());
+                let status = remaining
+                    .as_ref()
+                    .and_then(|pending| {
+                        let pending = lock(pending);
+                        if pending
+                            .values()
+                            .any(|input| input.questions.iter().any(|q| q.approval.is_some()))
+                        {
+                            Some(SessionStatus::AwaitingApproval)
+                        } else if !pending.is_empty() {
+                            Some(SessionStatus::AwaitingInput)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(SessionStatus::Working);
+                inner.set_status(&chat_id, status, false);
             }
             _ => {}
         }
@@ -7468,7 +8337,17 @@ async fn drive_run(
             // EOF would leave its ledger entry blocking every later user turn.
             // Retire it now as unknown/no-replay. Ordinary warm routes retain
             // their legacy continuation/fallback semantics.
-            let terminal_explicit = inner.take_terminal_explicit_steers(&chat_id, &run_id);
+            let mut terminal_explicit = inner.take_terminal_explicit_steers(&chat_id, &run_id);
+            if harness_id == HarnessId::Codex
+                && let Some(handle) = lock(&inner.runs)
+                    .get(&chat_id)
+                    .filter(|h| h.run_id == run_id)
+            {
+                // Warm native mailbox delivery may also be unresolved when the
+                // old turn ends. Preserve its fallback ownership, but show the
+                // queue claim as unknown until exact evidence arrives.
+                terminal_explicit.extend(lock(&handle.routed_steers).iter().cloned());
+            }
             if let Some(host) = inner.doc_host() {
                 for steer in terminal_explicit {
                     if let Err(error) =
@@ -7568,11 +8447,22 @@ async fn drive_run(
         .filter(|h| h.run_id == run_id)
         .map(|h| std::mem::take(&mut *lock(&h.routed_steers)).into())
         .unwrap_or_default();
+    if harness_id == HarnessId::Codex
+        && let Some(host) = inner.doc_host()
+        && let Ok(state) = host.context_control(&chat_id)
+        && let Some(mut goal) = state.goal
+    {
+        goal.continuation_ready = false;
+        if let Err(error) = host.persist_goal_readback(&chat_id, &new_id(), &goal) {
+            tracing::warn!(chat = %chat_id, %error, "goal subscription retirement persistence failed");
+        }
+    }
     inner.remove_run(&chat_id, &run_id);
     inner.set_status_with_completion(&chat_id, final_status, false, final_completed_turn);
-    let (redispatch, explicit): (Vec<_>, Vec<_>) = orphans
-        .into_iter()
-        .partition(|steer| steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn);
+    let (redispatch, explicit): (Vec<_>, Vec<_>) = orphans.into_iter().partition(|steer| {
+        harness_id != HarnessId::Codex
+            && steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn
+    });
     if let Some(host) = inner.doc_host() {
         for steer in explicit {
             if let Err(error) = host.mark_steer_correlation_unknown(&chat_id, &steer.message_id) {
@@ -7598,9 +8488,11 @@ async fn drive_run(
                     tracing::warn!(chat = %chat, "orphaned steer lost: no run config to re-dispatch");
                     break;
                 };
+                request.review = None;
                 request.prompt = steer.prompt.clone();
                 request.resume = None;
-                request.attachments = Vec::new();
+                request.attachments = steer.attachments.clone();
+                request.input_items = steer.input_items.clone();
                 tracing::info!(chat = %chat, "re-dispatching steer orphaned by a dying run");
                 let Some(host) = engine.inner.doc_host() else {
                     tracing::warn!(chat = %chat, "orphaned steer lost: doc host unavailable");
@@ -7685,6 +8577,7 @@ mod tests {
         }
         if tx
             .send(Ok(luna_proto::AgentEvent::Steered {
+                user_message_id: None,
                 assistant_message_id: None,
                 next_assistant_message_id: None,
             }))
@@ -8521,6 +9414,7 @@ mod tests {
             question: "Allow?".into(),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: "provider-1".into(),
                 provider: HarnessId::ClaudeCode,
@@ -8531,6 +9425,7 @@ mod tests {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: i64::MAX,
                 supports_task_allowance: false,
+                details: None,
             }),
         };
         let answer = approval_answer(&question, luna_proto::ApprovalDecision::AllowTask).unwrap();
@@ -8538,6 +9433,7 @@ mod tests {
         assert!(
             approval_answer(
                 &luna_proto::UserInputQuestion {
+                    mcp: None,
                     approval: None,
                     ..question
                 },
@@ -8654,6 +9550,7 @@ mod tests {
                     question: "Allow?".into(),
                     options: vec!["Deny".into(), "Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-1".into(),
                         provider: HarnessId::Codex,
@@ -8664,6 +9561,7 @@ mod tests {
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: i64::MAX,
                         supports_task_allowance: true,
+                        details: None,
                     }),
                 }],
                 resolver,
@@ -8689,6 +9587,7 @@ mod tests {
             question: "Allow?".into(),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: "claimed-local-ui".into(),
                 provider: HarnessId::Codex,
@@ -8699,6 +9598,7 @@ mod tests {
                 requested_scope: luna_proto::PermissionScope::Workspace,
                 expires_at_ms: i64::MAX,
                 supports_task_allowance: false,
+                details: None,
             }),
         };
         let pending = Arc::new(Mutex::new(std::collections::HashMap::new()));
@@ -8762,6 +9662,7 @@ mod tests {
                     question: "Which?".into(),
                     options: vec!["A".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: None,
                 }],
                 resolver: ordinary_tx,
@@ -11907,6 +12808,7 @@ mod tests {
                     question: "Allow?".into(),
                     options: vec!["Allow once".into()],
                     multi_select: false,
+                    mcp: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "claimed-local-ui".into(),
                         provider: HarnessId::Codex,
@@ -11917,6 +12819,7 @@ mod tests {
                         requested_scope: luna_proto::PermissionScope::Workspace,
                         expires_at_ms: crate::now_ms() + 30_000,
                         supports_task_allowance: false,
+                        details: None,
                     }),
                 }],
                 resolver: forged_tx,
@@ -11963,6 +12866,7 @@ mod tests {
                 durable_queue: false,
                 approved_queue: false,
                 event_wait: false,
+                child_creation: false,
             }
         }
 
@@ -12873,6 +13777,8 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            review: None,
+            input_items: Vec::new(),
             prompt: "first".into(),
             harness: None,
             provider_account_id: None,

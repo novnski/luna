@@ -38,6 +38,8 @@ type RequestLog = Arc<Mutex<Vec<RunRequest>>>;
 
 fn run_request(prompt: &str, cwd: &str) -> RunRequest {
     RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -501,6 +503,7 @@ impl Harness for PersistentHarness {
             while let Some(steer) = steering.recv().await {
                 n += 1;
                 let boundary = AgentEvent::Steered {
+                    user_message_id: None,
                     assistant_message_id: None,
                     next_assistant_message_id: steer.message_id.map(|id| format!("a-{id}")),
                 };
@@ -885,6 +888,8 @@ async fn real_claude_remembers_codeword_across_engine_restart() {
     let cwd = cwd.to_string_lossy().to_string();
 
     let real_request = |prompt: &str| RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -1001,6 +1006,8 @@ async fn steer_after_restart_dispatches_new_turn_with_resume() {
         .queue_command(
             CHAT,
             SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "actually, also add tests".into(),
                 message_id: Some("msg-user-2".into()),
             },

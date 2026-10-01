@@ -108,6 +108,8 @@ fn complete_assistant_count(core: &EngineCore) -> usize {
 fn run_payload(message_id: &str, repo_path: &str) -> SessionCommandPayload {
     SessionCommandPayload::Run {
         request: RunRequest {
+            review: None,
+            input_items: Vec::new(),
             prompt: "isolated please".into(),
             harness: None,
             provider_account_id: None,

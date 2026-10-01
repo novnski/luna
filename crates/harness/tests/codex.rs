@@ -45,6 +45,8 @@ fn native_client() -> CodexNativeClient {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        review: None,
+        input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
         provider_account_id: None,
@@ -95,13 +97,29 @@ async fn run_to_end(
     req: RunRequest,
     controls: RunControls,
 ) -> Vec<AgentEvent> {
+    let scenario = req.prompt.clone();
     let stream = harness.run(req, controls).await.expect("run starts");
-    tokio::time::timeout(
+    let events = tokio::time::timeout(
         Duration::from_secs(10),
         stream.map(|r| r.expect("stream event")).collect::<Vec<_>>(),
     )
     .await
-    .expect("run finished in time")
+    .expect("run finished in time");
+    if let Some(directory) = std::env::var_os("LUNA_STEERING_EVIDENCE_DIR") {
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let name = scenario
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let artifact = serde_json::json!({"provider": "deterministic native protocol fixture", "scenario": scenario, "events": events});
+        std::fs::write(
+            directory.join(format!("{name}-{}.json", uuid::Uuid::new_v4())),
+            serde_json::to_vec_pretty(&artifact).unwrap(),
+        )
+        .unwrap();
+    }
+    events
 }
 
 fn synthetic_runtime_contract() -> luna_proto::LunaAgentRuntimeContract {
@@ -1136,6 +1154,8 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
     let (controls, steer, _token) = controls("Yes");
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -1151,6 +1171,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
             AgentEvent::Steered {
                 assistant_message_id,
                 next_assistant_message_id,
+                ..
             } => Some((
                 assistant_message_id.clone(),
                 next_assistant_message_id.clone(),
@@ -1177,11 +1198,13 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
 }
 
 #[tokio::test]
-async fn explicit_steer_correlated_ack_emits_one_boundary_despite_text_echo() {
+async fn explicit_steer_native_record_emits_one_correlated_boundary() {
     let (controls, steer, _token) = controls("Yes");
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1201,7 +1224,7 @@ async fn explicit_steer_correlated_ack_emits_one_boundary_despite_text_echo() {
             .filter(|event| matches!(event, AgentEvent::Steered { .. }))
             .count(),
         1,
-        "only the correlated ACK, not the text echo, splits the transcript: {events:?}"
+        "only the native clientId record splits the transcript: {events:?}"
     );
     assert!(events.contains(&AgentEvent::TextDelta {
         text: "steered".into()
@@ -1215,6 +1238,8 @@ async fn explicit_steer_ignores_stale_and_duplicate_echoes() {
     for (message_id, acceptance) in [("queued-steer-a", first_tx)] {
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "same prompt".into(),
                 message_id: Some(message_id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1260,6 +1285,8 @@ async fn explicit_steer_uncorrelated_ack_stays_unknown_without_replay() {
         let (accepted_tx, accepted_rx) = oneshot::channel();
         steer
             .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "redirect please".into(),
                 message_id: Some("uncorrelated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1294,6 +1321,8 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1327,6 +1356,8 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1362,11 +1393,13 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
 }
 
 #[tokio::test]
-async fn explicit_steer_correlated_ack_settles_without_provider_echo() {
+async fn explicit_steer_ack_only_remains_pending_without_boundary() {
     let (controls, steer, _token) = controls("Yes");
     let (accepted_tx, accepted_rx) = oneshot::channel();
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -1391,8 +1424,8 @@ async fn explicit_steer_correlated_ack_settles_without_provider_echo() {
             .iter()
             .filter(|event| matches!(event, AgentEvent::Steered { .. }))
             .count(),
-        1,
-        "the matching turnId acknowledges steering without requiring an echo: {events:?}"
+        0,
+        "acceptance alone must not manufacture incorporation: {events:?}"
     );
 }
 
@@ -1401,6 +1434,8 @@ async fn rejected_steer_falls_back_to_a_follow_up_turn() {
     let (controls, steer, _token) = controls("Yes");
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "redirect please".into(),
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -1481,7 +1516,7 @@ async fn approvals_round_trip_as_input_requests() {
     assert!(asked[0].question.contains("rm -rf /tmp/x"));
     assert_eq!(
         asked[0].options,
-        vec!["Deny", "Allow once", "Allow for task", "Cancel"]
+        vec!["Deny", "Allow once", "Allow for session", "Cancel turn"]
     );
     assert_eq!(
         asked[0].approval.as_ref().unwrap().provider,
@@ -1650,7 +1685,7 @@ async fn computer_use_without_luna_task_binding_remains_unavailable() {
 async fn provider_permission_event_uses_exact_turn_and_one_request_grant() {
     let home = tempfile::tempdir().unwrap();
     for (scenario, choice) in [
-        ("scenario:computer-use:permission-allow", "Allow once"),
+        ("scenario:computer-use:permission-allow", "Allow for turn"),
         ("scenario:computer-use:permission-deny", "Deny"),
     ] {
         let (controls, _steer, _token) = controls(choice);
@@ -1850,6 +1885,8 @@ async fn next_turn_response_owns_approval_before_started_notification() {
     }
     steer
         .send(SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
             prompt: "follow-up t2".into(),
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -2526,6 +2563,8 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
     for turn in 0..3 {
         if turn == 1 {
             steer.send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
                 prompt: "Reuse the SAME existing subagent for one more task: reply exactly child-second. Use followup_task if available, otherwise send_input. Do not spawn a new agent. Wait for it to finish, then reply exactly parent-second. Do not inspect or change files.".into(),
                 message_id: None,
                 delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
@@ -2712,6 +2751,8 @@ async fn live_real_app_server_tool_and_steer() {
             if !sent && matches!(&event, AgentEvent::ToolCall { call: ToolCall::Exec { command }, .. } if command.contains("sleep")) {
                 let (tx, rx) = oneshot::channel();
                 steer.send(SteerMessage {
+                    input_items: Vec::new(),
+                    attachments: Vec::new(),
                     prompt: "After the command completes, change the final reply to exactly LUNA_AUDIT_STEER_OK.".into(),
                     message_id: Some("luna-audit-live-steer".into()),
                     delivery: luna_harness::SteerDelivery::RequireActiveTurn,
@@ -3108,4 +3149,316 @@ async fn real_image_generation_smoke() {
     assert!(std::path::Path::new(path).is_absolute());
     assert!(std::path::Path::new(path).is_file());
     assert!(serde_json::to_vec(&events).unwrap().len() < 64 * 1024);
+}
+
+// Failure scenarios were recorded before the delivery implementation.
+// The peer is deterministic native-protocol coverage, not a real model.
+#[tokio::test]
+async fn native_steering_reconciles_lost_ack_and_terminal_readback() {
+    for scenario in ["scenario:steer-record-lost-ack", "scenario:steer-readback"] {
+        let (controls, steer, _token) = controls("Yes");
+        let (tx, rx) = oneshot::channel();
+        steer
+            .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
+                prompt: "redirect please".into(),
+                message_id: Some("native-correlated-steer".into()),
+                delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                acceptance: Some(tx),
+            })
+            .await
+            .unwrap();
+        drop(steer);
+        let events = run_to_end(&harness(), request(scenario), controls).await;
+        let acceptance = rx.await.unwrap();
+        if scenario.ends_with("lost-ack") {
+            assert!(matches!(acceptance, SteerAcceptance::Unknown(_)));
+        } else {
+            assert_eq!(acceptance, SteerAcceptance::Accepted);
+        }
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event,
+            AgentEvent::Steered { user_message_id: Some(id), .. }
+                if id == "native-correlated-steer"))
+                .count(),
+            1,
+            "{events:?}"
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::Done { .. }))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_steering_records_multiple_ids_once_in_order() {
+    let (controls, steer, _token) = controls("Yes");
+    let mut replies = Vec::new();
+    for id in ["native-a", "native-b"] {
+        let (tx, rx) = oneshot::channel();
+        replies.push(rx);
+        steer
+            .send(SteerMessage {
+                input_items: Vec::new(),
+                attachments: Vec::new(),
+                prompt: "same prompt".into(),
+                message_id: Some(id.into()),
+                delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+                acceptance: Some(tx),
+            })
+            .await
+            .unwrap();
+    }
+    drop(steer);
+    let events = run_to_end(
+        &harness(),
+        request("scenario:steer-multiple-records"),
+        controls,
+    )
+    .await;
+    for reply in replies {
+        assert_eq!(reply.await.unwrap(), SteerAcceptance::Accepted);
+    }
+    let ids = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Steered {
+                user_message_id, ..
+            } => user_message_id.as_deref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ids, vec!["native-a", "native-b"], "{events:?}");
+}
+
+#[tokio::test]
+async fn native_terminal_interruption_is_truthful_without_local_stop() {
+    let (controls, steer, _token) = controls("Yes");
+    drop(steer);
+    let events = run_to_end(
+        &harness(),
+        request("scenario:external-interruption"),
+        controls,
+    )
+    .await;
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn native_steering_resume_readback_does_not_reopen_old_turn() {
+    let (controls, steer, _token) = controls("Yes");
+    drop(steer);
+    let mut req = request("scenario:resume-steering-reconciliation");
+    req.resume = Some("th-resumed".into());
+    req.model_options.insert(
+        luna_harness::codex::LUNA_STEER_RECONCILE_OPTION.into(),
+        serde_json::json!(["prior-steer", "missing-steer"]),
+    );
+    let events = run_to_end(&harness(), req, controls).await;
+    let records = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Steered {
+                user_message_id,
+                next_assistant_message_id,
+                ..
+            } => Some((
+                user_message_id.as_deref(),
+                next_assistant_message_id.as_deref(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(records, vec![(Some("prior-steer"), None)], "{events:?}");
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Completed,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn native_terminal_status_wins_the_local_interrupt_race() {
+    for (scenario, expected) in [
+        ("completed", DoneStatus::Completed),
+        ("failed", DoneStatus::Errored),
+        ("interrupted", DoneStatus::Interrupted),
+    ] {
+        let (controls, steer, token) = controls("Yes");
+        let mut stream = harness()
+            .run(
+                request(&format!("scenario:terminal-race:{scenario}")),
+                controls,
+            )
+            .await
+            .unwrap();
+        let events = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                let event = event.unwrap();
+                if matches!(&event, AgentEvent::TextDelta { text } if text == "terminal-race-ready")
+                {
+                    token.cancel();
+                }
+                events.push(event);
+            }
+            events
+        })
+        .await
+        .unwrap();
+        drop(steer);
+        let statuses = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::Done { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(statuses, vec![expected], "{events:?}");
+    }
+}
+
+// Failure scenarios were recorded before this fixture/implementation in the
+// wave's evidence/mcp-prompts/failure-scenarios.md. This is synthetic adapter
+// E2E, not proof of an actual MCP server, model or native UI.
+#[tokio::test]
+async fn generic_mcp_elicitation_roundtrips_typed_fields_and_actions() {
+    let mut proof = Vec::new();
+    for scenario in [
+        "accept",
+        "decline",
+        "cancel",
+        "url-accept",
+        "url-cancel",
+        "foreign",
+        "bad-schema",
+        "concurrent",
+        "defaults",
+        "formats",
+        "foreign-thread",
+        "null-turn",
+        "bad-default",
+        "bad-required",
+        "too-many",
+        "unsupported-mode",
+        "url-bad-scheme",
+        "url-credentials",
+        "duplicate",
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let mut req = computer_use_request(&format!("scenario:mcp-form:{scenario}"), home.path());
+        req.auto_approve = false;
+        let (mut controls, _steer, _token) = controls("unused");
+        let observed = Arc::new(Mutex::new(Vec::<Vec<UserInputQuestion>>::new()));
+        let seen = observed.clone();
+        let response_scenario = scenario.to_string();
+        controls.request_input = Box::new(move |questions| {
+            seen.lock().unwrap().push(questions.clone());
+            let (tx, rx) = oneshot::channel();
+            let answers = questions
+                .iter()
+                .map(|q| {
+                    let label = match q.header.as_str() {
+                        "name" => "Ada",
+                        "email" => "ada@example.invalid",
+                        "date" => "2026-09-30",
+                        "time" => "2026-09-30T12:34:56Z",
+                        "uri" => "https://example.invalid/path",
+                        "decimal" => "1.25",
+                        "count" => "0",
+                        "enabled" => "false",
+                        "color" => "Blue (blue)",
+                        "tags" => "Alpha (a)",
+                        _ if response_scenario.contains("cancel") => "Cancel",
+                        _ if response_scenario == "decline" => "Decline",
+                        _ => "Accept",
+                    };
+                    let labels = if response_scenario == "defaults"
+                        && q.mcp.as_ref().is_some_and(|m| {
+                            matches!(m.kind, luna_proto::McpInputKind::Field { .. })
+                        }) {
+                        vec![]
+                    } else {
+                        vec![label.into()]
+                    };
+                    UserInputAnswer {
+                        question_id: q.id.clone(),
+                        labels,
+                    }
+                })
+                .collect();
+            let _ = tx.send(answers);
+            rx
+        });
+        let events = run_to_end(&harness(), req, controls).await;
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                })
+            ),
+            "{events:?}"
+        );
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::TextDelta { text } if text.contains("mcp-fixture-verified"))), "fixture did not verify response: {events:?}");
+        let seen = observed.lock().unwrap();
+        proof.push(
+            serde_json::json!({"scenario":scenario,"questionSets":seen.len(),"events":events}),
+        );
+        if matches!(
+            scenario,
+            "foreign"
+                | "bad-schema"
+                | "foreign-thread"
+                | "null-turn"
+                | "bad-default"
+                | "bad-required"
+                | "too-many"
+                | "unsupported-mode"
+                | "url-bad-scheme"
+                | "url-credentials"
+        ) {
+            assert!(seen.is_empty());
+        } else {
+            assert!(!seen.is_empty());
+            if scenario == "duplicate" {
+                assert_eq!(seen.len(), 1);
+            }
+            // Raw authorization URL is transient and cannot serialize to docs.
+            let encoded = serde_json::to_string(&*seen).unwrap();
+            assert!(!encoded.contains("private-url-token"));
+        }
+    }
+    if let Some(directory) = std::env::var_os("LUNA_MCP_E2E_ARTIFACT_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("adapter.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"scenarios":proof}))
+                .unwrap(),
+        )
+        .unwrap();
+    }
 }

@@ -70,6 +70,8 @@ fn main() {
     doc.queue_command(&SessionCommandEntry {
         id: "cmd-1".into(),
         payload: SessionCommandPayload::Steer {
+            attachments: Vec::new(),
+            input_items: Vec::new(),
             prompt: "also run clippy".into(),
             message_id: None,
         },

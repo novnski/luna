@@ -58,11 +58,28 @@ impl RpcRequestFailure {
 
 type Pending = Arc<Mutex<HashMap<i64, oneshot::Sender<Result<Value, RpcRequestFailure>>>>>;
 
+/// A bounded/cancelled caller stops waiting without retaining an unreachable
+/// reply sender for the lifetime of a persistent native connection.
+struct PendingRequest {
+    id: i64,
+    pending: Pending,
+}
+
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.pending.lock().expect("pending lock").remove(&self.id);
+    }
+}
+
+type ComposerPolicy = Arc<Mutex<HashMap<String, Vec<Value>>>>;
+
 #[derive(Clone)]
 pub(crate) struct RpcClient {
     next_id: Arc<AtomicI64>,
     pending: Pending,
     writer: mpsc::UnboundedSender<String>,
+    /// Provider-reported thread policy for metadata reads on the same loaded client.
+    composer_policy: ComposerPolicy,
 }
 
 impl RpcClient {
@@ -73,15 +90,31 @@ impl RpcClient {
         tokio::spawn(write_loop(stdin, writer_rx));
         let pending: Pending = Arc::default();
         let (incoming_tx, incoming_rx) = mpsc::channel(256);
-        tokio::spawn(read_loop(stdout, Arc::clone(&pending), incoming_tx));
+        let composer_policy = Arc::default();
+        tokio::spawn(read_loop(
+            stdout,
+            Arc::clone(&pending),
+            incoming_tx,
+            Arc::clone(&composer_policy),
+        ));
         (
             Self {
                 next_id: Arc::new(AtomicI64::new(0)),
                 pending,
                 writer: writer_tx,
+                composer_policy,
             },
             incoming_rx,
         )
+    }
+
+    pub(crate) fn set_composer_policy(&self, thread: &str, disabled_plugins: Vec<Value>) {
+        if let Ok(mut policy) = self.composer_policy.lock() {
+            policy.insert(thread.into(), disabled_plugins);
+        }
+    }
+    pub(crate) fn composer_policy(&self, thread: &str) -> Option<Vec<Value>> {
+        self.composer_policy.lock().ok()?.get(thread).cloned()
     }
 
     /// Send a request and await its response (resolved by the reader task).
@@ -102,6 +135,10 @@ impl RpcClient {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         self.pending.lock().expect("pending lock").insert(id, tx);
+        let _pending_request = PendingRequest {
+            id,
+            pending: self.pending.clone(),
+        };
         let line = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
         if self.writer.send(line.to_string()).is_err() {
             self.pending.lock().expect("pending lock").remove(&id);
@@ -198,7 +235,12 @@ fn response_error(error: &Value) -> String {
 /// Parse stdout lines: responses resolve the pending map, everything else is
 /// forwarded in order. Non-JSON noise is skipped; on EOF all pending requests
 /// fail (their senders drop) and one final [`Incoming::Eof`] is delivered.
-async fn read_loop(stdout: ChildStdout, pending: Pending, tx: mpsc::Sender<Incoming>) {
+async fn read_loop(
+    stdout: ChildStdout,
+    pending: Pending,
+    tx: mpsc::Sender<Incoming>,
+    composer_policy: ComposerPolicy,
+) {
     let mut lines = BufReader::new(stdout).lines();
     // A read error ends the loop like EOF: either way the child's stdout is
     // unusable, pending requests must fail, and the session loop must know.
@@ -245,6 +287,19 @@ async fn read_loop(stdout: ChildStdout, pending: Pending, tx: mpsc::Sender<Incom
             }
             // Notification.
             (Some(method), None) => {
+                // Capture policy before delivering a notification to the session loop:
+                // metadata validation can be awaiting replies while that loop is busy.
+                if method == "thread/settings/updated"
+                    && let (Some(thread), Some(disabled)) = (
+                        msg["params"]["threadId"].as_str(),
+                        msg["params"]["threadSettings"]["disabledPluginIds"].as_array(),
+                    )
+                    && disabled.len() <= 1024
+                    && let Ok(mut policy) = composer_policy.lock()
+                    && policy.contains_key(thread)
+                {
+                    policy.insert(thread.into(), disabled.clone());
+                }
                 let incoming = Incoming::Notification {
                     method: method.to_owned(),
                     params: msg

@@ -157,6 +157,7 @@ impl Harness for HeldHarness {
                 question: "which one?".into(),
                 options: vec!["a".into(), "b".into()],
                 multi_select: false,
+                mcp: None,
                 approval: self.approves.then(|| luna_proto::ApprovalRequest {
                     provider_request_id: "approval-1".into(),
                     provider: HarnessId::Mock,
@@ -167,6 +168,7 @@ impl Harness for HeldHarness {
                     requested_scope: luna_proto::PermissionScope::Workspace,
                     expires_at_ms: i64::MAX,
                     supports_task_allowance: false,
+                    details: None,
                 }),
             }]);
         }
@@ -233,6 +235,7 @@ impl Harness for HeldHarness {
                                     || steer.delivery == luna_harness::SteerDelivery::AllowFollowUpTurn
                                 {
                                     AgentEvent::Steered {
+                                        user_message_id: None,
                                         assistant_message_id: Some("a-before-steer".into()),
                                         next_assistant_message_id: Some("a-after-steer".into()),
                                     }
@@ -888,6 +891,7 @@ async fn restart_removes_a_claim_whose_provider_receipt_was_already_applied() {
     handle
         .doc()
         .push_queued(&QueuedMessage {
+            input_items: Vec::new(),
             id: id.clone(),
             text: "accepted once".into(),
             attachments: Vec::new(),
@@ -1054,6 +1058,8 @@ async fn a_steer_command_holds_for_an_agent_that_takes_no_mid_turn_prompt() {
         .queue_command(
             CHAT,
             SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
                 prompt: "and also this".into(),
                 message_id: Some("m-steer".into()),
             },

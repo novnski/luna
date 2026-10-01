@@ -728,7 +728,36 @@ impl Render for SideChatPanel {
                         .gap(px(6.0))
                         .child(question.header.clone())
                         .child(question.question.clone());
-                    if question.approval.is_some() {
+                    if let Some(details) = question
+                        .approval
+                        .as_ref()
+                        .and_then(|approval| approval.details.as_ref())
+                    {
+                        if let Some(approval) = &question.approval
+                            && let Some(expires) =
+                                chrono::DateTime::from_timestamp_millis(approval.expires_at_ms)
+                        {
+                            card = card.child(format!(
+                                "Approval expires: {}",
+                                expires.with_timezone(&chrono::Local).format("%H:%M:%S")
+                            ));
+                        }
+                        for (label, value) in details.display_rows() {
+                            card = card.child(format!("{label}: {value}"));
+                        }
+                        for (index, choice) in details.choices.iter().enumerate() {
+                            card = card.child(choice.description.clone()).child(self.button(
+                                format!("side-approval-{index}"),
+                                choice.label.clone(),
+                                PanelAction::Approve(
+                                    luna_proto::ApprovalDecision::ProviderChoice {
+                                        index: index as u32,
+                                    },
+                                ),
+                                cx,
+                            ));
+                        }
+                    } else if question.approval.is_some() {
                         card = card
                             .child(self.button(
                                 "side-allow",

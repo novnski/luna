@@ -29,14 +29,19 @@
 //!   consumed so it can never settle the parent turn, and unknown methods
 //!   fall through to the parent path (fail open, never silent loss).
 //! - Steering: `turn/steer { expectedTurnId }` into the live turn; a rejected
-//!   steer (the turn-completed race) is queued and delivered as the next
+//!   ordinary warm input (the turn-completed race) is queued as the next
 //!   `turn/start` on the same thread. The session is persistent across turns
-//!   while the steering mailbox lives.
+//!   while the steering mailbox lives. Explicit steer never starts a new turn.
+//!   RPC acceptance is pending; native userMessage.clientId/readback records it.
 //! - Interrupt: cancelling [`RunControls::interrupt`] sends `turn/interrupt`,
 //!   escalating to SIGTERM → SIGKILL if the child is unresponsive; the stream
 //!   always ends with `Done { status: Interrupted }`.
 
+mod approvals;
 pub(crate) mod catalog;
+pub(crate) mod composer_catalog;
+mod elicitation;
+mod goals;
 pub mod native;
 mod normalize;
 mod subagents;
@@ -68,13 +73,15 @@ use crate::{
 };
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, to_effort};
 use normalize::{
-    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_type,
-    notification_thread_id, route_child_notification, turn_error_message, turn_id, usage_event,
+    ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_turn_id,
+    item_type, notification_thread_id, route_child_notification, turn_error_message, turn_id,
+    usage_event,
 };
 
 /// Engine-only model-option keys. They are consumed by this adapter and never
 /// forwarded as model configuration.
 pub const LUNA_NATIVE_THREAD_NAME_OPTION: &str = "lunaNativeThreadName";
+pub const LUNA_STEER_RECONCILE_OPTION: &str = "lunaSteerReconcileIds";
 pub const LUNA_STRICT_RESUME_OPTION: &str = "lunaStrictResume";
 pub const LUNA_CODEX_HOME_OPTION: &str = "lunaCodexHome";
 pub const LUNA_CODEX_FILE_AUTH_OPTION: &str = "lunaCodexFileAuth";
@@ -129,6 +136,7 @@ pub(super) fn apply_file_auth_override(cmd: &mut Command) {
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
 /// fake app server with [`CodexHarness::with_executable`].
 pub struct CodexHarness {
+    catalog_connections: composer_catalog::CatalogConnections,
     executable: Option<PathBuf>,
     /// Grace between `turn/interrupt` and SIGTERM.
     interrupt_grace: Duration,
@@ -146,6 +154,7 @@ impl Default for CodexHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             commands: tokio::sync::OnceCell::new(),
+            catalog_connections: composer_catalog::CatalogConnections::default(),
         }
     }
 }
@@ -728,8 +737,45 @@ impl Harness for CodexHarness {
         self.discover_models(None, false).await
     }
 
-    /// Skills from a short-lived `skills/list` probe (see
-    /// [`Self::discover_commands`]); cached on success.
+    async fn composer_catalog(
+        &self,
+        cwd: &std::path::Path,
+        home: &std::path::Path,
+        force_file_auth: bool,
+        thread_id: Option<&str>,
+    ) -> Result<luna_proto::ComposerCatalog, HarnessError> {
+        let cwd = cwd.canonicalize().map_err(HarnessError::Io)?;
+        if let Some(client) =
+            thread_id.and_then(|thread| self.catalog_connections.get(home, &cwd, thread))
+        {
+            return tokio::time::timeout(
+                Duration::from_secs(8),
+                composer_catalog::read(&client, &cwd, thread_id),
+            )
+            .await
+            .map_err(|_| HarnessError::Protocol("native thread catalog timed out".into()))?;
+        }
+        native::CodexNativeClient::new(home)
+            .with_executable(self.resolve_executable()?)
+            .for_execution_home(home, force_file_auth)
+            .read_composer_catalog(&cwd, thread_id)
+            .await
+    }
+
+    fn composer_catalog_source(&self) -> String {
+        let Ok(path) = self.resolve_executable() else {
+            return "unavailable".into();
+        };
+        let metadata = std::fs::metadata(&path).ok();
+        format!(
+            "{}:{:?}:{:?}",
+            path.display(),
+            metadata.as_ref().map(|m| m.len()),
+            metadata.and_then(|m| m.modified().ok())
+        )
+    }
+
+    /// Skills from a short-lived `skills/list` probe, cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         self.commands
             .get_or_try_init(|| self.discover_commands())
@@ -752,9 +798,11 @@ impl Harness for CodexHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let codex_home = request.model_options.remove(LUNA_CODEX_HOME_OPTION);
         let codex_file_auth = request.model_options.remove(LUNA_CODEX_FILE_AUTH_OPTION);
+        request.review = None;
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
+        request.input_items.clear();
         request.model_options.clear();
         if let Some(codex_home) = codex_home {
             request
@@ -813,6 +861,7 @@ impl CodexHarness {
                 ));
             }
         }
+        crate::validate_composer_inputs(&request.attachments, &request.input_items)?;
         let exe = self.resolve_executable()?;
         // Title generation has no tools and remains read-only. Ordinary runs
         // keep the engine-resolved sandbox; never broaden it in the adapter.
@@ -848,11 +897,13 @@ impl CodexHarness {
             apply_file_auth_override(&mut cmd);
         }
         cmd.arg("app-server");
-        if let Some(codex_home) = request
+        let catalog_home = request
             .model_options
             .remove(LUNA_CODEX_HOME_OPTION)
             .and_then(|value| value.as_str().map(std::path::PathBuf::from))
-        {
+            .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
+            .or_else(|| crate::executable::home_dir().map(|home| home.join(".codex")));
+        if let Some(codex_home) = &catalog_home {
             cmd.env("CODEX_HOME", codex_home);
         }
         request
@@ -896,8 +947,13 @@ impl CodexHarness {
 
         let (client, incoming) = RpcClient::new(stdin, stdout);
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
+        let (input_ready_tx, input_ready_rx) = tokio::sync::oneshot::channel();
+        let validate_selections = !request.input_items.is_empty();
         tokio::spawn(run_session(Session {
+            input_ready: validate_selections.then_some(input_ready_tx),
             title_only,
+            catalog_home,
+            catalog_connections: self.catalog_connections.clone(),
             child,
             client,
             incoming,
@@ -909,6 +965,9 @@ impl CodexHarness {
             stderr_tail,
         }));
 
+        if validate_selections {
+            input_ready_rx.await.map_err(|_| HarnessError::RejectedBeforeAcceptance("Codex stopped before validating the selected inputs; your input remains available".into()))??;
+        }
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))
         })
@@ -921,7 +980,10 @@ impl CodexHarness {
 // ---------------------------------------------------------------------------
 
 struct Session {
+    input_ready: Option<tokio::sync::oneshot::Sender<Result<(), HarnessError>>>,
     title_only: bool,
+    catalog_home: Option<PathBuf>,
+    catalog_connections: composer_catalog::CatalogConnections,
     child: Child,
     client: RpcClient,
     incoming: mpsc::Receiver<Incoming>,
@@ -944,12 +1006,60 @@ struct TurnRouter {
     completed: VecDeque<String>,
 }
 
+/// Real Codex inline review (0.159): `review/start` returns the root turn,
+/// one `turn/started` announces a review sub-turn with a different id, and
+/// every item plus the final `turn/completed` carry the root id. The sub-turn
+/// is an alias of the root: it must not retire the root or receive Stop.
+#[derive(Default)]
+struct ReviewTurn {
+    root: Option<String>,
+    aliases: HashSet<String>,
+}
+
+impl ReviewTurn {
+    fn start(&mut self, root: String) {
+        self.root = (!root.is_empty()).then_some(root);
+        self.aliases.clear();
+    }
+
+    /// Canonical id for a `turn/started`: a different id announced while the
+    /// review root is the active turn is the review sub-turn.
+    fn started(&mut self, id: String, active: Option<&str>) -> String {
+        match self.root.as_deref() {
+            Some(root) if !id.is_empty() && id != root && active == Some(root) => {
+                self.aliases.insert(id);
+                root.to_owned()
+            }
+            _ => id,
+        }
+    }
+
+    fn is_alias(&self, id: &str) -> bool {
+        self.aliases.contains(id)
+    }
+
+    fn canonical(&self, id: String) -> String {
+        match self.root.as_ref() {
+            Some(root) if self.aliases.contains(&id) => root.clone(),
+            _ => id,
+        }
+    }
+
+    fn settle(&mut self, id: &str) {
+        if self.root.as_deref() == Some(id) {
+            self.root = None;
+            self.aliases.clear();
+        }
+    }
+}
+
 /// A provider call ID may be delivered more than once. Keep one bounded set
 /// for the active turn; an old turn cannot pass the router's active-turn check.
 #[derive(Default)]
 struct LunaCallIds {
     turn_id: Option<String>,
     seen: HashSet<String>,
+    mcp_seen: HashSet<String>,
 }
 
 impl LunaCallIds {
@@ -962,6 +1072,7 @@ impl LunaCallIds {
         if self.turn_id.as_deref() != Some(turn_id) {
             self.turn_id = Some(turn_id.to_owned());
             self.seen.clear();
+            self.mcp_seen.clear();
         }
         self.seen.len() < MAX_CALLS_PER_TURN && self.seen.insert(call_id.to_owned())
     }
@@ -1025,10 +1136,106 @@ fn rotate(id: &mut String) -> (String, String) {
     (prev, id.clone())
 }
 
-fn clear_explicit_steer_turn(owner: &mut Option<String>, terminal_turn_id: &str) {
-    if owner.as_deref() == Some(terminal_turn_id) {
-        *owner = None;
+/// IDs correlate delivery; they never authorize retry or deduplicate upstream.
+#[derive(Default)]
+struct NativeSteers {
+    pending: HashMap<String, (Option<String>, Option<String>)>,
+}
+
+impl NativeSteers {
+    fn record(&mut self, item: &Value, turn_id: &str) -> Option<Option<String>> {
+        if !matches!(item_type(item), "userMessage" | "user_message") {
+            return None;
+        }
+        let id = item.get("clientId").and_then(Value::as_str)?;
+        let (expected, _) = self.pending.get(id)?;
+        if expected
+            .as_deref()
+            .is_some_and(|expected| expected != turn_id)
+        {
+            return None;
+        }
+        self.pending.remove(id).map(|(_, message_id)| message_id)
     }
+}
+
+async fn emit_recorded_steer(
+    event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    assistant_message_id: &mut String,
+    user_message_id: Option<String>,
+    historical: bool,
+) -> bool {
+    let (previous, next) = if historical {
+        (None, None)
+    } else {
+        let (prev, next) = rotate(assistant_message_id);
+        (Some(prev), Some(next))
+    };
+    send(
+        event_tx,
+        AgentEvent::Steered {
+            user_message_id,
+            assistant_message_id: previous,
+            next_assistant_message_id: next,
+        },
+    )
+    .await
+}
+
+/// A missing history item proves nothing. Read once with a bounded wait and
+/// retain every unresolved ID for late notifications or a later reconnect.
+async fn reconcile_native_steers(
+    client: &RpcClient,
+    thread_id: &str,
+    steers: &mut NativeSteers,
+    assistant_message_id: &mut String,
+    event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    historical: bool,
+) -> bool {
+    if steers.pending.is_empty() {
+        return true;
+    }
+    let read = tokio::time::timeout(
+        Duration::from_secs(2),
+        client.request(
+            "thread/read",
+            json!({"threadId": thread_id, "includeTurns": true}),
+        ),
+    )
+    .await;
+    let Ok(Ok(value)) = read else {
+        return true;
+    };
+    let Some(thread) = value
+        .get("thread")
+        .filter(|thread| thread.get("id").and_then(Value::as_str) == Some(thread_id))
+    else {
+        return true;
+    };
+    for turn in thread
+        .get("turns")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let Some(turn_id) = turn.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        for item in turn
+            .get("items")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(message_id) = steers.record(item, turn_id)
+                && !emit_recorded_steer(event_tx, assistant_message_id, message_id, historical)
+                    .await
+            {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 async fn send(tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>, ev: AgentEvent) -> bool {
@@ -1039,6 +1246,36 @@ async fn send(tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>, ev: AgentEven
 async fn start_turn(client: &RpcClient, params: Value) -> Result<String, HarnessError> {
     let started = client.request("turn/start", params).await?;
     Ok(started["turn"]["id"].as_str().unwrap_or("").to_owned())
+}
+
+/// Review owns the already-resolved thread. A separate LUNA review chat starts
+/// a fresh native thread first; deprecated detached provider delivery is avoided.
+async fn start_review(
+    client: &RpcClient,
+    thread_id: &str,
+    review: &luna_proto::NativeReviewRequest,
+) -> Result<String, HarnessError> {
+    review.target.validate().map_err(HarnessError::Protocol)?;
+    let started = client
+        .request(
+            "review/start",
+            json!({
+                "threadId": thread_id,
+                "delivery": "inline",
+                "target": review.target,
+            }),
+        )
+        .await?;
+    if started["reviewThreadId"].as_str() != Some(thread_id) {
+        return Err(HarnessError::Protocol(
+            "Codex returned an unexpected review thread; the task binding was preserved".into(),
+        ));
+    }
+    let turn_id = started["turn"]["id"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| HarnessError::Protocol("Codex review/start returned no turn id".into()))?;
+    Ok(turn_id.to_owned())
 }
 
 /// Awaiting a provider reply must not suspend Stop or consumer teardown.
@@ -1063,7 +1300,10 @@ impl SessionLiveness<'_> {
 /// steering mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        mut input_ready,
         title_only,
+        catalog_home,
+        catalog_connections,
         mut child,
         client,
         mut incoming,
@@ -1181,6 +1421,17 @@ async fn run_session(session: Session) {
         if let Some(tier) = &service_tier {
             p.insert("serviceTier".into(), Value::String(tier.clone()));
         }
+        if request.review.is_some()
+            && let Some(effort) = effort
+        {
+            // review/start has no per-turn effort field; freeze the selected
+            // reasoning setting into thread/start or thread/resume instead.
+            p.entry("config".to_string())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("thread config is an object")
+                .insert("model_reasoning_effort".into(), effort.into());
+        }
         p
     };
 
@@ -1249,6 +1500,21 @@ async fn run_session(session: Session) {
                 .await?
         };
         let thread_id = thread["thread"]["id"].as_str().unwrap_or("").to_owned();
+        if request.review.is_some() && thread_id.is_empty() {
+            return Err(HarnessError::Protocol(
+                "Codex returned no thread identity for native review".into(),
+            ));
+        }
+        // Native thread/start and thread/resume report this policy beside `thread`.
+        // thread/read does not expose it; keep the provider-reported loaded state.
+        client.set_composer_policy(
+            &thread_id,
+            thread
+                .get("disabledPluginIds")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
+        );
         if !title_only
             && let Some(name) = request
                 .model_options
@@ -1304,10 +1570,49 @@ async fn run_session(session: Session) {
         }
     };
 
-    let turn_params = |text: &str| -> Value {
+    // Metadata requests reuse the exact loaded native runtime. The lease drops
+    // with this session and never keeps a child alive after adapter shutdown.
+    let catalog_cwd = std::path::Path::new(&request.cwd)
+        .canonicalize()
+        .ok()
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|| request.cwd.clone());
+    let _catalog_lease = catalog_home
+        .as_deref()
+        .map(|home| catalog_connections.register(home, &catalog_cwd, &thread_id, client.clone()));
+
+    // Retained for the entire warm subscription; generation-aware Drop cannot
+    // unregister a replacement session. Never register ephemeral title work.
+    let _goal_connection = if title_only {
+        None
+    } else {
+        catalog_home
+            .as_ref()
+            .map(|home| goals::register(home, &thread_id, &client))
+    };
+    if !title_only
+        && let Some(Ok(Ok(reply))) = liveness
+            .wait(tokio::time::timeout(
+                Duration::from_secs(5),
+                client.request("thread/goal/get", json!({"threadId": thread_id})),
+            ))
+            .await
+        && let Ok(goal) = goals::decode(&thread_id, &reply)
+    {
+        let _ = send(
+            &event_tx,
+            AgentEvent::GoalChanged {
+                thread_id: thread_id.clone(),
+                goal,
+            },
+        )
+        .await;
+    }
+
+    let turn_params = |input: Vec<Value>| -> Value {
         let mut p = serde_json::Map::new();
         p.insert("threadId".into(), Value::String(thread_id.clone()));
-        p.insert("input".into(), json!([{ "type": "text", "text": text }]));
+        p.insert("input".into(), Value::Array(input));
         p.insert("approvalPolicy".into(), approval_policy.into());
         p.insert("approvalsReviewer".into(), approvals_reviewer.into());
         p.insert(
@@ -1331,6 +1636,47 @@ async fn run_session(session: Session) {
         Value::Object(p)
     };
 
+    let initial_input = match crate::composer_input::codex_input(
+        &request.prompt,
+        &request.attachments,
+        &request.input_items,
+    ) {
+        Ok(input) => input,
+        Err(error) => {
+            if let Some(tx) = input_ready.take() {
+                let _ = tx.send(Err(error));
+            } else {
+                let _ = event_tx.send(Err(error)).await;
+            }
+            shutdown_child(&mut child, kill_grace).await;
+            return;
+        }
+    };
+    let Some(validation) = liveness
+        .wait(composer_catalog::validate_inputs(
+            &client,
+            std::path::Path::new(&request.cwd),
+            &thread_id,
+            &request.input_items,
+        ))
+        .await
+    else {
+        shutdown_child(&mut child, kill_grace).await;
+        return;
+    };
+    if let Err(error) = validation {
+        if let Some(tx) = input_ready.take() {
+            let _ = tx.send(Err(error));
+        } else {
+            let _ = event_tx.send(Err(error)).await;
+        }
+        shutdown_child(&mut child, kill_grace).await;
+        return;
+    }
+    if let Some(tx) = input_ready.take() {
+        let _ = tx.send(Ok(()));
+    }
+
     let mut assistant_message_id = new_message_id();
     if !send(
         &event_tx,
@@ -1349,12 +1695,45 @@ async fn run_session(session: Session) {
         return;
     }
 
-    let mut router = TurnRouter::default();
-    let mut luna_call_ids = LunaCallIds::default();
-    let Some(started) = liveness
-        .wait(start_turn(&client, turn_params(&request.prompt)))
+    let mut native_steers = NativeSteers::default();
+    if request.resume.as_deref() == Some(thread_id.as_str()) {
+        for id in request
+            .model_options
+            .get(LUNA_STEER_RECONCILE_OPTION)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            native_steers
+                .pending
+                .insert(id.to_string(), (None, Some(id.to_string())));
+        }
+        if !reconcile_native_steers(
+            &client,
+            &thread_id,
+            &mut native_steers,
+            &mut assistant_message_id,
+            &event_tx,
+            true,
+        )
         .await
-    else {
+        {
+            shutdown_child(&mut child, kill_grace).await;
+            return;
+        }
+    }
+
+    let mut router = TurnRouter::default();
+    let mut review_turn = ReviewTurn::default();
+    let mut luna_call_ids = LunaCallIds::default();
+    let initial_turn = async {
+        match request.review.as_ref() {
+            Some(review) => start_review(&client, &thread_id, review).await,
+            None => start_turn(&client, turn_params(initial_input)).await,
+        }
+    };
+    let Some(started) = liveness.wait(initial_turn).await else {
         if !event_tx.is_closed() {
             let _ = send(
                 &event_tx,
@@ -1372,6 +1751,9 @@ async fn run_session(session: Session) {
     };
     match started {
         Ok(id) => {
+            if request.review.is_some() {
+                review_turn.start(id.clone());
+            }
             router.adopt_started(id.clone());
             if !send(
                 &event_tx,
@@ -1400,6 +1782,10 @@ async fn run_session(session: Session) {
     // ---- main loop --------------------------------------------------------
     // Deltas seen per agent-message item, so a model that never streams
     // (item/completed only) still emits its text exactly once.
+    let mut review_output_pending = request.review.is_some();
+    // Codex repeats the exitedReviewMode text as a final agent message; the
+    // findings part already carries it.
+    let mut review_output: Option<String> = None;
     let mut streamed_text: HashSet<String> = HashSet::new();
     let mut async_questions_seen: HashSet<String> = HashSet::new();
     let mut reasoning_streams: HashMap<String, ReasoningStream> = HashMap::new();
@@ -1410,16 +1796,15 @@ async fn run_session(session: Session) {
             .map(|contract| contract.context.thread_id.as_str()),
     );
     let mut computer_use_turn_cancel = CancellationToken::new();
+    let mut pending_approvals = approvals::PendingApprovals::new();
     // Token usage is held until the turn ends, emitted just before Done.
     let mut pending_usage: Option<AgentEvent> = None;
     // Steers whose `turn/steer` lost the turn-completed race; delivered as the
     // next `turn/start` when the expected turn's end notification arrives.
-    let mut queued_steers: VecDeque<String> = VecDeque::new();
-    // The Codex wire does not correlate echoed user items to `turn/steer`
-    // request ids. Keep explicit steering single-flight and never manufacture
-    // incorporation from a text match; a successful RPC response is only an
-    // accepted-but-unconfirmed delivery.
-    let mut explicit_steer_turn: Option<String> = None;
+    // Typed input, its composer selections and the durable correlation ID.
+    let mut queued_steers: VecDeque<(Vec<Value>, Vec<luna_proto::ComposerInput>, Option<String>)> =
+        VecDeque::new();
+    // Acknowledged input remains pending until its exact clientId is recorded.
     let mut steering_open = true;
     let mut interrupted = false;
     let mut interrupt_sent = false;
@@ -1458,8 +1843,26 @@ async fn run_session(session: Session) {
                     }
                 }
                 match method.as_str() {
+                    "thread/goal/updated" | "thread/goal/cleared" => {
+                        if notification_thread_id(&method, &params).as_deref() != Some(thread_id.as_str()) { continue; }
+                        let goal = if method == "thread/goal/cleared" { None } else {
+                            match goals::decode(&thread_id, &params) {
+                                Ok(goal) => goal,
+                                Err(error) => { tracing::warn!(%error, "invalid goal notification"); continue; }
+                            }
+                        };
+                        if !send(&event_tx, AgentEvent::GoalChanged { thread_id: thread_id.clone(), goal }).await { break 'main; }
+                    }
+                    "serverRequest/resolved" => {
+                        if params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str())
+                            && let Some(id) = params.get("requestId")
+                            && let Some(cancel) = pending_approvals.remove(&id.to_string())
+                        {
+                            cancel.cancel();
+                        }
+                    }
                     "turn/started" => {
-                        let id = turn_id(&params);
+                        let id = review_turn.started(turn_id(&params), router.active_id());
                         let previous = router.active_id().map(str::to_owned);
                         router.note_started(id.clone());
                         // A late start for a completed turn must not rotate
@@ -1469,6 +1872,7 @@ async fn run_session(session: Session) {
                         }
                         if previous.as_deref() != Some(id.as_str()) {
                             done_current = false;
+                            if !send(&event_tx, AgentEvent::ProviderTurnStarted { thread_id: thread_id.clone(), turn_id: id.clone() }).await { break 'main; }
                         }
                         if computer_use_turn_cancel.is_cancelled() || previous.as_deref() != Some(id.as_str()) {
                             computer_use_turn_cancel.cancel();
@@ -1528,6 +1932,31 @@ async fn run_session(session: Session) {
                             Phase::Completed
                         };
                         let item = params.get("item").unwrap_or(&Value::Null);
+                        if phase == Phase::Completed && matches!(item_type(item), "exitedReviewMode" | "exited_review_mode") {
+                            review_output_pending = false;
+                            review_output = item
+                                .get("review")
+                                .and_then(Value::as_str)
+                                .map(|text| text.trim().to_owned())
+                                .filter(|text| !text.is_empty());
+                        }
+                        if request.review.is_some()
+                            && matches!(item_type(item), "agentMessage" | "agent_message")
+                            && let Some(review) = review_output.as_deref()
+                            && item.get("text").and_then(Value::as_str).map(str::trim) == Some(review)
+                        {
+                            continue;
+                        }
+                        // Item notifications carry the root `turnId`, not `turn.id`.
+                        let item_turn = item_turn_id(&params);
+                        if let Some(message_id) = native_steers.record(item, &item_turn) {
+                            if !emit_recorded_steer(&event_tx, &mut assistant_message_id, message_id,
+                                router.active_id() != Some(item_turn.as_str())).await {
+                                break 'main;
+                            }
+                            continue;
+                        }
+
                         if interrupt.is_cancelled() {
                             // An OS action may already be running when Stop
                             // arrives. A late item completion cannot turn its
@@ -1626,6 +2055,13 @@ async fn run_session(session: Session) {
                         }
                     }
 
+                    "item/commandExecution/outputDelta" | "item/commandExecution/terminalInteraction"
+                    | "item/fileChange/outputDelta" | "item/fileChange/patchUpdated" => {
+                        for event in normalize::tool_activity(&method, &params) {
+                            if !send(&event_tx, event).await { break 'main; }
+                        }
+                    }
+
                     "thread/tokenUsage/updated" => {
                         if let Some(usage) = normalize::context_usage_event(&params)
                             && !send(&event_tx, usage).await { break 'main; }
@@ -1635,11 +2071,19 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/completed" => {
-                        let id = turn_id(&params);
+                        let raw = turn_id(&params);
+                        // A review sub-turn completion ends the review only
+                        // once reviewer output arrived; the root completes it.
+                        if review_turn.is_alias(&raw) && review_output_pending {
+                            router.note_completed(&raw);
+                            continue;
+                        }
+                        let id = review_turn.canonical(raw);
                         if router.active_id() != Some(id.as_str()) {
                             router.note_completed(&id);
                             continue;
                         }
+                        review_turn.settle(&id);
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -1650,7 +2094,8 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                        clear_explicit_steer_turn(&mut explicit_steer_turn, &id);
+                        if !reconcile_native_steers(&client, &thread_id, &mut native_steers,
+                            &mut assistant_message_id, &event_tx, false).await { break 'main; }
                         router.note_completed(&id);
                         // Item ids never span turns; without this the set grew
                         // one entry per message for a persistent session's life.
@@ -1668,12 +2113,23 @@ async fn run_session(session: Session) {
                                 == Some("failed"))
                             .then(|| "Codex turn failed".to_owned())
                         });
-                        let status = if interrupted {
-                            DoneStatus::Interrupted
-                        } else if error.is_some() {
-                            DoneStatus::Errored
-                        } else {
-                            DoneStatus::Completed
+                        // Native review: a turn that ends without reviewer output is
+                        // an error even when Codex reports it completed.
+                        let review_missing = !interrupted && review_output_pending;
+                        let error = error.or_else(|| {
+                            review_missing
+                                .then(|| "Native review ended without reviewer output".to_string())
+                        });
+                        review_output_pending = false;
+                        review_output = None;
+                        let status = match params.pointer("/turn/status").and_then(Value::as_str) {
+                            Some("interrupted") => DoneStatus::Interrupted,
+                            Some("failed") => DoneStatus::Errored,
+                            Some("completed") if review_missing => DoneStatus::Errored,
+                            Some("completed") => DoneStatus::Completed,
+                            _ if interrupted => DoneStatus::Interrupted,
+                            _ if error.is_some() => DoneStatus::Errored,
+                            _ => DoneStatus::Completed,
                         };
                         done_current = true;
                         if !send(
@@ -1689,17 +2145,20 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                        if interrupted {
+                        if interrupted || status == DoneStatus::Interrupted {
+                            interrupted = true;
                             done_after_interrupt = true;
                             break 'main;
                         }
                         // Persistent session: a steer that lost the race with
                         // this turn's end becomes the next turn now; otherwise
                         // stay alive for the mailbox — the caller owns teardown.
-                        if let Some(text) = queued_steers.pop_front() {
+                        if let Some((input, selections, message_id)) = queued_steers.pop_front() {
                             if !steer_as_new_turn(
                                 &client,
-                                turn_params(&text),
+                                turn_params(input),
+                                message_id,
+                                &request.cwd, &thread_id, &selections,
                                 &mut router,
                                 &liveness,
                                 &mut assistant_message_id,
@@ -1716,11 +2175,12 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/failed" => {
-                        let id = turn_id(&params);
+                        let id = review_turn.canonical(turn_id(&params));
                         if router.active_id() != Some(id.as_str()) {
                             router.note_completed(&id);
                             continue;
                         }
+                        review_turn.settle(&id);
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -1731,6 +2191,8 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
+                        if !reconcile_native_steers(&client, &thread_id, &mut native_steers,
+                            &mut assistant_message_id, &event_tx, false).await { break 'main; }
                         router.note_completed(&id);
                         if let Some(usage) = pending_usage.take()
                             && !send(&event_tx, usage).await
@@ -1762,11 +2224,12 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/aborted" => {
-                        let id = turn_id(&params);
+                        let id = review_turn.canonical(turn_id(&params));
                         if router.active_id() != Some(id.as_str()) {
                             router.note_completed(&id);
                             continue;
                         }
+                        review_turn.settle(&id);
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -1816,6 +2279,7 @@ async fn run_session(session: Session) {
                 }
 
                 Some(Incoming::Request { id, method, params }) => {
+                    pending_approvals.retain(|_, token| !token.is_cancelled());
                     handle_server_request(
                         &client,
                         id,
@@ -1832,6 +2296,7 @@ async fn run_session(session: Session) {
                             call_ids: &mut luna_call_ids,
                             interrupt: &interrupt,
                             computer_use_turn_cancel: &computer_use_turn_cancel,
+                            pending_approvals: &mut pending_approvals,
                         },
                     );
                 }
@@ -1842,27 +2307,42 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
-                    let text = msg.prompt;
+                    let Some(validation) = liveness.wait(composer_catalog::validate_inputs(&client, std::path::Path::new(&request.cwd), &thread_id, &msg.input_items)).await else { break 'main; };
+                    if let Err(error) = validation {
+                        if let Some(tx) = msg.acceptance { let _ = tx.send(SteerAcceptance::Rejected(error.to_string())); }
+                        else { terminal_error = Some(error.to_string()); break 'main; }
+                        continue 'main;
+                    }
+                    let selections = msg.input_items.clone();
+                    let input = match crate::composer_input::codex_input(&msg.prompt, &msg.attachments, &msg.input_items) {
+                        Ok(input) => input,
+                        Err(error) => {
+                            if let Some(tx) = msg.acceptance { let _ = tx.send(SteerAcceptance::Rejected(error.to_string())); }
+                            else { terminal_error = Some(error.to_string()); break 'main; }
+                            continue 'main;
+                        }
+                    };
                     let require_active =
                         msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let mut acceptance = msg.acceptance;
-                    if require_active && explicit_steer_turn.is_some() {
-                        if let Some(tx) = acceptance.take() {
-                            let _ = tx.send(SteerAcceptance::Rejected(
-                                "another Codex steer is accepted but incorporation is unconfirmed"
-                                    .into(),
-                            ));
-                        }
-                        continue 'main;
-                    }
+                    let message_id = msg.message_id;
+                    let wire_id = message_id.clone().unwrap_or_else(new_message_id);
                     if let Some(expected) = router.active.clone() {
                         let steer_params = json!({
                             "threadId": thread_id,
                             "expectedTurnId": expected,
-                            "input": [{ "type": "text", "text": text }],
+                            "clientUserMessageId": wire_id,
+                            "input": input,
                         });
+                        native_steers.pending.insert(wire_id.clone(),
+                            (Some(expected.clone()), message_id.clone()));
                         let Some(reply) = liveness
-                            .wait(client.request_classified("turn/steer", steer_params))
+                            .wait(async {
+                                tokio::time::timeout(Duration::from_secs(5),
+                                    client.request_classified("turn/steer", steer_params)).await
+                                    .unwrap_or_else(|_| Err(RpcRequestFailure::Unknown(
+                                        "Codex steer acknowledgement timed out".into())))
+                            })
                             .await
                         else {
                             if let Some(tx) = acceptance.take() {
@@ -1874,48 +2354,25 @@ async fn run_session(session: Session) {
                         };
                         match reply {
                             Ok(reply) => {
-                                // The response's turn id is the provider's
-                                // acknowledgement that this input joined the
-                                // expected turn. Split the assistant stream
-                                // here for explicit steers too: otherwise the
-                                // user input stays in the queue as unknown and
-                                // all later activity renders above it.
-                                if reply.get("turnId").and_then(Value::as_str)
-                                    != Some(expected.as_str())
-                                {
-                                    if let Some(tx) = acceptance.take() {
-                                        let _ = tx.send(SteerAcceptance::Unknown(
-                                            "Codex steer returned a different turn id".into(),
-                                        ));
-                                    }
-                                    continue 'main;
-                                }
-                                if require_active {
-                                    explicit_steer_turn = Some(expected.clone());
-                                }
-                                let (prev, next) = rotate(&mut assistant_message_id);
-                                if !send(
-                                    &event_tx,
-                                    AgentEvent::Steered {
-                                        assistant_message_id: Some(prev),
-                                        next_assistant_message_id: Some(next),
-                                    },
-                                )
-                                .await
-                                {
-                                    break 'main;
-                                }
-                                if require_active {
-                                    clear_explicit_steer_turn(&mut explicit_steer_turn, &expected);
-                                    if let Some(tx) = acceptance.take() {
-                                        let _ = tx.send(SteerAcceptance::Accepted);
-                                    }
+                                // RPC success acknowledges scheduling only. A clientId
+                                // notification/readback creates the transcript boundary.
+                                if let Some(tx) = acceptance.take() {
+                                    let outcome = if reply.get("turnId").and_then(Value::as_str)
+                                        == Some(expected.as_str()) {
+                                        SteerAcceptance::Accepted
+                                    } else {
+                                        SteerAcceptance::Unknown("Codex steer returned a different or missing turn id".into())
+                                    };
+                                    let _ = tx.send(outcome);
                                 }
                             }
                             // Only a correlated rejection authorizes ordinary
                             // warm input to fall back to the next turn. A lost
                             // reply may already have delivered the input.
                             Err(failure) => {
+                                if matches!(&failure, RpcRequestFailure::Rejected(_)) {
+                                    native_steers.pending.remove(&wire_id);
+                                }
                                 if require_active {
                                     if let Some(tx) = acceptance.take() {
                                         let outcome = match failure {
@@ -1937,7 +2394,9 @@ async fn run_session(session: Session) {
                                     terminal_error = Some(format!(
                                         "Codex steering delivery is unknown; input was not replayed: {message}"
                                     ));
-                                    break 'main;
+                                    // Notifications may already contain the exact native
+                                    // record. Keep consuming; never start a fallback turn.
+                                    continue 'main;
                                 }
                                 tracing::debug!(
                                     target: "luna_harness::codex",
@@ -1947,10 +2406,12 @@ async fn run_session(session: Session) {
                                 if router.active.as_deref() == Some(expected.as_str())
                                     && !router.is_completed(&expected)
                                 {
-                                    queued_steers.push_back(text);
+                                    queued_steers.push_back((input, selections, message_id));
                                 } else if !steer_as_new_turn(
                                     &client,
-                                    turn_params(&text),
+                                    turn_params(input),
+                                    message_id,
+                                    &request.cwd, &thread_id, &selections,
                                     &mut router,
                                     &liveness,
                                     &mut assistant_message_id,
@@ -1971,7 +2432,9 @@ async fn run_session(session: Session) {
                         }
                     } else if !steer_as_new_turn(
                         &client,
-                        turn_params(&text),
+                        turn_params(input),
+                        message_id,
+                        &request.cwd, &thread_id, &selections,
                         &mut router,
                         &liveness,
                         &mut assistant_message_id,
@@ -2119,16 +2582,45 @@ fn codex_permission_settings(
 /// Deliver a steer as a fresh `turn/start` on the same thread (the fallback
 /// leg of the steer race, and the between-turns delivery path). Returns false
 /// when the loop should end (turn/start failed or the consumer hung up).
+#[allow(clippy::too_many_arguments)]
 async fn steer_as_new_turn(
     client: &RpcClient,
-    params: Value,
+    mut params: Value,
+    user_message_id: Option<String>,
+    cwd: &str,
+    thread_id: &str,
+    selections: &[luna_proto::ComposerInput],
     router: &mut TurnRouter,
     liveness: &SessionLiveness<'_>,
     assistant_message_id: &mut String,
     done_current: &mut bool,
     computer_use_turn_cancel: &mut CancellationToken,
 ) -> bool {
-    let Some(started) = liveness.wait(start_turn(client, params)).await else {
+    if let Some(id) = &user_message_id {
+        params["clientUserMessageId"] = json!(id);
+    }
+    let Some(started) = liveness
+        .wait(async {
+            let attachments: Vec<String> = params
+                .get("input")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("localImage"))
+                .filter_map(|item| item.get("path").and_then(Value::as_str).map(str::to_owned))
+                .collect();
+            crate::validate_composer_inputs(&attachments, selections)?;
+            composer_catalog::validate_inputs(
+                client,
+                std::path::Path::new(cwd),
+                thread_id,
+                selections,
+            )
+            .await?;
+            start_turn(client, params).await
+        })
+        .await
+    else {
         return false;
     };
     let event_tx = liveness.events;
@@ -2144,6 +2636,7 @@ async fn steer_as_new_turn(
             if !send(
                 event_tx,
                 AgentEvent::Steered {
+                    user_message_id,
                     assistant_message_id: Some(prev),
                     next_assistant_message_id: Some(next),
                 },
@@ -2204,6 +2697,7 @@ struct ServerRequestContext<'a> {
     call_ids: &'a mut LunaCallIds,
     interrupt: &'a CancellationToken,
     computer_use_turn_cancel: &'a CancellationToken,
+    pending_approvals: &'a mut approvals::PendingApprovals,
 }
 
 /// Serve one server→client request. Approval requests round-trip through the
@@ -2215,8 +2709,19 @@ fn handle_server_request(
     params: &Value,
     context: ServerRequestContext<'_>,
 ) {
+    if matches!(
+        method,
+        "item/permissions/requestApproval"
+            | "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+    ) {
+        let mut pending = std::mem::take(context.pending_approvals);
+        approvals::handle(client, id, method, params, &context, &mut pending);
+        *context.pending_approvals = pending;
+        return;
+    }
     let ServerRequestContext {
-        auto_approve,
+        auto_approve: _,
         permission_policy,
         request_input,
         thread_id,
@@ -2226,91 +2731,65 @@ fn handle_server_request(
         call_ids,
         interrupt,
         computer_use_turn_cancel,
+        pending_approvals: _,
     } = context;
-    if method == "item/permissions/requestApproval" {
-        let permission = params
-            .get("permissions")
-            .filter(|value| value.as_object().is_some_and(|map| !map.is_empty()));
+    if method == "mcpServer/elicitation/request"
+        && params.get("serverName").and_then(Value::as_str) != Some("computer-use")
+    {
         let exact_context = !interrupt.is_cancelled()
             && !computer_use_turn_cancel.is_cancelled()
             && active_turn_id.is_some()
             && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
             && params.get("turnId").and_then(Value::as_str) == active_turn_id
-            && params
-                .get("itemId")
-                .and_then(Value::as_str)
-                .is_some_and(|id| !id.is_empty())
             && runtime_contract.is_some_and(|contract| {
                 !contract.context.thread_id.is_empty() && !contract.context.machine_id.is_empty()
             });
-        let Some(permission) = permission
-            .filter(|value| exact_context && value.to_string().len() <= 1024)
-            .cloned()
-        else {
-            client.respond(&id, json!({ "permissions": {} }));
+        if !exact_context {
+            client.respond(&id, json!({ "action": "decline" }));
+            return;
+        }
+        let turn = active_turn_id.unwrap();
+        if call_ids.turn_id.as_deref() != Some(turn) {
+            call_ids.turn_id = Some(turn.to_owned());
+            call_ids.seen.clear();
+            call_ids.mcp_seen.clear();
+        }
+        let wire_id = id.to_string();
+        // A retransmitted opaque request ID shares the original resolver.
+        // Do not send a competing decline response to the same pending ID.
+        if call_ids.mcp_seen.contains(&wire_id) {
+            return;
+        }
+        if call_ids.mcp_seen.len() >= 32 {
+            client.respond(&id, json!({ "action": "decline" }));
+            return;
+        }
+        let Ok(questions) = elicitation::questions(params, &id) else {
+            client.respond(&id, json!({ "action": "decline" }));
             return;
         };
-        let task_id = runtime_contract
-            .map(|contract| contract.context.thread_id.as_str())
-            .unwrap_or("");
-        let reason = params
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("Provider permission requested");
-        let reason: String = reason.chars().take(200).collect();
-        let question = UserInputQuestion {
-            id: new_message_id(),
-            header: "Approve provider permission".into(),
-            question: format!(
-                "Codex in LUNA task {task_id} requests this permission on {}: {}. Reason: {reason}. Allow once?",
-                permission_policy.machine_name, permission
-            ),
-            options: vec!["Deny".into(), "Allow once".into()],
-            multi_select: false,
-            approval: Some(luna_proto::ApprovalRequest {
-                provider_request_id: id.to_string(),
-                provider: HarnessId::Codex,
-                turn_id: active_turn_id.map(str::to_owned),
-                machine_name: permission_policy.machine_name.clone(),
-                action_kind: luna_proto::ApprovalActionKind::Tool,
-                summary: "Provider permission request".into(),
-                requested_scope: permission_policy.scope,
-                expires_at_ms: std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as i64
-                    + 120_000,
-                supports_task_allowance: false,
-            }),
-        };
+        call_ids.mcp_seen.insert(wire_id);
         let client = client.clone();
         let request_input = Arc::clone(request_input);
         let interrupt = interrupt.clone();
         let turn_cancel = computer_use_turn_cancel.clone();
         tokio::spawn(async move {
-            let receiver = (request_input)(vec![question.clone()]);
+            let receiver = (request_input)(questions.clone());
             let answers = tokio::select! {
                 biased;
                 _ = interrupt.cancelled() => None,
                 _ = turn_cancel.cancelled() => None,
                 result = tokio::time::timeout(Duration::from_secs(120), receiver) => result.ok().and_then(Result::ok),
             };
-            let allowed = !interrupt.is_cancelled()
-                && !turn_cancel.is_cancelled()
-                && answers.as_ref().is_some_and(|answers| {
-                    answers.iter().any(|answer| {
-                        answer.question_id == question.id
-                            && answer.labels.as_slice() == ["Allow once"]
-                    })
-                });
-            client.respond(
-                &id,
-                if allowed {
-                    json!({ "permissions": permission })
-                } else {
-                    json!({ "permissions": {} })
-                },
-            );
+            let response = if interrupt.is_cancelled() || turn_cancel.is_cancelled() {
+                json!({ "action": "cancel" })
+            } else {
+                answers
+                    .as_ref()
+                    .and_then(|answers| luna_proto::mcp_response(&questions, answers).ok())
+                    .unwrap_or_else(|| json!({ "action": "cancel" }))
+            };
+            client.respond(&id, response);
         });
         return;
     }
@@ -2347,6 +2826,7 @@ fn handle_server_request(
             ),
             options: vec!["Deny".into(), "Allow once".into()],
             multi_select: false,
+            mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: id.to_string(),
                 provider: HarnessId::Codex,
@@ -2361,6 +2841,7 @@ fn handle_server_request(
                     .as_millis() as i64
                     + 120_000,
                 supports_task_allowance: false,
+                details: None,
             }),
         };
         let client = client.clone();
@@ -2473,58 +2954,8 @@ fn handle_server_request(
         });
         return;
     }
-    let is_approval = matches!(
-        method,
-        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval"
-    );
-    if !is_approval {
-        tracing::debug!(
-            target: "luna_harness::codex",
-            "unhandled server request: {method}"
-        );
-        client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
-        return;
-    }
-    if auto_approve {
-        client.respond(&id, json!({ "decision": "accept" }));
-        return;
-    }
-
-    let question = approval_question(method, params, &id, &permission_policy);
-    let client = client.clone();
-    let request_input = Arc::clone(request_input);
-    tokio::spawn(async move {
-        // The engine's input bridge owns the `InputRequested`/`InputResolved`
-        // lifecycle (it mints the request id the resolver is parked under);
-        // emitting our own copy here doubled the doc's input part with an id
-        // `respond_input` could never match.
-        //
-        // A dropped sender (caller went away) degrades to a decline so the
-        // agent is unblocked — never silently allowed.
-        let answers = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            (request_input)(vec![question.clone()]),
-        )
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or_default();
-        let decision = answers
-            .iter()
-            .find(|answer| answer.question_id == question.id)
-            .and_then(|answer| answer.labels.first())
-            .map(String::as_str);
-        client.respond(
-            &id,
-            json!({
-                "decision": match decision {
-                    Some("Allow once") => "accept",
-                    Some("Allow for task") => "acceptForSession",
-                    _ => "decline",
-                }
-            }),
-        );
-    });
+    tracing::debug!(target: "luna_harness::codex", "unhandled server request: {method}");
+    client.respond_error(&id, -32601, &format!("unsupported method: {method}"));
 }
 
 /// Only a form choice explicitly advertising a one-request approval can be
@@ -2689,6 +3120,7 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
                     .iter()
                     .find_map(|k| q.get(*k).and_then(Value::as_bool))
                     .unwrap_or(false),
+                mcp: None,
                 approval: None,
             };
             (wire_id, question)
@@ -2697,83 +3129,14 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
 }
 
 /// Synthesize the yes/no question an approval request surfaces to the user.
+#[cfg(test)]
 fn approval_question(
     method: &str,
     params: &Value,
     provider_request_id: &Value,
     policy: &luna_proto::PermissionPolicy,
 ) -> UserInputQuestion {
-    let (header, question) = if method.contains("commandExecution") {
-        let command = match params.get("command") {
-            Some(Value::String(s)) => s.clone(),
-            Some(Value::Array(parts)) => parts
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(" "),
-            _ => String::new(),
-        };
-        (
-            "Approve command".to_owned(),
-            if command.is_empty() {
-                "Codex wants to run a command. Allow it?".to_owned()
-            } else {
-                format!("Codex wants to run `{command}`. Allow it?")
-            },
-        )
-    } else {
-        let paths: Vec<&str> = params
-            .get("changes")
-            .and_then(Value::as_array)
-            .map(|a| a.as_slice())
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|c| c.get("path").and_then(Value::as_str))
-            .collect();
-        (
-            "Approve file change".to_owned(),
-            if paths.is_empty() {
-                "Codex wants to modify files. Allow it?".to_owned()
-            } else {
-                format!("Codex wants to modify {}. Allow it?", paths.join(", "))
-            },
-        )
-    };
-    let action_kind = if method.contains("commandExecution") {
-        luna_proto::ApprovalActionKind::Command
-    } else {
-        luna_proto::ApprovalActionKind::FileChange
-    };
-    UserInputQuestion {
-        id: new_message_id(),
-        header,
-        question: format!("{question} Target: {}.", policy.machine_name),
-        options: vec![
-            "Deny".into(),
-            "Allow once".into(),
-            "Allow for task".into(),
-            "Cancel".into(),
-        ],
-        multi_select: false,
-        approval: Some(luna_proto::ApprovalRequest {
-            provider_request_id: provider_request_id.to_string(),
-            provider: HarnessId::Codex,
-            turn_id: params
-                .get("turnId")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            machine_name: policy.machine_name.clone(),
-            action_kind,
-            summary: question,
-            requested_scope: policy.scope,
-            expires_at_ms: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64
-                + 120_000,
-            supports_task_allowance: true,
-        }),
-    }
+    approvals::legacy_question(method, params, provider_request_id, policy)
 }
 
 use crate::{Signal, send_signal, shutdown_child};
@@ -2808,17 +3171,6 @@ mod tests {
         ordinary["delivery"] = json!("async");
         ordinary["questions"] = json!([]);
         assert!(async_questions_from_item(&ordinary).is_none());
-    }
-
-    #[test]
-    fn explicit_steer_owner_clears_only_on_its_terminal_turn() {
-        let mut owner = Some("turn-new".to_string());
-        clear_explicit_steer_turn(&mut owner, "turn-stale");
-        assert_eq!(owner.as_deref(), Some("turn-new"));
-        clear_explicit_steer_turn(&mut owner, "turn-new");
-        assert!(owner.is_none());
-        clear_explicit_steer_turn(&mut owner, "turn-new");
-        assert!(owner.is_none());
     }
 
     #[cfg(unix)]
@@ -2871,7 +3223,7 @@ mod tests {
         assert!(q.question.contains("rm -rf /tmp/x"));
         assert_eq!(
             q.options,
-            vec!["Deny", "Allow once", "Allow for task", "Cancel"]
+            vec!["Deny", "Allow once", "Allow for session", "Cancel turn"]
         );
         assert!(!q.multi_select);
         assert_eq!(q.approval.unwrap().machine_name, "test-machine");

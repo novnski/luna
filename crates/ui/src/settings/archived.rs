@@ -342,6 +342,7 @@ mod tests {
 
     fn chat(id: &str, archived: bool) -> Chat {
         Chat {
+            child_thread: None,
             id: id.into(),
             device_id: "d".into(),
             title: None,

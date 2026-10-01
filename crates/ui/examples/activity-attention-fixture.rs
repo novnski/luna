@@ -84,6 +84,7 @@ fn request_entry(id: &str, approval: bool, device: &str) -> SessionMessageEntry 
                     vec!["private option".into()]
                 },
                 multi_select: false,
+                mcp: None,
                 approval: approval.then(|| ApprovalRequest {
                     provider_request_id: request.into(),
                     provider: HarnessId::Mock,
@@ -94,6 +95,7 @@ fn request_entry(id: &str, approval: bool, device: &str) -> SessionMessageEntry 
                     requested_scope: PermissionScope::Workspace,
                     expires_at_ms: 1_900_000_000_000,
                     supports_task_allowance: false,
+                    details: None,
                 }),
             }],
             resolved: false,

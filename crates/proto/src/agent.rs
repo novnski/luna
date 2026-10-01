@@ -227,6 +227,122 @@ pub struct ApprovalRequest {
     pub requested_scope: PermissionScope,
     pub expires_at_ms: i64,
     pub supports_task_allowance: bool,
+    /// Optional provider context and exact advertised decision choices. Older
+    /// provider records retain the legacy approval path when this is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<ApprovalDetails>,
+}
+
+/// Display-only metadata. Grants/rules are held by the adapter, never accepted
+/// from a client-supplied copy of this structure.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalDetails {
+    pub provider_thread_id: Option<String>,
+    pub item_id: Option<String>,
+    pub approval_id: Option<String>,
+    pub kind: Option<String>,
+    pub environment_id: Option<String>,
+    pub cwd: Option<String>,
+    pub command: Option<String>,
+    pub reason: Option<String>,
+    pub command_actions: Option<serde_json::Value>,
+    pub file_changes: Option<serde_json::Value>,
+    pub grant_root: Option<String>,
+    pub network: Option<ApprovalNetworkContext>,
+    pub permissions: Option<serde_json::Value>,
+    pub proposed_exec_policy_amendment: Option<serde_json::Value>,
+    #[serde(default)]
+    pub proposed_network_policy_amendments: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub choices: Vec<ApprovalChoice>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalNetworkContext {
+    pub host: String,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalChoice {
+    pub label: String,
+    /// Native lifetime, e.g. request, turn, session, or persistent policy.
+    pub scope: String,
+    pub description: String,
+}
+
+impl ApprovalDetails {
+    /// Shared rendering for the composer and side-chat panels. JSON context
+    /// remains exact so filesystem deny entries and host rules stay visible.
+    pub fn display_rows(&self) -> Vec<(String, String)> {
+        let mut rows = Vec::new();
+        for (label, value) in [
+            ("Action", self.kind.as_ref()),
+            ("Command / input", self.command.as_ref()),
+            ("Working directory", self.cwd.as_ref()),
+            ("Environment", self.environment_id.as_ref()),
+            ("Reason", self.reason.as_ref()),
+            ("Provider thread", self.provider_thread_id.as_ref()),
+            ("Item", self.item_id.as_ref()),
+            ("Approval callback", self.approval_id.as_ref()),
+            ("Proposed write root", self.grant_root.as_ref()),
+        ] {
+            if let Some(value) = value {
+                rows.push((label.into(), value.clone()));
+            }
+        }
+        if let Some(network) = &self.network {
+            rows.push((
+                "Network host".into(),
+                format!("{} ({})", network.host, network.protocol),
+            ));
+        }
+        for (label, value) in [
+            ("Parsed command actions", self.command_actions.as_ref()),
+            ("File changes", self.file_changes.as_ref()),
+            (
+                "Proposed command rule",
+                self.proposed_exec_policy_amendment.as_ref(),
+            ),
+        ] {
+            if let Some(value) = value {
+                rows.push((
+                    label.into(),
+                    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string()),
+                ));
+            }
+        }
+        if let Some(permissions) = &self.permissions {
+            if let Some(categories) = permissions.as_object() {
+                for (category, value) in categories {
+                    let label = match category.as_str() {
+                        "network" => "Network permissions",
+                        "fileSystem" => "Filesystem permissions",
+                        _ => category,
+                    };
+                    if !value.is_null() {
+                        rows.push((
+                            label.into(),
+                            serde_json::to_string_pretty(value)
+                                .unwrap_or_else(|_| value.to_string()),
+                        ));
+                    }
+                }
+            } else {
+                rows.push(("Requested permissions".into(), permissions.to_string()));
+            }
+        }
+        for (index, value) in self.proposed_network_policy_amendments.iter().enumerate() {
+            rows.push((
+                format!("Proposed network rule {}", index + 1),
+                value.to_string(),
+            ));
+        }
+        rows
+    }
 }
 
 impl ApprovalRequest {
@@ -244,6 +360,11 @@ pub enum ApprovalDecision {
     AllowTask,
     Deny,
     Cancel,
+    /// Index in the authoritative pending request's advertised choices. The
+    /// client cannot submit permission objects or policy amendment payloads.
+    ProviderChoice {
+        index: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,10 +407,26 @@ pub struct ModelOptionChoice {
     pub label: String,
 }
 
+/// Native selections keep their provider identity independent of composer labels.
+/// Images use the existing staged attachment transport, never sender-local paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ComposerInput {
+    Mention { name: String, path: String },
+    Skill { name: String, path: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunRequest {
+    /// A native Codex review, dispatched through review/start rather than an ordinary turn.
+    /// Separate reviews first create an ordinary LUNA chat and a fresh native thread;
+    /// the adapter always runs inline in that chat's own provider binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<NativeReviewRequest>,
     pub prompt: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_items: Vec<ComposerInput>,
     /// The harness picked at send time. Rides the command plane so
     /// claim-on-first-command (chat row still in flight on the registry
     /// channel) dispatches — and records — the picked harness instead of the
@@ -328,8 +465,8 @@ pub struct RunRequest {
     /// (composer uploads: UploadChunk/UploadCommit → durable path). The same
     /// paths also ride the prompt text as `Attached images (local files …)`
     /// refs (luna's `withAttachments` transport — that's what persists in the
-    /// doc); this field additionally lets a harness inline the bytes as image
-    /// content blocks. Additive + serde-defaulted for wire compat.
+    /// doc); this field additionally lets a harness send native image input
+    /// (Codex localImage) or inline image content blocks. Additive + serde-defaulted for wire compat.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<String>,
     /// Host-side isolated-worktree creation (see [`WorktreeSpec`]): when set,
@@ -338,6 +475,58 @@ pub struct RunRequest {
     /// host ignores it and runs in `cwd` (the repo's main checkout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeSpec>,
+}
+
+/// Stable native review target contract shared by durable commands and the picker.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ReviewTarget {
+    UncommittedChanges,
+    BaseBranch { branch: String },
+    Commit { sha: String, title: Option<String> },
+    Custom { instructions: String },
+}
+
+impl ReviewTarget {
+    pub fn validate(&self) -> Result<(), String> {
+        let (value, label) = match self {
+            Self::UncommittedChanges => return Ok(()),
+            Self::BaseBranch { branch } => (branch, "base branch"),
+            Self::Commit { sha, .. } => (sha, "commit"),
+            Self::Custom { instructions } => (instructions, "review instructions"),
+        };
+        if value.trim().is_empty() {
+            return Err(format!("Enter a {label} before starting the review"));
+        }
+        if value.contains('\0') {
+            return Err(format!("The {label} contains an invalid null character"));
+        }
+        Ok(())
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::UncommittedChanges => "Review working changes".into(),
+            Self::BaseBranch { branch } => format!("Review changes against {branch}"),
+            Self::Commit { sha, title } => format!(
+                "Review commit {}{}",
+                sha,
+                title
+                    .as_ref()
+                    .map(|title| format!(": {title}"))
+                    .unwrap_or_default()
+            ),
+            Self::Custom { instructions } => {
+                format!("Review with custom instructions:\n\n{instructions}")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeReviewRequest {
+    pub target: ReviewTarget,
 }
 
 /// Isolated-worktree directive riding [`RunRequest`]. The worktree is created
@@ -554,6 +743,9 @@ pub struct UserInputQuestion {
     /// marker; live authorization is held separately by the engine.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval: Option<ApprovalRequest>,
+    /// Generic MCP form/URL input; not a permission grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<crate::McpInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -590,6 +782,16 @@ pub enum ChildRuntimeStatus {
     Idle,
 }
 
+/// Live tool activity. Raw text stays on the owning host; documents retain a
+/// small display tail. Patch text is a serialized `ToolDiff`, not a terminal delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolActivityKind {
+    Stdout,
+    Stdin,
+    Patch,
+}
+
 /// The normalized streaming event every harness emits.
 ///
 /// Mirrors luna's `AgentEvent` tagged enum.
@@ -606,6 +808,14 @@ pub enum AgentEvent {
         /// Harness-native session id (used for resume).
         session_id: String,
         assistant_message_id: String,
+    },
+    /// Native review lifecycle. Completion text is authoritative and folded by ID,
+    /// so started/completed replay never duplicates findings in the transcript.
+    #[serde(rename_all = "camelCase")]
+    NativeReview {
+        id: String,
+        completed: bool,
+        text: String,
     },
     TextDelta {
         text: String,
@@ -631,12 +841,18 @@ pub enum AgentEvent {
         call: ToolCall,
     },
     #[serde(rename_all = "camelCase")]
+    ToolActivity {
+        id: String,
+        kind: ToolActivityKind,
+        text: String,
+    },
+    #[serde(rename_all = "camelCase")]
     ToolResult {
         id: String,
         is_error: bool,
-        /// Tool output text, capped by the emitting harness (ACP tool-call
-        /// content; claude/codex adapters never populate it). The doc-side
-        /// fold applies its own byte cap before anything persists.
+        /// Complete output received by the adapter. The host journals it
+        /// before limiting live-event or synced-document previews. Provider
+        /// limits still apply; this does not recover bytes never received.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
         /// Inline file diff for edit-shaped tools (ACP `Diff` content).
@@ -687,6 +903,18 @@ pub enum AgentEvent {
     AvailableCommands {
         commands: Vec<SlashCommand>,
     },
+    /// Authoritative native turn boundary, including autonomous goal turns.
+    #[serde(rename_all = "camelCase")]
+    ProviderTurnStarted {
+        thread_id: String,
+        turn_id: String,
+    },
+    /// Provider goal snapshots never imply a transcript/turn completion.
+    #[serde(rename_all = "camelCase")]
+    GoalChanged {
+        thread_id: String,
+        goal: Option<crate::ThreadGoal>,
+    },
     /// Internal supported-provider notification that asks the engine to
     /// refresh task metadata. It is consumed before journal/doc publication.
     #[serde(rename_all = "camelCase")]
@@ -715,7 +943,13 @@ pub enum AgentEvent {
     /// same child transcript even if the provider does not echo the user text.
     #[serde(rename_all = "camelCase")]
     Steered {
+        /// Exact native client user-message correlation when available. Native
+        /// recording proves incorporation into history, not model sampling.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        user_message_id: Option<String>,
         assistant_message_id: Option<String>,
+        /// With an exact user_message_id, None denotes historical readback:
+        /// settle delivery without reopening a turn or rotating live output.
         next_assistant_message_id: Option<String>,
     },
     #[serde(rename_all = "camelCase")]

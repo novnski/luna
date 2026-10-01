@@ -395,6 +395,7 @@ mod tests {
     #[test]
     fn recovery_projection_tracks_authoritative_phase_without_detail_leakage() {
         let chat = Chat {
+            child_thread: None,
             id: "synthetic-task".into(),
             device_id: "synthetic-device".into(),
             title: Some("Private task title".into()),

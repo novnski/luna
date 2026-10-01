@@ -1860,6 +1860,7 @@ async fn run_session(session: Session) {
             if let Some(steer) = queued_steers.pop_front() {
                 let (prev, next) = rotate(&mut assistant_message_id);
                 if !send(&event_tx, AgentEvent::Steered {
+                    user_message_id: None,
                     assistant_message_id: Some(prev),
                     next_assistant_message_id: Some(next),
                 }).await {
@@ -1996,6 +1997,7 @@ async fn run_session(session: Session) {
                             // steers live runs — but deliver, don't drop).
                             let (prev, next) = rotate(&mut assistant_message_id);
                             let _ = send(&event_tx, AgentEvent::Steered {
+                                user_message_id: None,
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
                             }).await;
@@ -2925,6 +2927,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 question: format!("{summary}. Target: {}.", permission_policy.machine_name),
                 options: opencode_approval_options(protocol),
                 multi_select: false,
+                mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: id.to_owned(),
                     provider: HarnessId::Opencode,
@@ -2948,6 +2951,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                         .as_millis() as i64
                         + 120_000,
                     supports_task_allowance,
+                    details: None,
                 }),
             };
             tokio::spawn(async move {
@@ -3499,6 +3503,7 @@ fn map_questions(props: &Value) -> Vec<UserInputQuestion> {
                             })
                             .unwrap_or_default(),
                         multi_select: q.get("multiple").and_then(Value::as_bool).unwrap_or(false),
+                        mcp: None,
                         approval: None,
                     })
                 })

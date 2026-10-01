@@ -104,10 +104,17 @@ pub struct ContextBoundary {
 #[serde(rename_all = "camelCase")]
 pub struct ContextControlState {
     pub schema_version: u32,
+    /// Native goal snapshot; transported with task-local provider controls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<crate::GoalReadback>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding_generation: Option<u32>,
     #[serde(default)]
     pub compact: CompactOperation,
+    /// Host-persisted same-chat rewind intent. Until readback reconciles it,
+    /// keep the full visible transcript and prevent provider dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_rewind: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_boundary: Option<ContextBoundary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -127,8 +134,10 @@ impl Default for ContextControlState {
     fn default() -> Self {
         Self {
             schema_version: CONTEXT_CONTROL_SCHEMA_VERSION,
+            goal: None,
             binding_generation: None,
             compact: CompactOperation::default(),
+            pending_rewind: None,
             last_boundary: None,
             pending_handoff: None,
             last_handoff: None,

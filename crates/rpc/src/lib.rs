@@ -65,6 +65,7 @@ pub mod methods {
     pub const SET_TITLE_SETTINGS: &str = "SetTitleSettings";
     pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
     pub const LIST_MODELS: &str = "ListModels";
+    pub const LIST_COMPOSER_CATALOG: &str = "ListComposerCatalog";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
     /// Peer-to-peer delivery fallback: the SENDER's engine forwards a queued
@@ -187,6 +188,7 @@ pub mod methods {
     /// Adopt a current preview; task and binding persist before chat visibility.
     pub const ADOPT_PROVIDER_TASK: &str = "AdoptProviderTask";
     /// L07 authoritative path for every existing local task mutation.
+    pub const CREATE_CHILD_THREAD: &str = "CreateChildThread";
     pub const EXECUTE_TASK_COMMAND: &str = "ExecuteTaskCommand";
     pub const GET_TASK_COMMAND_RECEIPT: &str = "GetTaskCommandReceipt";
     pub const GET_TASK_CLEANUP: &str = "GetTaskCleanup";
@@ -299,6 +301,8 @@ pub mod methods {
     /// Lazy full-tool-output fetch by doc-resident ref: read the owning
     /// host's journal first, then a legacy R2 sidecar. Relay-forwardable.
     pub const FETCH_TOOL_BLOB: &str = "FetchToolBlob";
+    /// Owner-only live prompt URL fetch; remote read scopes cannot retrieve it.
+    pub const MCP_ELICITATION_URL: &str = "McpElicitationUrl";
     // Updates (ControlRpc, relay-forwardable — a device reports/applies its own
     // binary's update). Stream: current UpdateStatus, then every change.
     pub const UPDATE_STATUS: &str = "UpdateStatus";
@@ -330,6 +334,7 @@ pub mod methods {
         SET_HARNESS_ENABLED,
         LIST_MODELS,
         LIST_COMMANDS,
+        LIST_COMPOSER_CATALOG,
         QUEUE_COMMAND,
         RELAY_COMMAND,
         RETRY_DELIVERY,
@@ -386,6 +391,7 @@ pub mod methods {
         REFRESH_TASK_BINDING,
         PREVIEW_PROVIDER_TASK_IMPORT,
         ADOPT_PROVIDER_TASK,
+        CREATE_CHILD_THREAD,
         EXECUTE_TASK_COMMAND,
         GET_TASK_COMMAND_RECEIPT,
         GET_TASK_CLEANUP,
@@ -467,6 +473,7 @@ pub mod methods {
         UPLOAD_COMMIT,
         READ_ATTACHMENT_CHUNK,
         FETCH_TOOL_BLOB,
+        MCP_ELICITATION_URL,
         UPDATE_STATUS,
         APPLY_UPDATE,
     ];

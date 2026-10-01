@@ -132,6 +132,7 @@ pub mod history_operations;
 mod http_error;
 pub mod instance_lock;
 // The owner-managed action seam is internal until an owner driver is verified.
+mod composer_catalog;
 #[allow(dead_code)]
 pub(crate) mod integration_actions;
 pub mod integration_settings;
@@ -907,6 +908,7 @@ impl EngineCore {
         if let Some(importer) = self.local_import.clone() {
             rpc = rpc.with_local_import(importer);
         }
+        rpc.set_new_task_preferences_path(self.device_write.root().join("composer-defaults.json"));
         let rpc = Arc::new(rpc);
         if tokio::runtime::Handle::try_current().is_ok() {
             let mut worker = self
@@ -920,6 +922,7 @@ impl EngineCore {
                     task_after,
                     project_after,
                 );
+                rpc.start_child_thread_maintenance(self.cleanup_cancel.clone());
                 *worker = Some((rpc.clone(), handle));
             }
         }
