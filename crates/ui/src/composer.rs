@@ -12672,9 +12672,25 @@ impl Render for Composer {
         let measured_model_bounds = self.model_bounds.clone();
         // Codex's Goal switch sits beside the access chip and travels with it.
         let goal_mode_chip = self.render_goal_mode_chip(cx);
+        // A pane composer's two-row layout gives the chips the whole actions
+        // row: at pane widths the main view's 45% cap truncated the model and
+        // access labels to an ellipsis. The main composer keeps its cap.
+        let model_cap = if self.binding.is_pane() && expanded {
+            (surface_width
+                - PILL_BORDER_V
+                - 12.0
+                - 28.0
+                - ACTION_UTILITY_GAP
+                - ACTION_PRIMARY_GAP
+                - 28.0
+                - morph_cluster_inset(true, layout_morph_t))
+            .max(surface_width * 0.45)
+        } else {
+            surface_width * 0.45
+        };
         let model_picker = div()
             .min_w_0()
-            .max_w(px(surface_width * 0.45))
+            .max_w(px(model_cap))
             .relative()
             .left(px(model_offset))
             .opacity(model_opacity)
