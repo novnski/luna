@@ -2953,6 +2953,7 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                     supports_task_allowance,
                     details: None,
                 }),
+                input: None,
             };
             tokio::spawn(async move {
                 let server = Server {
@@ -3505,6 +3506,7 @@ fn map_questions(props: &Value) -> Vec<UserInputQuestion> {
                         multi_select: q.get("multiple").and_then(Value::as_bool).unwrap_or(false),
                         mcp: None,
                         approval: None,
+                        input: None,
                     })
                 })
                 .collect()

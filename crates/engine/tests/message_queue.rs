@@ -170,6 +170,7 @@ impl Harness for HeldHarness {
                     supports_task_allowance: false,
                     details: None,
                 }),
+                input: None,
             }]);
         }
         let finish = self.finish.subscribe();

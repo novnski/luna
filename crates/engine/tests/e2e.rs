@@ -1192,6 +1192,7 @@ async fn respond_input_resolves_pending_question() {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -1356,6 +1357,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
                         supports_task_allowance: false,
                         details: None,
                     }),
+                    input: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -1900,6 +1902,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }],
                 resolved: false,
             }],
@@ -1969,6 +1972,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                         supports_task_allowance: false,
                         details: None,
                     }),
+                    input: None,
                 }],
                 resolved: false,
             }],
@@ -2717,6 +2721,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -2913,6 +2918,7 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
                         multi_select: false,
                         mcp: None,
                         approval: None,
+                        input: None,
                     }])
                     .await;
                     interrupt.cancelled().await;
@@ -3064,6 +3070,7 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 };
                 // The pre-fix Claude/Codex shape: surface the question under
                 // the harness's own id BEFORE asking through the bridge.
@@ -4355,6 +4362,7 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
                                 schema: Box::new(schema),
                             },
                         )),
+                        input: None,
                     },
                     UserInputQuestion {
                         id: "form-action".into(),
@@ -4364,6 +4372,7 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
                         multi_select: false,
                         approval: None,
                         mcp: Some(binding("form", McpInputKind::FormAction)),
+                        input: None,
                     },
                 ];
                 let mut url_meta = binding(
@@ -4384,6 +4393,7 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
                     multi_select: false,
                     approval: None,
                     mcp: Some(url_meta),
+                    input: None,
                 }];
                 assert!(!format!("{url:?}").contains("private-url-token"));
                 let form_rx = (controls.request_input)(form.clone());

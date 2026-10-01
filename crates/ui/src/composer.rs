@@ -722,6 +722,27 @@ fn approval_decision(
     }
 }
 
+/// Codex requests carry no deadline (`APPROVAL_NO_EXPIRY`): say what ends
+/// the wait instead of a clock time.
+pub(crate) fn approval_expiry_row(approval: &luna_proto::ApprovalRequest) -> (String, String) {
+    match approval.expires() {
+        None => (
+            "Approval waits".into(),
+            "Until you answer, the agent stops or its turn ends".into(),
+        ),
+        Some(at) => (
+            "Approval expires".into(),
+            chrono::DateTime::from_timestamp_millis(at)
+                .map(|time| {
+                    time.with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string()
+                })
+                .unwrap_or_else(|| "unknown".into()),
+        ),
+    }
+}
+
 fn luna_approval_question(
     questions: &[UserInputQuestion],
 ) -> Result<Option<&UserInputQuestion>, ()> {
@@ -928,6 +949,7 @@ impl Wizard {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 })
                 .collect(),
         );
@@ -2148,6 +2170,9 @@ pub struct ComposerInput {
     /// File mentions are a composer feature, not a behavior of generic inputs
     /// (picker searches and rename fields also use this type).
     mentions_enabled: bool,
+    /// Secret answer (Codex `isSecret`): paint a same-length mask and never
+    /// copy the plaintext to the clipboard.
+    masked: bool,
     /// Bumped once per `layout_text` pass — the flip logic uses it to apply at
     /// most one compact↔expanded flip per layout (a flip is only re-evaluated
     /// after the input has been measured in the new mode).
@@ -2238,6 +2263,7 @@ impl ComposerInput {
             projection: TextProjection::default(),
             ghost: None,
             mentions_enabled: false,
+            masked: false,
             history_navigation_active: false,
             layout_epoch: 0,
             display_is_placeholder: true,
@@ -2338,7 +2364,35 @@ impl ComposerInput {
         self.refresh_projection();
     }
 
+    /// Mask characters keep each UTF-8 length, so caret/selection byte
+    /// offsets stay valid against `content`.
+    pub fn set_masked(&mut self, masked: bool, cx: &mut Context<Self>) {
+        if self.masked != masked {
+            self.masked = masked;
+            self.needs_measure = true;
+            self.last_layout_key = None;
+            cx.notify();
+        }
+    }
+
     fn refresh_projection(&mut self) {
+        if self.masked {
+            self.projection = TextProjection {
+                display: self
+                    .content
+                    .chars()
+                    .map(|ch| match ch.len_utf8() {
+                        1 => '*',
+                        2 => '\u{00B7}',
+                        3 => '\u{2022}',
+                        _ => '\u{1F512}',
+                    })
+                    .collect(),
+                mentions: Vec::new(),
+                chips: Vec::new(),
+            };
+            return;
+        }
         self.projection = if self.mentions_enabled {
             TextProjection::project(&self.content, true, &self.native_spans)
         } else {
@@ -3061,6 +3115,9 @@ impl ComposerInput {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        if self.masked {
+            return;
+        }
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 self.content[self.selected_range.clone()].to_string(),
@@ -3073,7 +3130,7 @@ impl ComposerInput {
     }
 
     fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if self.read_only {
+        if self.read_only || self.masked {
             return;
         }
         if !self.selected_range.is_empty() {
@@ -11087,9 +11144,13 @@ impl Composer {
             luna_proto::McpInputKind::Field { schema, .. } => Some(schema),
             _ => None,
         });
-        let text_input = !mcp_prompt
+        // Codex `isOther:false` with options means pick one; no typed answer.
+        let text_input = (!mcp_prompt && question.accepts_typed_answer())
             || mcp_field
                 .is_some_and(|schema| schema.choices.is_empty() && schema.value_type != "boolean");
+        let secret = question.is_secret();
+        self.answer_input
+            .update(cx, |input, cx| input.set_masked(secret, cx));
         let can_advance = retryable || (!submitting && (wizard.page_has_answer() || !typed_empty));
         let surface_radius =
             composer_surface_radius(self.dock_frame.map_or(0.0, |frame| frame.amount));
@@ -11171,6 +11232,15 @@ impl Composer {
                         .flex_col()
                         .gap(px(3.0))
                         .child(SharedString::from(label.clone()))
+                        .when_some(question.option_description(ix), |el, description| {
+                            el.child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(11.5))
+                                    .font_weight(gpui::FontWeight::NORMAL)
+                                    .text_color(theme.readable_muted(0.65))
+                                    .child(SharedString::from(description.to_owned())),
+                            )
+                        })
                         .when_some(
                             question
                                 .approval
@@ -11276,20 +11346,12 @@ impl Composer {
                             .child(SharedString::from(question.question.clone())),
                     )
                     .when_some(question.approval.as_ref(), |el, approval| {
-                        let expires =
-                            chrono::DateTime::from_timestamp_millis(approval.expires_at_ms)
-                                .map(|time| {
-                                    time.with_timezone(&chrono::Local)
-                                        .format("%H:%M:%S")
-                                        .to_string()
-                                })
-                                .unwrap_or_else(|| "unknown".into());
                         let mut rows = approval
                             .details
                             .as_ref()
                             .map(|details| details.display_rows())
                             .unwrap_or_default();
-                        rows.push(("Approval expires".into(), expires));
+                        rows.push(approval_expiry_row(approval));
                         let context = div()
                             .id("approval-context")
                             .mt(px(8.0))
@@ -14754,6 +14816,7 @@ mod tests {
             multi_select: multi,
             mcp: None,
             approval: None,
+            input: None,
         }
     }
 
