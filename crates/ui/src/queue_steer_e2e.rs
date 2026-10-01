@@ -124,6 +124,10 @@ pub async fn run_queue_image_steer_e2e(
         let resolution = composer.update(cx, |c, cx| {
             c.resolve_queued_primary(CHAT, &item, false, true, cx)
         });
+        // Let the queue panel finish its appear animation before capturing.
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(800))
+            .await;
         let path = output.join(format!("queue-{slug}.png"));
         capture(window, cx, &path)?;
         anyhow::ensure!(
