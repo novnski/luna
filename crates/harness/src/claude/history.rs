@@ -219,6 +219,9 @@ fn require_uuid(value: &str, what: &str) -> Result<(), HarnessError> {
         .map_err(|_| protocol(format!("{what} is not a Claude UUID")))
 }
 
+/// `(source uuid, fork uuid)` for every copied row, in chain order.
+type UuidMapping = Vec<(String, String)>;
+
 #[derive(Debug, Clone, Copy)]
 enum ForkCut {
     /// Copy the active chain through this inclusive position.
@@ -430,7 +433,7 @@ impl Transcript {
         source_session: &str,
         fork_session: &str,
         title: Option<&str>,
-    ) -> Result<(Vec<Value>, Vec<(String, String)>), HarnessError> {
+    ) -> Result<(Vec<Value>, UuidMapping), HarnessError> {
         let kept = self.copied(cut);
         if kept.is_empty() {
             return Err(protocol("the Claude session has no messages to fork"));
