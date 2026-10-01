@@ -233,6 +233,8 @@ pub(crate) struct Normalizer {
     assistant_message_id: String,
     /// Last session id seen (init or result) — used for synthetic Dones.
     pub session_id: Option<String>,
+    /// Cross-session peer arrivals and receive-side holds.
+    peer: super::peer::PeerState,
 }
 
 impl Normalizer {
@@ -245,6 +247,7 @@ impl Normalizer {
             agent_spawn_tools: std::collections::HashSet::new(),
             assistant_message_id: new_message_id(),
             session_id: None,
+            peer: Default::default(),
         }
     }
 
@@ -265,7 +268,9 @@ impl Normalizer {
     /// Normalize one stdout frame into 0+ unified events. `interrupted` folds
     /// a post-interrupt `result` into `Done { status: Interrupted }`.
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
+        self.peer.observe(&frame);
         match frame {
+            Frame::System(f) if f.subtype == "peer_message_hold" => self.peer.hold_events(&f),
             Frame::System(f) => {
                 // A background subagent's completion arrives as an UNTAGGED
                 // `task_notification` carrying the spawning tool's id — the
@@ -531,6 +536,9 @@ impl Normalizer {
             }
 
             Frame::User(f) => {
+                if let Some(events) = self.peer.arrival_events(&f) {
+                    return events;
+                }
                 if let Some(parent) = &f.parent_tool_use_id {
                     // A subagent's tool results echo on the main channel too;
                     // they belong to its transcript, attributed like its calls.

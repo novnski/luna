@@ -870,6 +870,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::ProviderTurnStarted { .. }
         | AgentEvent::GoalChanged { .. }
         | AgentEvent::ChildStatus { .. }
+        | AgentEvent::PeerMessage { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
 }

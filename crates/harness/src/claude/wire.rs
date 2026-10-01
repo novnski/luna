@@ -57,6 +57,9 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// `peer_message_hold` fields (state/lane/from/cause/outcome…).
+    #[serde(flatten)]
+    pub peer_hold: super::peer::PeerHoldFields,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -175,6 +178,11 @@ pub(crate) struct MessageFrame {
     /// Terse assistant-level error code (`rate_limit`, `billing_error`, …).
     #[serde(default)]
     pub error: Option<String>,
+    /// User-replay provenance (`--replay-user-messages`): human, peer, …
+    #[serde(default)]
+    pub origin: Option<Value>,
+    #[serde(default)]
+    pub uuid: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -300,12 +308,16 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
 /// A stdin user turn: `{"type":"user","message":{...},"parent_tool_use_id":null}`.
 /// Steering = another such line mid-run (consumed at a step boundary).
 pub(crate) fn user_message_line(text: &str) -> String {
-    json!({
+    let mut line = json!({
         "type": "user",
         "message": { "role": "user", "content": text },
         "parent_tool_use_id": null,
-    })
-    .to_string()
+    });
+    // LUNA's own peer envelope declares the sender class (peer origin only).
+    if let Some(origin) = super::peer::host_declared_origin(text) {
+        line["origin"] = origin;
+    }
+    line.to_string()
 }
 
 /// One inline image for a stdin user turn (Anthropic base64 image source).

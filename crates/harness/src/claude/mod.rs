@@ -32,6 +32,7 @@
 
 pub mod catalog;
 mod normalize;
+pub mod peer;
 mod wire;
 
 use std::path::PathBuf;
@@ -166,6 +167,9 @@ impl ClaudeHarness {
             // Undocumented flag; validated live against 2.1.228.
             "--permission-prompt-tool",
             "stdio",
+            // Echo stdin turns with their provenance so native peer arrivals
+            // (cross-session SendMessage) are attributable (see `peer`).
+            "--replay-user-messages",
         ]);
         // The 1M context window is selected via a model-id suffix
         // (`sonnet[1m]`), exactly how the CLI itself does it; fast mode and

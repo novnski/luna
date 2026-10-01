@@ -20,7 +20,8 @@ use serde_json::Value;
 pub(crate) const ULTRATHINK_PREFIX: &str = "Ultrathink:\n";
 
 pub(crate) fn apply_ultrathink(reasoning: Option<ReasoningLevel>, text: &str) -> String {
-    if reasoning == Some(ReasoningLevel::Ultrathink) {
+    // A prefix would break Claude's peer classification of LUNA's envelope.
+    if reasoning == Some(ReasoningLevel::Ultrathink) && !super::peer::is_luna_peer_envelope(text) {
         format!("{ULTRATHINK_PREFIX}{text}")
     } else {
         text.to_owned()
