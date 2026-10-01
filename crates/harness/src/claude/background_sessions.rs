@@ -93,9 +93,10 @@ fn parse_row(row: &Value) -> Option<(ClaudeExternalSession, Option<u32>)> {
 }
 
 /// Parse `claude agents --json` stdout. `Err` carries a user-facing reason.
-pub fn parse_listing(
-    stdout: &[u8],
-) -> Result<(Vec<(ClaudeExternalSession, Option<u32>)>, bool), String> {
+/// Parsed rows with each row's process id, plus whether rows were dropped.
+type ParsedListing = (Vec<(ClaudeExternalSession, Option<u32>)>, bool);
+
+fn parse_listing(stdout: &[u8]) -> Result<ParsedListing, String> {
     if stdout.len() > MAX_STDOUT_BYTES {
         return Err("The Claude session listing was too large to read safely.".into());
     }

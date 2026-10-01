@@ -551,6 +551,7 @@ fn main() -> anyhow::Result<()> {
                     std::process::exit(1);
                 }
             };
+            let handles = [tasks.0, settings.0];
             cx.spawn(async move |cx| {
                 let result: anyhow::Result<()> = async {
                     let evidence = run(tasks, settings, &output, cx).await?;
@@ -565,7 +566,7 @@ fn main() -> anyhow::Result<()> {
                     Ok(())
                 }
                 .await;
-                for window in [tasks.0, settings.0] {
+                for window in handles {
                     let _ = window.update(cx, |_, window, _| window.remove_window());
                 }
                 if let Err(error) = result {
