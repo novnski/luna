@@ -203,10 +203,13 @@ async fn goal_start_sends_claude_goal_command_and_reads_the_verdict() {
 
     assert_eq!(stdin_texts(&fixture), vec![format!("/goal {MET}")]);
     assert!(
-        stdin_lines(&fixture)
-            .iter()
-            .all(|line| line["type"] == "user" && !line.to_string().contains("thread/goal")),
-        "only stream-json user lines reach Claude"
+        stdin_lines(&fixture).iter().all(|line| {
+            matches!(
+                line["type"].as_str(),
+                Some("user" | "control_request" | "control_response")
+            ) && !line.to_string().contains("thread/goal")
+        }),
+        "only stream-json lines reach Claude, never a Codex method"
     );
     let changes = goals(&events);
     assert_eq!(changes.len(), 3, "{changes:#?}");

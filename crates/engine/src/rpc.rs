@@ -3164,6 +3164,52 @@ impl EngineRpc {
                 "Stop the expected active turn, wait for settlement, then retry with a new command id.",
             );
         }
+        // CC-14/15: refuse what Claude cannot run here, never queue it: a goal
+        // sent mid-turn (Claude would run it later, unannounced) and a review
+        // target that is not a plain git ref for its `/code-review`.
+        if let TaskCommandIntent::Session {
+            command: SessionCommandPayload::Run { request, .. },
+            ..
+        } = &command.intent
+            && (request.goal.is_some() || request.review.is_some())
+            && self
+                .workspace
+                .chat(&command.task_id)
+                .ok()
+                .flatten()
+                .and_then(|chat| chat.config)
+                .is_some_and(|config| config.harness == HarnessId::ClaudeCode)
+        {
+            let refusal = if request.goal.is_some()
+                && self.sessions.turn_in_flight(&command.task_id)
+            {
+                Some((
+                    CommandReasonCode::ActiveTurnConflict,
+                    "Claude starts a goal between turns. Wait for the current turn to finish, or stop it, then send the goal.".to_owned(),
+                    "Send the goal again once Claude is idle.",
+                ))
+            } else if let Some(review) = request.review.as_ref()
+                && let Err(error) = crate::claude_ongoing::review_prompt(&review.target)
+            {
+                Some((
+                    CommandReasonCode::UnsupportedOperation,
+                    error.to_string(),
+                    "Choose a plain branch or commit name, then start the review again.",
+                ))
+            } else {
+                None
+            };
+            if let Some((code, message, recovery)) = refusal {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Rejected,
+                    false,
+                    code,
+                    &message,
+                    recovery,
+                );
+            }
+        }
         if matches!(command.intent, TaskCommandIntent::Delete {}) {
             if let Some(service) = &self.side_chats {
                 service

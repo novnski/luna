@@ -563,7 +563,9 @@ async fn claude_review_runs_code_review_and_shows_shared_findings() {
         .iter()
         .find(|e| e.role == MessageRole::User)
         .unwrap();
-    assert_eq!(text(user), "/code-review main...HEAD");
+    // The transcript keeps the picker's readable target; Claude received its
+    // own command (asserted on its stdin above).
+    assert_eq!(text(user), "Review changes against main");
     let findings = entries
         .iter()
         .find(|e| text(e).contains("### Review findings"))

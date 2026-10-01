@@ -39,7 +39,19 @@ def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + ".%03dZ" % int((t % 1) * 1000)
 
 
+# The stdin line (LUNA's native `uuid`) the current turn answers. Like the
+# real 2.1.286 CLI, root frames echo it and results carry the echo + origin.
+CURRENT = {"uuid": None}
+
+
 def emit(frame):
+    kind = frame.get("type")
+    if CURRENT["uuid"] and frame.get("parent_tool_use_id") is None and \
+            kind in ("assistant", "stream_event", "result"):
+        frame.setdefault("user_message_uuid", CURRENT["uuid"])
+        if kind == "result":
+            frame.setdefault("user_message_uuids", [CURRENT["uuid"]])
+            frame.setdefault("origin", {"kind": "human"})
     sys.stdout.write(json.dumps(frame) + "\n")
     sys.stdout.flush()
 
@@ -62,9 +74,9 @@ def read_line():
         sys.exit(9)
     if frame.get("type") == "control_response":
         return frame
-    if frame.get("type") == "control_request" and \
-            frame.get("request", {}).get("subtype") == "interrupt":
-        # An idle session acknowledges an interrupt (nothing to abort).
+    if frame.get("type") == "control_request":
+        # LUNA's own controls (interrupt, settings readback, …): acknowledged.
+        # A goal or review never travels as a control request.
         emit({"type": "control_response", "response": {
             "subtype": "success", "request_id": frame.get("request_id", ""), "response": {}}})
         return frame
@@ -340,6 +352,7 @@ def schedules_turn():
 
 
 def handle(frame):
+    CURRENT["uuid"] = frame.get("uuid")
     text = text_of(frame).strip()
     if text.startswith("/goal"):
         goal_command(text[len("/goal"):])
@@ -368,6 +381,8 @@ def handle(frame):
 with open(os.path.join(CONFIG, "starts.jsonl"), "a") as starts:
     starts.write(json.dumps({"argv": ARGS, "resume": RESUME, "pid": os.getpid()}) + "\n")
 first = read_line()
+while first is not None and first.get("type") in ("control_response", "control_request"):
+    first = read_line()
 if first is None:
     sys.exit(1)
 if RESUME and not os.path.exists(TRANSCRIPT) and "missing" in RESUME:
