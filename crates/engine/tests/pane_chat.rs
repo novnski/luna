@@ -1313,6 +1313,48 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     })
     .await;
 
+    // Like a main chat, Stop freezes the side queue until a fresh
+    // user-authored turn: the composer's idle send is a session `run`.
+    let side_row = core.workspace.chat(&side).unwrap().unwrap();
+    let side_config_now = side_row.config.clone().unwrap();
+    let fresh = RunRequest {
+        review: None,
+        goal: None,
+        input_items: Vec::new(),
+        prompt: "fresh turn after stop".into(),
+        harness: Some(id),
+        provider_account_id: side_config_now.provider_account_id.clone(),
+        model: side_config_now.model.clone(),
+        reasoning: side_config_now.reasoning,
+        model_options: Default::default(),
+        cwd: side_row.cwd.clone().unwrap(),
+        sandbox: side_config_now.sandbox,
+        auto_approve: false,
+        permission_mode: side_config_now.permission_mode,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        attachments: Vec::new(),
+        worktree: None,
+        resume: None,
+    };
+    command(
+        &client,
+        &side,
+        "side-fresh",
+        json!({"kind":"session","command":{"kind":"run","messageId":"side-fresh","request": fresh}}),
+    )
+    .await
+    .unwrap();
+    until_diag_side(&core, &recorder, &side, "fresh side turn", || {
+        runs_for(&recorder, &side)
+            .iter()
+            .any(|run| run.prompt == "fresh turn after stop")
+            && !core.sessions.turn_in_flight(&side)
+    })
+    .await;
+    parent_untouched(&core, &recorder, "fresh turn");
+
     // G6: model/effort change on the side chat applies to its next turn only.
     let mut side_config = core.workspace.chat(&side).unwrap().unwrap().config.unwrap();
     side_config.model = Some("side-model".into());
