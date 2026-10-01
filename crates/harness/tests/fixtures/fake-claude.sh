@@ -67,9 +67,15 @@ case "$first" in
 *scenario:cc01-cancel-approval*)
   emit "$INIT_286"
   emit '{"type":"control_request","request_id":"cr-perm","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"touch cc01-should-not-run"},"tool_use_id":"toolu_cc01"}}'
-  # Let LUNA surface the approval, then withdraw it (e.g. the turn was
-  # interrupted elsewhere, or another client answered).
-  sleep 0.3
+  # Wait until LUNA surfaced the approval (the test's input bridge drops a
+  # marker in the cwd), then withdraw it (e.g. the turn was interrupted
+  # elsewhere, or another client answered).
+  waited=0
+  while [ ! -f surfaced ]; do
+    sleep 0.05
+    waited=$((waited+1))
+    [ "$waited" -lt 200 ] || fail "approval never surfaced"
+  done
   emit '{"type":"control_cancel_request","request_id":"cr-perm"}'
   # The test answers "Allow once" late, inside this window.
   sleep 1
