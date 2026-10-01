@@ -343,6 +343,7 @@ impl AccountsPage {
                 reset_credits: None,
                 detail: None,
             }],
+            live_sessions: Vec::new(),
         });
         page
     }

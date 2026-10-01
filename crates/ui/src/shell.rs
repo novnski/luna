@@ -19821,6 +19821,7 @@ impl Shell {
                 reset_credits: None,
                 detail: None,
             }],
+            live_sessions: Vec::new(),
         };
         self.usage_snapshot = Some(snapshot.clone());
         self.usage_environment_snapshots = vec![(environment_id.clone(), snapshot)];

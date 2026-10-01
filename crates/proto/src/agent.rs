@@ -891,6 +891,13 @@ pub enum AgentEvent {
         input_tokens: u64,
         output_tokens: u64,
     },
+    /// Live provider accounting (usage/cost totals, rate limits, retries,
+    /// effective runtime readback). Control plane only: the engine records it
+    /// for the Usage page and never folds it into a transcript.
+    #[serde(rename_all = "camelCase")]
+    ProviderAccounting {
+        report: Box<crate::ProviderAccountingReport>,
+    },
     /// Native child-session status, only meaningful inside `Subagent`.
     #[serde(rename_all = "camelCase")]
     ChildStatus {

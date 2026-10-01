@@ -229,6 +229,9 @@ pub(crate) struct RateLimitInfo {
     pub status: String,
     #[serde(rename = "rateLimitType", default)]
     pub rate_limit_type: Option<String>,
+    /// Epoch seconds when the limiting window resets (CC-06).
+    #[serde(rename = "resetsAt", default)]
+    pub resets_at: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]

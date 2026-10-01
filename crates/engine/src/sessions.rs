@@ -1087,6 +1087,8 @@ struct Inner {
     /// Last dispatched request per chat — the steer→new-turn fallback re-derives its
     /// run config from this (chat config rows land with the workspace doc in M4).
     last_requests: Mutex<HashMap<String, RunRequest>>,
+    /// CC-06 live provider accounting (Usage page; never journaled).
+    live_usage: crate::live_usage::LiveUsageLedger,
     /// Harness-native session ids per chat (resume continuity across turns) —
     /// the live-process cache over the durable copy on the workspace chat row
     /// (luna kept the same pair on `chats.harness_session_id`). An empty
@@ -1117,6 +1119,10 @@ struct Inner {
 /// Turn-start hook: called with `(chat_id, cwd)`.
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type SideChatLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// CC-06 live accounting and native live model/effort switch hooks.
+#[path = "sessions_cc06.rs"]
+mod cc06;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -1167,6 +1173,7 @@ impl SessionsEngine {
                 dispatches_in_flight: std::sync::atomic::AtomicUsize::new(0),
                 recovery_settings_path: Mutex::new(None),
                 last_requests: Mutex::new(HashMap::new()),
+                live_usage: Default::default(),
                 harness_sessions: Mutex::new(HashMap::new()),
                 titles: OnceLock::new(),
                 task_identity: OnceLock::new(),
@@ -3524,6 +3531,18 @@ impl SessionsEngine {
         self.note_turn_start(chat_id, &request.cwd);
         if let Some((run_id, steerable, same_runtime, steer_tx, ledger)) = routed {
             let user_id = message_id.clone().unwrap_or_else(new_id);
+            // CC-06: a parked Claude run applies a model/effort-only change
+            // natively (acks + readback before the prompt) instead of restarting.
+            let same_runtime = same_runtime
+                || (steerable
+                    && self.stage_live_switch(
+                        chat_id,
+                        &run_id,
+                        harness_id,
+                        &request,
+                        &user_id,
+                        workspace_repair_revision,
+                    ));
             let accepted = if steerable && same_runtime {
                 // Warm dispatch uses the same mailbox as explicit steering.
                 // Register acceptance before a fast boundary can retire it.
@@ -7155,6 +7174,13 @@ async fn drive_run(
             };
             event
         };
+
+        // CC-06: live accounting is control-plane data for the Usage page; it
+        // never reaches the journal, the transcript or turn state.
+        if let AgentEvent::ProviderAccounting { report } = &event {
+            inner.live_usage.record(&chat_id, report);
+            continue;
+        }
 
         // ── subagent routing ───────────────────────────────────────────
         // Tagged events NEVER fold into the parent transcript: they stream

@@ -136,6 +136,7 @@ mod composer_catalog;
 #[allow(dead_code)]
 pub(crate) mod integration_actions;
 pub mod integration_settings;
+pub mod live_usage;
 pub mod local_import;
 #[cfg(target_os = "macos")]
 mod macos_keychain;

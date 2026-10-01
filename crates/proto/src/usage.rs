@@ -263,6 +263,10 @@ impl UsageLimitSnapshot {
 pub struct UsageSnapshot {
     pub summary: UsageSummary,
     pub limits: Vec<UsageLimitSnapshot>,
+    /// Live provider sessions reported by their own streams (CC-06). Shown
+    /// beside history, never added to `summary.buckets`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live_sessions: Vec<crate::LiveSessionUsage>,
 }
 
 /// Merge normalized environment reports without transferring transcripts.
@@ -275,6 +279,7 @@ pub fn merge_usage_snapshots(mut snapshots: Vec<UsageSnapshot>) -> Option<UsageS
     merged.summary.sources.clear();
     merged.summary.warnings.clear();
     merged.limits.clear();
+    merged.live_sessions.clear();
     let mut fingerprints = HashSet::new();
     let mut accounts: HashMap<(u8, String), usize> = HashMap::new();
     for snapshot in snapshots {
@@ -350,6 +355,20 @@ pub fn merge_usage_snapshots(mut snapshots: Vec<UsageSnapshot>) -> Option<UsageS
                 }
             } else {
                 merged.limits.push(limit);
+            }
+        }
+        // Live rows are per-environment process observations: keep the
+        // newest row per provider session, never sum them.
+        for live in snapshot.live_sessions {
+            let same = |row: &crate::LiveSessionUsage| {
+                row.provider == live.provider
+                    && row.task_id == live.task_id
+                    && row.native_session_id == live.native_session_id
+            };
+            match merged.live_sessions.iter_mut().find(|row| same(row)) {
+                Some(row) if row.updated_at_ms < live.updated_at_ms => *row = live,
+                Some(_) => {}
+                None => merged.live_sessions.push(live),
             }
         }
     }
@@ -512,6 +531,7 @@ mod tests {
                 reset_credits: None,
                 detail: None,
             }],
+            live_sessions: Vec::new(),
         };
         let merged =
             merge_usage_snapshots(vec![snapshot("one", "same", 1), snapshot("two", "same", 2)])
@@ -559,6 +579,7 @@ mod tests {
                 reset_credits: None,
                 detail: None,
             }],
+            live_sessions: Vec::new(),
         };
         let merged = merge_usage_snapshots(vec![
             snapshot(Some("same"), 20, LimitAvailability::ProbeFailed),

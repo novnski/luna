@@ -30,8 +30,12 @@
 //! - Interrupt: cancelling [`RunControls::interrupt`] sends the protocol-level
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
+mod accounting;
 pub mod catalog;
+mod delivery;
+mod live_session;
 mod normalize;
+mod runtime_controls;
 mod wire;
 
 use std::path::PathBuf;
@@ -52,8 +56,11 @@ use luna_proto::{
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
 use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child};
-use catalog::{apply_ultrathink, models_from_initialize, static_models, to_effort};
+use catalog::{apply_ultrathink, models_from_initialize, static_models};
 use normalize::Normalizer;
+/// Model options a native live switch may change (CC-06); the engine requires
+/// every other option of a warm runtime to be unchanged.
+pub use runtime_controls::SWITCHABLE_OPTIONS as LIVE_SWITCH_OPTIONS;
 use wire::{ControlRequestFrame, Frame, allow_response, control_response_line};
 
 /// Locate the device's installed Claude Code CLI: our own PATH, then the
@@ -93,6 +100,9 @@ pub struct ClaudeHarness {
     /// Command discovery cache: only a successful probe is cached, so a
     /// broken CLI retries on the next picker open (ACP-harness parity).
     commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    /// CC-06: live model/effort switches staged by the engine for a warm run,
+    /// keyed by the follow-up steer's message id.
+    staged: runtime_controls::SharedStaged,
 }
 
 impl Default for ClaudeHarness {
@@ -102,6 +112,7 @@ impl Default for ClaudeHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             commands: tokio::sync::OnceCell::new(),
+            staged: Default::default(),
         }
     }
 }
@@ -166,24 +177,22 @@ impl ClaudeHarness {
             // Undocumented flag; validated live against 2.1.228.
             "--permission-prompt-tool",
             "stdio",
+            // CC-06: re-emit each stdin user line with its `uuid` once the CLI
+            // records it — the native delivery receipt for steers.
+            "--replay-user-messages",
         ]);
         // The 1M context window is selected via a model-id suffix
         // (`sonnet[1m]`), exactly how the CLI itself does it; fast mode and
         // always-on thinking are settings overrides.
-        if let Some(model) = &request.model {
-            let one_m = request
-                .model_options
-                .get("contextWindow")
-                .and_then(Value::as_str)
-                == Some("1m");
-            cmd.arg("--model");
-            cmd.arg(if one_m {
-                format!("{model}[1m]")
-            } else {
-                model.clone()
-            });
+        let model_flag =
+            runtime_controls::model_flag(request.model.as_deref(), &request.model_options);
+        if let Some(model) = &model_flag {
+            cmd.args(["--model", model]);
         }
-        if let Some(effort) = to_effort(request.reasoning, request.model.as_deref()) {
+        // CC-06: the discovered effort ladder decides when one is known.
+        if let Some(effort) =
+            runtime_controls::effort_flag(exe, request.reasoning, model_flag.as_deref())
+        {
             cmd.args(["--effort", effort]);
         }
         if let Some(contract) = request
@@ -320,6 +329,7 @@ impl ClaudeHarness {
                         .unwrap_or("initialize control request failed");
                     return Err(HarnessError::Protocol(msg.into()));
                 }
+                runtime_controls::remember_catalog(&exe, &response);
                 return Ok(response);
             }
             Err(HarnessError::Protocol(
@@ -430,6 +440,16 @@ impl Harness for ClaudeHarness {
     /// Done is the CLI's own terminal frame, for wake turns too.
     fn deterministic_turn_end(&self) -> bool {
         true
+    }
+
+    fn stage_live_reconfiguration(
+        &self,
+        message_id: &str,
+        from: &crate::LiveRuntimeSelection,
+        to: &crate::LiveRuntimeSelection,
+    ) -> bool {
+        self.resolve_executable()
+            .is_ok_and(|exe| runtime_controls::stage(&self.staged, &exe, message_id, from, to))
     }
 
     /// Keep the trait's lightweight bundled list for internal callers that
@@ -564,11 +584,27 @@ impl ClaudeHarness {
         // also ride the prompt text, so a skipped/unreadable file degrades to
         // the old-app behavior (the agent opens the path with its Read tool).
         let images = load_image_blocks(&request.attachments).await;
-        let first = wire::user_message_line_with_images(
-            &apply_ultrathink(request.reasoning, &request.prompt),
-            &images,
+        // CC-06: every user line carries a native uuid for receipts/results.
+        let first_uuid = delivery::native_uuid_for(None);
+        let first = delivery::with_uuid(
+            wire::user_message_line_with_images(
+                &apply_ultrathink(request.reasoning, &request.prompt),
+                &images,
+            ),
+            &first_uuid,
         );
         let _ = stdin_tx.send(StdinMsg::line(first));
+        // CC-06: read back what the CLI actually applied when LUNA asked for
+        // a model or effort (a run that requested nothing has nothing to check).
+        let launch_readback = (!title_only
+            && (request.model.is_some() || request.reasoning.is_some()))
+        .then(|| {
+            let model =
+                runtime_controls::model_flag(request.model.as_deref(), &request.model_options);
+            let effort = runtime_controls::effort_flag(&exe, request.reasoning, model.as_deref())
+                .map(str::to_owned);
+            (model, effort)
+        });
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
@@ -588,6 +624,11 @@ impl ClaudeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            cc06: Cc06Session {
+                first_uuid,
+                launch_readback,
+                staged: self.staged.clone(),
+            },
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -737,6 +778,15 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    cc06: Cc06Session,
+}
+
+/// CC-06 launch inputs for delivery receipts, readback and live switches.
+struct Cc06Session {
+    first_uuid: String,
+    /// Requested `(--model, --effort)` to verify with `get_settings`.
+    launch_readback: Option<(Option<String>, Option<String>)>,
+    staged: runtime_controls::SharedStaged,
 }
 
 /// The per-run event loop: one task multiplexing stdout frames, the steering
@@ -749,12 +799,13 @@ async fn run_session(session: Session) {
         stdin_tx,
         event_tx,
         controls,
-        reasoning,
+        mut reasoning,
         permission_mode,
         permission_policy,
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        cc06,
     } = session;
     let RunControls {
         request_input,
@@ -765,6 +816,7 @@ async fn run_session(session: Session) {
     let request_input = Arc::new(request_input);
 
     let mut norm = Normalizer::new();
+    let mut live = live_session::LiveSession::start(cc06, title_only, &stdin_tx);
     // Claude's root user echo carries no correlation id. Explicit steering is
     // single-flight and a successful stdin write remains unconfirmed; text
     // equality alone must never settle a durable queue row.
@@ -777,12 +829,47 @@ async fn run_session(session: Session) {
     let mut escalation: Option<tokio::task::JoinHandle<()>> = None;
 
     'main: loop {
+        let switch_deadline = live.switch_deadline();
         tokio::select! {
             line = stdout_lines.next_line() => match line {
                 Ok(Some(line)) => {
                     let line = line.trim();
                     if line.is_empty() {
                         continue;
+                    }
+                    // CC-06 side channel: replay receipts, control replies,
+                    // accounting and result ownership.
+                    let (prefix, foreign) = match live.on_line(
+                        line,
+                        &mut norm,
+                        &stdin_tx,
+                        &mut reasoning,
+                        &mut explicit_steer_unconfirmed,
+                        interrupted,
+                    ) {
+                        live_session::LineOutcome::Normalize { prefix, foreign } => (prefix, foreign),
+                        live_session::LineOutcome::Consumed(events) => {
+                            for ev in events {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
+                            continue;
+                        }
+                        live_session::LineOutcome::SwitchFailed(events) => {
+                            steering_open = false;
+                            for ev in events {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
+                            continue;
+                        }
+                    };
+                    for ev in prefix {
+                        if event_tx.send(Ok(ev)).await.is_err() {
+                            break 'main;
+                        }
                     }
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
@@ -810,6 +897,11 @@ async fn run_session(session: Session) {
                     }
                     for ev in norm.normalize(frame, interrupted) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
+                        if is_done && foreign {
+                            // Another native turn's result (E24): the human
+                            // turn still outstanding owns the next Done.
+                            continue;
+                        }
                         if is_done {
                             // Stream-json result frames are the authoritative
                             // per-turn terminal boundary. A native stdin ACK
@@ -836,10 +928,14 @@ async fn run_session(session: Session) {
                 }
             },
 
-            steer = steering.recv(), if steering_open && !interrupted => match steer {
+            steer = steering.recv(), if steering_open && !interrupted && !live.switch_pending() => match steer {
                 Some(msg) => {
+                    let (msg, uuid) = match live.route_steer(msg, &stdin_tx, &mut reasoning) {
+                        live_session::SteerRoute::Pending => continue 'main,
+                        live_session::SteerRoute::Write(msg, uuid) => (*msg, uuid),
+                    };
                     let prompt = apply_ultrathink(reasoning, &msg.prompt);
-                    let line = wire::user_message_line(&prompt);
+                    let line = delivery::with_uuid(wire::user_message_line(&prompt), &uuid);
                     if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
                         if explicit_steer_unconfirmed {
                             if let Some(tx) = msg.acceptance {
@@ -851,10 +947,12 @@ async fn run_session(session: Session) {
                             continue 'main;
                         }
                         let (written_tx, written_rx) = tokio::sync::oneshot::channel();
+                        live.record_sent(uuid.clone(), msg.message_id.clone(), true);
                         if stdin_tx.send(StdinMsg::Line {
                             line,
                             written: Some(written_tx),
                         }).is_err() {
+                            live.record_unsent(&uuid);
                             if let Some(tx) = msg.acceptance {
                                 let _ = tx.send(crate::SteerAcceptance::Rejected(
                                     "Claude input channel closed before dispatch".into(),
@@ -885,6 +983,7 @@ async fn run_session(session: Session) {
                                 }
                             }
                             Ok(Err(error)) => {
+                                live.record_unsent(&uuid);
                                 if let Some(tx) = msg.acceptance {
                                     let _ = tx.send(crate::SteerAcceptance::Unknown(error));
                                 }
@@ -903,6 +1002,7 @@ async fn run_session(session: Session) {
                         if !accepted {
                             continue 'main;
                         }
+                        live.record_sent(uuid, msg.message_id.clone(), false);
                         // Ordinary warm routing retains its historical local
                         // boundary/follow-up behavior.
                         let (prev, next) = norm.rotate_for_steer();
@@ -924,9 +1024,28 @@ async fn run_session(session: Session) {
                 }
             },
 
+            _ = async {
+                match switch_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            }, if switch_deadline.is_some() => {
+                if let live_session::LineOutcome::SwitchFailed(events) =
+                    live.switch_timed_out(&stdin_tx)
+                {
+                    steering_open = false;
+                    for ev in events {
+                        if event_tx.send(Ok(ev)).await.is_err() {
+                            break 'main;
+                        }
+                    }
+                }
+            },
+
             _ = interrupt.cancelled(), if !interrupt_sent => {
                 interrupt_sent = true;
                 interrupted = true;
+                live.interrupted();
                 let _ = stdin_tx.send(StdinMsg::line(wire::interrupt_request_line("int_1")));
                 // Escalate if the CLI doesn't wind down within the grace
                 // periods: SIGTERM (kills bash trees, runs SessionEnd hooks),
