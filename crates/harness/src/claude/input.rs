@@ -486,7 +486,16 @@ fn claude_skill(name: &str, path: &str) -> Result<String, HarnessError> {
         .and_then(|f| f.to_str())
         .unwrap_or_default();
     let leaf = name.rsplit(':').next().unwrap_or(name);
-    if leaf != dir_name && frontmatter_name(&body) != Some(name) {
+    // A command is named by its file stem (`commands/ns/<leaf>.md`), a skill
+    // by its folder (`skills/<leaf>/SKILL.md`).
+    let expected = if command && !shaped {
+        file.file_stem()
+            .and_then(|f| f.to_str())
+            .unwrap_or_default()
+    } else {
+        dir_name
+    };
+    if leaf != expected && frontmatter_name(&body) != Some(name) {
         return Err(reject(format!(
             "Skill \"{name}\" does not match its folder ({path}); reselect it; {KEPT}."
         )));
