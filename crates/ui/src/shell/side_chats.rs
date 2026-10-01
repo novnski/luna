@@ -624,17 +624,26 @@ impl SideChatPanel {
                 false,
             )
         };
+        // Like a main chat, a side chat is named by its first question; the
+        // engine's stored title only repeats "Side chat · <parent>", which
+        // the identity badge and parent link already show.
         let title = page
-            .meta
-            .title
-            .trim()
-            .to_string()
-            .chars()
-            .take(120)
-            .collect::<String>();
+            .entries
+            .iter()
+            .find(|entry| entry.role == luna_doc::MessageRole::User)
+            .and_then(|entry| {
+                entry.parts.iter().find_map(|part| match part {
+                    luna_doc::MessagePart::Text { text, .. } => {
+                        Some(transcript::single_line(text))
+                    }
+                    _ => None,
+                })
+            })
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| "New side chat".into());
         let chrome = PaneChatChrome {
             identity: PaneIdentity::Side,
-            title: if title.is_empty() { "Side chat".into() } else { title.into() },
+            title: title.into(),
             parent_title: transcript::single_line(&self.parent_title).into(),
             status: Some(status),
             meta: Some(format!("{provider} · {model} · {context}").into()),
@@ -1260,5 +1269,73 @@ impl Shell {
             .unwrap()
             .clone()
             .into_any_element()
+    }
+}
+
+/// Headless QA drives the production side chat panel through these hooks.
+#[cfg(feature = "appshots-fixture")]
+impl Shell {
+    pub fn fixture_open_side_chats(&mut self, cx: &mut Context<Self>) {
+        self.add_work_surface(RightSurface::SideChats, cx);
+        if self.side_chat_panel.is_none() {
+            self.create_side_chat_panel(None, cx);
+        }
+    }
+
+    /// `snapshot` (start with recent context), `new`, `type`, `send`, `back`,
+    /// `stop`, `refresh`, or `open` (the first saved side chat).
+    pub fn fixture_side_chat(&mut self, action: &str, text: &str, cx: &mut Context<Self>) {
+        let Some(panel) = self.side_chat_panel.clone() else {
+            return;
+        };
+        panel.update(cx, |panel, cx| {
+            let action = match action {
+                "snapshot" => PanelAction::NewSnapshot,
+                "new" => PanelAction::New,
+                "back" => PanelAction::Back,
+                "stop" => PanelAction::Stop,
+                "refresh" => PanelAction::Refresh,
+                "open" => match panel.history.as_ref().and_then(|history| history.items.first()) {
+                    Some(meta) => PanelAction::Open(meta.id.clone()),
+                    None => return,
+                },
+                "type" | "send" => {
+                    let input = panel.input.clone();
+                    input.update(cx, |input, cx| input.set_text(text, cx));
+                    if action == "type" {
+                        return;
+                    }
+                    PanelAction::Send
+                }
+                _ => return,
+            };
+            panel.action(action, cx);
+        });
+    }
+
+    pub fn fixture_side_chat_readback(&self, cx: &Context<Self>) -> serde_json::Value {
+        let Some(panel) = self.side_chat_panel.as_ref().map(|panel| panel.read(cx)) else {
+            return serde_json::Value::Null;
+        };
+        let page = panel.page.as_ref();
+        serde_json::json!({
+            "pageId": page.map(|page| page.meta.id.clone()),
+            "state": page.map(|page| page.meta.state.clone()),
+            "contextMode": page.map(|page| page.meta.context_mode.clone()),
+            "writable": page.is_some_and(|page| page.meta.state == "active") && panel.lease.is_some(),
+            "working": page.map(|page| page.working),
+            "busy": panel.busy,
+            "error": panel.error,
+            "input": panel.input.read(cx).text().to_string(),
+            "question": panel.pending_question().map(|(id, _)| id),
+            "historyCount": panel.history.as_ref().map(|history| history.items.len()),
+            "historyStates": panel.history.as_ref().map(|history| history.items.iter().map(|meta| meta.state.clone()).collect::<Vec<_>>()),
+            "texts": page.map(|page| page.entries.iter().flat_map(|entry| entry.parts.iter()).filter_map(|part| match part {
+                luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            }).collect::<Vec<_>>()),
+            "parentTranscriptRows": self.state.read(cx).transcript.len(),
+            "mainComposer": self.composer.read(cx).readback(cx),
+        })
     }
 }

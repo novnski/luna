@@ -735,17 +735,16 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                     window.update(cx, |shell, _, cx| shell.fixture_child_chat_send(REPLY, cx))?;
-                    let mut replied = serde_json::Value::Null;
                     for _ in 0..200 {
                         settle(cx, 100).await;
-                        replied = readback(window, cx)?;
-                        let text = replied["openTranscriptText"].to_string();
-                        if text.contains(REPLY) && text.contains(MOCK_ANSWER) && replied["openSending"] == false {
+                        let current = readback(window, cx)?;
+                        let text = current["openTranscriptText"].to_string();
+                        if text.contains(REPLY) && text.contains(MOCK_ANSWER) && current["openSending"] == false {
                             break;
                         }
                     }
                     settle(cx, 600).await;
-                    replied = readback(window, cx)?;
+                    let replied = readback(window, cx)?;
                     capture(window, cx, output.join("05-child-reply.png"))?;
                     let text = replied["openTranscriptText"].to_string();
                     anyhow::ensure!(replied["openChild"] == IDLE, "second child not open: {replied}");
@@ -860,17 +859,16 @@ fn main() -> anyhow::Result<()> {
                     }
                     record.insert("sendInFlight".into(), in_flight);
                     window.update(cx, |shell, _, cx| shell.fixture_child_chat_open(DONE.into(), cx))?;
-                    let mut returned = serde_json::Value::Null;
                     for _ in 0..200 {
                         settle(cx, 100).await;
-                        returned = readback(window, cx)?;
-                        let text = returned["openTranscriptText"].to_string();
+                        let current = readback(window, cx)?;
+                        let text = current["openTranscriptText"].to_string();
                         if text.contains(NAV_PENDING) && text.matches(MOCK_ANSWER).count() >= 1 {
                             break;
                         }
                     }
                     settle(cx, 500).await;
-                    returned = readback(window, cx)?;
+                    let returned = readback(window, cx)?;
                     capture(window, cx, output.join("p06-send-settled-after-return.png"))?;
                     let texts: Vec<String> = returned["openTranscriptText"].as_array().into_iter().flatten().filter_map(|text| text.as_str().map(str::to_string)).collect();
                     anyhow::ensure!(texts.iter().filter(|text| text.contains(NAV_PENDING)).count() == 1, "navigation during the send must deliver exactly one prompt: {returned}");
@@ -1002,7 +1000,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("child-chats-pane.pass"),
-                                "PASS: headless production Shell; child chats folded out of the sidebar, picker card + count, list order/status; open child = shared pane chat view (main transcript + main composer bound to the child); one set of pane watches per open child released on Back/close; real composer send answered by the Mock harness with parent isolation; approval card and goal bar in the pane bound to the child; draft retained across Back and pane close; send-then-Back delivers exactly once with an applied receipt for the original command id; dark/light and a 360 px pane captured; Open as main hands the draft over\n",
+                                "PASS: headless production Shell; child chats folded out of the sidebar, picker card + count, list order/status; open child = shared pane chat view (main transcript + main composer bound to the child); one set of pane watches per open child released on Back/close; real composer send answered by the Mock harness with parent isolation; approval card and goal bar in the pane bound to the child; draft retained across Back and pane close; send-then-Back delivers exactly once and the engine receipt is keyed by the original command id (Mock: Pending, checked read-only by the composer's receipt watch); dark/light and a 360 px pane captured; Open as main hands the draft over\n",
                             )
                         });
                         if let Err(error) = written {

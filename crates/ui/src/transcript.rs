@@ -3257,10 +3257,6 @@ impl Transcript {
         this
     }
 
-    pub(crate) fn is_pane_chat(&self) -> bool {
-        self.pane_chat
-    }
-
     fn build(
         state: Entity<AppState>,
         doc_override: Option<String>,

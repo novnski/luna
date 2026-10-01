@@ -5296,10 +5296,6 @@ impl Composer {
             || !self.interrupt_tasks.is_empty()
     }
 
-    pub(crate) fn binding(&self) -> &crate::chat_binding::ChatBinding {
-        &self.binding
-    }
-
     /// Drop this composer's in-memory copy of `key`'s draft so the next
     /// navigation reloads the durable record. Used when another composer (a
     /// pane composer handing its chat to the main view) saved newer text.

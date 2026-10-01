@@ -440,10 +440,6 @@ impl PaneChatView {
         }
     }
 
-    pub(super) fn chat_id(&self) -> &str {
-        &self.chat_id
-    }
-
     pub(super) fn transcript(&self) -> &Entity<Transcript> {
         &self.transcript
     }
