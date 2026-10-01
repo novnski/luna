@@ -211,6 +211,9 @@ mod tests {
 }
 
 /// Fresh, visible same-project child. Parent authority is never a tool argument.
+///
+/// Every field added after the first version is optional and skipped when
+/// absent, so older payloads decode and keep their durable payload hash.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateChildThreadRequest {
@@ -218,11 +221,14 @@ pub struct CreateChildThreadRequest {
     pub idempotency_key: String,
     #[serde(default)]
     pub title: Option<String>,
+    /// Absent: the parent's model.
     #[serde(default)]
     pub model: Option<String>,
+    /// Absent: the parent's reasoning level.
     #[serde(default)]
     pub reasoning: Option<crate::ReasoningLevel>,
-    /// Explicit existing checkout; this version never materializes a worktree.
+    /// Explicit existing directory. Only valid with `checkout` absent or
+    /// `current`; absent means the parent's current checkout.
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default = "child_reports_default")]
@@ -230,9 +236,38 @@ pub struct CreateChildThreadRequest {
     /// Consent to queue a new parent turn, shown in the one-use approval.
     #[serde(default)]
     pub continue_parent: bool,
+    /// Where the child works. Absent: `cwd` when given, else the parent's
+    /// current checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<ChildCheckoutRequest>,
+    /// Requested access level. Absent: the parent's effective access. Access
+    /// above the parent's ceiling needs an explicit user grant: the manual
+    /// creation dialog is that grant; a model request is shown on the
+    /// approval card and capped unless the user picks the grant choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<crate::PermissionMode>,
 }
 fn child_reports_default() -> bool {
     true
+}
+
+/// Checkout choice for a new child chat.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ChildCheckoutRequest {
+    /// Share the parent's current checkout (cwd, branch and worktree).
+    Current,
+    /// Materialize a fresh linked git worktree on a new branch for the child.
+    #[serde(rename_all = "camelCase")]
+    NewWorktree {
+        /// New branch name. Absent: a generated `luna/child-…` branch.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+        /// Base ref. Absent: the parent's current branch, or its HEAD commit
+        /// when the parent is detached.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -244,6 +279,61 @@ pub struct ChildThreadReceipt {
     pub initial_message_id: String,
     /// Durable intent/queue acceptance is not provider acceptance.
     pub startup_state: String,
+    /// What was actually provisioned (checkout, branch, granted access).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioning: Option<ChildProvisioning>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChildCheckoutKind {
+    /// The parent's checkout at creation time.
+    Current,
+    /// An explicit existing directory (`cwd`).
+    ExistingPath,
+    /// A LUNA-materialized worktree owned by this child.
+    NewWorktree,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChildCreator {
+    /// The user's own creation dialog (`CreateChildThread`).
+    User,
+    /// A parent agent's `create_thread` call, approved on its card.
+    Agent,
+}
+
+/// Engine-recorded provisioning of one child. Never accepted from a client:
+/// the engine computes it at creation and stores it on the child row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildProvisioning {
+    pub created_by: ChildCreator,
+    pub checkout_kind: ChildCheckoutKind,
+    /// Directory the child runs in (the worktree path for `newWorktree`).
+    pub cwd: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Ref the new worktree branch was created from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
+    /// What the creator asked for; `None` = default from the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_permission_mode: Option<crate::PermissionMode>,
+    /// Access the child was created with.
+    pub granted_permission_mode: crate::PermissionMode,
+    /// The parent's effective access when the child was created.
+    pub parent_permission_ceiling: crate::PermissionMode,
+    /// The user explicitly granted access above the parent's ceiling. Such a
+    /// child is not re-capped by the parent's later ceiling.
+    #[serde(default)]
+    pub granted_by_user: bool,
+    /// Requested access exceeded the ceiling without a grant and was capped.
+    #[serde(default)]
+    pub escalation_denied: bool,
 }
 
 /// Engine-owned synced lineage and durable startup intent. Independent from
@@ -267,6 +357,10 @@ pub struct ChildThread {
     /// their delivered outcomes compacted away, keeping the synced row bounded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome_floor_ms: Option<i64>,
+    /// Absent on rows created before provisioning was recorded: those are
+    /// existing-checkout children whose access is capped by the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provisioning: Option<ChildProvisioning>,
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

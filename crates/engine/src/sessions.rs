@@ -2627,6 +2627,7 @@ impl SessionsEngine {
             } else {
                 Vec::new()
             },
+            chat: None,
         })
     }
 

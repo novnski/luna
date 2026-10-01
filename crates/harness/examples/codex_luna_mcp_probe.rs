@@ -72,6 +72,7 @@ fn contract(cwd: &str) -> LunaAgentRuntimeContract {
             reasoning: None,
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
+            chat: None,
         },
         environment: Default::default(),
         local_endpoints: Vec::new(),

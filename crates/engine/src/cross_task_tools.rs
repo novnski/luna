@@ -1698,6 +1698,7 @@ mod tests {
             reasoning: None,
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
+            chat: None,
         };
         let contract = crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
             context,

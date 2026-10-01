@@ -130,6 +130,7 @@ async fn main() {
             reasoning: None,
             execution_route: "local".into(),
             granted_scopes: Vec::new(),
+            chat: None,
         },
         environment: Default::default(),
         local_endpoints: Vec::new(),

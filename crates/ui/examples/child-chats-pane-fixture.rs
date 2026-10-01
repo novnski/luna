@@ -346,6 +346,7 @@ fn child_thread(spec: &Spec, at_ms: i64) -> Option<ChildThread> {
             .into_iter()
             .collect(),
         outcome_floor_ms: None,
+        provisioning: None,
     })
 }
 
