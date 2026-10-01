@@ -547,6 +547,10 @@ fn schedule_luna_prospective_cleanup(
     });
 }
 
+/// How long a LUNA tool approval card may wait for the user. It equals the
+/// `tool_timeout_sec` the Codex adapter gives the `luna` MCP server.
+const LUNA_TOOL_APPROVAL_WAIT_MS: i64 = 86_400_000;
+
 /// Retires one parked approval card however its waiter ends, including when
 /// the provider abandons the call and the waiting future is dropped.
 struct PendingApprovalGuard {
@@ -1659,7 +1663,11 @@ impl SessionsEngine {
                     evidence.source_environment_id,
                 )
             };
-        let expires_at_ms = now_ms().saturating_add(30_000);
+        // The card waits for the user, not a timer: it ends on an answer,
+        // Stop, the provider turn leaving Ready, run replacement, or the
+        // provider abandoning the call. The bound matches the Codex MCP
+        // `tool_timeout_sec`; the commit window is restamped at approval.
+        let expires_at_ms = now_ms().saturating_add(LUNA_TOOL_APPROVAL_WAIT_MS);
         let fence = ApprovedSendFence {
             source_task_id: claim.source_task_id.clone(),
             source_run_id: claim.source_run_id.clone(),
@@ -1685,7 +1693,7 @@ impl SessionsEngine {
         let (resolver, _answer_rx) = oneshot::channel();
         let (grant_tx, grant_rx) = oneshot::channel();
         let binding = self.inner.current_codex_binding_key(chat_id);
-        let guard = {
+        let (guard, mut readiness, mut run_cancel) = {
             let runs = lock(&self.inner.runs);
             let run = runs
                 .get(chat_id)
@@ -1704,11 +1712,15 @@ impl SessionsEngine {
                     resolver,
                 },
             );
-            PendingApprovalGuard {
-                pending,
-                engine_tx: run.engine_tx.clone(),
-                request_id: request_id.clone(),
-            }
+            (
+                PendingApprovalGuard {
+                    pending,
+                    engine_tx: run.engine_tx.clone(),
+                    request_id: request_id.clone(),
+                },
+                run.provider_turn_readiness.subscribe(),
+                run.cancel.subscribe(),
+            )
         };
         if guard
             .engine_tx
@@ -1720,18 +1732,24 @@ impl SessionsEngine {
         {
             return Err(fail(CrossTaskError::Unavailable));
         }
-        let grant = tokio::select! {
-            _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
-            result = tokio::time::timeout(std::time::Duration::from_secs(30), grant_rx) => {
-                match result {
-                    Ok(Ok(fence)) => Ok(fence),
-                    Ok(Err(_)) => Err(CrossTaskError::UserRequest),
-                    Err(_) => Err(CrossTaskError::Deadline),
+        let mut grant_rx = grant_rx;
+        let grant = loop {
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => break Err(CrossTaskError::Cancelled),
+                _ = run_cancel.wait_for(|cancelled| *cancelled) => break Err(CrossTaskError::Cancelled),
+                changed = readiness.changed() => {
+                    if changed.is_err() || *readiness.borrow() != ProviderTurnReadiness::Ready {
+                        break Err(CrossTaskError::Cancelled);
+                    }
                 }
+                result = &mut grant_rx => break result.map_err(|_| CrossTaskError::UserRequest),
             }
         };
         drop(guard);
-        let fence = grant.map_err(fail)?;
+        let mut fence = grant.map_err(fail)?;
+        // Approval opens the bounded commit window checked at the durable write.
+        fence.expires_at_ms = now_ms().saturating_add(30_000);
         self.with_live_approved_send(&fence, || Ok(()))?;
         if let Some(child) = child_request {
             let child_fence = crate::cross_task_tools::ApprovedChildFence {
