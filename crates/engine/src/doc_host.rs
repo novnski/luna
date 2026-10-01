@@ -1172,6 +1172,24 @@ impl DocHost {
         Ok(())
     }
 
+    /// Update provider control state in one durable projection (CC-14).
+    pub fn update_context_control(
+        &self,
+        chat_id: &str,
+        event_id: &str,
+        update: impl FnOnce(&mut ContextControlState),
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        self.persist_queue_projection(&handle, event_id, move |doc| {
+            let mut state = doc.context_control();
+            update(&mut state);
+            doc.set_context_control(&state)?;
+            Ok(())
+        })?;
+        handle.publish_messages();
+        Ok(())
+    }
+
     /// Install native goal readback and its receipt atomically without replacing
     /// other provider control state that changed while the RPC was in flight.
     pub fn complete_goal_operation(

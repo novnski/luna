@@ -1203,6 +1203,7 @@ enum MutateParams {
     },
 }
 
+mod claude_goals;
 mod prompt_stash;
 mod side_chats;
 
@@ -4324,12 +4325,18 @@ impl EngineRpc {
                 "Goals require a provider configuration".into(),
             ))
         })?;
+        if config.harness == HarnessId::ClaudeCode {
+            let cwd = chat.cwd.clone().unwrap_or_else(|| ".".into());
+            return self
+                .apply_claude_goal_operation(command_id, task_id, &cwd, operation)
+                .await;
+        }
         if config.harness != HarnessId::Codex {
             return self.reject_context_command(
                 command_id,
                 CommandReasonCode::UnsupportedOperation,
-                "Goals are supported by Codex tasks.",
-                "Choose a Codex task with an accepted provider binding.",
+                "Goals are supported by Codex and Claude Code tasks.",
+                "Choose a Codex or Claude Code task with an accepted provider binding.",
             );
         }
         let execution = self

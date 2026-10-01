@@ -337,15 +337,21 @@ def handle(frame):
     text = text_of(frame).strip()
     if text.startswith("/goal"):
         goal_command(text[len("/goal"):])
-    elif "scenario:findings" in text:
+    elif text.startswith("/code-review") or "scenario:findings" in text:
         findings_turn(text)
     elif "scenario:schedules" in text:
         schedules_turn()
+    elif "scenario:slow" in text:
+        say("thinking ")
+        time.sleep(3)
+        model_result("slow done", 1)
     else:
         say("ok")
         model_result("ok", 1)
 
 
+with open(os.path.join(CONFIG, "starts.jsonl"), "a") as starts:
+    starts.write(json.dumps({"argv": ARGS, "resume": RESUME, "pid": os.getpid()}) + "\n")
 first = read_line()
 if first is None:
     sys.exit(1)

@@ -28,8 +28,6 @@ use std::path::{Path, PathBuf};
 use luna_proto::{AgentEvent, GoalEvaluation, GoalStatus, ThreadGoal};
 use serde_json::Value;
 
-/// Claude refuses longer conditions (`Goal condition is limited to 4000 characters`).
-pub(crate) const MAX_CONDITION_CHARS: usize = 4_000;
 const MAX_REASON_CHARS: usize = 600;
 /// Transcripts can be large; goal rows are found in a bounded tail.
 const TRANSCRIPT_TAIL_BYTES: u64 = 32 * 1024 * 1024;
