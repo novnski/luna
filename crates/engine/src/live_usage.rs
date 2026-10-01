@@ -8,8 +8,10 @@
 //! buckets (the history scan reads the same native transcripts).
 //!
 //! Plan rate-limit observations from the stream fill the Claude limit windows
-//! only when the account probe did not produce a Ready snapshot, and are
-//! labelled unverified because the stream does not name its account.
+//! only when the account probe did not produce a Ready snapshot. They carry no
+//! verified account id (so they are never de-duplicated with an account) and
+//! say so in their label and detail, because the stream does not name its
+//! account.
 
 use std::sync::Mutex;
 
@@ -266,11 +268,22 @@ pub fn attach(
     if limit.availability == LimitAvailability::Ready {
         return;
     }
-    limit.availability = LimitAvailability::Unverified;
+    let probe = limit.detail.take();
+    // Real provider-reported values with an explicit observation time; the
+    // missing verified id keeps them out of account de-duplication.
+    limit.availability = LimitAvailability::Ready;
+    limit.verified_account_id = None;
+    limit.account_label = Some("Live session stream · account not verified".into());
     limit.windows = windows;
     limit.checked_at_ms = Some(observation.observed_at_ms);
-    limit.detail = Some(format!(
-        "Observed in a live Claude session stream ({}) · account not verified",
-        observation.status.replace('_', " ")
-    ));
+    limit.detail = Some(match probe {
+        Some(probe) => format!(
+            "Observed in a live Claude session stream ({}) · account not verified · account probe: {probe}",
+            observation.status.replace('_', " ")
+        ),
+        None => format!(
+            "Observed in a live Claude session stream ({}) · account not verified",
+            observation.status.replace('_', " ")
+        ),
+    });
 }

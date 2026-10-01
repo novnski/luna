@@ -198,6 +198,13 @@ impl super::Shell {
         self.open_settings(super::SettingsSection::Usage, cx);
     }
 
+    /// The boot splash only fades on a connection transition, which a
+    /// pre-connected fixture never makes.
+    pub fn fixture_dismiss_splash(&mut self, cx: &mut gpui::Context<Self>) {
+        self.splash = super::super::SplashPhase::Gone;
+        cx.notify();
+    }
+
     pub fn fixture_usage_page_live_rows(&self) -> usize {
         self.usage_snapshot
             .as_ref()

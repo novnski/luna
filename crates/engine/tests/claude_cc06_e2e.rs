@@ -419,7 +419,11 @@ async fn parked_claude_run_switches_model_natively_and_usage_reports_it() {
         .find(|limit| limit["provider"] == "claude")
         .cloned()
         .expect("claude limit");
-    assert_eq!(claude["availability"], "unverified");
+    assert_eq!(claude["availability"], "ready");
+    assert!(
+        claude["verifiedAccountId"].is_null(),
+        "never account-deduplicated"
+    );
     assert!(
         claude["detail"]
             .as_str()
@@ -479,6 +483,12 @@ async fn rejected_claude_switch_redispatches_once_with_the_new_model() {
     .await;
     let spawns = conversation_spawns(&fx.project);
     assert_eq!(spawns.len(), 2, "{spawns:?}");
+    assert!(
+        stdin_users(&fx.project)
+            .iter()
+            .any(|f| f["request"]["subtype"] == "set_model"),
+        "the native switch was attempted before the restart"
+    );
     let second = &spawns[1];
     let model = second.iter().position(|arg| arg == "--model").unwrap();
     assert_eq!(second[model + 1], "claude-opus-5-5");

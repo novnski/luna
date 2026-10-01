@@ -11,16 +11,40 @@
 //!   the run without writing, and the existing orphan path re-dispatches the
 //!   same message as a fresh run — so `last_requests` must already hold the
 //!   new configuration.
+//! - Known limit: the "LUNA context" section appended at launch keeps the
+//!   launch model/reasoning until the next restart (the CLI's own system
+//!   prompt follows the switched model).
 
 use luna_proto::{HarnessId, RunRequest};
 
 use super::{RuntimeConfig, SessionsEngine, lock};
 
+/// The LUNA runtime contract embeds `context.model/reasoning` (and the
+/// "LUNA context" instruction section rendered from that context), so a model
+/// change alters its hash. For a live switch those derived parts are the only
+/// permitted difference: environment, tools, delivery, every other context
+/// field and every other instruction section must still be identical.
+fn contract_without_selection(value: &serde_json::Value) -> serde_json::Value {
+    let Ok(mut contract) =
+        serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone())
+    else {
+        return value.clone();
+    };
+    contract.content_hash.clear();
+    contract.context.model = None;
+    contract.context.reasoning = None;
+    contract
+        .instructions
+        .retain(|section| section.source != luna_proto::RuntimeInstructionSource::Context);
+    serde_json::to_value(contract).unwrap_or_else(|_| value.clone())
+}
+
 impl RuntimeConfig {
     /// True when `next` differs from this live runtime only in what a native
     /// live switch can change. Everything else (account, cwd, sandbox,
-    /// approvals, policy, worktree, runtime contract, auth instance, every
-    /// other model option) must be identical.
+    /// approvals, policy, worktree, auth instance, the runtime contract apart
+    /// from its model/reasoning context, every other model option) must be
+    /// identical.
     fn differs_only_in_live_selection(&self, next: &RuntimeConfig) -> bool {
         let others = |options: &serde_json::Map<String, serde_json::Value>| {
             options
@@ -28,7 +52,14 @@ impl RuntimeConfig {
                 .filter(|(key, _)| {
                     !luna_harness::claude::LIVE_SWITCH_OPTIONS.contains(&key.as_str())
                 })
-                .map(|(key, value)| (key.clone(), value.clone()))
+                .map(|(key, value)| {
+                    let value = if key == luna_proto::LUNA_RUNTIME_CONTRACT_OPTION {
+                        contract_without_selection(value)
+                    } else {
+                        value.clone()
+                    };
+                    (key.clone(), value)
+                })
                 .collect::<serde_json::Map<_, _>>()
         };
         self.harness_id == next.harness_id
@@ -42,11 +73,20 @@ impl RuntimeConfig {
             && self != next
     }
 
+    /// Only the switchable selection goes to the adapter; the engine already
+    /// proved everything else unchanged.
     fn live_selection(&self) -> luna_harness::LiveRuntimeSelection {
         luna_harness::LiveRuntimeSelection {
             model: self.model.clone(),
             reasoning: self.reasoning,
-            model_options: self.model_options.clone(),
+            model_options: self
+                .model_options
+                .iter()
+                .filter(|(key, _)| {
+                    luna_harness::claude::LIVE_SWITCH_OPTIONS.contains(&key.as_str())
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
         }
     }
 }

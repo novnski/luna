@@ -346,6 +346,7 @@ fn main() -> anyhow::Result<()> {
             cx.activate(true);
             cx.spawn(async move |cx| {
                 let result = async {
+                    window.update(cx, |shell, _, cx| shell.fixture_dismiss_splash(cx))?;
                     window.update(cx, |shell, _, cx| shell.fixture_open_usage_page("cost", cx))?;
                     wait_rows(window, cx).await?;
                     capture(window.into(), cx, &capture_output.join("live-usage-cost.png"))?;
@@ -360,16 +361,17 @@ fn main() -> anyhow::Result<()> {
                         limit = window.update(cx, |shell, _, _| {
                             shell.fixture_usage_page_claude_limit()
                         })?;
-                        if limit
-                            .as_ref()
-                            .is_some_and(|l| l.availability == LimitAvailability::Unverified)
-                        {
+                        if limit.as_ref().is_some_and(|l| {
+                            l.availability == LimitAvailability::Ready
+                                && l.detail.as_deref().is_some_and(|d| d.contains("stream"))
+                        }) {
                             break;
                         }
                     }
                     let limit = limit.ok_or_else(|| anyhow::anyhow!("no Claude limit row"))?;
                     anyhow::ensure!(
-                        limit.availability == LimitAvailability::Unverified
+                        limit.availability == LimitAvailability::Ready
+                            && limit.verified_account_id.is_none()
                             && limit.windows.iter().any(|w| w.id == "five_hour"),
                         "stream-observed Claude windows missing: {limit:?}"
                     );
