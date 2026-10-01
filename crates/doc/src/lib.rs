@@ -10,6 +10,7 @@
 
 pub mod commands;
 pub mod constants;
+pub mod native_output;
 pub mod parts;
 pub mod queue;
 pub mod rebuild;
@@ -20,6 +21,7 @@ pub mod workspace;
 
 pub use commands::*;
 pub use constants::*;
+pub use native_output::*;
 pub use parts::*;
 pub use queue::*;
 pub use rebuild::*;

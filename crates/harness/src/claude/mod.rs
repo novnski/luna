@@ -32,6 +32,7 @@
 
 pub mod catalog;
 mod normalize;
+mod tool_results;
 mod wire;
 
 use std::path::PathBuf;
