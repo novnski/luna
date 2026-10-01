@@ -137,15 +137,53 @@ fn has_text(core: &EngineCore, chat: &str, role: MessageRole, needle: &str) -> b
         .any(|entry| entry.role == role && text(entry).contains(needle))
 }
 
-async fn until(what: &str, mut ready: impl FnMut() -> bool) {
+async fn until(what: &str, mut ready: impl FnMut() -> bool, diag: impl Fn() -> String) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(40);
     while !ready() {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
+            "timed out waiting for {what}\n{}",
+            diag()
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Failure context: fake invocations, transcripts, queues and session state.
+fn diag(core: &EngineCore, chats: &[&str], project: &Path) -> String {
+    let mut out = format!(
+        "fake log:\n{}\n",
+        std::fs::read_to_string(project.join(".cc09-fake.log")).unwrap_or_default()
+    );
+    let mut ids: Vec<String> = chats.iter().map(|c| c.to_string()).collect();
+    for chat in core.workspace.read_chats().unwrap_or_default() {
+        if chat.child_thread.is_some() && !ids.contains(&chat.id) {
+            ids.push(chat.id.clone());
+        }
+    }
+    for chat in &ids {
+        out.push_str(&format!(
+            "chat {chat}: status {:?}\n",
+            core.sessions.session_status(chat).map(|s| s.status)
+        ));
+        for entry in entries(core, chat) {
+            out.push_str(&format!(
+                "  {:?} {} {:?}\n",
+                entry.role,
+                entry.id,
+                text(&entry)
+            ));
+        }
+        if let Ok(handle) = core.doc_host.open(chat) {
+            for row in handle.doc().read_queue().unwrap_or_default() {
+                out.push_str(&format!(
+                    "  queue {} {:?} {:?}\n",
+                    row.id, row.status, row.hold_reason
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// `(kind, pid, rest)` rows from the fake's invocation log. Only turn-capable
@@ -201,9 +239,11 @@ async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart()
     create_parent(&core, &client, &parent, &project).await;
     // An ordinary first parent turn creates the parent's own native session.
     queue(&client, &parent, "parent-first", "sid:parent hello").await;
-    until("parent first reply", || {
-        has_text(&core, &parent, MessageRole::Assistant, "OK")
-    })
+    until(
+        "parent first reply",
+        || has_text(&core, &parent, MessageRole::Assistant, "OK"),
+        || diag(&core, &[&parent], &project),
+    )
     .await;
 
     // A1/A3: manual creation on a Claude parent; same-provider child.
@@ -223,21 +263,29 @@ async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart()
     assert_eq!(config.harness, HarnessId::ClaudeCode);
     assert_eq!(row.child_thread.as_ref().unwrap().parent_task_id, parent);
 
-    until("child reply", || {
-        has_text(&core, &child, MessageRole::Assistant, "CHILD_RESULT_OK")
-    })
+    until(
+        "child reply",
+        || has_text(&core, &child, MessageRole::Assistant, "CHILD_RESULT_OK"),
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     // A4: one durable outcome, one parent notice.
-    until("parent outcome notice", || {
-        entries(&core, &parent)
-            .iter()
-            .any(|e| e.id.starts_with("child-outcome:"))
-    })
+    until(
+        "parent outcome notice",
+        || {
+            entries(&core, &parent)
+                .iter()
+                .any(|e| e.id.starts_with("child-outcome:"))
+        },
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     // B1: the continuation reached the Claude parent as a host-declared peer.
-    until("parent processed the report", || {
-        has_text(&core, &parent, MessageRole::Assistant, "PARENT_SAW_REPORT")
-    })
+    until(
+        "parent processed the report",
+        || has_text(&core, &parent, MessageRole::Assistant, "PARENT_SAW_REPORT"),
+        || diag(&core, &[&parent], &project),
+    )
     .await;
 
     let log = fake_log(&project);
@@ -347,9 +395,11 @@ async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart()
         "expect-resume:child child reply",
     )
     .await;
-    until("child resumed reply", || {
-        has_text(&core, &child, MessageRole::Assistant, "CHILD_REPLY_OK")
-    })
+    until(
+        "child resumed reply",
+        || has_text(&core, &child, MessageRole::Assistant, "CHILD_REPLY_OK"),
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     let log = fake_log(&project);
     let reply = lines_with(&log, "expect-resume:child");
@@ -384,9 +434,11 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
         "scenario:peer-arrival sid:parent",
     )
     .await;
-    until("peer reply", || {
-        has_text(&core, &parent, MessageRole::Assistant, "PEER_REPLY")
-    })
+    until(
+        "peer reply",
+        || has_text(&core, &parent, MessageRole::Assistant, "PEER_REPLY"),
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     let all = entries(&core, &parent);
     let peer_at = all
@@ -421,9 +473,11 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
 
     // C1: a mid-turn arrival splits the streaming segment around it.
     queue(&client, &parent, "peer-2", "scenario:mid-turn-peer").await;
-    until("mid-turn reply", || {
-        has_text(&core, &parent, MessageRole::Assistant, "AFTER_PEER")
-    })
+    until(
+        "mid-turn reply",
+        || has_text(&core, &parent, MessageRole::Assistant, "AFTER_PEER"),
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     let all = entries(&core, &parent);
     let before = all
@@ -446,11 +500,15 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
 
     // C4/C5: socket-lane holds are reported once per state and never end a turn.
     queue(&client, &parent, "peer-3", "scenario:peer-hold-socket").await;
-    until("socket hold resolution", || {
-        entries(&core, &parent)
-            .iter()
-            .any(|e| e.id == "peer:peer-msg-2:dropped")
-    })
+    until(
+        "socket hold resolution",
+        || {
+            entries(&core, &parent)
+                .iter()
+                .any(|e| e.id == "peer:peer-msg-2:dropped")
+        },
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     let all = entries(&core, &parent);
     let held = all
@@ -475,29 +533,43 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
         "sid:held reply",
     )
     .await;
-    until("held report recorded", || {
-        entries(&core, &parent).iter().any(|e| {
-            e.id.starts_with("peer:") && e.id.ends_with(":held") && text(e).contains("Held child")
-        })
-    })
+    until(
+        "held report recorded",
+        || {
+            entries(&core, &parent).iter().any(|e| {
+                e.id.starts_with("peer:")
+                    && e.id.ends_with(":held")
+                    && text(e).contains("Held child")
+            })
+        },
+        || diag(&core, &[&parent], &project),
+    )
     .await;
-    until("parent turn settled", || {
-        core.sessions.session_status(&parent).is_some_and(|s| {
-            !matches!(
-                s.status,
-                SessionStatus::Working | SessionStatus::AwaitingInput
+    until(
+        "parent turn settled",
+        || {
+            core.sessions.session_status(&parent).is_some_and(|s| {
+                !matches!(
+                    s.status,
+                    SessionStatus::Working | SessionStatus::AwaitingInput
+                )
+            })
+        },
+        || diag(&core, &[&parent], &project),
+    )
+    .await;
+    until(
+        "visible hold error",
+        || {
+            has_text(
+                &core,
+                &parent,
+                MessageRole::Assistant,
+                "has not reached the model",
             )
-        })
-    })
-    .await;
-    until("visible hold error", || {
-        has_text(
-            &core,
-            &parent,
-            MessageRole::Assistant,
-            "has not reached the model",
-        )
-    })
+        },
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     assert_eq!(
         lines_with(&fake_log(&project), &format!("luna-child:{held_child}")).len(),
@@ -535,11 +607,15 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
         .unwrap()
         .effective_permission_mode;
     assert_eq!(child_mode, luna_proto::PermissionMode::Ask);
-    until("continuation skipped notice", || {
-        entries(&core, &parent)
-            .iter()
-            .any(|e| e.id.starts_with("child-continuation-skipped:"))
-    })
+    until(
+        "continuation skipped notice",
+        || {
+            entries(&core, &parent)
+                .iter()
+                .any(|e| e.id.starts_with("child-continuation-skipped:"))
+        },
+        || diag(&core, &[&parent], &project),
+    )
     .await;
     let notice = entries(&core, &parent)
         .into_iter()
