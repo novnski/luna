@@ -8785,6 +8785,13 @@ impl RpcService for EngineRpc {
                 // Provider enablement can also change during the refresh.
                 let still_enabled = Self::usage_providers_for(&self.registry.enabled_set());
                 Self::retain_enabled_usage(&mut snapshot, &still_enabled);
+                // CC-06: live stream accounting beside history (never summed in).
+                crate::live_usage::attach(
+                    &mut snapshot,
+                    self.sessions.live_usage(),
+                    &still_enabled,
+                    include_limits && !synthetic,
+                );
                 for source in &mut snapshot.summary.sources {
                     source.environment_id = self.engine_info.device_id.clone();
                 }

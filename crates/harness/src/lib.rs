@@ -60,6 +60,16 @@ pub enum ProviderForkProgress {
 pub type ProviderForkProgressReporter =
     dyn Fn(ProviderForkProgress) -> Result<(), HarnessError> + Send + Sync;
 
+/// The model/effort part of a run's configuration, for live reconfiguration
+/// of a warm provider session (CC-06). Everything else about a run (cwd,
+/// policy, account, runtime contract) is outside this selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveRuntimeSelection {
+    pub model: Option<String>,
+    pub reasoning: Option<ReasoningLevel>,
+    pub model_options: serde_json::Map<String, serde_json::Value>,
+}
+
 /// A steer prompt pushed into a live run; delivered at the harness's steering boundary.
 pub struct SteerMessage {
     pub prompt: String,
@@ -237,6 +247,19 @@ pub trait Harness: Send + Sync {
             provider_session_id: result.provider_session_id.clone(),
         })?;
         Ok(result)
+    }
+    /// Stage a live model/effort change for the warm run that will next
+    /// receive the ordinary (follow-up) steer `message_id`. The adapter must
+    /// obtain native acknowledgment and readback before writing that prompt,
+    /// and must not write it under the old configuration if the change fails.
+    /// `false` (the default) means only a runtime restart can apply `to`.
+    fn stage_live_reconfiguration(
+        &self,
+        _message_id: &str,
+        _from: &LiveRuntimeSelection,
+        _to: &LiveRuntimeSelection,
+    ) -> bool {
+        false
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
     /// A provider-authored catalog suitable for replacing a saved snapshot.

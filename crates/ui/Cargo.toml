@@ -74,6 +74,10 @@ name = "usage-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "live-usage-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "accounts-fixture"
 required-features = ["appshots-fixture"]
 

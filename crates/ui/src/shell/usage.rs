@@ -18,6 +18,10 @@ use super::{SettingsSection, Shell};
 use crate::icons::{self, icon};
 use crate::theme::Theme;
 
+/// CC-06 live provider sessions section.
+#[path = "usage_live.rs"]
+mod live;
+
 fn provider_mark(provider: UsageProvider) -> &'static str {
     match provider {
         UsageProvider::Codex => icons::OPENAI_MARK,
@@ -2099,6 +2103,30 @@ impl Shell {
 
         let mut content = div().w_full().flex().flex_col().gap(px(26.0));
         if let Some(snapshot) = snapshot {
+            let chats = &self.state.read(cx).chats;
+            let title_of = |task: &str| {
+                chats
+                    .iter()
+                    .find(|chat| chat.id == task)
+                    .and_then(|chat| chat.title.clone())
+            };
+            // Provenance of any Claude windows taken from a session stream.
+            let limit_note = snapshot
+                .limits
+                .iter()
+                .find(|limit| {
+                    limit.account_label.as_deref() == Some(luna_proto::STREAM_OBSERVED_LIMIT_LABEL)
+                })
+                .and_then(|limit| limit.detail.clone());
+            if let Some(section) = live::live_sessions_section(
+                &snapshot.live_sessions,
+                title_of,
+                limit_note,
+                &theme,
+                now_ms,
+            ) {
+                content = content.child(section);
+            }
             if limits_view {
                 content = content.child(pooled_limit_sections(&snapshot.limits, &theme, now_ms));
             } else {

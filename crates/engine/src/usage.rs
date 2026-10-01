@@ -1735,6 +1735,7 @@ fn snapshot_impl(
                 .is_none_or(|items| items.contains(&limit.provider))
         })
         .collect(),
+        live_sessions: Vec::new(),
     }
 }
 

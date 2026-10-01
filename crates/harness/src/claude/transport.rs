@@ -482,6 +482,28 @@ impl ControlChannel {
         }
     }
 
+    /// `--replay-user-messages` echo of one of this run's own lines (CC-06
+    /// receipt, folded here): the CLI recorded the exact input in history.
+    /// An explicit steer settles once, whichever of replay or lifecycle
+    /// `started` arrives first; a waiting acceptance resolves Accepted.
+    pub(crate) fn on_replay(&mut self, uuid: &str) -> Effects {
+        let mut effects = Effects::default();
+        let Some(input) = self.inputs.get_mut(uuid) else {
+            return effects;
+        };
+        if let Some((tx, _)) = input.acceptance.take() {
+            let _ = tx.send(SteerAcceptance::Accepted);
+        }
+        if input.kind == InputKind::Explicit
+            && !input.incorporated
+            && let Some(id) = &input.luna_message_id
+        {
+            input.incorporated = true;
+            effects.incorporated.push(id.clone());
+        }
+        effects
+    }
+
     fn on_lifecycle(&mut self, uuid: &str, state: LifecycleState, effects: &mut Effects) {
         let Some(input) = self.inputs.get_mut(uuid) else {
             tracing::debug!(

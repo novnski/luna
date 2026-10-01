@@ -599,10 +599,15 @@ impl Normalizer {
                 }
                 let window =
                     rate_window_label(f.rate_limit_info.rate_limit_type.as_deref().unwrap_or(""));
+                let reset = super::accounting::reset_suffix(f.rate_limit_info.resets_at);
                 vec![AgentEvent::Error {
-                    message: format!(
-                        "Claude {window} limit reached — the turn was blocked. Try again after it resets."
-                    ),
+                    message: if reset.is_empty() {
+                        format!(
+                            "Claude {window} limit reached — the turn was blocked. Try again after it resets."
+                        )
+                    } else {
+                        format!("Claude {window} limit reached — the turn was blocked.{reset}")
+                    },
                 }]
             }
 

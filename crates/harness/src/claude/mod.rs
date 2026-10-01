@@ -30,13 +30,17 @@
 //! - Interrupt: cancelling [`RunControls::interrupt`] sends the protocol-level
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
+mod accounting;
 pub mod catalog;
 mod controls;
+mod delivery;
 mod discovery;
 mod events;
 mod input;
+mod live_session;
 mod normalize;
 pub mod profile;
+mod runtime_controls;
 mod tool_results;
 mod transport;
 mod turns;
@@ -67,6 +71,9 @@ use crate::{
 use catalog::{models_from_initialize, static_models, to_effort};
 use normalize::Normalizer;
 use profile::{ClaudeLaunchProfile, ToolSelection};
+/// Model options a native live switch may change (CC-06); the engine requires
+/// every other option of a warm runtime to be unchanged.
+pub use runtime_controls::SWITCHABLE_OPTIONS as LIVE_SWITCH_OPTIONS;
 use wire::Frame;
 
 /// Locate the device's installed Claude Code CLI: our own PATH, then the
@@ -109,6 +116,9 @@ pub struct ClaudeHarness {
     /// Scoped command discovery cache: only successful probes are cached, so a
     /// broken CLI retries on the next picker open (ACP-harness parity).
     discovery: discovery::DiscoveryCache,
+    /// CC-06: live model/effort switches staged by the engine for a warm run,
+    /// keyed by the follow-up steer's message id.
+    staged: runtime_controls::SharedStaged,
 }
 
 impl Default for ClaudeHarness {
@@ -119,6 +129,7 @@ impl Default for ClaudeHarness {
             kill_grace: Duration::from_secs(3),
             config_home: None,
             discovery: discovery::DiscoveryCache::default(),
+            staged: Default::default(),
         }
     }
 }
@@ -184,24 +195,23 @@ impl ClaudeHarness {
             // summary is asked for (raw reasoning stays provider-private).
             "--thinking-display",
             "summarized",
+            // CC-06: re-emit each stdin user line with its `uuid` once the CLI
+            // records it — the native delivery receipt (folded into the
+            // transport's single uuid mechanism).
+            "--replay-user-messages",
         ]);
         // The 1M context window is selected via a model-id suffix
         // (`sonnet[1m]`), exactly how the CLI itself does it; fast mode and
         // always-on thinking are settings overrides.
-        if let Some(model) = &request.model {
-            let one_m = request
-                .model_options
-                .get("contextWindow")
-                .and_then(Value::as_str)
-                == Some("1m");
-            cmd.arg("--model");
-            cmd.arg(if one_m {
-                format!("{model}[1m]")
-            } else {
-                model.clone()
-            });
+        let model_flag =
+            runtime_controls::model_flag(request.model.as_deref(), &request.model_options);
+        if let Some(model) = &model_flag {
+            cmd.args(["--model", model]);
         }
-        if let Some(effort) = to_effort(request.reasoning, request.model.as_deref()) {
+        // CC-06: the discovered effort ladder decides when one is known.
+        if let Some(effort) =
+            runtime_controls::effort_flag(exe, request.reasoning, model_flag.as_deref())
+        {
             cmd.args(["--effort", effort]);
         }
         if let Some(contract) = request
@@ -282,6 +292,7 @@ impl ClaudeHarness {
             self.kill_grace,
         )
         .await
+        .inspect(|response| runtime_controls::remember_catalog(&exe, response))
     }
 
     /// The CLI's read-only initialization response contains its current model
@@ -366,6 +377,16 @@ impl Harness for ClaudeHarness {
     /// Done is the CLI's own terminal frame, for wake turns too.
     fn deterministic_turn_end(&self) -> bool {
         true
+    }
+
+    fn stage_live_reconfiguration(
+        &self,
+        message_id: &str,
+        from: &crate::LiveRuntimeSelection,
+        to: &crate::LiveRuntimeSelection,
+    ) -> bool {
+        self.resolve_executable()
+            .is_ok_and(|exe| runtime_controls::stage(&self.staged, &exe, message_id, from, to))
     }
 
     /// Keep the trait's lightweight bundled list for internal callers that
@@ -542,6 +563,17 @@ impl ClaudeHarness {
             .ledger
             .register_native(turns::SendKind::Initial, None, initial_uuid);
         let _ = stdin_tx.send(StdinMsg::line(first));
+        // CC-06: read back what the CLI actually applied when LUNA asked for
+        // a model or effort (a run that requested nothing has nothing to check).
+        let launch_readback = (!title_only
+            && (request.model.is_some() || request.reasoning.is_some()))
+        .then(|| {
+            let model =
+                runtime_controls::model_flag(request.model.as_deref(), &request.model_options);
+            let effort = runtime_controls::effort_flag(&exe, request.reasoning, model.as_deref())
+                .map(str::to_owned);
+            (model, effort)
+        });
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
@@ -559,6 +591,10 @@ impl ClaudeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            cc06: Cc06Session {
+                launch_readback,
+                staged: self.staged.clone(),
+            },
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -638,6 +674,14 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    cc06: Cc06Session,
+}
+
+/// CC-06 launch inputs for delivery receipts, readback and live switches.
+struct Cc06Session {
+    /// Requested `(--model, --effort)` to verify with `get_settings`.
+    launch_readback: Option<(Option<String>, Option<String>)>,
+    staged: runtime_controls::SharedStaged,
 }
 
 /// The per-run event loop: one task multiplexing stdout frames, the steering
@@ -651,13 +695,14 @@ async fn run_session(session: Session) {
         stdin_tx,
         event_tx,
         controls,
-        reasoning,
+        mut reasoning,
         permission_mode,
         mut transport,
         permission_policy,
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        cc06,
     } = session;
     let RunControls {
         request_input,
@@ -676,6 +721,9 @@ async fn run_session(session: Session) {
     // Stop, or LUNA failing closed on a weaker native permission mode.
     let stop = interrupt.child_token();
 
+    let mut live = live_session::LiveSession::start(cc06, title_only, &stdin_tx);
+    let mut released: std::collections::VecDeque<crate::SteerMessage> =
+        std::collections::VecDeque::new();
     // Claude's root user echo carries no correlation id. Explicit steering is
     // single-flight and a successful stdin write remains unconfirmed; text
     // equality alone must never settle a durable queue row.
@@ -689,6 +737,7 @@ async fn run_session(session: Session) {
 
     'main: loop {
         let receipt_deadline = transport.next_deadline();
+        let switch_deadline = live.switch_deadline();
         tokio::select! {
             line = stdout_lines.next_line() => match line {
                 Ok(Some(line)) => {
@@ -700,30 +749,58 @@ async fn run_session(session: Session) {
                         requests.cancel(&id);
                         continue;
                     }
-                    if let transport::Intercept::Consumed(effects) = transport.intercept(line) {
-                        for user_message_id in effects.incorporated {
-                            // Exact native receipt: this steer's uuid drained into a turn.
-                            explicit_steer_unconfirmed = false;
-                            let (prev, next) = norm.rotate_for_steer();
-                            let ev = AgentEvent::Steered {
-                                user_message_id: Some(user_message_id),
-                                assistant_message_id: Some(prev),
-                                next_assistant_message_id: Some(next),
-                            };
-                            if event_tx.send(Ok(ev)).await.is_err() {
-                                break 'main;
-                            }
-                        }
-                        // CC-02: the same receipts drive the turn ledger
-                        // (deferred follow-up boundaries, withheld foreign Done).
-                        for (uuid, state) in effects.lifecycle {
-                            for ev in norm.native_input_lifecycle(&uuid, state.as_str()) {
+                    // CC-06 side channel: replay receipts, its own control
+                    // replies (live switch, launch readback) and accounting.
+                    let prefix = match live.on_line(line, &stdin_tx, &mut reasoning) {
+                        live_session::LineOutcome::Normalize { prefix } => prefix,
+                        live_session::LineOutcome::Consumed(events) => {
+                            for ev in events {
                                 if event_tx.send(Ok(ev)).await.is_err() {
                                     break 'main;
                                 }
                             }
+                            continue;
+                        }
+                        live_session::LineOutcome::Release { events, steer } => {
+                            released.push_back(*steer);
+                            for ev in events {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
+                            continue;
+                        }
+                        live_session::LineOutcome::SwitchFailed(events) => {
+                            steering_open = false;
+                            for ev in events {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
+                            continue;
+                        }
+                        live_session::LineOutcome::Replay(uuid) => {
+                            let effects = transport.on_replay(&uuid);
+                            for ev in receipt_events(&mut norm, effects, &mut explicit_steer_unconfirmed) {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
+                            continue;
+                        }
+                    };
+                    if let transport::Intercept::Consumed(effects) = transport.intercept(line) {
+                        for ev in receipt_events(&mut norm, effects, &mut explicit_steer_unconfirmed) {
+                            if event_tx.send(Ok(ev)).await.is_err() {
+                                break 'main;
+                            }
                         }
                         continue;
+                    }
+                    for ev in prefix {
+                        if event_tx.send(Ok(ev)).await.is_err() {
+                            break 'main;
+                        }
                     }
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
@@ -785,8 +862,19 @@ async fn run_session(session: Session) {
                 }
             },
 
-            steer = steering.recv(), if steering_open && !interrupted => match steer {
+            // A steer parked behind a CC-06 live switch is released into
+            // this same write path once the switch is applied and read back.
+            steer = async {
+                match released.pop_front() {
+                    Some(steer) => Some(steer),
+                    None => steering.recv().await,
+                }
+            }, if steering_open && !interrupted && !live.switch_pending() => match steer {
                 Some(msg) => {
+                    let msg = match live.route_steer(msg, &stdin_tx, &mut reasoning) {
+                        live_session::SteerRoute::Pending => continue 'main,
+                        live_session::SteerRoute::Write(msg) => *msg,
+                    };
                     let line = match input::user_line(
                         &msg.prompt,
                         reasoning,
@@ -864,7 +952,7 @@ async fn run_session(session: Session) {
                                 transport.explicit_written(&uuid, msg.acceptance);
                             }
                             Ok(Err(error)) => {
-                                if let Some(tx) = msg.acceptance {
+                                    if let Some(tx) = msg.acceptance {
                                     let _ = tx.send(crate::SteerAcceptance::Unknown(error));
                                 }
                             }
@@ -916,6 +1004,24 @@ async fn run_session(session: Session) {
 
             () = sleep_until(receipt_deadline), if receipt_deadline.is_some() => {
                 transport.expire_due(std::time::Instant::now());
+            },
+
+            _ = async {
+                match switch_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            }, if switch_deadline.is_some() => {
+                if let live_session::LineOutcome::SwitchFailed(events) =
+                    live.switch_timed_out(&stdin_tx)
+                {
+                    steering_open = false;
+                    for ev in events {
+                        if event_tx.send(Ok(ev)).await.is_err() {
+                            break 'main;
+                        }
+                    }
+                }
             },
 
             _ = stop.cancelled(), if !interrupt_sent => {
@@ -984,6 +1090,31 @@ async fn sleep_until(deadline: Option<std::time::Instant>) {
     if let Some(deadline) = deadline {
         tokio::time::sleep_until(deadline.into()).await;
     }
+}
+
+/// Events for one batch of transport receipts: exact explicit-steer
+/// incorporation (`Steered` with the LUNA message id, once per input) and the
+/// CC-02 turn ledger's view of each `command_lifecycle` transition.
+fn receipt_events(
+    norm: &mut Normalizer,
+    effects: transport::Effects,
+    explicit_steer_unconfirmed: &mut bool,
+) -> Vec<AgentEvent> {
+    let mut out = Vec::new();
+    for user_message_id in effects.incorporated {
+        // Exact native receipt: this steer's uuid reached the conversation.
+        *explicit_steer_unconfirmed = false;
+        let (prev, next) = norm.rotate_for_steer();
+        out.push(AgentEvent::Steered {
+            user_message_id: Some(user_message_id),
+            assistant_message_id: Some(prev),
+            next_assistant_message_id: Some(next),
+        });
+    }
+    for (uuid, state) in effects.lifecycle {
+        out.extend(norm.native_input_lifecycle(&uuid, state.as_str()));
+    }
+    out
 }
 
 type RequestInputFn = Box<
