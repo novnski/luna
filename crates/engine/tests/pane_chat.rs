@@ -1103,6 +1103,16 @@ async fn until_diag(what: &str, mut ready: impl FnMut() -> bool, diag: impl Fn()
     }
 }
 
+async fn until_diag_side(
+    core: &EngineCore,
+    recorder: &Recorder,
+    side: &str,
+    what: &str,
+    ready: impl FnMut() -> bool,
+) {
+    until_diag(what, ready, || chat_diag(core, recorder, side)).await;
+}
+
 fn queued_ids(core: &EngineCore, chat: &str) -> Vec<String> {
     core.doc_host
         .open(chat)
@@ -1238,7 +1248,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     )
     .await
     .unwrap();
-    until("side steer", || {
+    until_diag_side(&core, &recorder, &side, "side steer", || {
         recorder
             .steers
             .lock()
@@ -1258,7 +1268,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     )
     .await
     .unwrap();
-    until("side queue holds", || queued_ids(&core, &side).contains(&"side-q2".to_string())).await;
+    until_diag_side(&core, &recorder, &side, "side queue holds", || queued_ids(&core, &side).contains(&"side-q2".to_string())).await;
     parent_untouched(&core, &recorder, "queue");
 
     // G5: the ordinary Stop task command stops only the side turn.
@@ -1270,7 +1280,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     )
     .await
     .unwrap();
-    until("side stopped", || !core.sessions.turn_in_flight(&side)).await;
+    until_diag_side(&core, &recorder, &side, "side stopped", || !core.sessions.turn_in_flight(&side)).await;
     parent_untouched(&core, &recorder, "stop");
     // The held follow-up still belongs to the side chat; send it now if the
     // queue was paused by Stop.
@@ -1295,7 +1305,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .await
         .unwrap();
     }
-    until("queued side follow-up ran", || {
+    until_diag_side(&core, &recorder, &side, "queued side follow-up ran", || {
         runs_for(&recorder, &side)
             .iter()
             .any(|run| run.prompt.contains("QUEUED after hold"))
@@ -1319,7 +1329,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     queue_with(&client, &side, json!({"messageId":"side-q3","text":"after model change","holdForTurnEnd":true}))
         .await
         .unwrap();
-    until("side model run", || {
+    until_diag_side(&core, &recorder, &side, "side model run", || {
         runs_for(&recorder, &side).len() == before + 1 && !core.sessions.turn_in_flight(&side)
     })
     .await;
@@ -1336,7 +1346,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     queue_with(&client, &side, json!({"messageId":"side-q4","text":"after access change","holdForTurnEnd":true}))
         .await
         .unwrap();
-    until("side ask run", || runs_for(&recorder, &side).len() == before + 1).await;
+    until_diag_side(&core, &recorder, &side, "side ask run", || runs_for(&recorder, &side).len() == before + 1).await;
     assert_eq!(
         runs_for(&recorder, &side)[before]
             .permission_policy
@@ -1345,7 +1355,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
             .effective_mode,
         PermissionMode::Ask
     );
-    until("side idle", || !core.sessions.turn_in_flight(&side)).await;
+    until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
     if mode != "full" {
         command(&client, &side, "side-full", json!({"kind":"setPermission","mode":"full"}))
             .await
@@ -1354,14 +1364,14 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         queue_with(&client, &side, json!({"messageId":"side-q5","text":"above parent","holdForTurnEnd":true}))
             .await
             .unwrap();
-        until("side capped run", || runs_for(&recorder, &side).len() == before + 1).await;
+        until_diag_side(&core, &recorder, &side, "side capped run", || runs_for(&recorder, &side).len() == before + 1).await;
         let policy = runs_for(&recorder, &side)[before].permission_policy.clone().unwrap();
         assert_eq!(
             policy.effective_mode,
             parent_before.config.as_ref().unwrap().effective_permission_mode,
             "a side chat never runs above its parent"
         );
-        until("side idle", || !core.sessions.turn_in_flight(&side)).await;
+        until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
     }
     parent_untouched(&core, &recorder, "access change");
 
@@ -1384,13 +1394,13 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         )
         .await
         .unwrap();
-    until("legacy side send", || {
+    until_diag_side(&core, &recorder, &side, "legacy side send", || {
         runs_for(&recorder, &side)
             .iter()
             .any(|run| run.prompt == "legacy send")
     })
     .await;
-    until("side idle", || !core.sessions.turn_in_flight(&side)).await;
+    until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
     // The legacy send now honours the side chat's own model change.
     assert_eq!(
         runs_for(&recorder, &side)
