@@ -410,6 +410,8 @@ pub(super) enum PaneChatEvent {
     Back,
     OpenAsMain(String),
     ShowParent(String),
+    /// Side chats: stop work and seal the history (read-only afterwards).
+    Unload,
 }
 
 impl gpui::EventEmitter<PaneChatEvent> for PaneChatView {}
@@ -516,10 +518,28 @@ impl PaneChatView {
             .and_then(|chat| chat.title.clone())
             .map(|title| transcript::single_line(&title))
             .unwrap_or_else(|| "Parent chat".into());
-        let title = chat
-            .and_then(|chat| chat.title.clone())
-            .map(|title| transcript::single_line(&title))
-            .unwrap_or_else(|| self.identity.label().to_string());
+        let title = match self.identity {
+            // Named by its first question, like the leased side view: the
+            // engine's row title only repeats "Side chat · <parent>".
+            PaneIdentity::Side => ChatBinding::Chat(self.chat_id.clone())
+                .transcript(state)
+                .iter()
+                .find(|entry| entry.role == luna_doc::MessageRole::User)
+                .and_then(|entry| {
+                    entry.parts.iter().find_map(|part| match part {
+                        luna_doc::MessagePart::Text { text, .. } => {
+                            Some(transcript::single_line(text))
+                        }
+                        _ => None,
+                    })
+                })
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| "New side chat".into()),
+            PaneIdentity::Child => chat
+                .and_then(|chat| chat.title.clone())
+                .map(|title| transcript::single_line(&title))
+                .unwrap_or_else(|| self.identity.label().to_string()),
+        };
         let theme = Theme::of(cx);
         let (status, archived) = match (self.identity, chat) {
             (PaneIdentity::Child, Some(chat)) => {
@@ -577,7 +597,7 @@ impl Render for PaneChatView {
             &chrome,
             PaneHeaderActions {
                 back_label: self.back_label,
-                // (Side chats: Back unloads the side chat; see SideChatPanel.)
+                // (Side chats: Back parks the side chat; see SideChatPanel.)
                 back: Rc::new(|_, cx| cx.emit(PaneChatEvent::Back)),
                 // A side chat is never a main chat; a child can be promoted.
                 open_main: (self.identity == PaneIdentity::Child).then(|| {
@@ -588,7 +608,33 @@ impl Render for PaneChatView {
                 show_parent: Some(Rc::new(move |_, cx| {
                     cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
                 })),
-                extra: Vec::new(),
+                extra: if self.identity == PaneIdentity::Side {
+                    let border_strong = theme.border_strong;
+                    let hover = crate::theme::ink(0.06);
+                    vec![
+                        div()
+                            .id("pane-chat-unload")
+                            .role(gpui::Role::Button)
+                            .aria_label("Unload side chat: stop work and keep read-only history")
+                            .tab_index(0)
+                            .h(px(crate::surface_chrome::CONTROL_SIZE))
+                            .px(px(8.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
+                            .cursor_pointer()
+                            .text_size(crate::typography::ui_rems(11.5))
+                            .text_color(theme.text_muted)
+                            .hover(move |style| style.bg(hover))
+                            .focus_visible(move |style| style.border_color(border_strong))
+                            .on_click(cx.listener(|_, _, _, cx| cx.emit(PaneChatEvent::Unload)))
+                            .child("Unload")
+                            .into_any_element(),
+                    ]
+                } else {
+                    Vec::new()
+                },
             },
             &theme,
             cx,

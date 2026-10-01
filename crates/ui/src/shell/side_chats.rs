@@ -58,20 +58,26 @@ pub(super) enum SideChatEvent {
 
 impl gpui::EventEmitter<SideChatEvent> for SideChatPanel {}
 
-/// Advertised by an engine whose side chats accept the ordinary chat paths
-/// (task commands, `WatchQueue`, `WatchDocMessages`, drafts) and whose
-/// `WatchChats` delivers side chat rows (without a project, so they stay out
-/// of the sidebar and can't become the main chat). Until then side chats use
-/// the leased side-chat RPCs and the composer says what they support.
-pub(super) const SIDE_CHAT_TASK_COMMANDS_V1: &str = "side-chat-task-commands-v1";
-
-/// Whether this side chat can use the full bound composer.
+/// Whether this side chat can use the full bound composer (contract §5.1):
+/// the engine advertises `side-chat-task-commands-v1` (side chats accept the
+/// ordinary task commands, watches, drafts and per-chat RPCs while leased)
+/// and `WatchChats` publishes the live side chat's row (without a project,
+/// so it stays out of the sidebar and can't become the main chat). Otherwise
+/// side chats use the leased side-chat RPCs and the input says what they
+/// support.
 pub(super) fn side_chat_first_class(state: &AppState, side_id: &str) -> bool {
-    state
-        .engine()
-        .is_some_and(|engine| engine.engine_info().supports(SIDE_CHAT_TASK_COMMANDS_V1))
-        && state.chats.iter().any(|chat| chat.id == side_id)
+    state.engine().is_some_and(|engine| {
+        engine
+            .engine_info()
+            .supports(luna_proto::capabilities::SIDE_CHAT_TASK_COMMANDS_V1)
+    }) && state
+        .chats
+        .iter()
+        .any(|chat| chat.id == side_id && chat.space_id.is_none())
 }
+
+/// The lease lapses after 30 s without a renewal; renew well inside that.
+const LEASE_HEARTBEAT: Duration = Duration::from_secs(10);
 
 pub(super) struct SideChatPanel {
     state: Entity<AppState>,
@@ -79,6 +85,12 @@ pub(super) struct SideChatPanel {
     composers: Entity<PaneComposers>,
     /// The shared full chat view, when this side chat is first-class.
     full_view: Option<(Entity<PaneChatView>, Subscription)>,
+    /// First-class side chats left with Back: still writable, their leases
+    /// kept alive by the heartbeat so the draft or a send in flight can
+    /// finish and the chat can be reopened. Unloaded on panel release.
+    parked: std::collections::HashMap<String, String>,
+    last_renew: std::time::Instant,
+    renew_task: Option<Task<()>>,
     links: crate::markdown::render::LinkUi,
     engine: Option<EngineHandle>,
     parent: String,
@@ -142,7 +154,14 @@ impl SideChatPanel {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 if this
                     .update(cx, |panel, cx| {
-                        if panel.lease.is_some() && !panel.busy {
+                        // A first-class side chat streams through its live
+                        // doc watch; reading pages would replace (and stop)
+                        // that watch. Its lease only needs the heartbeat.
+                        if panel.full_mode(cx) || !panel.parked.is_empty() {
+                            if panel.last_renew.elapsed() >= LEASE_HEARTBEAT {
+                                panel.renew_leases(cx);
+                            }
+                        } else if panel.lease.is_some() && !panel.busy {
                             panel.action(PanelAction::Refresh, cx);
                         }
                     })
@@ -156,6 +175,9 @@ impl SideChatPanel {
             state,
             composers,
             full_view: None,
+            parked: Default::default(),
+            last_renew: std::time::Instant::now(),
+            renew_task: None,
             links,
             engine,
             parent,
@@ -196,6 +218,102 @@ impl SideChatPanel {
         self.state.read(cx).engine_generation() == self.engine_generation
     }
 
+    /// The open page is a writable, first-class side chat.
+    fn full_mode(&self, cx: &App) -> bool {
+        self.lease.is_some()
+            && self.page.as_ref().is_some_and(|page| {
+                page.meta.state == "active"
+                    && side_chat_first_class(self.state.read(cx), &page.meta.id)
+            })
+    }
+
+    /// Heartbeat: `RenewSideChat` for the open and every parked lease. Never
+    /// reads pages, so live doc watches are untouched.
+    fn renew_leases(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine.clone() else {
+            return;
+        };
+        if !self.is_current(cx) || self.renew_task.is_some() {
+            return;
+        }
+        let mut leases: Vec<(String, String)> = self
+            .parked
+            .iter()
+            .map(|(id, lease)| (id.clone(), lease.clone()))
+            .collect();
+        if let (Some(page), Some(lease)) = (&self.page, &self.lease) {
+            leases.push((page.meta.id.clone(), lease.clone()));
+        }
+        if leases.is_empty() {
+            return;
+        }
+        self.last_renew = std::time::Instant::now();
+        self.renew_task = Some(cx.spawn(async move |this, cx| {
+            let calls = leases.clone();
+            let results = Tokio::spawn(cx, async move {
+                let mut results = Vec::new();
+                for (id, lease) in calls {
+                    let result = tokio::time::timeout(
+                        Duration::from_secs(10),
+                        engine
+                            .client()
+                            .call(methods::RENEW_SIDE_CHAT, json!({"id": id, "lease": lease})),
+                    )
+                    .await
+                    .map_err(|_| luna_rpc::RpcError::Failed("Lease renewal timed out".into()))
+                    .and_then(|result| result);
+                    results.push((id, result));
+                }
+                results
+            })
+            .await
+            .unwrap_or_default();
+            this.update(cx, |panel, cx| {
+                panel.renew_task = None;
+                for (id, result) in results {
+                    let open = panel.page.as_ref().is_some_and(|page| page.meta.id == id);
+                    match result {
+                        Ok(value) => {
+                            if open
+                                && let Ok(meta) = serde_json::from_value::<
+                                    luna_engine::side_chats::SideChatMeta,
+                                >(value)
+                                && let Some(page) = panel.page.as_mut()
+                            {
+                                page.meta = meta;
+                            }
+                        }
+                        Err(error) => {
+                            if open {
+                                // The engine made it read-only; show the
+                                // saved history and why.
+                                panel.lease = None;
+                                panel.full_view = None;
+                                panel.error = Some(error.to_string());
+                                panel.action(PanelAction::Refresh, cx);
+                            } else {
+                                panel.parked.remove(&id);
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Parked side chats to unload when the panel goes away.
+    pub(super) fn parked_release_requests(&self) -> Vec<(EngineHandle, String, String)> {
+        let Some(engine) = self.engine.clone() else {
+            return Vec::new();
+        };
+        self.parked
+            .iter()
+            .map(|(id, lease)| (engine.clone(), id.clone(), lease.clone()))
+            .collect()
+    }
+
     pub(super) fn release_request(&self) -> Option<(EngineHandle, String, String)> {
         Some((
             self.engine.clone()?,
@@ -224,9 +342,31 @@ impl SideChatPanel {
 
     fn action(&mut self, action: PanelAction, cx: &mut Context<Self>) {
         if matches!(action, PanelAction::Back) {
+            if !self.is_current(cx) {
+                return;
+            }
+            // A first-class side chat is parked, not unloaded: its composer
+            // (draft, send in flight, receipt check) is cached per chat and
+            // the heartbeat keeps the lease, so reopening continues it.
+            if self.full_mode(cx)
+                && let (Some(page), Some(lease)) = (self.page.take(), self.lease.take())
+            {
+                self.parked.insert(page.meta.id.clone(), lease);
+                self.full_view = None;
+                self.transcript = None;
+                self.transcript_events = None;
+                self.before = None;
+                self.answers.clear();
+                // A page read in flight must not reopen the parked chat.
+                self.task = None;
+                self.busy = false;
+                self.operation_label = None;
+                self.action(PanelAction::Refresh, cx);
+                return;
+            }
             // A send or unload in flight finishes first: navigation never
             // drops an in-flight side chat request or its readback.
-            if self.busy || !self.is_current(cx) {
+            if self.busy {
                 return;
             }
             if self.lease.is_some() {
@@ -338,7 +478,9 @@ impl SideChatPanel {
             }
             PanelAction::Open(id) => {
                 self.before = None;
-                (methods::READ_SIDE_CHAT, json!({"id":id}))
+                // Reopening a parked side chat resumes its lease.
+                self.lease = self.parked.remove(&id);
+                (methods::READ_SIDE_CHAT, json!({"id":id,"lease":self.lease}))
             }
             PanelAction::Send => {
                 let Some(page) = self
@@ -529,6 +671,7 @@ impl SideChatPanel {
                             }
                             panel.transcript = None;
                             panel.transcript_events = None;
+                            panel.full_view = None;
                             panel.origin = None;
                             panel.lease = None;
                             panel.input.update(cx, |input, cx| input.set_text("", cx));
@@ -591,7 +734,10 @@ impl SideChatPanel {
                 }
             }));
         }
-        if changed {
+        // A first-class side chat's live doc watch owns its rows; a page
+        // snapshot would replace (and stop) that watch.
+        let live = self.state.read(cx).pane_chat(&page.meta.id).is_some();
+        if changed && !live {
             self.state.update(cx, |state, cx| {
                 state.set_subagent_snapshot(page.meta.id.clone(), page.entries.clone());
                 cx.notify();
@@ -860,9 +1006,39 @@ impl SideChatPanel {
             });
             let events = cx.subscribe(&view, |panel, _, event, cx| match event {
                 PaneChatEvent::Back => panel.action(PanelAction::Back, cx),
+                PaneChatEvent::Unload => panel.action(PanelAction::Unload, cx),
                 PaneChatEvent::ShowParent(_) => panel.action(PanelAction::RevealOrigin, cx),
                 PaneChatEvent::OpenAsMain(_) => {}
             });
+            // "Use in parent" on a side chat answer, as in the leased view.
+            let transcript = view.read(cx).transcript().clone();
+            transcript.update(cx, |view, _| view.allow_side_chat_handoff());
+            self.transcript_events = Some(cx.subscribe(&transcript, |panel, _, event, cx| {
+                if let TranscriptEvent::SideChatResult {
+                    side_chat_id,
+                    message_id,
+                    text,
+                } = event
+                    && panel.is_current(cx)
+                    && panel
+                        .page
+                        .as_ref()
+                        .is_some_and(|page| page.meta.id == *side_chat_id)
+                    && panel
+                        .state
+                        .read(cx)
+                        .sub_transcript(side_chat_id)
+                        .iter()
+                        .any(|entry| entry.id == *message_id)
+                {
+                    cx.emit(SideChatEvent::ResultToParent {
+                        parent: panel.parent.clone(),
+                        engine_generation: panel.engine_generation,
+                        text: text.clone(),
+                    });
+                }
+            }));
+            self.transcript = None;
             self.full_view = Some((view, events));
         }
         let minutes =
@@ -1280,6 +1456,23 @@ impl Shell {
         };
         self.side_chat_events = None;
         let request = panel.read(cx).release_request();
+        // Parked first-class side chats end with the panel, quietly: their
+        // leases would lapse within 30 s anyway, this just saves promptly.
+        for (engine, id, lease) in panel.read(cx).parked_release_requests() {
+            cx.spawn(async move |_, cx| {
+                let _ = Tokio::spawn(cx, async move {
+                    tokio::time::timeout(
+                        Duration::from_secs(20),
+                        engine
+                            .client()
+                            .call(methods::UNLOAD_SIDE_CHAT, json!({"id": id, "lease": lease})),
+                    )
+                    .await
+                })
+                .await;
+            })
+            .detach();
+        }
         drop(panel);
         if let Some((engine, id, lease)) = request {
             let progress = SidebarNotice::status("Stopping side chat and saving its transcript…");
@@ -1445,6 +1638,13 @@ impl Shell {
             "parentTranscriptRows": self.state.read(cx).transcript.len(),
             "mainComposer": self.composer.read(cx).readback(cx),
             "firstClass": page.is_some_and(|page| side_chat_first_class(self.state.read(cx), &page.meta.id)),
+            "parked": panel.parked.keys().cloned().collect::<Vec<_>>(),
+            "liveTexts": page.map(|page| self.state.read(cx).sub_transcript(&page.meta.id).iter().flat_map(|entry| entry.parts.iter()).filter_map(|part| match part {
+                luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            }).collect::<Vec<_>>()),
+            "paneChats": self.state.read(cx).pane_chat_ids(),
+            "watchedDocs": self.state.read(cx).fixture_sub_watch_ids(),
             "fullComposer": panel.full_view.as_ref().map(|(view, _)| view.read(cx).composer().read(cx).readback(cx)),
         })
     }

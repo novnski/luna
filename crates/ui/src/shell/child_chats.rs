@@ -313,6 +313,7 @@ impl ChildChatPanel {
             PaneChatEvent::Back => panel.back(cx),
             PaneChatEvent::OpenAsMain(id) => cx.emit(ChildChatEvent::OpenAsMain(id.clone())),
             PaneChatEvent::ShowParent(id) => cx.emit(ChildChatEvent::ShowParent(id.clone())),
+            PaneChatEvent::Unload => {}
         });
         let transcript = view.read(cx).transcript().clone();
         self.open = Some(OpenChild {

@@ -263,6 +263,9 @@ impl ResolvedRunConfig {
     }
 }
 
+/// The engine's refusal for provider/account changes on a side chat.
+const SIDE_CHAT_PROVIDER_REFUSAL: &str = "A side chat keeps its parent's provider and account: its context is the parent's forked provider session";
+
 const PERMISSION_OPTIONS: [(PermissionMode, &str, &str); 2] = [
     (
         PermissionMode::Auto,
@@ -1047,6 +1050,16 @@ impl Pickers {
 
     pub fn draft(&self) -> &DraftConfig {
         &self.config
+    }
+
+    /// A first-class side chat in the pane (its row has no project). Its
+    /// provider and account are its parent's forked session (contract §5.1).
+    fn side_chat_locked(&self, cx: &App) -> bool {
+        self.binding.is_pane()
+            && self
+                .binding
+                .chat_row(self.state.read(cx))
+                .is_some_and(|chat| chat.space_id.is_none())
     }
 
     /// Harness is locked once the chat exists (feature-inventory §1.7).
@@ -2086,6 +2099,11 @@ impl Pickers {
     }
 
     fn pick_harness(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        if self.side_chat_locked(cx) && self.effective_harness(cx) != Some(harness) {
+            self.context_error = Some(SIDE_CHAT_PROVIDER_REFUSAL.into());
+            cx.notify();
+            return;
+        }
         if self.harness_locked(cx) {
             if self.effective_harness(cx) != Some(harness) {
                 self.begin_provider_switch_confirmation(harness);
@@ -2135,6 +2153,11 @@ impl Pickers {
 
     fn pick_provider_account(&mut self, account_id: String, cx: &mut Context<Self>) {
         self.account_error = None;
+        if self.side_chat_locked(cx) {
+            self.account_error = Some(SIDE_CHAT_PROVIDER_REFUSAL.into());
+            cx.notify();
+            return;
+        }
         if self.binding.chat_id(self.state.read(cx)).is_none() {
             self.config.provider_account_id = Some(account_id);
             self.models.remove(&HarnessId::Codex);
@@ -4438,6 +4461,7 @@ impl Pickers {
         }
 
         let locked = self.harness_locked(cx);
+        let side_locked = self.side_chat_locked(cx);
         let effective = self.effective_harness(cx);
         if effective == Some(HarnessId::Codex) {
             self.ensure_accounts(false, cx);
@@ -4550,7 +4574,9 @@ impl Pickers {
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .when(locked && effective != Some(harness), |el| el.opacity(0.7))
+                        .when(locked && effective != Some(harness), |el| {
+                            el.opacity(if side_locked { 0.3 } else { 0.7 })
+                        })
                         .when(!is_viewed, |el| el.hover(|s| s.bg(crate::theme::ink(0.06))))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.setting_menu = None;
