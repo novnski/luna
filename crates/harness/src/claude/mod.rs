@@ -31,6 +31,7 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod history;
 mod normalize;
 mod wire;
 
@@ -248,6 +249,9 @@ impl ClaudeHarness {
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
         }
+        // CC-10: the SDK's enableFileCheckpointing, so `rewind_files` can
+        // restore Edit/Write/NotebookEdit changes later.
+        cmd.env(history::FILE_CHECKPOINT_ENV, "1");
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -464,6 +468,43 @@ impl Harness for ClaudeHarness {
         self.run_with_mode(request, controls, false).await
     }
 
+    /// CC-10: Claude forks follow the Agent SDK `forkSession` contract.
+    fn fork_capability(&self) -> luna_proto::ProviderForkCapability {
+        luna_proto::ProviderForkCapability::Checkpoint
+    }
+    async fn fork_session(
+        &self,
+        request: luna_proto::ProviderForkRequest,
+    ) -> Result<luna_proto::ProviderForkResult, HarnessError> {
+        self.fork_session_staged(request, &|_| Ok(())).await
+    }
+    async fn fork_session_staged(
+        &self,
+        request: luna_proto::ProviderForkRequest,
+        progress: &crate::ProviderForkProgressReporter,
+    ) -> Result<luna_proto::ProviderForkResult, HarnessError> {
+        history::fork_session(&self.resolve_executable()?, request, progress).await
+    }
+    async fn native_history_turns(
+        &self,
+        scope: crate::NativeHistoryScope,
+    ) -> Result<crate::NativeHistoryTurns, HarnessError> {
+        history::native_turns(&scope)
+    }
+    async fn rewind_native_conversation(
+        &self,
+        request: crate::NativeRewindRequest,
+        progress: &crate::NativeRewindProgressReporter,
+    ) -> Result<crate::NativeRewindOutcome, HarnessError> {
+        history::rewind_conversation(&self.resolve_executable()?, request, progress).await
+    }
+    async fn rewind_native_files(
+        &self,
+        request: crate::NativeFileRewindRequest,
+    ) -> Result<crate::NativeFileRewindResult, HarnessError> {
+        history::rewind_files(&self.resolve_executable()?, request).await
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
@@ -568,6 +609,12 @@ impl ClaudeHarness {
             &apply_ultrathink(request.reasoning, &request.prompt),
             &images,
         );
+        let mut identities = history::TurnIdentities::default();
+        let first = if title_only {
+            first
+        } else {
+            identities.stamp(first)
+        };
         let _ = stdin_tx.send(StdinMsg::line(first));
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
@@ -588,6 +635,7 @@ impl ClaudeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            identities,
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -737,6 +785,8 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    /// CC-10 client uuids and per-turn provider checkpoints.
+    identities: history::TurnIdentities,
 }
 
 /// The per-run event loop: one task multiplexing stdout frames, the steering
@@ -755,6 +805,7 @@ async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        mut identities,
     } = session;
     let RunControls {
         request_input,
@@ -784,6 +835,7 @@ async fn run_session(session: Session) {
                     if line.is_empty() {
                         continue;
                     }
+                    identities.observe(line);
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
                         Err(e) => {
@@ -809,6 +861,11 @@ async fn run_session(session: Session) {
                         continue;
                     }
                     for ev in norm.normalize(frame, interrupted) {
+                        if let Some(checkpoint) = identities.checkpoint_before(&ev)
+                            && event_tx.send(Ok(checkpoint)).await.is_err()
+                        {
+                            break 'main;
+                        }
                         let is_done = matches!(ev, AgentEvent::Done { .. });
                         if is_done {
                             // Stream-json result frames are the authoritative
@@ -839,7 +896,7 @@ async fn run_session(session: Session) {
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
                     let prompt = apply_ultrathink(reasoning, &msg.prompt);
-                    let line = wire::user_message_line(&prompt);
+                    let line = identities.stamp(wire::user_message_line(&prompt));
                     if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
                         if explicit_steer_unconfirmed {
                             if let Some(tx) = msg.acceptance {
