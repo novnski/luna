@@ -786,7 +786,7 @@ impl Composer {
                 &theme,
                 cx,
             ))
-        } else if pending.is_some() {
+        } else if pending.is_some() && !editing {
             Some(
                 div()
                     .size(px(24.0))
