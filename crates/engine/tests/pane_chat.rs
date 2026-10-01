@@ -1107,6 +1107,10 @@ fn queued_ids(core: &EngineCore, chat: &str) -> Vec<String> {
 /// while the parent's run, queue, config and transcript stay untouched.
 async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     use base64::Engine as _;
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_test_writer()
+        .try_init();
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
     let repo = base.join(format!("repo-pane-side-ordinary-{}", provider_name(id)));
