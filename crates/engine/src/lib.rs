@@ -120,6 +120,7 @@ pub mod backup;
 pub mod backup_control;
 pub mod change_requests;
 pub mod chat2_host;
+mod command_scope;
 pub mod context_controls;
 pub mod credentials;
 pub mod cross_task_tools;

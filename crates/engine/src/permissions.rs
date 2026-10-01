@@ -40,6 +40,10 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             network_control: "Claude permission mode and restricted workspace rules".into(),
             known_limitations: vec![
                 "Escalations returned by native auto review still require the user.".into(),
+                "Ask and Auto run Claude Code restricted: user, project and local settings files are not loaded, so their custom commands, output styles and hooks are unavailable there (the command list shows only what loads). Full loads them."
+                    .into(),
+                "Ask and Auto grant the built-in tools of Claude Code 2.1.286 by name, including Bash and WebFetch; Workflow and CronCreate stay unavailable, and tools added by newer CLI versions need an updated grant."
+                    .into(),
                 "Auto requires Claude Code 2.1.218 or later plus an eligible account, provider, and model (Fable, Opus 4.6+, or Sonnet 4.6+)."
                     .into(),
             ],
@@ -170,10 +174,11 @@ fn mapping(harness: HarnessId, mode: PermissionMode) -> String {
         }
         (HarnessId::Codex, PermissionMode::Full) => "danger-full-access + never".into(),
         (HarnessId::ClaudeCode, PermissionMode::Ask) => {
-            "acceptEdits + restricted workspace + interactive escalation".into()
+            "acceptEdits + restricted workspace + named command/web tools + interactive escalation"
+                .into()
         }
         (HarnessId::ClaudeCode, PermissionMode::Auto) => {
-            "auto + restricted workspace + user escalation".into()
+            "auto + restricted workspace + named command/web tools + user escalation".into()
         }
         (HarnessId::ClaudeCode, PermissionMode::Full) => {
             "bypassPermissions + dangerously-skip-permissions".into()

@@ -31,7 +31,9 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod discovery;
 mod normalize;
+pub mod profile;
 mod wire;
 
 use std::path::PathBuf;
@@ -51,9 +53,12 @@ use luna_proto::{
 };
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
-use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child};
+use crate::{
+    CommandScope, Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child,
+};
 use catalog::{apply_ultrathink, models_from_initialize, static_models, to_effort};
 use normalize::Normalizer;
+use profile::{ClaudeLaunchProfile, ToolSelection};
 use wire::{ControlRequestFrame, Frame, allow_response, control_response_line};
 
 /// Locate the device's installed Claude Code CLI: our own PATH, then the
@@ -90,9 +95,12 @@ pub struct ClaudeHarness {
     interrupt_grace: Duration,
     /// Grace between SIGTERM and SIGKILL.
     kill_grace: Duration,
-    /// Command discovery cache: only a successful probe is cached, so a
+    /// Explicit provider home (`CLAUDE_CONFIG_DIR`) for every child; `None`
+    /// inherits the engine's environment.
+    config_home: Option<PathBuf>,
+    /// Scoped command discovery cache: only successful probes are cached, so a
     /// broken CLI retries on the next picker open (ACP-harness parity).
-    commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    discovery: discovery::DiscoveryCache,
 }
 
 impl Default for ClaudeHarness {
@@ -101,7 +109,8 @@ impl Default for ClaudeHarness {
             executable: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
-            commands: tokio::sync::OnceCell::new(),
+            config_home: None,
+            discovery: discovery::DiscoveryCache::default(),
         }
     }
 }
@@ -114,6 +123,12 @@ impl ClaudeHarness {
     /// Use a fixed CLI binary instead of PATH/known-location resolution.
     pub fn with_executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable = Some(path.into());
+        self
+    }
+
+    /// Pin the provider home (`CLAUDE_CONFIG_DIR`) for runs AND discovery.
+    pub fn with_config_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_home = Some(path.into());
         self
     }
 
@@ -145,7 +160,7 @@ impl ClaudeHarness {
         })
     }
 
-    fn build_command(&self, exe: &PathBuf, request: &RunRequest) -> Command {
+    fn build_command(&self, exe: &PathBuf, request: &RunRequest, tools: ToolSelection) -> Command {
         let mut cmd = Command::new(exe);
         crate::compose_child_path(&mut cmd, exe);
         cmd.args([
@@ -161,11 +176,6 @@ impl ClaudeHarness {
             // summary is asked for (raw reasoning stays provider-private).
             "--thinking-display",
             "summarized",
-            // Route permission prompts to the stdio control channel so
-            // `can_use_tool` (and AskUserQuestion in particular) reaches us.
-            // Undocumented flag; validated live against 2.1.228.
-            "--permission-prompt-tool",
-            "stdio",
         ]);
         // The 1M context window is selected via a model-id suffix
         // (`sonnet[1m]`), exactly how the CLI itself does it; fast mode and
@@ -222,12 +232,6 @@ impl ClaudeHarness {
             cmd.arg("--append-system-prompt");
             cmd.arg(sections);
         }
-        let effective_mode = request
-            .permission_policy
-            .as_ref()
-            .map(|policy| policy.effective_mode)
-            .unwrap_or(luna_proto::PermissionMode::Ask);
-        cmd.args(claude_permission_args(effective_mode));
         if let Some(resume) = &request.resume {
             cmd.arg(format!("--resume={resume}"));
         }
@@ -241,13 +245,11 @@ impl ClaudeHarness {
         if request.reasoning == Some(ReasoningLevel::Ultracode) {
             settings.insert("ultracode".into(), Value::Bool(true));
         }
-        if !settings.is_empty() {
-            cmd.arg("--settings");
-            cmd.arg(Value::Object(settings).to_string());
-        }
-        if !request.cwd.is_empty() {
-            cmd.current_dir(&request.cwd);
-        }
+        // Policy flags (incl. the stdio permission channel), the one merged
+        // settings layer, cwd and provider home: shared with discovery (G1).
+        let mut profile = ClaudeLaunchProfile::for_request(request, self.config_home.clone());
+        profile.tools = tools;
+        profile.apply(&mut cmd, &settings);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -255,85 +257,23 @@ impl ClaudeHarness {
         cmd
     }
 
-    /// Short-lived discovery probe: spawn the CLI in stream-json mode, send
-    /// the `initialize` control request, and read the commands out of its
-    /// control_response. No user message is ever written, so no turn (and no
-    /// API call) happens; the child is torn down as soon as the response
-    /// lands.
+    /// Unscoped `initialize` probe used by model discovery: no workspace, no
+    /// policy flags (unchanged), but never the user's hooks.
     async fn discover_initialize(&self) -> Result<Value, HarnessError> {
         let exe = self.resolve_executable()?;
-        let mut cmd = Command::new(&exe);
-        crate::compose_child_path(&mut cmd, &exe);
-        cmd.args([
-            "--print",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            // Mandatory with --print + stream-json output; without it the
-            // CLI exits immediately with a usage error.
-            "--verbose",
-        ]);
-        cmd.stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                HarnessError::NotInstalled(exe.display().to_string())
-            } else {
-                HarnessError::Io(e)
-            }
-        })?;
-        let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-            shutdown_child(&mut child, self.kill_grace).await;
-            return Err(HarnessError::Protocol("claude child has no stdio".into()));
-        };
-        const PROBE_ID: &str = "luna-command-probe";
-        let discovery = async {
-            let request = serde_json::json!({
-                "type": "control_request",
-                "request_id": PROBE_ID,
-                "request": { "subtype": "initialize" },
-            });
-            stdin
-                .write_all(format!("{request}\n").as_bytes())
-                .await
-                .map_err(HarnessError::Io)?;
-            stdin.flush().await.map_err(HarnessError::Io)?;
-            let mut lines = BufReader::new(stdout).lines();
-            while let Some(line) = lines.next_line().await.map_err(HarnessError::Io)? {
-                let Ok(frame) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                if frame.get("type").and_then(Value::as_str) != Some("control_response") {
-                    continue;
+        let home = self.config_home.clone();
+        discovery::initialize_probe(
+            &exe,
+            |cmd| {
+                cmd.arg("--settings");
+                cmd.arg(Value::Object(profile::discovery_settings()).to_string());
+                if let Some(home) = &home {
+                    cmd.env("CLAUDE_CONFIG_DIR", home);
                 }
-                let response = frame.get("response").cloned().unwrap_or(Value::Null);
-                if response.get("request_id").and_then(Value::as_str) != Some(PROBE_ID) {
-                    continue;
-                }
-                if response.get("subtype").and_then(Value::as_str) == Some("error") {
-                    let msg = response
-                        .get("error")
-                        .and_then(Value::as_str)
-                        .unwrap_or("initialize control request failed");
-                    return Err(HarnessError::Protocol(msg.into()));
-                }
-                return Ok(response);
-            }
-            Err(HarnessError::Protocol(
-                "claude exited before answering the initialize control request".into(),
-            ))
-        };
-        let result = tokio::time::timeout(Duration::from_secs(10), discovery).await;
-        shutdown_child(&mut child, self.kill_grace).await;
-        match result {
-            Ok(inner) => inner,
-            Err(_) => Err(HarnessError::Protocol(
-                "Claude initialization timed out".into(),
-            )),
-        }
+            },
+            self.kill_grace,
+        )
+        .await
     }
 
     /// The CLI's read-only initialization response contains its current model
@@ -347,18 +287,6 @@ impl ClaudeHarness {
             ));
         }
         Ok(models)
-    }
-}
-
-fn claude_permission_args(mode: luna_proto::PermissionMode) -> &'static [&'static str] {
-    match mode {
-        luna_proto::PermissionMode::Ask => &["--restricted", "--permission-mode", "acceptEdits"],
-        luna_proto::PermissionMode::Auto => &["--restricted", "--permission-mode", "auto"],
-        luna_proto::PermissionMode::Full => &[
-            "--permission-mode",
-            "bypassPermissions",
-            "--dangerously-skip-permissions",
-        ],
     }
 }
 
@@ -440,20 +368,33 @@ impl Harness for ClaudeHarness {
         Ok(static_models())
     }
 
-    /// Slash commands from the CLI's `initialize` control-request handshake —
-    /// the same channel the Claude Agent SDK's `query()` opens. The response
-    /// carries every command with description + argument hint and involves no
-    /// model turn (verified live, 2.1.228: the control_response is the first
-    /// stdout line, well before any API traffic). Cached on success.
+    /// Legacy unscoped discovery: the default (Ask) profile, no workspace.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
-        self.commands
-            .get_or_try_init(|| async {
-                self.discover_initialize()
-                    .await
-                    .map(|response| parse_initialize_commands(&response))
-            })
-            .await
-            .cloned()
+        self.commands_in(&CommandScope::default()).await
+    }
+
+    /// Slash commands from the CLI's `initialize` control-request handshake —
+    /// the same channel the Claude Agent SDK's `query()` opens; no model turn.
+    /// Spawned from the scope's launch profile (binary, home, cwd, policy), so
+    /// the catalog is the one a run in that scope loads. Cached per scope.
+    async fn commands_in(&self, scope: &CommandScope) -> Result<Vec<SlashCommand>, HarnessError> {
+        let exe = self.resolve_executable()?;
+        let profile = ClaudeLaunchProfile::new(
+            scope.permission_mode,
+            scope.cwd.as_deref().map(profile::canonical_dir),
+            self.config_home.clone(),
+        );
+        let key = discovery::scope_key(&exe, &profile, scope);
+        if let Some(commands) = self.discovery.get(key) {
+            return Ok(commands);
+        }
+        let settings = profile::discovery_settings();
+        let response =
+            discovery::initialize_probe(&exe, |cmd| profile.apply(cmd, &settings), self.kill_grace)
+                .await?;
+        let commands = parse_initialize_commands(&response);
+        self.discovery.put(key, commands.clone());
+        Ok(commands)
     }
 
     async fn run(
@@ -512,13 +453,16 @@ impl ClaudeHarness {
             .model_options
             .remove(crate::LUNA_PROVIDER_AUTH_INSTANCE_OPTION);
         let exe = self.resolve_executable()?;
-        let mut cmd = self.build_command(&exe, &request);
+        let tools = if title_only {
+            ToolSelection::Disabled
+        } else {
+            ToolSelection::ModeDefault
+        };
+        let mut cmd = self.build_command(&exe, &request, tools);
         if title_only {
             cmd.args([
                 "--system-prompt",
                 crate::TITLE_INSTRUCTIONS,
-                "--tools",
-                "",
                 "--strict-mcp-config",
                 "--mcp-config",
                 "{\"mcpServers\":{}}",
@@ -1171,15 +1115,15 @@ mod tests {
     fn permission_modes_map_to_exact_cli_arguments() {
         use luna_proto::PermissionMode::{Ask, Auto, Full};
         assert_eq!(
-            claude_permission_args(Ask),
+            profile::mode_args(Ask),
             ["--restricted", "--permission-mode", "acceptEdits"]
         );
         assert_eq!(
-            claude_permission_args(Auto),
+            profile::mode_args(Auto),
             ["--restricted", "--permission-mode", "auto"]
         );
         assert_eq!(
-            claude_permission_args(Full),
+            profile::mode_args(Full),
             [
                 "--permission-mode",
                 "bypassPermissions",

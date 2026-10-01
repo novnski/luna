@@ -9826,14 +9826,23 @@ impl RpcService for EngineRpc {
             methods::LIST_COMMANDS => {
                 // Same shape as ListModels: resolve the installed provider,
                 // then ask its own command discovery surface. The mock uses
-                // the trait's empty default.
-                let p: ListModelsParams = parse_params(params)?;
+                // the trait's empty default. Discovery runs under the scope the
+                // chat/space's next run launches with (G1, E23).
+                let p: crate::command_scope::ListCommandsParams = parse_params(params)?;
                 let harness = self
                     .registry
                     .resolve(p.harness)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let scope = crate::command_scope::resolve(
+                    &p,
+                    &self.workspace,
+                    &self.workspace_files,
+                    self.doc_host.device_id(),
+                    &self.agent_accounts,
+                )
+                .await?;
                 let commands = harness
-                    .commands()
+                    .commands_in(&scope)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&commands)

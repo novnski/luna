@@ -4,7 +4,9 @@
 //! Code over stream-json, Codex over app-server JSON-RPC, and OpenCode over
 //! its HTTP/SSE server protocol.
 
+mod command_scope;
 mod composer_input;
+pub use command_scope::CommandScope;
 pub use composer_input::validate_composer_inputs;
 
 use async_trait::async_trait;
@@ -257,6 +259,12 @@ pub trait Harness: Send + Sync {
     /// Slash commands advertised by the agent; may spawn a short-lived probe.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
+    }
+    /// Slash commands for the exact execution scope a run would use. Adapters
+    /// whose loaded configuration depends on workspace, policy or account
+    /// override this; the default ignores the scope.
+    async fn commands_in(&self, _scope: &CommandScope) -> Result<Vec<SlashCommand>, HarnessError> {
+        self.commands().await
     }
     /// Run the harness's own native/session compaction operation. Adapters
     /// must opt in; the default is honest unsupported behavior.

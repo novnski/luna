@@ -4516,6 +4516,9 @@ struct SlashState {
     active: Option<usize>,
     /// Harness the popup is showing commands for (cache key).
     harness: Option<HarnessId>,
+    /// Execution scope (task/project + effective mode) of that list: Claude
+    /// loads different commands per workspace and policy (E23).
+    scope: String,
     request: u64,
     loading: bool,
     error: Option<SharedString>,
@@ -4653,7 +4656,7 @@ pub struct Composer {
     slash: SlashState,
     /// Advertised commands per harness (one `ListCommands` per harness per
     /// composer lifetime; the engine caches discovery on its side too).
-    slash_cache: HashMap<HarnessId, Vec<SlashCommand>>,
+    slash_cache: HashMap<(HarnessId, String), Vec<SlashCommand>>,
     /// Slash-popup row scroll — the stack overflows into a wheel/keyboard-
     /// scrollable list once it outgrows the card.
     slash_scroll: gpui::ScrollHandle,
@@ -8804,14 +8807,34 @@ impl Composer {
             return;
         }
         self.slash.dismissed = None;
-        let harness = self.pickers.read(cx).resolved(cx).harness;
-        let harness_changed = self.slash.harness != harness;
+        let resolved = self.pickers.read(cx).resolved(cx);
+        let harness = resolved.harness;
+        let (scope_params, scope) = {
+            let state = self.state.read(cx);
+            let mode = resolved.effective_permission_mode;
+            match (state.selected_chat_row(), state.selected_space_row()) {
+                (Some(chat), _) => (
+                    serde_json::json!({ "chatId": chat.id, "permissionMode": mode }),
+                    format!("chat:{}:{mode:?}", chat.id),
+                ),
+                (None, Some(space)) => (
+                    serde_json::json!({ "spaceId": space.id, "permissionMode": mode }),
+                    format!("space:{}:{mode:?}", space.id),
+                ),
+                (None, None) => (
+                    serde_json::json!({ "permissionMode": mode }),
+                    format!("none:{mode:?}"),
+                ),
+            }
+        };
+        let harness_changed = self.slash.harness != harness || self.slash.scope != scope;
         if token == self.slash.token && !harness_changed {
             self.refilter_slash(cx);
             return;
         }
         self.slash.token = token.clone();
         self.slash.harness = harness;
+        self.slash.scope = scope.clone();
         self.slash.error = None;
         if token.is_none() {
             self.slash.active = None;
@@ -8824,7 +8847,7 @@ impl Composer {
             self.refilter_slash(cx);
             return;
         };
-        if self.slash_cache.contains_key(&harness) {
+        if self.slash_cache.contains_key(&(harness, scope.clone())) {
             self.slash.loading = false;
             self.refilter_slash(cx);
             return;
@@ -8847,9 +8870,12 @@ impl Composer {
         };
         let request = self.slash.request;
         self.slash_task = Some(cx.spawn(async move |this, cx| {
-            let mut params = serde_json::json!({ "harness": harness });
-            if let (Some(target), Some(object)) = (&target, params.as_object_mut()) {
-                object.insert("targetDeviceId".into(), target.clone().into());
+            let mut params = scope_params;
+            if let Some(object) = params.as_object_mut() {
+                object.insert("harness".into(), serde_json::json!(harness));
+                if let Some(target) = &target {
+                    object.insert("targetDeviceId".into(), target.clone().into());
+                }
             }
             let result = engine.client().call(methods::LIST_COMMANDS, params).await;
             this.update(cx, |composer, cx| {
@@ -8860,7 +8886,7 @@ impl Composer {
                 match result {
                     Ok(value) => match serde_json::from_value::<Vec<SlashCommand>>(value) {
                         Ok(commands) => {
-                            composer.slash_cache.insert(harness, commands);
+                            composer.slash_cache.insert((harness, scope), commands);
                         }
                         Err(err) => tracing::warn!(%err, "slash command decode failed"),
                     },
@@ -8882,7 +8908,7 @@ impl Composer {
         let cached = self
             .slash
             .harness
-            .and_then(|h| self.slash_cache.get(&h))
+            .and_then(|h| self.slash_cache.get(&(h, self.slash.scope.clone())))
             .map(Vec::as_slice)
             .unwrap_or_default();
         let goal = self.slash.harness == Some(HarnessId::Codex) && self.goal_command_available(cx);
@@ -8967,6 +8993,7 @@ impl Composer {
             request,
             dismissed,
             harness: self.slash.harness,
+            scope: self.slash.scope.clone(),
             ..SlashState::default()
         };
         self.sync_mention_controls(cx);
