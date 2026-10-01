@@ -472,7 +472,7 @@ async fn staged_live_switch_applies_and_reads_back_before_the_prompt() {
     assert_eq!(switch.effective_effort.as_deref(), Some("max"));
 
     let frames = stdin_frames(dir.path());
-    let position = |pred: &dyn Fn(&serde_json::Value) -> bool| frames.iter().position(pred);
+    let position = |pred: &dyn Fn(&serde_json::Value) -> bool| frames.iter().position(|f| pred(f));
     let set_model = position(&|f| f["request"]["subtype"] == "set_model").unwrap();
     let apply = position(&|f| f["request"]["subtype"] == "apply_flag_settings").unwrap();
     let prompt = position(&|f| f["type"] == "user" && f["message"]["content"] == "follow-up")
