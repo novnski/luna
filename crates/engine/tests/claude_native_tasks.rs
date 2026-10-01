@@ -195,7 +195,7 @@ async fn provider_exit_mid_workflow_settles_it_as_session_ended() {
     const CHAT: &str = "claude-native-workflow-gone";
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path());
-    run_until_idle(&core, CHAT, "scenario:workflow-abandoned", dir.path()).await;
+    run_until_idle(&core, CHAT, "scenario:abandoned-workflow", dir.path()).await;
     let ledger = ledger(&core, CHAT);
     assert_eq!(ledger.tasks.len(), 1);
     let task = &ledger.tasks[0];

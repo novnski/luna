@@ -11,7 +11,6 @@
 #![cfg(unix)]
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use futures::StreamExt;
@@ -24,7 +23,8 @@ use luna_proto::{
     NativeTaskSnapshot, NativeTaskStatus, NativeWorkflowAgentState, RunRequest, SandboxLevel,
 };
 
-static ENV_LOCK: Mutex<()> = Mutex::new(());
+/// Async-aware: every test holds it across awaits.
+static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn fixture_path() -> PathBuf {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -100,7 +100,7 @@ fn native_tasks(events: &[AgentEvent]) -> Vec<NativeTaskSnapshot> {
 /// never captured, and the workflow never becomes a subagent.
 #[tokio::test]
 async fn native_workflow_graph_survives_the_parked_wake_shape() {
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK.lock().await;
     let harness = ClaudeHarness::new().with_executable(fixture_path());
     let events = run_to_end(&harness, request("scenario:workflow")).await;
 
@@ -262,7 +262,7 @@ async fn native_workflow_graph_survives_the_parked_wake_shape() {
 /// messaging/bridge identity, and unrelated environment is kept.
 #[tokio::test]
 async fn launched_claude_child_drops_inherited_session_identity() {
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK.lock().await;
     let names = [
         "CLAUDE_CODE_MESSAGING_SOCKET",
         "CLAUDE_CODE_MESSAGING_TOKEN",
@@ -338,7 +338,7 @@ fn kill(pid: u32) {
 /// LUNA launches anything, with the native handoff command.
 #[tokio::test]
 async fn resume_held_by_an_external_background_session_is_refused() {
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let external = orphan_sleeper();
     // Row shape from the real 2.1.286 `claude agents --json` probe.
@@ -349,7 +349,7 @@ async fn resume_held_by_an_external_background_session_is_refused() {
     let mut req = request("scenario:happy");
     req.resume = Some("sess-held".into());
     let result = ClaudeHarness::new()
-        .with_executable(&exe)
+        .with_executable(exe)
         .run(req, controls())
         .await;
     kill(external);
@@ -367,7 +367,7 @@ async fn resume_held_by_an_external_background_session_is_refused() {
 /// print-mode child, a stopped background row and other conversations.
 #[tokio::test]
 async fn resume_ignores_luna_owned_stopped_and_unrelated_rows() {
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let mut own_child = std::process::Command::new("sleep")
         .arg("30")
@@ -385,8 +385,9 @@ async fn resume_ignores_luna_owned_stopped_and_unrelated_rows() {
     let exe = wrapper(dir.path(), &rows, 0);
     let mut req = request("scenario:happy");
     req.resume = Some("sess-held".into());
-    let events = run_to_end(&ClaudeHarness::new().with_executable(&exe), req).await;
+    let events = run_to_end(&ClaudeHarness::new().with_executable(exe), req).await;
     let _ = own_child.kill();
+    let _ = own_child.wait();
     kill(external);
     assert!(dir.path().join("launched").exists());
     assert!(events.iter().any(|e| matches!(
@@ -401,12 +402,12 @@ async fn resume_ignores_luna_owned_stopped_and_unrelated_rows() {
 /// B-4 fail-open: an unreadable listing never blocks an ordinary resume.
 #[tokio::test]
 async fn resume_proceeds_when_the_session_listing_is_unavailable() {
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let exe = wrapper(dir.path(), "not json", 2);
     let mut req = request("scenario:happy");
     req.resume = Some("sess-held".into());
-    let events = run_to_end(&ClaudeHarness::new().with_executable(&exe), req).await;
+    let events = run_to_end(&ClaudeHarness::new().with_executable(exe), req).await;
     assert!(events.iter().any(|e| matches!(
         e,
         AgentEvent::Done {
@@ -420,7 +421,7 @@ async fn resume_proceeds_when_the_session_listing_is_unavailable() {
 /// engine's own children, and reports an unreadable listing explicitly.
 #[tokio::test]
 async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK.lock().await;
     let dir = tempfile::tempdir().unwrap();
     let mut own_child = std::process::Command::new("sleep")
         .arg("30")
@@ -437,10 +438,11 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
     );
     let exe = wrapper(dir.path(), &rows, 0);
     let view = ClaudeHarness::new()
-        .with_executable(&exe)
+        .with_executable(exe)
         .external_sessions()
         .await;
     let _ = own_child.kill();
+    let _ = own_child.wait();
     assert_eq!(view.unavailable_reason, None);
     assert_eq!(view.sessions.len(), 4);
     let own_row = &view.sessions[0];
@@ -475,7 +477,7 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
 
     let broken = wrapper(dir.path(), "{\"not\":\"an array\"}", 0);
     let view = ClaudeHarness::new()
-        .with_executable(&broken)
+        .with_executable(broken)
         .external_sessions()
         .await;
     assert!(view.sessions.is_empty());
@@ -485,7 +487,7 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
     );
     let failing = wrapper(dir.path(), "", 1);
     let view = ClaudeHarness::new()
-        .with_executable(&failing)
+        .with_executable(failing)
         .external_sessions()
         .await;
     assert!(view.unavailable_reason.unwrap().contains("agents --json"));
@@ -498,7 +500,7 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
 #[tokio::test]
 #[ignore = "needs a live capture from live-acceptance.py"]
 async fn live_workflow_capture_replays_into_a_settled_graph() {
-    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _env = ENV_LOCK.lock().await;
     let capture = std::env::var("LUNA_CLAUDE_WORKFLOW_CAPTURE").expect("capture path");
     let dir = tempfile::tempdir().unwrap();
     let exe = dir.path().join("claude");
@@ -510,7 +512,7 @@ async fn live_workflow_capture_replays_into_a_settled_graph() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
     let events = run_to_end(
-        &ClaudeHarness::new().with_executable(&exe),
+        &ClaudeHarness::new().with_executable(exe),
         request("live workflow replay"),
     )
     .await;
