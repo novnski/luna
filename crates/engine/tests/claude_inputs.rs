@@ -368,11 +368,29 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
     );
     // One native conversation: the cold process starts it and every image
     // follow-up resumes it in a replacement process.
-    let argv: Vec<Value> = peer_log(&cwd)
+    // CC-12 checks the typed skill (turn 7) against the launch's own effective
+    // catalog with ONE initialize-only readback (hooks disabled, no user
+    // message) before dispatch; it is not a turn process.
+    let (readbacks, argv): (Vec<Value>, Vec<Value>) = peer_log(&cwd)
         .into_iter()
         .filter(|entry| entry["kind"] == "argv")
         .map(|entry| entry["argv"].clone())
-        .collect();
+        .partition(|args| {
+            args.as_array().is_some_and(|args| {
+                args.windows(2).any(|pair| {
+                    pair[0] == "--settings"
+                        && pair[1]
+                            .as_str()
+                            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                            .is_some_and(|settings| settings["disableAllHooks"] == true)
+                })
+            })
+        });
+    assert_eq!(
+        readbacks.len(),
+        1,
+        "one CC-12 readback for the typed skill: {readbacks:?}"
+    );
     let session = argv
         .get(1)
         .and_then(|args| args.as_array())
@@ -406,7 +424,7 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
     core.sessions.interrupt(CHAT).await.unwrap();
     evidence(
         "turn-types",
-        json!({"fixturePngSha256": sha(&png), "hostUpload": image, "blocks": sent, "argv": argv,
+        json!({"fixturePngSha256": sha(&png), "hostUpload": image, "blocks": sent, "argv": argv, "cc12Readbacks": readbacks,
                "userTranscript": user_texts(&core, CHAT), "steeredQueueRow": format!("{row:?}"), "peerLog": peer_log(&cwd), "realProvider": false}),
     );
 }
