@@ -31,7 +31,9 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod events;
 mod normalize;
+mod turns;
 mod wire;
 
 use std::path::PathBuf;
@@ -568,10 +570,16 @@ impl ClaudeHarness {
             &apply_ultrathink(request.reasoning, &request.prompt),
             &images,
         );
+        // CC-02: every stdin user line carries a native uuid the CLI echoes
+        // on the turn that answers it (see `turns`).
+        let mut norm = Normalizer::new();
+        let initial_uuid = norm.native.ledger.register(turns::SendKind::Initial, None);
+        let first = turns::stamp_line(&first, &initial_uuid);
         let _ = stdin_tx.send(StdinMsg::line(first));
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
+            norm,
             title_only,
             child,
             stdout_lines: BufReader::new(stdout).lines(),
@@ -724,6 +732,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Std
 }
 
 struct Session {
+    norm: Normalizer,
     title_only: bool,
     child: Child,
     stdout_lines: tokio::io::Lines<BufReader<crate::process::ChildStdout>>,
@@ -743,6 +752,7 @@ struct Session {
 /// mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        mut norm,
         title_only,
         mut child,
         mut stdout_lines,
@@ -764,7 +774,6 @@ async fn run_session(session: Session) {
     } = controls;
     let request_input = Arc::new(request_input);
 
-    let mut norm = Normalizer::new();
     // Claude's root user echo carries no correlation id. Explicit steering is
     // single-flight and a successful stdin write remains unconfirmed; text
     // equality alone must never settle a durable queue row.
@@ -787,7 +796,12 @@ async fn run_session(session: Session) {
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
                         Err(e) => {
-                            tracing::debug!(target: "luna_harness::claude", "unparseable frame (skipped): {e}");
+                            tracing::debug!(target: "luna_harness::claude", "unparseable frame (retained as evidence): {e}");
+                            for ev in norm.native.invalid_line(line, &e) {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
                             continue;
                         }
                     };
@@ -808,7 +822,7 @@ async fn run_session(session: Session) {
                         }
                         continue;
                     }
-                    for ev in norm.normalize(frame, interrupted) {
+                    for ev in norm.normalize_native(frame, interrupted) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
                         if is_done {
                             // Stream-json result frames are the authoritative
@@ -850,6 +864,11 @@ async fn run_session(session: Session) {
                             }
                             continue 'main;
                         }
+                        let native = norm
+                            .native
+                            .ledger
+                            .register(turns::SendKind::Steer, msg.message_id.clone());
+                        let line = turns::stamp_line(&line, &native);
                         let (written_tx, written_rx) = tokio::sync::oneshot::channel();
                         if stdin_tx.send(StdinMsg::Line {
                             line,
@@ -899,8 +918,19 @@ async fn run_session(session: Session) {
                             }
                         }
                     } else {
+                        let native = norm
+                            .native
+                            .ledger
+                            .register(turns::SendKind::FollowUp, msg.message_id.clone());
+                        let line = turns::stamp_line(&line, &native);
                         let accepted = stdin_tx.send(StdinMsg::line(line)).is_ok();
                         if !accepted {
+                            continue 'main;
+                        }
+                        // CC-02: an echo-capable CLI may queue this send
+                        // behind a turn it started itself; its `Steered`
+                        // waits for the native start of THIS send.
+                        if norm.native.ledger.defers_follow_up_boundary() {
                             continue 'main;
                         }
                         // Ordinary warm routing retains its historical local

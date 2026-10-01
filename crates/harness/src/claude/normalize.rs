@@ -233,6 +233,9 @@ pub(crate) struct Normalizer {
     assistant_message_id: String,
     /// Last session id seen (init or result) — used for synthetic Dones.
     pub session_id: Option<String>,
+    /// CC-02: native turn identity, lifecycle evidence and frame retention
+    /// (see `super::turns`; driven by `normalize_native`).
+    pub(crate) native: super::turns::NativeTracker,
 }
 
 impl Normalizer {
@@ -245,6 +248,7 @@ impl Normalizer {
             agent_spawn_tools: std::collections::HashSet::new(),
             assistant_message_id: new_message_id(),
             session_id: None,
+            native: Default::default(),
         }
     }
 
@@ -544,7 +548,7 @@ impl Normalizer {
                                 AgentEvent::ToolResult {
                                     id: b.tool_use_id.clone(),
                                     is_error: b.is_error.unwrap_or(false),
-                                    output: None,
+                                    output: super::events::tool_result_text(&b.content),
                                     diff: None,
                                 },
                             )
@@ -573,7 +577,7 @@ impl Normalizer {
                     .map(|b| AgentEvent::ToolResult {
                         id: b.tool_use_id.clone(),
                         is_error: b.is_error.unwrap_or(false),
-                        output: None,
+                        output: super::events::tool_result_text(&b.content),
                         diff: None,
                     })
                     .collect()
@@ -695,7 +699,7 @@ impl Normalizer {
             }
 
             // Control frames are handled by the run loop, not normalized.
-            Frame::ControlRequest(_) | Frame::Other => Vec::new(),
+            Frame::ControlRequest(_) | Frame::Native(_) | Frame::Other => Vec::new(),
         }
     }
 }

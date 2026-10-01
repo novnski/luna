@@ -857,3 +857,434 @@ async fn title_run_disables_tools_and_denies_unexpected_permissions() {
         "{events:?}"
     );
 }
+
+// ── CC-02: native turn identity (E24) and event/storage decoding ─────────
+// Frame shapes follow the SDK schema embedded in CLI 2.1.286; scenarios live
+// in `fixtures/fake-claude.sh` (`scenario:e24-*`, `scenario:cc02-lifecycle`).
+// Failure cases: `$B/evidence/cc02-events/failure-cases.md`.
+
+fn evidence<'a>(events: &'a [AgentEvent], kind: &str) -> Vec<&'a serde_json::Value> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ProviderEvidence {
+                provider,
+                kind: found,
+                payload,
+                ..
+            } if found == kind => {
+                assert_eq!(*provider, HarnessId::ClaudeCode);
+                Some(payload)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn text_at(events: &[AgentEvent], text: &str) -> usize {
+    events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::TextDelta { text: found } if found == text))
+        .unwrap_or_else(|| panic!("text {text} missing: {events:?}"))
+}
+
+fn done_positions(events: &[AgentEvent]) -> Vec<usize> {
+    events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| matches!(e, AgentEvent::Done { .. }).then_some(i))
+        .collect()
+}
+
+fn steer_positions(events: &[AgentEvent]) -> Vec<(usize, Option<String>)> {
+    events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            AgentEvent::Steered {
+                user_message_id, ..
+            } => Some((i, user_message_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Run `prompt`; after the first `Done`, send each follow-up as an ordinary
+/// warm send (`AllowFollowUpTurn`) — the shape the engine's warm route uses.
+async fn run_with_follow_ups(prompt: &str, follow_ups: &[(&str, Option<&str>)]) -> Vec<AgentEvent> {
+    let (controls, steer, _token) = controls("A");
+    let mut stream = harness()
+        .run(request(prompt), controls)
+        .await
+        .expect("run starts");
+    let mut pending: Vec<SteerMessage> = follow_ups
+        .iter()
+        .map(|(text, id)| SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
+            prompt: (*text).into(),
+            message_id: id.map(Into::into),
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
+        })
+        .collect();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            let done = matches!(event, AgentEvent::Done { .. });
+            events.push(event);
+            if done {
+                for message in pending.drain(..) {
+                    steer.send(message).await.expect("follow-up queued");
+                }
+            }
+        }
+        events
+    })
+    .await
+    .expect("run finished in time")
+}
+
+fn result_records(events: &[AgentEvent]) -> Vec<&serde_json::Value> {
+    evidence(events, "result")
+}
+
+/// E24 / B1, B3, B7, B9, B10: a resumed session reports a leftover background
+/// task (origin only) and a peer turn (foreign echo) BEFORE it runs the human
+/// prompt. Neither foreign result may complete the human turn; usage still
+/// flows; the human turn's first stamped frame opens a fresh segment; a
+/// replayed and a historical result change nothing.
+#[tokio::test]
+async fn e24_foreign_results_never_complete_the_pending_human_turn() {
+    let (controls, _steer, _token) = controls("A");
+    let events = run_to_end(&harness(), request("scenario:e24-resume"), controls).await;
+
+    let dones = done_positions(&events);
+    assert_eq!(dones.len(), 1, "only the human result settles: {events:?}");
+    assert!(matches!(
+        &events[dones[0]],
+        AgentEvent::Done { status: DoneStatus::Completed, session_id: Some(id), .. } if id == "sess-e24"
+    ));
+    for (input, output) in [(3, 4), (2, 2), (5, 6)] {
+        assert!(
+            events.contains(&AgentEvent::Usage {
+                input_tokens: input,
+                output_tokens: output
+            }),
+            "usage {input}/{output} must still flow: {events:?}"
+        );
+    }
+
+    let records = result_records(&events);
+    let owners: Vec<(&str, bool)> = records
+        .iter()
+        .map(|r| {
+            (
+                r["owner"].as_str().unwrap(),
+                r["withheld"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        owners,
+        [
+            ("foreign", true),
+            ("foreign", true),
+            ("own", false),
+            ("duplicate", true),
+            ("duplicate", true)
+        ],
+        "{records:#?}"
+    );
+    assert_eq!(records[0]["stamp"]["origin"]["kind"], "task-notification");
+    assert_eq!(records[1]["stamp"]["origin"]["kind"], "peer");
+    let own = records[2];
+    let initial_uuid = own["stamp"]["userMessageUuid"].as_str().unwrap().to_owned();
+    assert_eq!(own["consumed"][0]["kind"], "initial");
+    assert_eq!(own["consumed"][0]["nativeUuid"], initial_uuid.as_str());
+    assert!(uuid::Uuid::parse_str(&initial_uuid).is_ok());
+
+    let steers = steer_positions(&events);
+    assert_eq!(
+        steers.len(),
+        1,
+        "one boundary for the human turn: {events:?}"
+    );
+    let (steer_at, correlation) = &steers[0];
+    assert_eq!(correlation.as_deref(), Some(initial_uuid.as_str()));
+    assert!(text_at(&events, "FOREIGN-WAKE") < *steer_at);
+    assert!(text_at(&events, "PEER-TURN") < *steer_at);
+    assert!(*steer_at < text_at(&events, "HUMAN-ANSWER"));
+    assert!(text_at(&events, "HUMAN-ANSWER") < dones[0]);
+
+    let init = evidence(&events, "system/init");
+    assert_eq!(init.len(), 1, "{events:?}");
+    assert_eq!(init[0]["claudeCodeVersion"], "2.1.286");
+    assert_eq!(init[0]["ledger"]["echoCapable"], true);
+    // The human result's evidence precedes its Done in the stream.
+    let own_at = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ProviderEvidence { native_id: Some(id), .. } if id == "res-human"))
+        .unwrap();
+    assert!(own_at < dones[0]);
+}
+
+/// E24 / B2: a warm follow-up written while Claude starts a wake turn waits in
+/// the CLI queue. Its `Steered` carries the LUNA message id and lands only
+/// when the CLI starts it; the wake result completes nothing.
+#[tokio::test]
+async fn e24_follow_up_queued_behind_a_wake_turn_settles_only_its_own_receipt() {
+    let events =
+        run_with_follow_ups("scenario:e24-followup", &[("again", Some("luna-msg-2"))]).await;
+
+    let dones = done_positions(&events);
+    assert_eq!(dones.len(), 2, "first answer + follow-up only: {events:?}");
+    let steers = steer_positions(&events);
+    assert_eq!(steers.len(), 1, "{events:?}");
+    let (steer_at, correlation) = &steers[0];
+    assert_eq!(correlation.as_deref(), Some("luna-msg-2"));
+    assert!(dones[0] < text_at(&events, "WAKE-TURN"));
+    assert!(text_at(&events, "WAKE-TURN") < *steer_at);
+    assert!(*steer_at < text_at(&events, "SECOND-ANSWER"));
+    assert!(text_at(&events, "SECOND-ANSWER") < dones[1]);
+
+    let records = result_records(&events);
+    assert_eq!(records.len(), 3, "{records:#?}");
+    assert_eq!(records[1]["owner"], "foreign");
+    assert_eq!(records[1]["withheld"], true);
+    assert_eq!(records[1]["queuedTurnCount"], 1);
+    assert_eq!(records[2]["owner"], "own");
+    assert_eq!(records[2]["consumed"][0]["lunaId"], "luna-msg-2");
+    assert_eq!(records[2]["consumed"][0]["kind"], "followUp");
+}
+
+/// E24 / B4: without echo capability the legacy contract stays: the warm
+/// follow-up's boundary is the stdin write and every root result settles.
+#[tokio::test]
+async fn e24_older_runtime_keeps_legacy_completion() {
+    let events = run_with_follow_ups("scenario:e24-legacy", &[("again", Some("luna-msg-2"))]).await;
+
+    assert_eq!(done_positions(&events).len(), 3, "{events:?}");
+    let steers = steer_positions(&events);
+    assert_eq!(steers.len(), 1, "{events:?}");
+    assert_eq!(steers[0].1, None, "legacy boundary keeps FIFO correlation");
+    assert!(
+        steers[0].0 < text_at(&events, "WAKE-TURN"),
+        "boundary at write"
+    );
+    let records = result_records(&events);
+    assert_eq!(records[1]["owner"], "foreign");
+    assert_eq!(records[1]["withheld"], false);
+    assert_eq!(records[1]["ledger"]["echoCapable"], false);
+}
+
+/// E24 / B6: the CLI folds the queued follow-up into its own wake turn. The
+/// result echoes it, so it is OWN and settles — no wedged turn.
+#[tokio::test]
+async fn e24_follow_up_folded_into_a_wake_turn_settles_without_waiting() {
+    let events = run_with_follow_ups("scenario:e24-fold", &[("again", Some("luna-msg-2"))]).await;
+
+    let dones = done_positions(&events);
+    assert_eq!(dones.len(), 2, "{events:?}");
+    let steers = steer_positions(&events);
+    assert_eq!(steers.len(), 1, "{events:?}");
+    assert_eq!(steers[0].1.as_deref(), Some("luna-msg-2"));
+    assert!(text_at(&events, "WAKE-PART") < steers[0].0);
+    assert!(steers[0].0 < text_at(&events, "FOLDED-ANSWER"));
+    let records = result_records(&events);
+    assert_eq!(records[1]["owner"], "own");
+    assert_eq!(records[1]["stamp"]["origin"]["kind"], "task-notification");
+}
+
+/// E24 / B5, B8: two follow-ups merged into one turn both get their exact
+/// boundary (in send order) and one result consumes both.
+#[tokio::test]
+async fn e24_batched_follow_ups_settle_together() {
+    let events = run_with_follow_ups(
+        "scenario:e24-batch",
+        &[("two", Some("luna-2")), ("three", Some("luna-3"))],
+    )
+    .await;
+
+    assert_eq!(done_positions(&events).len(), 2, "{events:?}");
+    let steers = steer_positions(&events);
+    let ids: Vec<_> = steers.iter().map(|(_, id)| id.as_deref()).collect();
+    assert_eq!(ids, [Some("luna-2"), Some("luna-3")], "{events:?}");
+    assert!(steers[1].0 < text_at(&events, "BATCH-ANSWER"));
+    let records = result_records(&events);
+    let consumed: Vec<_> = records[1]["consumed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["lunaId"].as_str().unwrap())
+        .collect();
+    assert_eq!(consumed, ["luna-2", "luna-3"]);
+}
+
+/// CC-02 A–E: task/hook/compaction/reset/lifecycle decoding, bounded and
+/// redacted unknown retention with exact counts, invalid frames, tool-result
+/// bodies, and a tolerant result that still settles the turn.
+#[tokio::test]
+async fn cc02_lifecycle_unknown_and_tool_bodies_are_decoded_and_retained() {
+    let (controls, _steer, _token) = controls("A");
+    let events = run_to_end(&harness(), request("scenario:cc02-lifecycle"), controls).await;
+    let serialized = serde_json::to_string(&events).unwrap();
+    assert!(!serialized.contains("SECRET-SENTINEL"), "secrets leaked");
+
+    // Tasks (C1, C2).
+    let started = evidence(&events, "system/task_started");
+    assert_eq!(started[0]["family"], "task");
+    assert_eq!(started[0]["phase"], "started");
+    assert_eq!(started[0]["subagentType"], "general-purpose");
+    assert_eq!(started[0]["promptBytes"], 11);
+    assert_eq!(
+        evidence(&events, "system/task_progress")[0]["usage"]["totalTokens"],
+        120
+    );
+    let updated = evidence(&events, "system/task_updated");
+    assert_eq!(updated[0]["status"], "killed");
+    assert_eq!(updated[0]["error"], "stopped by user");
+    assert_eq!(
+        evidence(&events, "system/background_tasks_changed")[0]["tasks"][0]["taskId"],
+        "agent-1"
+    );
+    assert_eq!(
+        evidence(&events, "system/task_notification")[0]["status"],
+        "stopped"
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_spawn"
+                && matches!(event.as_ref(), AgentEvent::Done { status: DoneStatus::Interrupted, .. })
+    )));
+
+    // Hooks (C3): bounded output.
+    assert_eq!(
+        evidence(&events, "system/hook_started")[0]["hookEvent"],
+        "PreToolUse"
+    );
+    assert_eq!(
+        evidence(&events, "system/hook_progress")[0]["stdout"],
+        "checking"
+    );
+    let response = evidence(&events, "system/hook_response")[0];
+    assert_eq!(response["outcome"], "success");
+    assert_eq!(response["exitCode"], 0);
+    let stdout = response["stdout"].as_str().unwrap();
+    assert!(
+        stdout.contains("[truncated") && stdout.len() < 4300,
+        "{}",
+        stdout.len()
+    );
+
+    // Compaction and reset (C4, C5).
+    let status = evidence(&events, "system/status");
+    assert_eq!(status[0]["phase"], "started");
+    assert_eq!(status[1]["phase"], "finished");
+    assert_eq!(status[1]["result"], "failed");
+    assert_eq!(status[1]["error"], "summary too long");
+    let boundary = evidence(&events, "system/compact_boundary")[0];
+    assert_eq!(boundary["family"], "compaction");
+    assert_eq!(boundary["trigger"], "manual");
+    assert_eq!(boundary["preTokens"], 959489);
+    assert_eq!(boundary["postTokens"], 10107);
+    let reset = evidence(&events, "conversation_reset")[0];
+    assert_eq!(reset["family"], "conversationReset");
+    assert_eq!(
+        reset["newConversationId"],
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    );
+    assert_eq!(reset["trigger"], "clear");
+    assert_eq!(evidence(&events, "command_lifecycle")[0]["state"], "queued");
+
+    // Unprojected, unknown, redaction, bounds, flood caps (D1–D6).
+    assert_eq!(
+        evidence(&events, "native:system/permission_denied").len(),
+        1
+    );
+    assert_eq!(evidence(&events, "native:prompt_suggestion").len(), 1);
+    let widget = evidence(&events, "unknown:system/future_widget")[0];
+    assert_eq!(widget["sample"]["api_key"], "[redacted]");
+    assert_eq!(widget["sample"]["authorization"], "[redacted]");
+    assert_eq!(widget["sample"]["input_tokens"], 5);
+    assert_eq!(widget["sample"]["note"], "kept");
+    assert_eq!(widget["sha256"].as_str().unwrap().len(), 64);
+    let big = evidence(&events, "unknown:future_frame")[0];
+    assert_eq!(big["truncated"], true);
+    assert!(big["bytes"].as_u64().unwrap() > 20_000);
+    assert!(big["sample"]["blob"].as_str().unwrap().len() < 700);
+    assert_eq!(
+        evidence(&events, "unknown:future_flood").len(),
+        8,
+        "per-kind cap"
+    );
+    assert_eq!(evidence(&events, "invalid:non_json").len(), 1);
+    assert_eq!(evidence(&events, "invalid:assistant").len(), 1);
+    assert!(evidence(&events, "system/thinking_tokens").is_empty());
+    assert!(evidence(&events, "system/session_state_changed").is_empty());
+
+    // Tool-result bodies (E1–E3), root and subagent.
+    let output = |id: &str| {
+        events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult {
+                    id: found, output, ..
+                } if found == id => Some(output.clone()),
+                AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                    AgentEvent::ToolResult {
+                        id: found, output, ..
+                    } if found == id => Some(output.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("tool result {id} missing"))
+    };
+    assert_eq!(output("t-str").as_deref(), Some("hi\n"));
+    assert_eq!(
+        output("t-arr").as_deref(),
+        Some(
+            "line one\n[image: image/png, 8 base64 bytes]\n[unsupported tool_result block: widget_v9]"
+        )
+    );
+    assert_eq!(output("t-empty").as_deref(), Some(""));
+    assert_eq!(output("t-none"), None);
+    assert_eq!(
+        output("sub-t").as_deref(),
+        Some("(Bash completed with no output)")
+    );
+
+    // Tolerant result (A1–A4): malformed fields, success + is_error (529).
+    let record = result_records(&events)[0];
+    let invalid: Vec<_> = record["invalidFields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(invalid, ["errors", "usage"]);
+    assert_eq!(record["owner"], "unattributed");
+    assert_eq!(record["totalCostUsd"], 0.0123);
+    assert_eq!(record["localCommand"], "compact");
+    assert_eq!(record["permissionDenials"], 1);
+    assert_eq!(record["apiErrorStatus"], 529);
+    let counts = &record["frameCounts"];
+    assert_eq!(counts["unknown:future_flood"], 12, "{counts}");
+    assert_eq!(counts["system/thinking_tokens"], 2, "{counts}");
+    assert_eq!(counts["system/session_state_changed"], 1, "{counts}");
+    assert!(events.contains(&AgentEvent::Error {
+        message: "Claude API is overloaded (529). Try again shortly.".into()
+    }));
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Done {
+            status: DoneStatus::Completed,
+            result: None,
+            error: None,
+            session_id: Some("sess-life".into()),
+        })
+    );
+}
