@@ -2150,6 +2150,9 @@ const FULL_OUTPUT_MAX_LINES: usize = 400;
 /// Readable fallback for typed MCP/dynamic content. Encoded media remains
 /// available in Copy; never dump base64 into a transcript or execute app UI.
 fn rich_output_display(text: &str) -> Option<String> {
+    if let Some(display) = luna_doc::native_display(text) {
+        return Some(display);
+    }
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let payload = value.get("lunaToolOutput")?;
     let mut sections = vec![
@@ -8181,6 +8184,12 @@ pub fn fixture_detail_panel(detail: &ToolDetail, theme: &Theme, ui_scale: f32) -
         .font_family(theme.font_sans.clone())
         .child(detail_body(detail, None, theme, None, false))
         .into_any_element()
+}
+
+/// The production lazy-fetch detail builder, for the Claude tool-results fixture.
+#[cfg(feature = "appshots-fixture")]
+pub fn fixture_blob_detail(text: &str, is_diff: bool) -> Option<ToolDetail> {
+    blob_detail(text, is_diff)
 }
 
 #[cfg(feature = "appshots-fixture")]

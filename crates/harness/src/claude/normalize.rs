@@ -235,6 +235,8 @@ pub(crate) struct Normalizer {
     /// which then opened as an empty, never-created subagent doc (user
     /// report 2026-08-20).
     agent_spawn_tools: std::collections::HashSet<String>,
+    /// Native tool names/inputs by owner scope, for result projection.
+    tools: super::tool_results::ToolLedger,
     /// Rotates at each assistant-frame close and at each steer; SessionStarted
     /// carries the first value so folds can attribute deltas from the start.
     assistant_message_id: String,
@@ -253,6 +255,7 @@ impl Normalizer {
             last_model: None,
             agent_tasks: std::collections::HashMap::new(),
             agent_spawn_tools: std::collections::HashSet::new(),
+            tools: Default::default(),
             assistant_message_id: new_message_id(),
             session_id: None,
             native: Default::default(),
@@ -413,6 +416,10 @@ impl Normalizer {
                     // arrives only as full text blocks on its tagged
                     // assistant frames — emit them, in block order with the
                     // tool calls, or subagent transcripts are tool-chips-only.
+                    for b in f.message.blocks().filter(|b| b.kind == "tool_use") {
+                        self.tools
+                            .record(Some(parent.as_str()), &b.id, &b.name, &b.input);
+                    }
                     let mut out: Vec<AgentEvent> = f
                         .message
                         .blocks()
@@ -448,6 +455,9 @@ impl Normalizer {
                 for b in f.message.blocks() {
                     if b.kind == "tool_use" && matches!(b.name.as_str(), "Agent" | "Task") {
                         self.agent_spawn_tools.insert(b.id.clone());
+                    }
+                    if b.kind == "tool_use" {
+                        self.tools.record(None, &b.id, &b.name, &b.input);
                     }
                 }
                 let mut out: Vec<AgentEvent> = f
@@ -545,21 +555,16 @@ impl Normalizer {
                 if let Some(parent) = &f.parent_tool_use_id {
                     // A subagent's tool results echo on the main channel too;
                     // they belong to its transcript, attributed like its calls.
-                    let mut out: Vec<AgentEvent> = f
-                        .message
-                        .blocks()
-                        .filter(|b: &ContentBlock| b.kind == "tool_result")
-                        .map(|b| {
-                            tag(
-                                parent,
-                                AgentEvent::ToolResult {
-                                    id: b.tool_use_id.clone(),
-                                    is_error: b.is_error.unwrap_or(false),
-                                    output: super::events::tool_result_text(&b.content),
-                                    diff: None,
-                                },
-                            )
-                        })
+                    let mut out: Vec<AgentEvent> = self
+                        .tools
+                        .results(
+                            Some(parent.as_str()),
+                            &f.message.content,
+                            f.tool_use_result.as_ref(),
+                            f.tool_result_meta.as_ref(),
+                        )
+                        .into_iter()
+                        .map(|event| tag(parent, event))
                         .collect();
                     // A tagged user frame's TEXT blocks are the parent
                     // steering its subagent (SendMessage-style follow-ups —
@@ -578,16 +583,12 @@ impl Normalizer {
                     );
                     return out;
                 }
-                f.message
-                    .blocks()
-                    .filter(|b: &ContentBlock| b.kind == "tool_result")
-                    .map(|b| AgentEvent::ToolResult {
-                        id: b.tool_use_id.clone(),
-                        is_error: b.is_error.unwrap_or(false),
-                        output: super::events::tool_result_text(&b.content),
-                        diff: None,
-                    })
-                    .collect()
+                self.tools.results(
+                    None,
+                    &f.message.content,
+                    f.tool_use_result.as_ref(),
+                    f.tool_result_meta.as_ref(),
+                )
             }
 
             // A claude.ai plan window was hit. A hard `rejected` blocks the
@@ -694,7 +695,11 @@ impl Normalizer {
                         session_id: f.session_id,
                     }
                 };
-                let mut out = Vec::new();
+                let mut out = f
+                    .structured_output
+                    .as_ref()
+                    .map(|value| self.tools.structured_output(value))
+                    .unwrap_or_default();
                 if let Some(window) = window {
                     out.push(AgentEvent::ContextUsage {
                         tokens: None,

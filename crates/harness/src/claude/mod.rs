@@ -36,6 +36,7 @@ mod discovery;
 mod events;
 mod normalize;
 pub mod profile;
+mod tool_results;
 mod transport;
 mod turns;
 mod wire;

@@ -24,3 +24,16 @@ LUNA_TOOL_OUTPUT_EVIDENCE=/absolute/path/to/evidence/tool-output/offline \
 The artifact directory contains `doc.json`, `preview-events.json`, `journal.jsonl`, `command.txt`, `patch.json`, `mcp.json`, `child-doc.json`, `child-output.txt` and `result.json`. Hash the files after reviewing them. The fixture is offline protocol/engine evidence. It does not prove real-provider timing, media validity or native UI rendering.
 
 For native corroboration, run one disposable ordinary repository/task with the coordinator-owned LUNA Dev app. Ask Codex to run a harmless delayed command that prints a distinctive head, more than 64 KiB of UTF-8 text and a tail; steer after live output appears. Verify the original chip updates, finishes at the original call site and retrieves the tail after reopening. Exercise an add/edit patch and a mixed-content MCP fixture, then open full detail and Copy. Save native screenshots, raw provider frames/version, document/RPC readback, the host journal and hashes. Preserve the primary app/data/cache and use no Git worktrees.
+
+## Claude Code results (`kind: "native"`)
+
+The Claude adapter projects every received `tool_result` once into a `lunaToolOutput` envelope with `kind: "native"` (`crates/harness/src/claude/tool_results.rs`; display helpers in `crates/doc/src/native_output.rs`). It keeps ordered typed content (text, image with MIME and base64, document, search result, unsupported blocks with their type and field names), MCP `structuredContent`/`_meta`/`resourceLinks` from the 2.1.x `tool_use_result` spread, the tool's native Output object without fields that repeat the content, diff or call arguments (listed under `deduplicated`; large pre-images under `omitted` with byte counts), the complete call arguments and any `tool_result_meta` non-execution reason. A result with no content and no `tool_use_result` stays unavailable (`output: None`); a received empty result is `empty: true`. Diffs come only from native `structuredPatch`, Write create or before/after content and NotebookEdit cell sources. Computer-use image bytes are replaced by `dataOmitted`. Documents and live previews receive only the type/count summary or, for typed built-in tools, a bounded summary of the text blocks.
+
+Offline validation uses a 2.1.286-shaped peer (`crates/harness/tests/fixtures/tool-results-claude.py`):
+
+```sh
+scripts/cargo.sh test --locked -p luna-harness --test claude_tool_results
+LUNA_CC05_EVIDENCE=/absolute/evidence/dir scripts/cargo.sh test --locked -p luna-engine --test claude_tool_results
+```
+
+The ignored `live_capture_replay_projects_every_received_result` test replays frames captured from the real CLI (`CC05_REPLAY_FRAMES=/abs/frames.jsonl`).

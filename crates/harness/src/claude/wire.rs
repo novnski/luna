@@ -193,6 +193,14 @@ pub(crate) struct MessageFrame {
     /// CC-02 turn identity (`user_message_uuid(s)`, origin, native uuid).
     #[serde(skip)]
     pub stamp: TurnStamp,
+    /// User frames: the tool's full native Output object (or the MCP
+    /// `{content, _meta?, structuredContent?, resourceLinks?}` spread).
+    /// Projected by [`super::tool_results`].
+    #[serde(default)]
+    pub tool_use_result: Option<Value>,
+    /// User frames: `[{id, non_execution_kind?, user_feedback?, remedy?}]`.
+    #[serde(default)]
+    pub tool_result_meta: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -233,9 +241,6 @@ pub(crate) struct ContentBlock {
     pub tool_use_id: String,
     #[serde(default)]
     pub is_error: Option<bool>,
-    /// `tool_result` body: a string or an array of content blocks.
-    #[serde(default)]
-    pub content: Value,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -266,6 +271,9 @@ pub(crate) struct ResultFrame {
     pub usage: UsageBody,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// `--json-schema` runs: the validated value, distinct from `result`.
+    #[serde(default)]
+    pub structured_output: Option<Value>,
     /// CC-02: the complete, per-field tolerant decode this frame came from.
     #[serde(skip)]
     pub envelope: Box<ResultEnvelope>,
@@ -285,6 +293,7 @@ impl ResultFrame {
                 output_tokens: envelope.usage.output_tokens,
             },
             session_id: envelope.session_id.clone(),
+            structured_output: envelope.structured_output.clone(),
             envelope: Box::new(envelope),
         }
     }

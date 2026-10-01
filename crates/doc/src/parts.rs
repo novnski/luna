@@ -146,6 +146,9 @@ pub fn rich_tool_output_summary(text: &str, is_error: bool) -> Option<String> {
     if kind == "unsupported" {
         return Some("Unsupported item · diagnostic available".into());
     }
+    if kind == "native" {
+        return Some(crate::native_output::native_summary(payload, is_error));
+    }
     if !matches!(kind, "mcp" | "dynamic") {
         return None;
     }
@@ -679,6 +682,10 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     if let Some(full) = output {
                         *out_slot = if private_result {
                             rich_tool_output_summary(full, *is_error)
+                        } else if let Some(text) = crate::native_output::native_text(full) {
+                            // Typed built-in: summarize its text, never the envelope.
+                            summarize_tool_output(&text)
+                                .or_else(|| rich_tool_output_summary(full, *is_error))
                         } else {
                             summarize_tool_output(full)
                         };

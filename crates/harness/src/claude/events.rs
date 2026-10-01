@@ -236,8 +236,8 @@ pub(crate) struct ResultEnvelope {
     pub api_error_status: Option<i64>,
     pub permission_denials: usize,
     pub has_structured_output: bool,
+    /// Copied onto `ResultFrame.structured_output` for CC-05's projection.
     #[serde(skip)]
-    #[allow(dead_code)] // Structured-output projection belongs to CC-05.
     pub structured_output: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub local_command: Option<String>,
@@ -339,84 +339,6 @@ impl ResultEnvelope {
             stamp: TurnStamp::decode(value),
             invalid_fields: invalid,
         }
-    }
-}
-
-// ── Tool-result bodies (G2 foundation) ─────────────────────────────────────
-
-/// The text body of a `tool_result` block's `content`: a string, or an array
-/// of content blocks in order. Text blocks stay verbatim; images, documents
-/// and other rich blocks become one bounded placeholder line each (never
-/// base64). `None` = the field is absent (unavailable); `Some("")` = empty.
-pub(crate) fn tool_result_text(content: &Value) -> Option<String> {
-    match content {
-        Value::Null => None,
-        Value::String(text) => Some(text.clone()),
-        Value::Array(blocks) => Some(
-            blocks
-                .iter()
-                .map(tool_result_block_text)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        other => Some(format!(
-            "[unsupported tool_result content: {}]",
-            json_kind(other)
-        )),
-    }
-}
-
-fn tool_result_block_text(block: &Value) -> String {
-    let kind = str_of(block, "type").unwrap_or("");
-    match kind {
-        "text" => str_of(block, "text").unwrap_or_default().to_owned(),
-        "image" => {
-            let source = block.get("source").cloned().unwrap_or(Value::Null);
-            let media = label(&source, "media_type").unwrap_or_else(|| "image".into());
-            match str_of(&source, "data") {
-                Some(data) => format!("[image: {media}, {} base64 bytes]", data.len()),
-                None => match label(&source, "url") {
-                    Some(url) => format!("[image: {media}, {url}]"),
-                    None => format!("[image: {media}]"),
-                },
-            }
-        }
-        "document" => {
-            let name = label(block, "title")
-                .or_else(|| block.get("source").and_then(|s| label(s, "media_type")))
-                .unwrap_or_else(|| "document".into());
-            format!("[document: {name}]")
-        }
-        "tool_reference" => format!(
-            "[tool reference: {}]",
-            label(block, "tool_name").unwrap_or_default()
-        ),
-        "search_result" => format!(
-            "[search result: {} {}]",
-            label(block, "title").unwrap_or_default(),
-            label(block, "source").unwrap_or_default()
-        ),
-        "resource" | "resource_link" => format!(
-            "[resource: {}]",
-            label(block, "uri")
-                .or_else(|| block.get("resource").and_then(|r| label(r, "uri")))
-                .unwrap_or_default()
-        ),
-        other => format!(
-            "[unsupported tool_result block: {}]",
-            bounded(if other.is_empty() { "untyped" } else { other }, 64)
-        ),
-    }
-}
-
-fn json_kind(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "null",
-        Value::Bool(_) => "boolean",
-        Value::Number(_) => "number",
-        Value::String(_) => "string",
-        Value::Array(_) => "array",
-        Value::Object(_) => "object",
     }
 }
 
