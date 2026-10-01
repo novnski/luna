@@ -3,9 +3,9 @@ use super::pane_chat::{
 };
 use super::*;
 use crate::state::EngineHandle;
-use std::rc::Rc;
 use luna_engine::side_chats::{SideChatCreated, SideChatList, SideChatPage};
 use serde_json::{Value, json};
+use std::rc::Rc;
 
 fn state_label(state: &str) -> &str {
     match state {
@@ -664,9 +664,7 @@ impl SideChatPanel {
             .find(|entry| entry.role == luna_doc::MessageRole::User)
             .and_then(|entry| {
                 entry.parts.iter().find_map(|part| match part {
-                    luna_doc::MessagePart::Text { text, .. } => {
-                        Some(transcript::single_line(text))
-                    }
+                    luna_doc::MessagePart::Text { text, .. } => Some(transcript::single_line(text)),
                     _ => None,
                 })
             })
@@ -762,7 +760,12 @@ impl SideChatPanel {
                     .flex()
                     .gap(px(6.0))
                     .when(page.before.is_some(), |el| {
-                        el.child(self.button("side-older", "Older messages", PanelAction::Older, cx))
+                        el.child(self.button(
+                            "side-older",
+                            "Older messages",
+                            PanelAction::Older,
+                            cx,
+                        ))
                     })
                     .when(self.before.is_some(), |el| {
                         el.child(self.button(
@@ -832,10 +835,9 @@ impl SideChatPanel {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let stale = self
-            .full_view
-            .as_ref()
-            .is_none_or(|(view, _)| view.read(cx).composer().read(cx).readback(cx)["boundChat"] != page.meta.id.as_str());
+        let stale = self.full_view.as_ref().is_none_or(|(view, _)| {
+            view.read(cx).composer().read(cx).readback(cx)["boundChat"] != page.meta.id.as_str()
+        });
         if stale {
             let composer = self
                 .composers
@@ -938,7 +940,9 @@ impl SideChatPanel {
                 .when(!self.busy, |el| {
                     el.cursor_pointer()
                         .hover(|style| style.opacity(0.85))
-                        .on_click(cx.listener(|panel, _, _, cx| panel.action(PanelAction::Stop, cx)))
+                        .on_click(
+                            cx.listener(|panel, _, _, cx| panel.action(PanelAction::Stop, cx)),
+                        )
                 })
                 .child(div().size(px(11.0)).rounded(px(3.0)).bg(theme.bg))
         });
@@ -960,11 +964,7 @@ impl SideChatPanel {
                     .hover(|style| style.opacity(0.85))
                     .on_click(cx.listener(|panel, _, _, cx| panel.action(PanelAction::Send, cx)))
             })
-            .child(
-                icon(icons::ARROW_UP)
-                    .size(px(14.0))
-                    .text_color(theme.bg),
-            );
+            .child(icon(icons::ARROW_UP).size(px(14.0)).text_color(theme.bg));
         let pill = crate::composer::pane_composer_surface(theme)
             .id("side-composer-surface")
             .w_full()
@@ -997,7 +997,11 @@ impl SideChatPanel {
                             .items_center()
                             .gap(px(4.0))
                             .child(chip(brand, brand_color, format!("{provider} · {model}")))
-                            .child(chip(icons::KEY_MINIMALISTIC, None, "Parent's access".into())),
+                            .child(chip(
+                                icons::KEY_MINIMALISTIC,
+                                None,
+                                "Parent's access".into(),
+                            )),
                     )
                     .when(!status.is_empty(), |el| {
                         el.child(
@@ -1036,7 +1040,11 @@ impl SideChatPanel {
     }
 
     /// A pending question or approval in the composer's card chrome.
-    fn render_side_question(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_side_question(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let (_, questions) = self.pending_question()?;
         let question = questions
             .iter()
@@ -1302,17 +1310,16 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let links = Self::session_links(Some(self.active_chat.clone()), cx);
-        let panel = cx
-            .new(|cx| {
-                SideChatPanel::new(
-                    self.state.clone(),
-                    self.pane_composers.clone(),
-                    links,
-                    self.active_chat.clone(),
-                    origin,
-                    cx,
-                )
-            });
+        let panel = cx.new(|cx| {
+            SideChatPanel::new(
+                self.state.clone(),
+                self.pane_composers.clone(),
+                links,
+                self.active_chat.clone(),
+                origin,
+                cx,
+            )
+        });
         self.side_chat_events = Some(cx.subscribe(&panel, |shell, _, event, cx| {
             let (parent, engine_generation, text) = match event {
                 SideChatEvent::RevealOrigin {
@@ -1391,7 +1398,11 @@ impl Shell {
                 "back" => PanelAction::Back,
                 "stop" => PanelAction::Stop,
                 "refresh" => PanelAction::Refresh,
-                "open" => match panel.history.as_ref().and_then(|history| history.items.first()) {
+                "open" => match panel
+                    .history
+                    .as_ref()
+                    .and_then(|history| history.items.first())
+                {
                     Some(meta) => PanelAction::Open(meta.id.clone()),
                     None => return,
                 },

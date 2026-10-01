@@ -30,7 +30,8 @@ const PROJECT: &str = "side-pane-project";
 const PARENT: &str = "d0d0d0d0-0000-4000-8000-000000000001";
 const OTHER: &str = "d0d0d0d0-0000-4000-8000-000000000002";
 const SIDE_QUESTION: &str = "Is the rollout order safe if the cache migration lands first?";
-const SIDE_ANSWER: &str = "Yes. The cache migration is additive, so landing it first only warms the new keys early.";
+const SIDE_ANSWER: &str =
+    "Yes. The cache migration is additive, so landing it first only warms the new keys early.";
 const SIDE_REQUEST: &str = "side-fixture-approval";
 
 fn config() -> ChatConfig {
@@ -69,7 +70,6 @@ fn text_entry(
         continuation_of: None,
     }
 }
-
 
 fn approval_entry(device: &str, at: i64) -> SessionMessageEntry {
     SessionMessageEntry {
@@ -159,11 +159,10 @@ async fn wait_for(
 }
 
 fn main() -> anyhow::Result<()> {
-    let output = PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .ok_or_else(|| anyhow::anyhow!("usage: side-chat-pane-fixture ABSOLUTE_EVIDENCE_DIR"))?,
-    );
+    let output =
+        PathBuf::from(std::env::args().nth(1).ok_or_else(|| {
+            anyhow::anyhow!("usage: side-chat-pane-fixture ABSOLUTE_EVIDENCE_DIR")
+        })?);
     anyhow::ensure!(output.is_absolute(), "evidence directory must be absolute");
     std::fs::create_dir_all(&output)?;
     for stale in ["readback.json", "side-chat-pane.pass", "failure.txt"] {

@@ -81,7 +81,10 @@ impl ChatBinding {
     pub fn space_row<'a>(&self, state: &'a AppState) -> Option<&'a luna_proto::Space> {
         match self {
             Self::Selected => state.selected_space_row(),
-            Self::Chat(_) => match self.chat_row(state).and_then(|chat| chat.space_id.as_deref()) {
+            Self::Chat(_) => match self
+                .chat_row(state)
+                .and_then(|chat| chat.space_id.as_deref())
+            {
                 Some(space) => state.space_row(space),
                 None => state.selected_space_row(),
             },
@@ -101,7 +104,8 @@ impl ChatBinding {
     }
 
     pub fn space_git(&self, state: &AppState) -> bool {
-        self.space_row(state).is_some_and(|space| space.git_detected)
+        self.space_row(state)
+            .is_some_and(|space| space.git_detected)
     }
 
     /// Whether this binding reads the selected chat's live projections.

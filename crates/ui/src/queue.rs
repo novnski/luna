@@ -444,19 +444,22 @@ impl Composer {
         let Some((chat_id, item, host_supports_actions)) = ({
             let state = self.state.read(cx);
             let queue = self.binding.queue(state);
-            self.binding.chat_id(state).map(str::to_string).and_then(|chat_id| {
-                queue
-                    .iter()
-                    .max_by_key(|item| item.issued_at)
-                    .cloned()
-                    .map(|item| {
-                        let supported = state.chat_host_supports(
-                            &chat_id,
-                            luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
-                        );
-                        (chat_id, item, supported)
-                    })
-            })
+            self.binding
+                .chat_id(state)
+                .map(str::to_string)
+                .and_then(|chat_id| {
+                    queue
+                        .iter()
+                        .max_by_key(|item| item.issued_at)
+                        .cloned()
+                        .map(|item| {
+                            let supported = state.chat_host_supports(
+                                &chat_id,
+                                luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
+                            );
+                            (chat_id, item, supported)
+                        })
+                })
         }) else {
             return false;
         };
@@ -494,7 +497,11 @@ impl Composer {
             let chat_id = self.binding.chat_id(state)?.to_string();
             let host_supports_actions = state
                 .chat_host_supports(&chat_id, luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1);
-            (self.binding.queue(state).to_vec(), chat_id, host_supports_actions)
+            (
+                self.binding.queue(state).to_vec(),
+                chat_id,
+                host_supports_actions,
+            )
         };
         self.prepare_queue_previews(&items, window, cx);
         if items.is_empty() {
@@ -1379,8 +1386,8 @@ impl Composer {
             .await;
             this.update(cx, |composer, cx| {
                 composer.queue_removing.remove(&id);
-                let selected_matches = composer.binding.chat_id(composer.state.read(cx))
-                    == Some(chat_id.as_str());
+                let selected_matches =
+                    composer.binding.chat_id(composer.state.read(cx)) == Some(chat_id.as_str());
                 match result {
                     Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
                         if selected_matches {
@@ -1507,7 +1514,12 @@ impl Composer {
             cx.notify();
             return;
         }
-        if !self.binding.queue(self.state.read(cx)).iter().any(|item| item.id == id) {
+        if !self
+            .binding
+            .queue(self.state.read(cx))
+            .iter()
+            .any(|item| item.id == id)
+        {
             return;
         }
         let owner_device_id = engine.engine_info().device_id.clone();

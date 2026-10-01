@@ -265,25 +265,26 @@ fn approval_entry(device: &str, at: i64) -> SessionMessageEntry {
 }
 
 fn goal_control(now_ms: i64) -> luna_proto::ContextControlState {
-    let mut control = luna_proto::ContextControlState::default();
-    control.goal = Some(luna_proto::GoalReadback {
-        thread_id: "fixture-thread".into(),
-        binding_generation: 1,
-        goal: Some(luna_proto::ThreadGoal {
+    luna_proto::ContextControlState {
+        goal: Some(luna_proto::GoalReadback {
             thread_id: "fixture-thread".into(),
-            objective: GOAL_OBJECTIVE.into(),
-            status: luna_proto::GoalStatus::Active,
-            token_budget: Some(400_000),
-            tokens_used: 126_000,
-            time_used_seconds: 1_260,
-            created_at: now_ms / 1000 - 1_260,
-            updated_at: now_ms / 1000,
-            evaluation: None,
+            binding_generation: 1,
+            goal: Some(luna_proto::ThreadGoal {
+                thread_id: "fixture-thread".into(),
+                objective: GOAL_OBJECTIVE.into(),
+                status: luna_proto::GoalStatus::Active,
+                token_budget: Some(400_000),
+                tokens_used: 126_000,
+                time_used_seconds: 1_260,
+                created_at: now_ms / 1000 - 1_260,
+                updated_at: now_ms / 1000,
+                evaluation: None,
+            }),
+            checked_at_ms: now_ms,
+            continuation_ready: true,
         }),
-        checked_at_ms: now_ms,
-        continuation_ready: true,
-    });
-    control
+        ..Default::default()
+    }
 }
 
 fn config() -> ChatConfig {
@@ -503,10 +504,12 @@ fn main() -> anyhow::Result<()> {
                 at_ms,
             ))?;
             if spec.id == APPROVAL {
-                doc.doc().push_message(&approval_entry(&device, at_ms + 1_000))?;
+                doc.doc()
+                    .push_message(&approval_entry(&device, at_ms + 1_000))?;
             }
             if spec.id == GOAL {
-                doc.doc().set_context_control(&goal_control(now.timestamp_millis()))?;
+                doc.doc()
+                    .set_context_control(&goal_control(now.timestamp_millis()))?;
             }
             let mut chat = core.workspace.chat(spec.id)?.expect("seeded chat");
             chat.created_at = at - TimeDelta::minutes(2);
@@ -874,7 +877,7 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(texts.iter().filter(|text| text.contains(NAV_PENDING)).count() == 1, "navigation during the send must deliver exactly one prompt: {returned}");
                     anyhow::ensure!(texts.iter().filter(|text| text.contains(MOCK_ANSWER)).count() == 1, "expected exactly one reply to the in-flight send: {returned}");
                     anyhow::ensure!(returned["openInput"] == "" && returned["openComposer"]["failure"].is_null() && returned["openSending"] == false, "the in-flight send did not settle cleanly: {returned}");
-                    let prompt_id = returned["openTranscriptUserIds"].as_array().into_iter().flatten().filter_map(|id| id.as_str()).last().map(str::to_string);
+                    let prompt_id = returned["openTranscriptUserIds"].as_array().into_iter().flatten().filter_map(|id| id.as_str()).next_back().map(str::to_string);
                     anyhow::ensure!(prompt_id.is_some(), "no user message id: {returned}");
                     let prompt_id = prompt_id.unwrap_or_default();
                     let done_composer = returned["paneComposerStates"][DONE].clone();

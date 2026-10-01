@@ -4459,10 +4459,12 @@ impl Transcript {
         };
 
         let goal_marks = match &self.doc_override {
-            Some(doc_id) if self.pane_chat => crate::chat_binding::ChatBinding::Chat(doc_id.clone())
-                .context_control(self.state.read(cx))
-                .goal_marks
-                .clone(),
+            Some(doc_id) if self.pane_chat => {
+                crate::chat_binding::ChatBinding::Chat(doc_id.clone())
+                    .context_control(self.state.read(cx))
+                    .goal_marks
+                    .clone()
+            }
             Some(_) => luna_proto::GoalMarks::default(),
             None => self.state.read(cx).context_control.goal_marks.clone(),
         };

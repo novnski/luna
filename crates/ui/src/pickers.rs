@@ -1042,10 +1042,7 @@ impl Pickers {
     /// The loaded model catalog for `harness`, if any (the child creation
     /// dialog offers the parent's provider's models from it).
     pub(crate) fn loaded_models(&self, harness: HarnessId) -> Option<Vec<Model>> {
-        self.models
-            .get(&harness)
-            .and_then(Loadable::ready)
-            .cloned()
+        self.models.get(&harness).and_then(Loadable::ready).cloned()
     }
 
     pub fn draft(&self) -> &DraftConfig {
@@ -2146,7 +2143,11 @@ impl Pickers {
             cx.notify();
             return;
         }
-        let Some(chat_id) = self.binding.chat_id(self.state.read(cx)).map(str::to_string) else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         let Some(engine) = self.engine(cx) else {
@@ -2218,7 +2219,11 @@ impl Pickers {
     }
 
     fn run_context_action(&mut self, kind: &'static str, cx: &mut Context<Self>) {
-        let Some(chat_id) = self.binding.chat_id(self.state.read(cx)).map(str::to_string) else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         let Some(engine) = self.engine(cx) else {
@@ -2246,7 +2251,11 @@ impl Pickers {
     }
 
     fn confirm_provider_switch(&mut self, target: HarnessId, cx: &mut Context<Self>) {
-        let Some(chat_id) = self.binding.chat_id(self.state.read(cx)).map(str::to_string) else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         let Some(mut config) = self
@@ -2399,7 +2408,11 @@ impl Pickers {
     }
 
     fn update_chat_permission(&mut self, mode: PermissionMode, cx: &mut Context<Self>) {
-        let Some(chat_id) = self.binding.chat_id(self.state.read(cx)).map(str::to_string) else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         let Some(mut config) = self
@@ -2496,7 +2509,11 @@ impl Pickers {
         intent_kind: &'static str,
         change: impl FnOnce(&mut ChatConfig),
     ) {
-        let Some(chat_id) = self.binding.chat_id(self.state.read(cx)).map(str::to_string) else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         let previous = self

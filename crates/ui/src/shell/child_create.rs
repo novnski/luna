@@ -96,10 +96,17 @@ impl ChildThreadDialog {
             "prompt": prompt,
             "idempotencyKey": self.key,
         });
-        if let Some(model) = self.model.as_ref().filter(|model| Some(*model) != parent.model.as_ref()) {
+        if let Some(model) = self
+            .model
+            .as_ref()
+            .filter(|model| Some(*model) != parent.model.as_ref())
+        {
             request["model"] = model.clone().into();
         }
-        if let Some(reasoning) = self.reasoning.filter(|level| Some(*level) != parent.reasoning) {
+        if let Some(reasoning) = self
+            .reasoning
+            .filter(|level| Some(*level) != parent.reasoning)
+        {
             request["reasoning"] = serde_json::to_value(reasoning).unwrap_or_default();
         }
         if let Some(access) = self.access.filter(|mode| *mode != parent.access) {
@@ -221,7 +228,8 @@ impl Shell {
             return;
         }
         if dialog.new_worktree && !parent.git {
-            dialog.error = Some("This project has no Git checkout. Use the current checkout.".into());
+            dialog.error =
+                Some("This project has no Git checkout. Use the current checkout.".into());
             cx.notify();
             return;
         }
@@ -323,14 +331,22 @@ impl Shell {
             .py(px(4.0))
             .rounded(px(7.0))
             .border_1()
-            .border_color(if selected { theme.border_strong } else { theme.border })
+            .border_color(if selected {
+                theme.border_strong
+            } else {
+                theme.border
+            })
             .bg(if selected {
                 crate::theme::ink(0.08)
             } else {
                 crate::theme::ink(0.02)
             })
             .text_size(crate::typography::ui_rems(12.0))
-            .text_color(if selected { theme.text } else { theme.text_muted })
+            .text_color(if selected {
+                theme.text
+            } else {
+                theme.text_muted
+            })
             .when(disabled.is_some(), |el| el.opacity(0.4))
             .when(disabled.is_none(), |el| {
                 el.cursor_pointer()
@@ -364,11 +380,14 @@ impl Shell {
         let grant_confirmed = dialog.grant_confirmed;
         let error = dialog.error.clone();
         let ladder = dialog.ladder(&parent);
-        let unavailable: Vec<(PermissionMode, Option<String>)> =
-            [PermissionMode::Ask, PermissionMode::Auto, PermissionMode::Full]
-                .into_iter()
-                .map(|mode| (mode, dialog.access_unavailable(&parent, mode)))
-                .collect();
+        let unavailable: Vec<(PermissionMode, Option<String>)> = [
+            PermissionMode::Ask,
+            PermissionMode::Auto,
+            PermissionMode::Full,
+        ]
+        .into_iter()
+        .map(|mode| (mode, dialog.access_unavailable(&parent, mode)))
+        .collect();
         let provider = parent
             .harness
             .map(super::child_chats::provider_label)
@@ -397,14 +416,20 @@ impl Shell {
             .flex_wrap()
             .gap(px(6.0))
             .child(
-                self.option_chip("child-create-current", "Current checkout", !new_worktree, None, &theme)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.child_dialog_update(cx, |dialog, _| dialog.new_worktree = false)
-                    })),
+                self.option_chip(
+                    "child-create-current",
+                    "Current checkout",
+                    !new_worktree,
+                    None,
+                    &theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.child_dialog_update(cx, |dialog, _| dialog.new_worktree = false)
+                })),
             )
             .child({
-                let disabled = (!parent.git)
-                    .then(|| "This project has no Git checkout.".to_string());
+                let disabled =
+                    (!parent.git).then(|| "This project has no Git checkout.".to_string());
                 let chip = self.option_chip(
                     "child-create-worktree",
                     "New worktree",
@@ -436,7 +461,10 @@ impl Shell {
         } else {
             note(format!(
                 "Shares the parent's checkout: {}{}",
-                parent.cwd.clone().unwrap_or_else(|| "the parent's folder".into()),
+                parent
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| "the parent's folder".into()),
                 parent
                     .branch
                     .as_ref()
@@ -540,15 +568,19 @@ impl Shell {
                 }
             }
             _ => {
-                reasoning_row = reasoning_row.child(self.option_chip(
-                    "child-create-reasoning-parent",
-                    reasoning
-                        .map(|level| format!("{} (parent)", crate::pickers::reasoning_label(level)))
-                        .unwrap_or_else(|| "Model default".into()),
-                    true,
-                    None,
-                    &theme,
-                ));
+                reasoning_row = reasoning_row.child(
+                    self.option_chip(
+                        "child-create-reasoning-parent",
+                        reasoning
+                            .map(|level| {
+                                format!("{} (parent)", crate::pickers::reasoning_label(level))
+                            })
+                            .unwrap_or_else(|| "Model default".into()),
+                        true,
+                        None,
+                        &theme,
+                    ),
+                );
             }
         }
 
@@ -563,7 +595,10 @@ impl Shell {
                 access_label(mode).to_string()
             };
             let chip = self.option_chip(
-                format!("child-create-access-{}", access_label(mode).to_lowercase().replace(' ', "-")),
+                format!(
+                    "child-create-access-{}",
+                    access_label(mode).to_lowercase().replace(' ', "-")
+                ),
                 label,
                 access == mode,
                 reason.clone(),

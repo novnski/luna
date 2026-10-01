@@ -2329,7 +2329,12 @@ impl AppState {
                 .engine_info()
                 .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
             {
-                self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id, WatchTarget::Selected));
+                self.queue_task = Some(spawn_queue_watch(
+                    cx,
+                    handle,
+                    chat_id,
+                    WatchTarget::Selected,
+                ));
             }
         }
         cx.notify();
@@ -2511,7 +2516,12 @@ impl AppState {
                 .engine_info()
                 .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
             {
-                self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id, WatchTarget::Selected));
+                self.queue_task = Some(spawn_queue_watch(
+                    cx,
+                    handle,
+                    chat_id,
+                    WatchTarget::Selected,
+                ));
             }
         }
         cx.notify();
@@ -2531,7 +2541,12 @@ impl AppState {
             .engine_info()
             .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
         {
-            self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id, WatchTarget::Selected));
+            self.queue_task = Some(spawn_queue_watch(
+                cx,
+                handle,
+                chat_id,
+                WatchTarget::Selected,
+            ));
         }
     }
 

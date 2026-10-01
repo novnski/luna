@@ -197,14 +197,12 @@ fn header_control<V: 'static>(
         .hover(move |style| style.bg(hover))
         .focus_visible(move |style| style.border_color(border_strong))
         .on_click(cx.listener(move |view, _, _, cx| action(view, cx)))
-        .on_key_down(
-            cx.listener(move |view, event: &gpui::KeyDownEvent, _, cx| {
-                if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                    key_action(view, cx);
-                    cx.stop_propagation();
-                }
-            }),
-        )
+        .on_key_down(cx.listener(move |view, event: &gpui::KeyDownEvent, _, cx| {
+            if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
+                key_action(view, cx);
+                cx.stop_propagation();
+            }
+        }))
 }
 
 /// Compact identity header: Back · title · identity badge · Open as main,
@@ -216,7 +214,8 @@ pub(super) fn render_pane_header<V: 'static>(
     cx: &mut Context<V>,
 ) -> gpui::Div {
     let muted = theme.text_muted;
-    let back_tooltip: SharedString = format!("Back to {} (Esc)", actions.back_label.to_lowercase()).into();
+    let back_tooltip: SharedString =
+        format!("Back to {} (Esc)", actions.back_label.to_lowercase()).into();
     let back = header_control(
         "pane-chat-back",
         format!("Back to {}", actions.back_label.to_lowercase()),
@@ -273,21 +272,27 @@ pub(super) fn render_pane_header<V: 'static>(
         .children(actions.extra);
     if let Some(open_main) = actions.open_main {
         toolbar = toolbar.child(
-            header_control("pane-chat-open-main", "Open as main chat", theme, open_main, cx)
-                .w(px(crate::surface_chrome::CONTROL_SIZE))
-                .justify_center()
-                .tooltip(|_, cx| {
-                    cx.new(|_| SurfaceTabTooltip {
-                        text: "Open as main chat".into(),
-                    })
-                    .into()
+            header_control(
+                "pane-chat-open-main",
+                "Open as main chat",
+                theme,
+                open_main,
+                cx,
+            )
+            .w(px(crate::surface_chrome::CONTROL_SIZE))
+            .justify_center()
+            .tooltip(|_, cx| {
+                cx.new(|_| SurfaceTabTooltip {
+                    text: "Open as main chat".into(),
                 })
-                .tooltip_show_delay(Duration::from_millis(350))
-                .child(
-                    icon(icons::ARROW_UP_RIGHT)
-                        .size(px(crate::surface_chrome::ICON_SIZE))
-                        .text_color(muted),
-                ),
+                .into()
+            })
+            .tooltip_show_delay(Duration::from_millis(350))
+            .child(
+                icon(icons::ARROW_UP_RIGHT)
+                    .size(px(crate::surface_chrome::ICON_SIZE))
+                    .text_color(muted),
+            ),
         );
     }
     let parent_label: SharedString = format!("from {}", chrome.parent_title).into();
@@ -303,7 +308,12 @@ pub(super) fn render_pane_header<V: 'static>(
         .px(px(4.0))
         .min_w_0()
         .text_color(theme.readable_muted(0.7))
-        .child(icon(icons::ARROW_UP_RIGHT).size(px(11.0)).flex_none().text_color(theme.readable_muted(0.6)))
+        .child(
+            icon(icons::ARROW_UP_RIGHT)
+                .size(px(11.0))
+                .flex_none()
+                .text_color(theme.readable_muted(0.6)),
+        )
         .child(div().min_w_0().truncate().child(parent_label))
         .into_any_element(),
         None => div()
@@ -326,21 +336,20 @@ pub(super) fn render_pane_header<V: 'static>(
         .text_size(crate::typography::ui_rems(11.5))
         .min_w_0()
         .when_some(chrome.status.clone(), |el, (label, color, _)| {
-            el.child(
-                div()
-                    .size(px(6.0))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(color),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(color)
-                    .child(label),
-            )
-            .child(div().flex_none().text_color(theme.readable_muted(0.4)).child("·"))
+            el.child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(color)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.readable_muted(0.4))
+                        .child("·"),
+                )
         })
         .child(div().min_w_0().child(parent))
         .when_some(chrome.meta.clone(), |el, meta| {
@@ -352,7 +361,13 @@ pub(super) fn render_pane_header<V: 'static>(
                     .child(format!("· {meta}")),
             )
         });
-    div().w_full().flex_none().flex().flex_col().child(toolbar).child(strip)
+    div()
+        .w_full()
+        .flex_none()
+        .flex()
+        .flex_col()
+        .child(toolbar)
+        .child(strip)
 }
 
 /// Body below the header: notices, the transcript, then the composer slot
@@ -440,8 +455,7 @@ impl PaneChatView {
             // as opening it as the main chat would.
             state.mark_chat_seen(&chat_id, cx);
         });
-        let transcript =
-            cx.new(|cx| Transcript::for_pane_chat(state.clone(), chat_id.clone(), cx));
+        let transcript = cx.new(|cx| Transcript::for_pane_chat(state.clone(), chat_id.clone(), cx));
         let mut links = links;
         links.source_session = Some(chat_id.clone());
         transcript.update(cx, |transcript, _| {
@@ -472,7 +486,11 @@ impl PaneChatView {
         }
     }
 
-    pub(super) fn set_status(&mut self, status: Option<(SharedString, gpui::Hsla)>, cx: &mut Context<Self>) {
+    pub(super) fn set_status(
+        &mut self,
+        status: Option<(SharedString, gpui::Hsla)>,
+        cx: &mut Context<Self>,
+    ) {
         if self.status_override != status {
             self.status_override = status;
             cx.notify();
