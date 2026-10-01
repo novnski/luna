@@ -102,6 +102,7 @@ fn root_chip_status(core: &EngineCore, id: &str) -> Option<SubagentStatus> {
 /// its wake turn and every background child to settle.
 async fn run_scenario(core: &EngineCore, project: &Path) -> anyhow::Result<()> {
     let request = RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: PROMPT.into(),

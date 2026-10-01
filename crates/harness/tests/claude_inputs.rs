@@ -76,6 +76,7 @@ fn harness() -> ClaudeHarness {
 
 fn request(cwd: &Path, prompt: &str, attachments: Vec<String>) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
@@ -529,6 +530,7 @@ async fn explicit_steer_carries_images_and_invalid_steers_are_rejected_unwritten
     let (bad_tx, bad_rx) = oneshot::channel();
     let (good_tx, good_rx) = oneshot::channel();
     let steer = |attachments: Vec<String>, prompt: &str, acceptance| SteerMessage {
+        goal: None,
         input_items: Vec::new(),
         attachments,
         prompt: prompt.into(),

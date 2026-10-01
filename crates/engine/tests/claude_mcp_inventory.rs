@@ -479,6 +479,7 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
 
 fn run_request(cwd: &Path) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: "hello".into(),

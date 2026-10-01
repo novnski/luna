@@ -82,7 +82,7 @@ use crate::process::{Child, ChildStdin, Command, Stdio};
 use crate::{
     CommandScope, Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child,
 };
-use catalog::{models_from_initialize, static_models, to_effort};
+use catalog::{models_from_initialize, static_models};
 use normalize::Normalizer;
 use profile::{ClaudeLaunchProfile, ToolSelection};
 /// Model options a native live switch may change (CC-06); the engine requires

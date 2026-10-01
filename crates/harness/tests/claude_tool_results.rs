@@ -29,6 +29,7 @@ fn harness() -> ClaudeHarness {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: prompt.into(),

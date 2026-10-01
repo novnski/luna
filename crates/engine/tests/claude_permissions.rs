@@ -58,6 +58,7 @@ fn assemble(root: &Path) -> EngineCore {
 
 fn run_request(prompt: String) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt,

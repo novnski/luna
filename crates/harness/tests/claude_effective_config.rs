@@ -139,6 +139,7 @@ fn count_flag(argv: &Value, flag: &str) -> usize {
 
 fn request(cwd: &Path, mode: PermissionMode) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: "effective configuration".into(),

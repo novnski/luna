@@ -64,6 +64,7 @@ fn stdin_frames(dir: &Path) -> Vec<serde_json::Value> {
 
 fn request(prompt: &str, cwd: &Path) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
@@ -98,6 +99,7 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>) {
 
 fn steer(prompt: &str, id: &str, delivery: SteerDelivery) -> SteerMessage {
     SteerMessage {
+        goal: None,
         prompt: prompt.into(),
         attachments: Vec::new(),
         input_items: Vec::new(),

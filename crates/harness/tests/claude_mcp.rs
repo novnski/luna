@@ -491,6 +491,7 @@ async fn app_resource_read_is_ui_only_bounded_and_never_rendered() {
 
 fn run_request(cwd: &Path) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: "hello".into(),

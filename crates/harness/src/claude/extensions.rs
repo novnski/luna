@@ -1352,7 +1352,8 @@ impl super::ClaudeHarness {
     ) -> Result<NativeExtensionsView, HarnessError> {
         let exe = self.resolve_executable()?;
         let request = launch_probe_request(cwd, mode)?;
-        let mut cmd = self.build_command(&exe, &request);
+        let mut cmd =
+            self.build_command(&exe, &request, super::profile::ToolSelection::ModeDefault);
         // The same opt-in a normal (non-title) run adds.
         cmd.arg("--include-hook-events");
         let args = command_args(&cmd);

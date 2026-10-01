@@ -195,6 +195,7 @@ fn main() -> anyhow::Result<()> {
             "cc11-fixture-run",
             SessionCommandPayload::Run {
                 request: RunRequest {
+                    goal: None,
                     review: None,
                     input_items: Vec::new(),
                     prompt: "hello".into(),

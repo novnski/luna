@@ -74,11 +74,9 @@ pub(super) async fn run(
         "--permission-prompt-tool",
         "stdio",
     ]);
-    cmd.args(super::claude_permission_args(
-        luna_proto::PermissionMode::Ask,
-    ));
+    cmd.args(super::profile::mode_args(luna_proto::PermissionMode::Ask));
     cmd.arg(format!("--resume={}", request.session_id));
-    if let Some(dir) = &harness.config_dir {
+    if let Some(dir) = &harness.config_home {
         cmd.env("CLAUDE_CONFIG_DIR", dir);
     }
     if !request.cwd.is_empty() {

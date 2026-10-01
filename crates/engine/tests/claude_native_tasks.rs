@@ -47,6 +47,7 @@ fn assemble(dir: &Path) -> EngineCore {
 
 fn request(dir: &Path, prompt: &str) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: prompt.into(),

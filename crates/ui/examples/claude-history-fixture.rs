@@ -60,6 +60,7 @@ fn config() -> ChatConfig {
 
 fn run_request(workspace: &Path, prompt: &str) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: prompt.into(),

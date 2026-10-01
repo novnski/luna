@@ -73,6 +73,7 @@ async fn start(scenario: &str, mode: PermissionMode, extra_prompt: &str) -> Run 
         invoke_luna_tool: None,
     };
     let request = RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: format!("scenario:{scenario} log:{} {extra_prompt}", log.display()),

@@ -43,6 +43,7 @@ fn home(cwd: &Path) -> PathBuf {
 
 fn request(cwd: &Path, prompt: &str, resume: Option<&str>) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
@@ -66,6 +67,7 @@ fn request(cwd: &Path, prompt: &str, resume: Option<&str>) -> RunRequest {
 
 fn steer(prompt: &str) -> SteerMessage {
     SteerMessage {
+        goal: None,
         input_items: Vec::new(),
         attachments: Vec::new(),
         prompt: prompt.into(),

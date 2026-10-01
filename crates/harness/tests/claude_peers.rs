@@ -30,6 +30,7 @@ fn fake() -> PathBuf {
 
 fn request(prompt: &str, cwd: &Path) -> RunRequest {
     RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: prompt.into(),

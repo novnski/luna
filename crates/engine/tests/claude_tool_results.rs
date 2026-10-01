@@ -117,6 +117,7 @@ async fn claude_rich_results_survive_journal_lazy_fetch_and_restart() {
             CHAT,
             HarnessId::ClaudeCode,
             RunRequest {
+                goal: None,
                 prompt: "scenario:rich-results".into(),
                 harness: None,
                 provider_account_id: None,

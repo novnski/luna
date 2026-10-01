@@ -883,6 +883,7 @@ fn explicit_steer(id: &str) -> (SteerMessage, oneshot::Receiver<SteerAcceptance>
     let (acceptance_tx, acceptance_rx) = oneshot::channel();
     (
         SteerMessage {
+            goal: None,
             input_items: Vec::new(),
             attachments: Vec::new(),
             prompt: "redirect please".into(),
@@ -1275,6 +1276,7 @@ async fn run_with_follow_ups(prompt: &str, follow_ups: &[(&str, Option<&str>)]) 
     let mut pending: Vec<SteerMessage> = follow_ups
         .iter()
         .map(|(text, id)| SteerMessage {
+            goal: None,
             input_items: Vec::new(),
             attachments: Vec::new(),
             prompt: (*text).into(),

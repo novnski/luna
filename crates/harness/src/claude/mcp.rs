@@ -387,7 +387,7 @@ impl SessionMcpRegistry {
 /// the real run without ever carrying a permission grant.
 pub(crate) fn admin_policy_args(mode: PermissionMode) -> Vec<&'static str> {
     let mut out = Vec::new();
-    let mut args = super::claude_permission_args(mode).iter();
+    let mut args = super::profile::mode_args(mode).iter();
     while let Some(arg) = args.next() {
         match *arg {
             "--permission-mode" => {

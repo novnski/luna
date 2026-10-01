@@ -103,6 +103,7 @@ async fn nested_native_agents_land_in_their_owning_transcripts() {
     let dir = tempfile::tempdir().unwrap();
     let core = assemble(dir.path());
     let request = RunRequest {
+        goal: None,
         review: None,
         input_items: Vec::new(),
         prompt: "scenario:native-nested".into(),

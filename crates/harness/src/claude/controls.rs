@@ -16,7 +16,7 @@
 //! - Plan tools stay denied (Plan/Build is cancelled), and a tool whose own
 //!   card is the interaction surface is never one-tap approved.
 //! - The native permission mode Claude reports is checked against the mode
-//!   LUNA launched (`claude_permission_args`, owned by the G1 baseline).
+//!   LUNA launched (`profile::mode_args`, owned by the G1 baseline).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
@@ -478,7 +478,7 @@ impl Controls {
 }
 
 fn expected_native_mode(mode: PermissionMode) -> Option<&'static str> {
-    let args = super::claude_permission_args(mode);
+    let args = super::profile::mode_args(mode);
     args.iter()
         .position(|arg| *arg == "--permission-mode")
         .and_then(|index| args.get(index + 1))
