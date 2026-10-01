@@ -842,6 +842,15 @@ impl Shell {
         self.composer.read(cx).readback(cx)
     }
 
+    pub fn fixture_set_right_pane_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        self.settings.right_pane_width = width;
+        cx.notify();
+    }
+
+    pub fn fixture_engine(&self, cx: &Context<Self>) -> Option<crate::state::EngineHandle> {
+        self.state.read(cx).engine().cloned()
+    }
+
     pub fn fixture_close_right_pane(&mut self, cx: &mut Context<Self>) {
         if self.right_pane_open(cx) {
             self.toggle_right_pane(cx);
@@ -867,6 +876,35 @@ impl Shell {
             "openSending": open.map(|open| open.view.read(cx).composer().read(cx).is_sending()),
             "openInput": open.map(|open| open.view.read(cx).composer().read(cx).input.read(cx).text().to_string()),
             "openEchoes": open.map(|open| state.echoes_for(&open.id).len()),
+            "openTranscriptUserIds": open.map(|open| {
+                state
+                    .sub_transcript(&open.id)
+                    .iter()
+                    .filter(|entry| entry.role == luna_doc::MessageRole::User)
+                    .map(|entry| entry.id.clone())
+                    .collect::<Vec<_>>()
+            }),
+            "mainComposer": self.composer.read(cx).readback(cx),
+            "paneComposerStates": self
+                .pane_composers
+                .read(cx)
+                .ids()
+                .into_iter()
+                .filter_map(|id| {
+                    let composer = self.pane_composers.read(cx).get(&id)?;
+                    Some((id, composer.read(cx).readback(cx)))
+                })
+                .collect::<serde_json::Map<_, _>>(),
+            "parentTranscriptRows": state.transcript.len(),
+            "parentTranscriptText": state
+                .transcript
+                .iter()
+                .flat_map(|entry| entry.parts.iter())
+                .filter_map(|part| match part {
+                    luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
             "openSendPending": open.map(|open| state.send_pending(&open.id, now)),
             "paneChats": state.pane_chat_ids(),
             "paneComposers": self.pane_composers.read(cx).ids(),
