@@ -7653,7 +7653,7 @@ async fn drive_run(
                     inner.task_identity.get().and_then(|t| t.view(&chat_id)),
                     &chat_id,
                     &inner.device_id,
-                    Some(thread_id),
+                    Some(thread_id.as_str()),
                 )
             {
                 crate::claude_ongoing::persist_run_goal(
@@ -7679,7 +7679,7 @@ async fn drive_run(
                     inner.task_identity.get().and_then(|t| t.view(&chat_id)),
                     &chat_id,
                     &inner.device_id,
-                    Some(session_id),
+                    Some(session_id.as_str()),
                 )
                 .is_some()
             {

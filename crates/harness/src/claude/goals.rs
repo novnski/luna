@@ -491,6 +491,30 @@ impl GoalTracker {
         }
     }
 
+    /// Claude restores an unfinished goal when a session resumes; seed it
+    /// from the record so this run's loop end is read back too. Never when
+    /// this run starts its own goal.
+    pub(crate) fn wants_seed(&self) -> bool {
+        self.active.is_none() && self.requested.is_none()
+    }
+
+    pub(crate) fn seed(&mut self, readback: Option<TranscriptGoal>) -> Vec<AgentEvent> {
+        if !self.wants_seed() {
+            return Vec::new();
+        }
+        let Some(goal) = readback.filter(|goal| goal.state == TranscriptGoalState::Active) else {
+            return Vec::new();
+        };
+        let active = ActiveGoal {
+            condition: goal.condition,
+            set_at_ms: goal.set_at_ms.unwrap_or_else(now_ms),
+            checks: goal.checks,
+            last_reason: goal.reason,
+        };
+        self.active = Some(active.clone());
+        vec![self.changed(Some(self.goal(GoalStatus::Active, &active)), None)]
+    }
+
     pub(crate) fn readback_unresolved(&self, readback: &Option<TranscriptGoal>) -> bool {
         self.active.is_some()
             && !self.cleared_by_error

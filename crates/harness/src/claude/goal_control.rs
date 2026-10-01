@@ -142,7 +142,15 @@ pub(super) async fn run(
         ))
     };
     let outcome = tokio::time::timeout(CONTROL_TIMEOUT, exchange).await;
-    crate::shutdown_child(&mut child, harness.kill_grace).await;
+    // End input so Claude exits on its own and finishes its session writes;
+    // signal only if it does not.
+    drop(stdin);
+    if tokio::time::timeout(Duration::from_secs(5), child.wait())
+        .await
+        .is_err()
+    {
+        crate::shutdown_child(&mut child, harness.kill_grace).await;
+    }
     let result = match outcome {
         Ok(result) => result?,
         Err(_) => {

@@ -22,10 +22,13 @@ pub(crate) struct Ongoing {
     goals: GoalTracker,
     findings: FindingsTracker,
     schedules: ScheduleTracker,
+    /// The first `init` reads the session record once (resume seed).
+    seeded: bool,
 }
 
 /// Follow-up work a frame needs before its events can be emitted.
 pub(crate) enum Work {
+    GoalSeed { session_id: String },
     GoalReadback(ReadbackRequest),
     Findings(ProvenanceRequest),
 }
@@ -39,6 +42,7 @@ impl Ongoing {
             goals: GoalTracker::new(),
             findings: FindingsTracker::new(),
             schedules: ScheduleTracker::new(),
+            seeded: false,
         }
     }
 
@@ -54,24 +58,46 @@ impl Ongoing {
         let Ok(frame) = serde_json::from_str::<Value>(line) else {
             return (Vec::new(), Vec::new());
         };
-        if let Some(cwd) = (frame.get("subtype").and_then(Value::as_str) == Some("init"))
+        let init = frame.get("subtype").and_then(Value::as_str) == Some("init")
+            && super::goals::is_root(&frame);
+        if let Some(cwd) = init
             .then(|| frame.get("cwd").and_then(Value::as_str))
             .flatten()
             .filter(|cwd| !cwd.is_empty())
         {
             self.cwd = cwd.to_owned();
         }
+        let seed = (init && !std::mem::replace(&mut self.seeded, true))
+            .then(|| frame.get("session_id").and_then(Value::as_str))
+            .flatten()
+            .filter(|_| self.goals.wants_seed())
+            .map(|session_id| Work::GoalSeed {
+                session_id: session_id.to_owned(),
+            });
         let (mut events, readback) = self.goals.observe(&frame, &self.cwd);
         let (review, provenance) = self.findings.observe(&frame, &self.cwd);
         events.extend(review);
         events.extend(self.schedules.observe(&frame));
-        let mut work: Vec<Work> = provenance.into_iter().map(Work::Findings).collect();
+        let mut work: Vec<Work> = seed.into_iter().collect();
+        work.extend(provenance.into_iter().map(Work::Findings));
         work.extend(readback.map(Work::GoalReadback));
         (events, work)
     }
 
     pub(crate) async fn resolve(&mut self, work: Work) -> Vec<AgentEvent> {
         match work {
+            Work::GoalSeed { session_id } => {
+                let (Some(dir), cwd) = (self.config_dir.clone(), self.cwd.clone()) else {
+                    return Vec::new();
+                };
+                let readback = tokio::task::spawn_blocking(move || {
+                    super::goals::read_transcript_goal(&dir, &session_id, &cwd)
+                })
+                .await
+                .ok()
+                .flatten();
+                self.goals.seed(readback)
+            }
             Work::GoalReadback(request) => {
                 let readback =
                     super::goals::read_after_loop(&self.goals, self.config_dir.clone(), &request)
