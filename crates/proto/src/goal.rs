@@ -37,6 +37,87 @@ pub struct ThreadGoal {
     pub time_used_seconds: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// Claude `/goal` only: its checker (a small model run after each turn)
+    /// and the latest reason it gave. Codex goals have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation: Option<GoalEvaluation>,
+}
+
+/// Claude's goal checker state, as Claude reports it. The objective is a
+/// completion condition; Claude has no token budget and no pause.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalEvaluation {
+    /// Turns the checker has evaluated since the goal was set.
+    #[serde(default)]
+    pub checks: u32,
+    /// The checker's most recent "not yet met" reason (bounded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_reason: Option<String>,
+}
+
+/// A provider-native scheduled prompt observed in a Claude session
+/// (`CronCreate`, or the dynamic `/loop` wakeup from `ScheduleWakeup`).
+/// LUNA never schedules or fires these: Claude owns them, and they run only
+/// while that session's Claude process is open.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSchedule {
+    /// Claude's own job id (`CronCreate`), or `wakeup` for the dynamic loop.
+    pub id: String,
+    pub kind: NativeScheduleKind,
+    /// Claude's human-readable schedule ("every 5 minutes", "in 10m").
+    pub schedule: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cron: Option<String>,
+    /// The prompt Claude enqueues when it fires (bounded).
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default)]
+    pub recurring: bool,
+    /// Claude persisted it to `.claude/scheduled_tasks.json`; otherwise it is
+    /// session-only and dies with the Claude process.
+    #[serde(default)]
+    pub durable: bool,
+    pub created_at_ms: i64,
+    /// A wakeup's exact next fire time (Claude's `scheduledFor`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_fire_at_ms: Option<i64>,
+    /// Claude expires recurring jobs 7 days after creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<i64>,
+    pub state: NativeScheduleState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NativeScheduleKind {
+    Cron,
+    Wakeup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum NativeScheduleState {
+    /// Claude reported it scheduled and has not reported it gone.
+    Scheduled,
+    /// `CronDelete` or `ScheduleWakeup {stop:true}` cancelled it.
+    Cancelled,
+    /// Claude's own `CronList` no longer lists it (fired one-shot, expired).
+    Ended,
+}
+
+impl NativeSchedule {
+    /// Claude's per-session maximum (`CronCreate` refuses more than 50).
+    pub const LIMIT: usize = 50;
+
+    pub fn is_live(&self, now_ms: i64) -> bool {
+        self.state == NativeScheduleState::Scheduled
+            && self.expires_at_ms.is_none_or(|at| at > now_ms)
+            && self
+                .next_fire_at_ms
+                .is_none_or(|at| self.recurring || at > now_ms)
+    }
 }
 
 /// Absence on Set preserves the budget. Unlimited explicitly sends null.

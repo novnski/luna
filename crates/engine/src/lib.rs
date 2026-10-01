@@ -124,6 +124,7 @@ mod claude_mcp;
 mod command_scope;
 mod claude_child_reports;
 mod claude_peers;
+mod claude_ongoing;
 pub mod context_controls;
 pub mod credentials;
 pub mod cross_task_tools;

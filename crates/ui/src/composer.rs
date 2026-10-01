@@ -8976,15 +8976,19 @@ impl Composer {
             .and_then(|h| self.slash_cache.get(&(h, self.slash.scope.clone())))
             .map(Vec::as_slice)
             .unwrap_or_default();
-        let goal = self.slash.harness == Some(HarnessId::Codex) && self.goal_command_available(cx);
-        let mut commands = Vec::with_capacity(cached.len() + usize::from(goal));
-        if goal {
-            commands.push(goals::goal_slash_command());
+        let goal = self
+            .slash
+            .harness
+            .and_then(goals::GoalProvider::of)
+            .filter(|_| self.goal_command_available(cx));
+        let mut commands = Vec::with_capacity(cached.len() + usize::from(goal.is_some()));
+        if let Some(provider) = goal {
+            commands.push(goals::goal_slash_command(provider));
         }
         commands.extend(
             cached
                 .iter()
-                .filter(|command| !goal || command.name != goals::GOAL_COMMAND)
+                .filter(|command| goal.is_none() || command.name != goals::GOAL_COMMAND)
                 .cloned(),
         );
         commands

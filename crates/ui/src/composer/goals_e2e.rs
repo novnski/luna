@@ -22,6 +22,13 @@ use std::sync::{Arc, Mutex};
 
 const CHAT: &str = "goal-fixture-chat";
 const CLAUDE_CHAT: &str = "goal-fixture-claude";
+/// A provider without native goals: no goal UI at all.
+const OPENCODE_CHAT: &str = "goal-fixture-opencode";
+/// Claude's goal is a condition its checker confirms after each turn.
+const CLAUDE_CONDITION: &str = "DONE.txt exists in the project root";
+/// `ReportFindings` rendered by the harness (`claude/findings.rs`), copied
+/// verbatim from evidence/cc14-goals-review/e2e/harness/findings.json.
+const CLAUDE_FINDINGS: &str = "1. **`src/auth.rs:42`** The token expiry check is inverted, so expired tokens are accepted\n   _correctness \u{b7} CONFIRMED_\n   Failure: A token that expired yesterday passes `is_valid()` and logs the user in\n2. **`src/db.rs`** Connection is never returned to the pool on error\n   _correctness \u{b7} PLAUSIBLE_\n   Failure: Ten failed queries exhaust the pool and every later request hangs\n\n1 malformed or extra finding(s) not shown.\n\n\n---\n_Provenance: Claude Code 2.1.286 `ReportFindings` \u{b7} high effort \u{b7} source `e3dcea5cbb8a` + uncommitted changes \u{b7} session `c1a0de00-0000-4000-8000-c5ce2bef53ff` \u{b7} call `toolu_rf1` \u{b7} payload sha256 `a22ee87bf52d9e05`_";
 /// The user's report, verbatim.
 const OBJECTIVE: &str = "yo what is this";
 const EDITED: &str = "yo what is this — count to 99, one number per line";
@@ -94,6 +101,14 @@ impl RpcService for FixtureEngine {
                 Ok(RpcReply::Value(json!({})))
             }
             methods::LIST_COMMANDS => RpcReply::value(&vec![
+                // The provider's own `/goal` (Claude advertises one): LUNA's
+                // goal command shadows it, so `/goal` is offered once.
+                SlashCommand {
+                    name: "goal".into(),
+                    description: "Set a goal \u{2014} keep working until the condition is met"
+                        .into(),
+                    input_hint: None,
+                },
                 SlashCommand {
                     name: "review".into(),
                     description: "Review the current changes".into(),
@@ -152,6 +167,7 @@ fn goal(
         time_used_seconds: secs,
         created_at: now - secs,
         updated_at: now - 20,
+        evaluation: None,
     }
 }
 
@@ -202,6 +218,93 @@ fn engine_state(
             state.sessions = vec![luna_proto::Session {
                 last_completed_turn: None,
                 chat_id: CHAT.into(),
+                device_id: "local".into(),
+                status: if working {
+                    luna_proto::SessionStatus::Working
+                } else {
+                    luna_proto::SessionStatus::Idle
+                },
+                started_at: None,
+                updated_at: chrono::Utc::now(),
+                recovery: None,
+            }];
+            cx.notify();
+        })
+    })
+}
+
+fn claude_goal(secs: i64, checks: u32, reason: Option<&str>) -> ThreadGoal {
+    let now = chrono::Utc::now().timestamp();
+    ThreadGoal {
+        thread_id: "claude-fixture-session".into(),
+        objective: CLAUDE_CONDITION.into(),
+        status: GoalStatus::Active,
+        token_budget: None,
+        tokens_used: 0,
+        time_used_seconds: secs,
+        created_at: now - secs,
+        updated_at: now,
+        evaluation: Some(luna_proto::GoalEvaluation {
+            checks,
+            last_reason: reason.map(str::to_owned),
+        }),
+    }
+}
+
+fn schedule(
+    id: &str,
+    kind: luna_proto::NativeScheduleKind,
+    when: &str,
+    prompt: &str,
+    recurring: bool,
+    state: luna_proto::NativeScheduleState,
+) -> luna_proto::NativeSchedule {
+    let now = chrono::Utc::now().timestamp_millis();
+    luna_proto::NativeSchedule {
+        id: id.into(),
+        kind,
+        schedule: when.into(),
+        cron: (kind == luna_proto::NativeScheduleKind::Cron).then(|| "*/5 * * * *".into()),
+        prompt: prompt.into(),
+        recurring,
+        durable: false,
+        created_at_ms: now,
+        next_fire_at_ms: (kind == luna_proto::NativeScheduleKind::Wakeup).then_some(now + 600_000),
+        expires_at_ms: recurring.then_some(now + 7 * 86_400_000),
+        state,
+    }
+}
+
+/// A Claude chat's durable state as it reaches the UI. Headless Claude never
+/// continues a goal on its own (`continuationReady: false`).
+#[allow(clippy::too_many_arguments)]
+fn claude_state(
+    state: &Entity<AppState>,
+    window: AnyWindowHandle,
+    cx: &mut AsyncApp,
+    transcript: Vec<SessionMessageEntry>,
+    goal: Option<ThreadGoal>,
+    marks: luna_proto::GoalMarks,
+    schedules: Vec<luna_proto::NativeSchedule>,
+    working: bool,
+) -> anyhow::Result<()> {
+    let state = state.clone();
+    act(window, cx, move |_, cx| {
+        state.update(cx, |state, cx| {
+            state.selected_chat = Some(CLAUDE_CHAT.into());
+            state.apply_transcript(transcript);
+            state.context_control.goal = Some(GoalReadback {
+                thread_id: "claude-fixture-session".into(),
+                binding_generation: 1,
+                goal,
+                checked_at_ms: chrono::Utc::now().timestamp_millis() - 2_000,
+                continuation_ready: false,
+            });
+            state.context_control.goal_marks = marks;
+            state.context_control.native_schedules = schedules;
+            state.sessions = vec![luna_proto::Session {
+                last_completed_turn: None,
+                chat_id: CLAUDE_CHAT.into(),
                 device_id: "local".into(),
                 status: if working {
                     luna_proto::SessionStatus::Working
@@ -570,6 +673,7 @@ pub async fn run_goal_card_e2e(
     let chats = vec![
         chat(CHAT, "codex", "Goal parity fixture")?,
         chat(CLAUDE_CHAT, "claude-code", "Claude fixture")?,
+        chat(OPENCODE_CHAT, "opencode", "OpenCode fixture")?,
     ];
     {
         let state = state.clone();
@@ -1085,27 +1189,366 @@ pub async fn run_goal_card_e2e(
         crate::appearance::set_mode(crate::appearance::AppearanceMode::Dark, cx)
     })?;
 
-    // 12. A Claude chat never shows the bar or the Goal switch, even with a
-    // goal readback in state.
+    // 12. Claude chat: the same Goal switch and one `/goal` (LUNA's shadows
+    // Claude's native entry), with Claude's condition wording.
+    claude_state(
+        &state,
+        window,
+        cx,
+        Vec::new(),
+        None,
+        Default::default(),
+        Vec::new(),
+        false,
+    )?;
+    let tree = a11y_tree(window, cx)?;
+    let nodes = goal_nodes(&tree);
+    anyhow::ensure!(
+        bar_nodes(&nodes).is_empty()
+            && node(&nodes, "Goal mode").is_some_and(|node| node["toggled"] == "False"),
+        "Claude no-goal state wrong: {nodes:?}"
+    );
+    let walk = tab_walk(&composer, window, cx, |label| label == "Goal mode")?;
+    key_press(window, cx, "space")?;
+    let tree = a11y_tree(window, cx)?;
+    let on = card(&composer, cx);
+    anyhow::ensure!(
+        on["goalMode"] == true
+            && on["placeholder"] == CLAUDE_GOAL_PLACEHOLDER
+            && input_placeholder(&tree).as_deref() == Some(CLAUDE_GOAL_PLACEHOLDER)
+            && node(&goal_nodes(&tree), "Goal mode").is_some_and(|node| node["toggled"] == "True"
+                && node["description"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("checker confirms"))),
+        "Claude goal mode wrong: {on}"
+    );
+    shots.push(shot(window, cx, output, "09-claude-goal-mode.png").await?);
+    focus_input(&composer, window, cx)?;
+    type_into(
+        cx.update(|cx| composer.read(cx).input.clone()),
+        window,
+        cx,
+        "/go",
+    )?;
+    draw(window, cx)?;
+    // Claude's own command list (with its native `goal`) has to arrive for
+    // the shadowing to be exercised.
+    wait_for(cx, "Claude's command list", |cx| {
+        card(&composer, cx)["slashCommands"]
+            .as_array()
+            .is_some_and(|names| names.iter().any(|name| name == "review"))
+    })
+    .await?;
+    let slash = card(&composer, cx);
+    let goal_entries = slash["slashCommands"]
+        .as_array()
+        .map(|names| names.iter().filter(|name| *name == "goal").count())
+        .unwrap_or_default();
+    input_edit(&composer, window, cx, |input, window, cx| {
+        input.replace_text_in_range(None, "", window, cx)
+    })?;
+    anyhow::ensure!(
+        goal_entries == 1,
+        "Claude `/goal` must be offered once: {slash}"
+    );
+    steps.push(json!({"step": "claude-goal-mode", "tabWalk": walk, "card": on, "slash": slash}));
+
+    // 13. Send in goal mode: ONE run carrying the goal for the Claude chat
+    // (the harness turns it into Claude's own `/goal <condition>` line).
+    let before = rpc.executes().len();
+    focus_input(&composer, window, cx)?;
+    input_edit(&composer, window, cx, |input, window, cx| {
+        input.replace_text_in_range(None, CLAUDE_CONDITION, window, cx)
+    })?;
+    key_press(window, cx, "enter")?;
+    wait_for(cx, "the Claude goal send", |_| {
+        rpc.executes().len() == before + 1
+    })
+    .await?;
+    let executes = rpc.executes();
+    let run = sent(&executes, before)?;
+    let request = &run["intent"]["command"]["request"];
+    let claude_message = run["commandId"].as_str().unwrap_or_default().to_owned();
+    anyhow::ensure!(
+        run["intent"]["kind"] == "session"
+            && run["taskId"] == CLAUDE_CHAT
+            && request["goal"]["objective"] == CLAUDE_CONDITION
+            && request["goal"].get("tokenBudget").is_none(),
+        "Claude goal send wrong: {run}"
+    );
+    rpc.gate.add_permits(1);
+    wait_for(cx, "the Claude goal send to settle", |cx| {
+        cx.update(|cx| !composer.read(cx).sending)
+    })
+    .await?;
+    steps.push(json!({"step": "claude-goal-sent", "intent": run["intent"]}));
+
+    // 14. Claude working toward it: checks and the checker's reason; no Edit
+    // or Pause (Claude has neither); Clear waits for the turn boundary.
+    let mut claude_marks = luna_proto::GoalMarks::default();
+    claude_marks.mark_sent(&claude_message);
+    let claude_turn = "claude-goal-turn";
+    let claude_transcript = vec![
+        entry(&claude_message, MessageRole::User, CLAUDE_CONDITION, false),
+        entry(
+            claude_turn,
+            MessageRole::Assistant,
+            "Checking the project, then creating DONE.txt\u{2026}",
+            true,
+        ),
+    ];
+    claude_state(
+        &state,
+        window,
+        cx,
+        claude_transcript.clone(),
+        Some(claude_goal(52, 2, Some("DONE.txt does not exist yet"))),
+        claude_marks.clone(),
+        Vec::new(),
+        true,
+    )?;
+    shots.push(shot(window, cx, output, "10-claude-pursuing.png").await?);
+    let tree = a11y_tree(window, cx)?;
+    let nodes = goal_nodes(&tree);
+    let summary = node_starting(&nodes, "Pursuing goal, ")
+        .and_then(|node| node["label"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    let checker = tree["nodes"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, node)| node["aria"]["label"].as_str())
+        .find(|label| label.starts_with("Last check:"))
+        .map(str::to_owned);
+    let clear_waits = tree["nodes"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(_, node)| &node["aria"])
+        .find(|aria| aria["label"] == CLAUDE_CLEAR_BETWEEN_TURNS)
+        .cloned();
+    anyhow::ensure!(
+        summary.starts_with(&format!("Pursuing goal, {CLAUDE_CONDITION}, "))
+            && summary.ends_with(", 2 checks")
+            && node(&nodes, "Edit goal").is_none()
+            && node(&nodes, "Pause goal").is_none()
+            && checker.as_deref() == Some("Last check: DONE.txt does not exist yet")
+            && clear_waits
+                .as_ref()
+                .is_some_and(|aria| !has_action(aria, "Click")),
+        "Claude pursuing semantics wrong: summary={summary} checker={checker:?} clear={clear_waits:?} nodes={nodes:?}"
+    );
+    steps.push(json!({"step": "claude-pursuing", "summary": summary, "checker": checker, "clearWhileWorking": clear_waits, "goalNodes": nodes}));
+
+    // 15. The loop ended with the goal still active (headless Claude waits
+    // for the next message), and Claude's own schedules are listed with their
+    // real lifetime (a cancelled one is hidden). Clear is now available.
+    let schedules = vec![
+        schedule(
+            "a1b2c3d4",
+            luna_proto::NativeScheduleKind::Cron,
+            "every 5 minutes",
+            "check the deploy",
+            true,
+            luna_proto::NativeScheduleState::Scheduled,
+        ),
+        schedule(
+            "wakeup",
+            luna_proto::NativeScheduleKind::Wakeup,
+            "in 10m \u{2014} CI takes about ten minutes",
+            "/loop check CI",
+            false,
+            luna_proto::NativeScheduleState::Scheduled,
+        ),
+        schedule(
+            "e5f6a7b8",
+            luna_proto::NativeScheduleKind::Cron,
+            "at 15:30 on Oct 1",
+            "push the release branch",
+            false,
+            luna_proto::NativeScheduleState::Cancelled,
+        ),
+    ];
+    let idle_transcript = vec![
+        entry(&claude_message, MessageRole::User, CLAUDE_CONDITION, false),
+        entry(
+            claude_turn,
+            MessageRole::Assistant,
+            "The build is still running; I'll check again.",
+            false,
+        ),
+    ];
+    claude_state(
+        &state,
+        window,
+        cx,
+        idle_transcript.clone(),
+        Some(claude_goal(96, 3, Some("The build has not finished"))),
+        claude_marks.clone(),
+        schedules.clone(),
+        false,
+    )?;
+    shots.push(shot(window, cx, output, "11-claude-waiting-schedules.png").await?);
+    let tree = a11y_tree(window, cx)?;
+    let labels: Vec<String> = tree["nodes"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, node)| node["aria"]["label"].as_str().map(str::to_owned))
+        .collect();
+    let group = tree["nodes"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(_, node)| &node["aria"])
+        .find(|aria| aria["label"] == "2 prompts scheduled by Claude")
+        .cloned();
+    anyhow::ensure!(
+        labels.iter().any(|l| l == "Last check: The build has not finished \u{b7} Claude checks again after your next message.")
+            && labels.iter().any(|l| l == "every 5 minutes: check the deploy (recurring, session-only)")
+            && labels.iter().any(|l| l.starts_with("in 10m"))
+            && !labels.iter().any(|l| l.contains("push the release branch"))
+            && group.as_ref().is_some_and(|g| g["description"].as_str().is_some_and(|d| d.contains("30 minutes"))),
+        "Claude waiting/schedules semantics wrong: {labels:?} {group:?}"
+    );
+    let walk = reverse_tab_walk(&composer, window, cx, |label| label == "Clear goal")?;
+    key_press(window, cx, "space")?;
+    wait_for(cx, "the Claude clear", |_| {
+        rpc.executes().len() == before + 2
+    })
+    .await?;
+    let executes = rpc.executes();
+    let clear = sent(&executes, before + 1)?;
+    anyhow::ensure!(
+        clear["taskId"] == CLAUDE_CHAT
+            && clear["intent"]["kind"] == "goal"
+            && clear["intent"]["operation"]["action"] == "clear",
+        "Claude Clear dispatched wrong: {clear}"
+    );
+    rpc.gate.add_permits(1);
+    wait_for(cx, "the Claude clear to settle", |cx| {
+        cx.update(|cx| composer.read(cx).goal_ui.pending.is_none())
+    })
+    .await?;
+    steps.push(json!({"step": "claude-waiting-clear", "reverseTabWalk": walk, "group": group, "intent": clear["intent"]}));
+
+    // 16. Claude's checker confirmed the condition: the bar is gone, the turn
+    // reads "Goal achieved in 41s", Claude's remaining schedule stays listed.
+    let mut achieved = claude_marks.clone();
+    achieved.mark_achieved(claude_turn, 41);
+    let mut complete = claude_goal(41, 2, Some("DONE.txt exists in the project root"));
+    complete.status = GoalStatus::Complete;
+    let done_transcript = vec![
+        entry(&claude_message, MessageRole::User, CLAUDE_CONDITION, false),
+        entry(
+            claude_turn,
+            MessageRole::Assistant,
+            "Created DONE.txt.",
+            false,
+        ),
+    ];
+    claude_state(
+        &state,
+        window,
+        cx,
+        done_transcript,
+        Some(complete),
+        achieved,
+        schedules[..1].to_vec(),
+        false,
+    )?;
+    shots.push(shot(window, cx, output, "12-claude-achieved.png").await?);
+    let tree = a11y_tree(window, cx)?;
+    let nodes = goal_nodes(&tree);
+    anyhow::ensure!(
+        node_starting(&nodes, "Pursuing goal").is_none()
+            && node(&nodes, "Goal achieved in 41s").is_some()
+            && node(&nodes, "Sent as goal").is_some(),
+        "Claude achieved state wrong: {nodes:?}"
+    );
+    steps.push(json!({"step": "claude-achieved", "goalNodes": nodes}));
+
+    // 17. Claude's ReportFindings on the shared findings UI: the review
+    // lifecycle chip and the findings with their provenance line.
+    let mut parts = Vec::new();
+    for event in [
+        luna_proto::AgentEvent::NativeReview {
+            id: "toolu_rf1".into(),
+            completed: false,
+            text: "Claude code review \u{b7} high effort".into(),
+        },
+        luna_proto::AgentEvent::NativeReview {
+            id: "toolu_rf1".into(),
+            completed: true,
+            text: CLAUDE_FINDINGS.into(),
+        },
+    ] {
+        luna_doc::fold_event_into_parts(&mut parts, &event);
+    }
+    let review_entry = SessionMessageEntry {
+        id: "claude-review-turn".into(),
+        role: MessageRole::Assistant,
+        parts,
+        created_at: chrono::Utc::now().timestamp_millis(),
+        device_id: "local".into(),
+        status: Some(MessageStatus::Complete),
+        continuation_of: None,
+    };
+    claude_state(
+        &state,
+        window,
+        cx,
+        vec![
+            entry(
+                "claude-review",
+                MessageRole::User,
+                "/code-review main...HEAD",
+                false,
+            ),
+            review_entry,
+        ],
+        None,
+        Default::default(),
+        Vec::new(),
+        false,
+    )?;
+    shots.push(shot(window, cx, output, "13-claude-review-findings.png").await?);
+    let tree = a11y_tree(window, cx)?;
+    let text_nodes: Vec<String> = tree["nodes"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(_, node)| node["aria"]["label"].as_str().map(str::to_owned))
+        .filter(|label| {
+            label.contains("Review findings")
+                || label.contains("Native code review")
+                || label.contains("Provenance")
+        })
+        .collect();
+    steps.push(json!({"step": "claude-review-findings", "labels": text_nodes}));
+
+    // 18. A provider without native goals (OpenCode) never shows the bar or
+    // the Goal switch, even with a goal readback in state.
     {
         let state = state.clone();
         act(window, cx, move |_, cx| {
             state.update(cx, |state, cx| {
-                state.selected_chat = Some(CLAUDE_CHAT.into());
+                state.selected_chat = Some(OPENCODE_CHAT.into());
                 cx.notify();
             })
         })?;
     }
     let tree = a11y_tree(window, cx)?;
-    let claude_available = cx.update(|cx| composer.read(cx).goal_mode_available(cx));
-    let claude_nodes = goal_nodes(&tree);
+    let other_available = cx.update(|cx| composer.read(cx).goal_mode_available(cx));
+    let other_nodes = goal_nodes(&tree);
     anyhow::ensure!(
-        bar_nodes(&claude_nodes).is_empty()
-            && node(&claude_nodes, "Goal mode").is_none()
-            && !claude_available,
-        "Claude chat exposes goal UI: {claude_nodes:?}"
+        bar_nodes(&other_nodes).is_empty()
+            && node(&other_nodes, "Goal mode").is_none()
+            && !other_available,
+        "a provider without goals exposes goal UI: {other_nodes:?}"
     );
-    steps.push(json!({"step": "claude-chat", "goalModeAvailable": claude_available, "goalNodes": claude_nodes}));
+    steps.push(json!({"step": "opencode-chat", "goalModeAvailable": other_available, "goalNodes": other_nodes}));
 
     let calls: Vec<Value> = rpc
         .calls

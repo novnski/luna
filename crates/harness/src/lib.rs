@@ -106,6 +106,31 @@ pub struct SteerMessage {
     pub goal: Option<luna_proto::GoalStartRequest>,
 }
 
+/// A provider-native goal control outside a run (CC-14).
+#[derive(Debug, Clone)]
+pub struct NativeGoalControl {
+    /// The provider session that owns the goal.
+    pub session_id: String,
+    pub cwd: String,
+    pub action: NativeGoalAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGoalAction {
+    /// Read the provider's own goal record; never starts a process.
+    Read,
+    /// The provider's own clear (Claude: `/goal clear`, a local command).
+    Clear,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeGoalReadback {
+    /// `None`: no unfinished goal (cleared, achieved, judged impossible).
+    pub goal: Option<luna_proto::ThreadGoal>,
+    /// The provider's own reply text, when a command ran.
+    pub reply: Option<String>,
+}
+
 /// What the provider wire proved about an explicit in-turn steer request.
 /// `Unknown` is deliberately distinct from rejection: the request may have
 /// reached the provider, so callers must preserve it without replaying it.
@@ -376,6 +401,17 @@ pub trait Harness: Send + Sync {
     ) -> Result<NativeTaskStop, HarnessError> {
         Err(HarnessError::Protocol(
             "stopping a native child is not supported by this harness".into(),
+    }
+
+    /// Read or clear a provider-native goal outside a run, with the
+    /// provider's own operation (Claude: its `/goal` command and session
+    /// record). Adapters must opt in; the default is honest unsupported.
+    async fn native_goal_control(
+        &self,
+        _request: NativeGoalControl,
+    ) -> Result<NativeGoalReadback, HarnessError> {
+        Err(HarnessError::RejectedBeforeAcceptance(
+            "this provider has no native goal control".into(),
         ))
     }
     /// Run an isolated title request. Drivers must opt in with title-specific

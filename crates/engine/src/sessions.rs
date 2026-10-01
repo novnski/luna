@@ -2635,6 +2635,29 @@ impl SessionsEngine {
             .clone()
     }
 
+    /// CC-14: hold the dispatch transition gate with no runtime for this
+    /// chat (a parked warm runtime is retired first, as permission changes
+    /// do), so a one-shot provider control is the only native writer.
+    /// `None` while a turn is running.
+    pub(crate) async fn exclusive_idle_runtime(
+        &self,
+        chat_id: &str,
+    ) -> Result<Option<OwnedMutexGuard<()>>, EngineError> {
+        let transition = self.transition_gate(chat_id).lock_owned().await;
+        if self.turn_in_flight(chat_id) {
+            return Ok(None);
+        }
+        if self.has_live_run(chat_id) {
+            self.interrupt(chat_id).await?;
+            if self.has_live_run(chat_id) {
+                return Err(EngineError::Other(
+                    "the parked provider runtime did not retire before the deadline".into(),
+                ));
+            }
+        }
+        Ok(Some(transition))
+    }
+
     pub(crate) fn prepare_workspace_repair_execution(
         &self,
         chat_id: &str,
@@ -3316,8 +3339,13 @@ impl SessionsEngine {
             ));
         }
         if let Some(goal) = request.goal.as_ref() {
-            if harness_id != HarnessId::Codex {
-                return Err(EngineError::Other("Goals require a Codex task".into()));
+            if !matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode) {
+                return Err(EngineError::Other(
+                    "Goals need a Codex or Claude Code task".into(),
+                ));
+            }
+            if harness_id == HarnessId::ClaudeCode {
+                crate::claude_ongoing::admit_goal_start(goal, self.turn_in_flight(chat_id))?;
             }
             goal.validate()
                 .map_err(|error| EngineError::Other(error.into()))?;
@@ -3332,6 +3360,23 @@ impl SessionsEngine {
             }
             // The transcript message is exactly the objective Codex received.
             request.prompt = goal.objective.clone();
+        }
+        // CC-15: Claude's review is its own `/code-review` line (or an
+        // ordinary message for custom instructions), never `review/start`.
+        if harness_id == HarnessId::ClaudeCode
+            && let Some(review) = request.review.take()
+        {
+            if self.turn_in_flight(chat_id) {
+                return Err(EngineError::Other(
+                    "Wait for the active turn to finish before starting a review".into(),
+                ));
+            }
+            if !request.attachments.is_empty() || request.worktree.is_some() {
+                return Err(EngineError::Other(
+                    "A review uses the task's existing checkout without attachments".into(),
+                ));
+            }
+            request.prompt = crate::claude_ongoing::review_prompt(&review.target)?;
         }
         if let Some(review) = request.review.as_ref() {
             if harness_id != HarnessId::Codex {
@@ -3719,37 +3764,47 @@ impl SessionsEngine {
                         &user_id,
                         workspace_repair_revision,
                     ));
-            let accepted = if steerable && same_runtime && request.goal.is_none() {
-                // Warm dispatch uses the same mailbox as explicit steering.
-                // Register acceptance before a fast boundary can retire it.
-                let mut pending = lock(&ledger);
-                let message = SteerMessage {
-                    input_items: request.input_items.clone(),
-                    attachments: request.attachments.clone(),
-                    prompt: request.prompt.clone(),
-                    message_id: Some(user_id.clone()),
-                    delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
-                    acceptance: None,
-                    goal: None,
-                };
-                if steer_tx.try_send(message).is_ok() {
-                    pending.push_back(RoutedSteer {
-                        attachments: request.attachments.clone(),
+            // A Claude goal is Claude's own `/goal` line through the same
+            // warm mailbox (the harness writes it); Codex goals never are.
+            let claude_goal = request
+                .goal
+                .clone()
+                .filter(|_| harness_id == HarnessId::ClaudeCode);
+            let accepted =
+                if steerable && same_runtime && (request.goal.is_none() || claude_goal.is_some()) {
+                    // Warm dispatch uses the same mailbox as explicit steering.
+                    // Register acceptance before a fast boundary can retire it.
+                    let mut pending = lock(&ledger);
+                    let message = SteerMessage {
                         input_items: request.input_items.clone(),
+                        attachments: request.attachments.clone(),
                         prompt: request.prompt.clone(),
-                        message_id: user_id.clone(),
+                        message_id: Some(user_id.clone()),
                         delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
-                    });
-                    true
+                        acceptance: None,
+                        goal: claude_goal,
+                    };
+                    if steer_tx.try_send(message).is_ok() {
+                        pending.push_back(RoutedSteer {
+                            attachments: request.attachments.clone(),
+                            input_items: request.input_items.clone(),
+                            prompt: request.prompt.clone(),
+                            message_id: user_id.clone(),
+                            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+                        });
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
-                }
-            } else {
-                false
-            };
+                };
             if accepted {
                 let handle = self.doc_handle(chat_id)?;
                 handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+                if request.goal.is_some() {
+                    self.mark_goal_sent(chat_id, &user_id);
+                }
                 if self.is_live(chat_id, &run_id) {
                     // Working BEFORE the lastMessageAt bump: both ride the
                     // workspace doc from this one peer, so causal order makes it
@@ -7829,6 +7884,43 @@ async fn drive_run(
                 {
                     tracing::warn!(chat = %chat_id, %error, "goal achieved mark persistence failed");
                 }
+            } else if harness_id == HarnessId::ClaudeCode
+                && let Some(host) = inner.doc_host()
+                && let Some(binding) = crate::claude_ongoing::claude_binding(
+                    inner.task_identity.get().and_then(|t| t.view(&chat_id)),
+                    &chat_id,
+                    &inner.device_id,
+                    Some(thread_id.as_str()),
+                )
+            {
+                crate::claude_ongoing::persist_run_goal(
+                    host,
+                    &chat_id,
+                    &entry_id,
+                    &binding,
+                    goal.as_ref(),
+                    turn_id.is_some(),
+                );
+            }
+            continue;
+        }
+        // CC-14: Claude's own schedules (observation only; never published).
+        if let AgentEvent::NativeSchedules {
+            session_id,
+            schedules,
+        } = &event
+        {
+            if harness_id == HarnessId::ClaudeCode
+                && let Some(host) = inner.doc_host()
+                && crate::claude_ongoing::claude_binding(
+                    inner.task_identity.get().and_then(|t| t.view(&chat_id)),
+                    &chat_id,
+                    &inner.device_id,
+                    Some(session_id.as_str()),
+                )
+                .is_some()
+            {
+                crate::claude_ongoing::persist_schedules(host, &chat_id, schedules);
             }
             continue;
         }

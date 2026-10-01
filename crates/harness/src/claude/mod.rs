@@ -36,6 +36,9 @@ mod controls;
 mod delivery;
 mod discovery;
 mod events;
+mod findings;
+mod goal_control;
+mod goals;
 mod history;
 mod input;
 mod live_session;
@@ -43,9 +46,11 @@ mod mcp;
 mod native_stop;
 mod native_tasks;
 mod normalize;
+mod ongoing;
 pub mod peer;
 pub mod profile;
 mod runtime_controls;
+mod schedules;
 mod tool_results;
 mod transport;
 mod turns;
@@ -128,6 +133,8 @@ pub struct ClaudeHarness {
     mcp_sessions: Arc<mcp::SessionMcpRegistry>,
     /// Live runs addressable by `stop_native_child` (CC-08).
     live_children: native_stop::LiveChildren,
+    /// Explicit Claude config dir (tests); `None` inherits the child's own.
+    config_dir: Option<PathBuf>,
 }
 
 impl Default for ClaudeHarness {
@@ -141,6 +148,7 @@ impl Default for ClaudeHarness {
             staged: Default::default(),
             mcp_sessions: Arc::default(),
             live_children: native_stop::LiveChildren::default(),
+            config_dir: None,
         }
     }
 }
@@ -167,6 +175,21 @@ impl ClaudeHarness {
         self.interrupt_grace = interrupt_grace;
         self.kill_grace = kill_grace;
         self
+    }
+
+    /// Pin the Claude config dir (`CLAUDE_CONFIG_DIR`) for launched CLIs and
+    /// for reading their session records. Production inherits the user's.
+    pub fn with_config_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.config_dir = Some(dir.into());
+        self
+    }
+
+    /// Where Claude persists this harness's session records.
+    fn goal_config_dir(&self) -> Option<PathBuf> {
+        self.config_dir
+            .clone()
+            .or_else(|| self.config_home.clone())
+            .or_else(goals::default_config_dir)
     }
 
     fn resolve_executable(&self) -> Result<PathBuf, HarnessError> {
@@ -212,6 +235,12 @@ impl ClaudeHarness {
             // attribution of native peer arrivals (see `peer`).
             "--replay-user-messages",
         ]);
+        // CC-15: LUNA renders Claude's typed review findings, so `/code-review`
+        // reports through `ReportFindings` (Claude's host opt-in).
+        cmd.env("CLAUDE_CODE_REPORT_FINDINGS", "1");
+        if let Some(dir) = &self.config_dir {
+            cmd.env("CLAUDE_CONFIG_DIR", dir);
+        }
         // The 1M context window is selected via a model-id suffix
         // (`sonnet[1m]`), exactly how the CLI itself does it; fast mode and
         // always-on thinking are settings overrides.
@@ -511,6 +540,14 @@ impl Harness for ClaudeHarness {
             .await)
     }
 
+    /// CC-14: Claude's own goal record and `/goal clear` (see `goal_control`).
+    async fn native_goal_control(
+        &self,
+        request: crate::NativeGoalControl,
+    ) -> Result<crate::NativeGoalReadback, HarnessError> {
+        goal_control::run(self, request).await
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
@@ -622,6 +659,14 @@ impl ClaudeHarness {
 
         // The initial prompt as the first stdin user line (streaming-input
         // mode). Ultrathink rides every user message — steers included.
+        // CC-14: a goal start is Claude's own `/goal <condition>` line; it
+        // still takes the single native uuid below.
+        let mut ongoing = ongoing::Ongoing::new(!title_only, self.goal_config_dir(), &request.cwd);
+        let mut first_line = first.line;
+        if let Some(goal) = request.goal.as_ref().filter(|_| !title_only) {
+            ongoing.goal_requested(&goal.objective);
+            first_line = wire::user_message_line(&goals::set_line(&goal.objective));
+        }
         let permission_mode = request
             .permission_policy
             .as_ref()
@@ -637,7 +682,7 @@ impl ClaudeHarness {
         // the CC-02 turn ledger correlates results against the same uuid.
         let mut norm = Normalizer::new();
         let (first, initial_uuid) =
-            transport.stamp_user_line(first.line, transport::InputKind::Initial, None);
+            transport.stamp_user_line(first_line, transport::InputKind::Initial, None);
         // CC-10 checkpoints key on the same client uuid.
         let mut identities = history::TurnIdentities::default();
         if !title_only {
@@ -682,6 +727,7 @@ impl ClaudeHarness {
             mcp_sessions: (!title_only).then(|| self.mcp_sessions.clone()),
             identities,
             live_children: self.live_children.clone(),
+            ongoing,
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -761,6 +807,8 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    /// CC-14/15 observers: native goals, findings and schedules.
+    ongoing: ongoing::Ongoing,
     live_children: native_stop::LiveChildren,
     /// CC-10 client uuids and per-turn provider checkpoints.
     identities: history::TurnIdentities,
@@ -797,6 +845,7 @@ async fn run_session(session: Session) {
         mcp_sessions,
         mut identities,
         live_children,
+        mut ongoing,
     } = session;
     let RunControls {
         request_input,
@@ -905,6 +954,17 @@ async fn run_session(session: Session) {
                         continue;
                     }
                     for ev in prefix {
+                        if event_tx.send(Ok(ev)).await.is_err() {
+                            break 'main;
+                        }
+                    }
+                    // CC-14/15: native goals, findings and schedules read the
+                    // raw frame first. They only add events.
+                    let (mut extra, work) = ongoing.observe(line);
+                    for item in work {
+                        extra.extend(ongoing.resolve(item).await);
+                    }
+                    for ev in extra {
                         if event_tx.send(Ok(ev)).await.is_err() {
                             break 'main;
                         }
@@ -1024,6 +1084,12 @@ async fn run_session(session: Session) {
                             continue 'main;
                         }
                     };
+                    // CC-14: a warm goal start is Claude's own `/goal` line.
+                    let mut line = line;
+                    if let Some(goal) = &msg.goal {
+                        ongoing.goal_requested(&goal.objective);
+                        line = wire::user_message_line(&goals::set_line(&goal.objective));
+                    }
                     let explicit = msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let (line, uuid) = transport.stamp_user_line(
                         line,
@@ -1099,6 +1165,17 @@ async fn run_session(session: Session) {
                             uuid,
                         );
                         let accepted = stdin_tx.send(StdinMsg::line(line)).is_ok();
+                        // A goal's acceptance is the stdin hand-off; Claude's
+                        // own verdict on it arrives as frames.
+                        if let Some(tx) = msg.acceptance {
+                            let _ = tx.send(if accepted {
+                                crate::SteerAcceptance::Accepted
+                            } else {
+                                crate::SteerAcceptance::Rejected(
+                                    "Claude input channel closed before dispatch".into(),
+                                )
+                            });
+                        }
                         if !accepted {
                             continue 'main;
                         }
