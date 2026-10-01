@@ -46,6 +46,10 @@ name = "claude-prompts-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "queue-image-steer-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "goal-card-fixture"
 required-features = ["appshots-fixture"]
 

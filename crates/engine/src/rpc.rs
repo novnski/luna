@@ -3299,7 +3299,8 @@ impl EngineRpc {
                 .as_ref()
                 .map(|execution| execution.harness)
                 .unwrap_or_else(|| self.doc_host.harness_for(&command.task_id));
-            if (!item.attachments.is_empty() && harness != HarnessId::Codex)
+            if (!item.attachments.is_empty()
+                && !crate::provider_inputs::steers_native_inputs(harness))
                 || !self.sessions.steers_mid_turn(harness)
             {
                 return self.finish_task_command(

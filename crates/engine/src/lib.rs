@@ -144,6 +144,7 @@ mod model_cache;
 pub mod permissions;
 pub mod profile;
 pub mod project_commands;
+mod provider_inputs;
 mod provider_updates;
 pub mod recovery;
 pub mod registry;

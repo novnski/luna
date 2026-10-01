@@ -1405,6 +1405,12 @@ impl Pickers {
             .is_some_and(|list| offered_harnesses(list).is_empty())
     }
 
+    /// Fixture-only: seed the host harness catalog without an engine.
+    #[cfg(feature = "appshots-fixture")]
+    pub(crate) fn fixture_set_harnesses(&mut self, list: Vec<HarnessDescriptor>) {
+        self.harnesses = Loadable::Ready(list);
+    }
+
     /// Whether the selected host catalog says this harness accepts a prompt
     /// inside the current turn. Unknown/loading catalogs fail closed so the
     /// queue never advertises Steer on an assumption.

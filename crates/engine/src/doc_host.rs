@@ -5285,12 +5285,13 @@ impl DocHost {
             let reason = if candidate.follow_up_behavior != luna_proto::FollowUpBehavior::Steer {
                 Some(QueueHoldReason::SteeringUnavailable)
             } else if !candidate.attachments.is_empty()
-                && candidate
-                    .execution
-                    .as_ref()
-                    .map(|c| c.harness)
-                    .unwrap_or_else(|| self.harness_for(chat_id))
-                    != luna_proto::HarnessId::Codex
+                && !crate::provider_inputs::steers_native_inputs(
+                    candidate
+                        .execution
+                        .as_ref()
+                        .map(|c| c.harness)
+                        .unwrap_or_else(|| self.harness_for(chat_id)),
+                )
             {
                 Some(QueueHoldReason::AttachmentsUnsupported)
             } else {
@@ -7260,6 +7261,13 @@ impl DocHost {
                 // dispatches — the drain already gated on the bytes being
                 // present, so every ref resolves here.
                 self.resolve_request_attachments(&mut request);
+                // Reject invalid input before a worktree or transcript entry
+                // exists; the receipt rejection keeps the draft recoverable.
+                crate::provider_inputs::admit(
+                    self.harness_for_request(chat_id, &request),
+                    &request.attachments,
+                    &request.input_items,
+                )?;
                 // Worktree directive (WorktreeSpec): materialize on THIS host at
                 // drain time — the durable command plane replaces the sender's
                 // old blocking CreateWorktree relay RPC, whose lost reply wedged
@@ -7671,11 +7679,7 @@ impl DocHost {
         let mut prompt = self.resolve_prompt_attachments(prompt);
         let mut attachments = attachments.to_vec();
         self.resolve_input_attachments(&mut prompt, &mut attachments);
-        if self.harness_for(chat_id) == luna_proto::HarnessId::Codex {
-            luna_harness::validate_composer_inputs(&attachments, input_items)?;
-        } else if !input_items.is_empty() {
-            return Err(EngineError::Other("Native plugin, app and skill selections require Codex; keep the draft and choose Codex or remove them.".into()));
-        }
+        crate::provider_inputs::admit(self.harness_for(chat_id), &attachments, input_items)?;
         if self.held_until_turn_end(
             sessions,
             chat_id,

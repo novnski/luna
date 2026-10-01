@@ -735,11 +735,14 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        // Codex's warm mailbox carries typed inputs and attachments; other
-        // harnesses take text only. Native review targets require a fresh
-        // adapter dispatch (resuming the same binding) at a safe boundary.
+        // Codex's warm mailbox carries typed inputs and attachments. Other
+        // harnesses' typed inputs take a fresh (resumed) dispatch, whose
+        // rejection is recoverable; the warm fallback is at-least-once.
+        // Native review targets require a fresh adapter dispatch (resuming
+        // the same binding) at a safe boundary.
         request.review.is_none()
-            && (harness_id == HarnessId::Codex || request.attachments.is_empty())
+            && (harness_id == HarnessId::Codex
+                || (request.attachments.is_empty() && request.input_items.is_empty()))
             && self == &Self::from_request(harness_id, request)
     }
 }
@@ -3291,12 +3294,7 @@ impl SessionsEngine {
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
         let _in_flight = DispatchInFlight::enter(&self.inner);
-        if !request.input_items.is_empty() && harness_id != HarnessId::Codex {
-            return Err(EngineError::Other("Native plugin, app and skill selections require Codex. Keep the draft and choose Codex or remove the selections.".into()));
-        }
-        if harness_id == HarnessId::Codex {
-            luna_harness::validate_composer_inputs(&request.attachments, &request.input_items)?;
-        }
+        crate::provider_inputs::admit(harness_id, &request.attachments, &request.input_items)?;
         if recovery.is_some()
             && self
                 .inner
@@ -4172,12 +4170,12 @@ impl SessionsEngine {
         let Some((harness_id, run_id, steer_tx, ledger)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
-        if (!attachments.is_empty() || !input_items.is_empty()) && harness_id != HarnessId::Codex {
+        if (!attachments.is_empty() || !input_items.is_empty())
+            && !crate::provider_inputs::steers_native_inputs(harness_id)
+        {
             return Ok(SteerOutcome::Rejected);
         }
-        if harness_id == HarnessId::Codex {
-            luna_harness::validate_composer_inputs(attachments, input_items)?;
-        }
+        crate::provider_inputs::admit(harness_id, attachments, input_items)?;
         let user_id = message_id.unwrap_or_else(new_id);
         self.inner
             .recovery

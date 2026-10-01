@@ -34,12 +34,15 @@ pub mod catalog;
 mod controls;
 mod discovery;
 mod events;
+mod input;
 mod normalize;
 pub mod profile;
 mod tool_results;
 mod transport;
 mod turns;
 mod wire;
+
+pub use input::validate_inputs;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -61,7 +64,7 @@ use crate::process::{Child, ChildStdin, Command, Stdio};
 use crate::{
     CommandScope, Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child,
 };
-use catalog::{apply_ultrathink, models_from_initialize, static_models, to_effort};
+use catalog::{models_from_initialize, static_models, to_effort};
 use normalize::Normalizer;
 use profile::{ClaudeLaunchProfile, ToolSelection};
 use wire::Frame;
@@ -458,6 +461,17 @@ impl ClaudeHarness {
             .model_options
             .remove(crate::LUNA_PROVIDER_AUTH_INSTANCE_OPTION);
         let exe = self.resolve_executable()?;
+        // One typed builder for every turn. It validates the exact bytes it
+        // sends, so an invalid or changed file rejects here, before a process
+        // or stdin line exists, and the caller keeps the draft envelope.
+        let first = input::user_line(
+            &request.prompt,
+            request.reasoning,
+            &request.attachments,
+            &request.input_items,
+        )
+        .await?;
+        tracing::info!(target: "luna_harness::claude", input = %first.manifest.summary(), "first user line");
         let tools = if title_only {
             ToolSelection::Disabled
         } else {
@@ -508,15 +522,6 @@ impl ClaudeHarness {
 
         // The initial prompt as the first stdin user line (streaming-input
         // mode). Ultrathink rides every user message — steers included.
-        // Staged image attachments are inlined as base64 image content blocks
-        // ahead of the text (verified against the real CLI); their path refs
-        // also ride the prompt text, so a skipped/unreadable file degrades to
-        // the old-app behavior (the agent opens the path with its Read tool).
-        let images = load_image_blocks(&request.attachments).await;
-        let first = wire::user_message_line_with_images(
-            &apply_ultrathink(request.reasoning, &request.prompt),
-            &images,
-        );
         let permission_mode = request
             .permission_policy
             .as_ref()
@@ -532,7 +537,7 @@ impl ClaudeHarness {
         // the CC-02 turn ledger correlates results against the same uuid.
         let mut norm = Normalizer::new();
         let (first, initial_uuid) =
-            transport.stamp_user_line(first, transport::InputKind::Initial, None);
+            transport.stamp_user_line(first.line, transport::InputKind::Initial, None);
         norm.native
             .ledger
             .register_native(turns::SendKind::Initial, None, initial_uuid);
@@ -580,79 +585,6 @@ impl StdinMsg {
             written: None,
         }
     }
-}
-
-/// Anthropic's API caps inline images at 5MB of raw bytes; larger files stay
-/// path refs only.
-const MAX_INLINE_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
-
-/// Media type for an inline image block — extension first, magic bytes as the
-/// fallback (pasted screenshots may carry odd names). Only the API-supported
-/// inline types map; anything else (svg/bmp/tiff/…) returns `None`.
-fn image_media_type(path: &std::path::Path, bytes: &[u8]) -> Option<&'static str> {
-    let by_ext = match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("png") => Some("image/png"),
-        Some("jpg" | "jpeg") => Some("image/jpeg"),
-        Some("gif") => Some("image/gif"),
-        Some("webp") => Some("image/webp"),
-        _ => None,
-    };
-    by_ext.or(match bytes {
-        [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
-        [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
-        [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
-        [
-            b'R',
-            b'I',
-            b'F',
-            b'F',
-            _,
-            _,
-            _,
-            _,
-            b'W',
-            b'E',
-            b'B',
-            b'P',
-            ..,
-        ] => Some("image/webp"),
-        _ => None,
-    })
-}
-
-/// Load `RunRequest::attachments` into inline image blocks, best-effort: an
-/// unreadable, oversized, or unsupported file is skipped — its path ref still
-/// rides the prompt text — never fatal to the run.
-async fn load_image_blocks(paths: &[String]) -> Vec<wire::ImageBlock> {
-    use base64::Engine as _;
-    let mut blocks = Vec::new();
-    for path in paths {
-        let bytes = match tokio::fs::read(path).await {
-            Ok(bytes) => bytes,
-            Err(err) => {
-                tracing::warn!(target: "luna_harness::claude", %path, error = %err, "attachment unreadable; path ref only");
-                continue;
-            }
-        };
-        if bytes.len() as u64 > MAX_INLINE_IMAGE_BYTES {
-            tracing::debug!(target: "luna_harness::claude", %path, "attachment over inline cap; path ref only");
-            continue;
-        }
-        let Some(media_type) = image_media_type(std::path::Path::new(path), &bytes) else {
-            tracing::debug!(target: "luna_harness::claude", %path, "attachment not an inline-supported image; path ref only");
-            continue;
-        };
-        blocks.push(wire::ImageBlock {
-            media_type: media_type.to_string(),
-            data: base64::engine::general_purpose::STANDARD.encode(&bytes),
-        });
-    }
-    blocks
 }
 
 /// Owns the child's stdin; a write failure (EPIPE after the child died) is
@@ -855,10 +787,32 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
-                    let prompt = apply_ultrathink(reasoning, &msg.prompt);
+                    let line = match input::user_line(
+                        &msg.prompt,
+                        reasoning,
+                        &msg.attachments,
+                        &msg.input_items,
+                    )
+                    .await
+                    {
+                        Ok(input) => {
+                            tracing::info!(target: "luna_harness::claude", input = %input.manifest.summary(), "steer user line");
+                            input.line
+                        }
+                        Err(error) => {
+                            // Nothing was written: explicit steering reports a
+                            // recoverable rejection. Warm routes never carry
+                            // typed inputs to Claude (engine `can_route`).
+                            tracing::error!(target: "luna_harness::claude", %error, "steer input rejected before write");
+                            if let Some(tx) = msg.acceptance {
+                                let _ = tx.send(crate::SteerAcceptance::Rejected(error.to_string()));
+                            }
+                            continue 'main;
+                        }
+                    };
                     let explicit = msg.delivery == crate::SteerDelivery::RequireActiveTurn;
                     let (line, uuid) = transport.stamp_user_line(
-                        wire::user_message_line(&prompt),
+                        line,
                         if explicit { transport::InputKind::Explicit } else { transport::InputKind::Ordinary },
                         msg.message_id.clone(),
                     );
