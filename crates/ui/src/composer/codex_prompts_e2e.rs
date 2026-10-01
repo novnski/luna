@@ -23,9 +23,17 @@ fn act(
     window.update(cx, |_, window, cx| f(window, cx))
 }
 
-fn capture(window: AnyWindowHandle, cx: &mut AsyncApp, path: &Path) -> anyhow::Result<()> {
+/// Capture after the question panel's enter animation has settled.
+async fn capture(window: AnyWindowHandle, cx: &mut AsyncApp, path: &Path) -> anyhow::Result<()> {
+    for _ in 0..8 {
+        act(window, cx, |window, cx| {
+            window.draw(cx).clear();
+        })?;
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(120))
+            .await;
+    }
     window.update(cx, |_, window, cx| -> anyhow::Result<()> {
-        window.draw(cx).clear();
         window.draw(cx).clear();
         window.render_to_image()?.save(path)?;
         Ok(())
@@ -179,7 +187,7 @@ pub async fn run_codex_prompts_e2e(
             at_ms: chrono::Utc::now().timestamp_millis(),
         }),
     )?;
-    capture(window, cx, &output.join("01-retry-notice.png"))?;
+    capture(window, cx, &output.join("01-retry-notice.png")).await?;
     evidence.insert(
         "retryNotice".into(),
         cx.update(|cx| json!(state.read(cx).provider_notice)),
@@ -198,7 +206,7 @@ pub async fn run_codex_prompts_e2e(
         ),
         None,
     )?;
-    capture(window, cx, &output.join("02-mcp-tool-approval.png"))?;
+    capture(window, cx, &output.join("02-mcp-tool-approval.png")).await?;
     let readback = wizard_readback(&composer, cx);
     anyhow::ensure!(
         readback["header"] == "Approve MCP tool"
@@ -227,7 +235,7 @@ pub async fn run_codex_prompts_e2e(
         ),
         None,
     )?;
-    capture(window, cx, &output.join("03-subagent-approval.png"))?;
+    capture(window, cx, &output.join("03-subagent-approval.png")).await?;
     let readback = wizard_readback(&composer, cx);
     anyhow::ensure!(
         readback["header"] == "Approve command · sub-agent alpha",
@@ -248,7 +256,7 @@ pub async fn run_codex_prompts_e2e(
         ),
         None,
     )?;
-    capture(window, cx, &output.join("04-request-input-options.png"))?;
+    capture(window, cx, &output.join("04-request-input-options.png")).await?;
     let readback = wizard_readback(&composer, cx);
     anyhow::ensure!(
         readback["descriptions"] == json!(["Calm", "Loud"])
@@ -272,7 +280,7 @@ pub async fn run_codex_prompts_e2e(
             })
         })
     })?;
-    capture(window, cx, &output.join("05-request-input-secret.png"))?;
+    capture(window, cx, &output.join("05-request-input-secret.png")).await?;
     let readback = wizard_readback(&composer, cx);
     anyhow::ensure!(
         readback["secret"] == true

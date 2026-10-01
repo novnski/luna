@@ -3657,7 +3657,7 @@ async fn mcp_tool_call_approval_renders_tool_context_and_sends_persist() {
             tool.arguments,
             vec![
                 ("Title".to_owned(), "Bug".to_owned()),
-                ("Labels".to_owned(), "[\n  \"p1\"\n]".to_owned())
+                ("Labels".to_owned(), "[\"p1\"]".to_owned())
             ]
         );
         let labels: Vec<_> = details.choices.iter().map(|c| c.label.as_str()).collect();

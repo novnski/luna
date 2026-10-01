@@ -48,7 +48,7 @@ pub(super) fn tool_approval(params: &Value) -> Option<ToolApproval> {
     };
     let render = |value: &Value| match value {
         Value::String(text) => text.clone(),
-        other => serde_json::to_string_pretty(other).unwrap_or_else(|_| other.to_string()),
+        other => other.to_string(),
     };
     let mut arguments: Vec<(String, String)> = meta
         .get("tool_params_display")
