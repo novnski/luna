@@ -11,7 +11,148 @@ read -r first || exit 1
 
 emit() { printf '%s\n' "$1"; }
 
+# --- CLI 2.1.286 control-transport shapes (cc01) -----------------------------
+# From the installed 2.1.286 binary's SDK schema and initialization-only
+# handshakes (no model turn). system/init advertises protocol capabilities.
+INIT_286='{"type":"system","subtype":"init","cwd":"/tmp","session_id":"sess-cc01","tools":["Bash","Read"],"mcp_servers":[],"model":"claude-fable-5","permissionMode":"acceptEdits","slash_commands":[],"apiKeySource":"none","claude_code_version":"2.1.286","output_style":"default","agents":[],"skills":[],"plugins":[],"capabilities":["interrupt_receipt_v1","interrupt_cancel_queued_v1","msg_lifecycle_v1"],"uuid":"a0000000-0000-4000-8000-000000000001"}'
+# End the scenario with a visible failure result (quotes stripped from $1).
+fail() {
+  msg=$(printf '%s' "$1" | tr -d '"\\' | cut -c1-300)
+  emit "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"errors\":[\"$msg\"],\"usage\":{\"input_tokens\":0,\"output_tokens\":0},\"session_id\":\"sess-cc01\"}"
+  exit 0
+}
+ok() {
+  emit "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"$1\",\"errors\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"terminal_reason\":\"completed\",\"session_id\":\"sess-cc01\"}"
+}
+uuid_of() { printf '%s\n' "$1" | sed -n 's/.*"uuid":"\([0-9a-f-]\{36\}\)".*/\1/p'; }
+lifecycle() {
+  emit "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$1\",\"state\":\"$2\",\"uuid\":\"b0000000-0000-4000-8000-000000000002\",\"session_id\":\"sess-cc01\"}"
+}
+delta() {
+  emit "{\"type\":\"stream_event\",\"parent_tool_use_id\":null,\"event\":{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"$1\"}},\"session_id\":\"sess-cc01\"}"
+}
+
 case "$first" in
+
+*scenario:cc01-unknown-controls*)
+  emit "$INIT_286"
+  # Words after the scenario name: inbound subtypes the test reads from the
+  # compatibility ledger as ones LUNA must refuse explicitly.
+  subtypes=$(printf '%s\n' "$first" | sed 's/.*scenario:cc01-unknown-controls\([^"]*\)".*/\1/')
+  [ -n "$subtypes" ] || fail "no subtypes supplied"
+  n=0
+  for st in $subtypes; do
+    n=$((n+1))
+    emit "{\"type\":\"control_request\",\"request_id\":\"cr-u$n\",\"request\":{\"subtype\":\"$st\"}}"
+    read -r reply || exit 1
+    case "$reply" in *'"type":"control_response"'*) ;; *) fail "not a control_response for $st: $reply" ;; esac
+    case "$reply" in *"\"request_id\":\"cr-u$n\""*) ;; *) fail "reply for $st has the wrong id: $reply" ;; esac
+    case "$reply" in *'"subtype":"error"'*) ;; *) fail "reply for $st is not an error: $reply" ;; esac
+    case "$reply" in *"Unsupported control request subtype: $st"*) ;; *) fail "reply for $st lacks the reason: $reply" ;; esac
+  done
+  # Noise LUNA must not answer: a duplicate id, a request without an id, a
+  # stray response, a withdrawal of an unknown id, a heartbeat.
+  emit '{"type":"control_request","request_id":"cr-u1","request":{"subtype":"hook_callback"}}'
+  emit '{"type":"control_request","request":{"subtype":"hook_callback"}}'
+  emit '{"type":"control_response","response":{"subtype":"success","request_id":"never-issued","response":{}}}'
+  emit '{"type":"control_cancel_request","request_id":"never-issued"}'
+  emit '{"type":"keep_alive"}'
+  emit '{"type":"control_request","request_id":"cr-last","request":{"subtype":"luna_future_subtype"}}'
+  read -r reply || exit 1
+  case "$reply" in *'"request_id":"cr-last"'*) ;; *) fail "answered noise before cr-last: $reply" ;; esac
+  delta "controls answered"
+  ok "controls-ok"
+  ;;
+
+*scenario:cc01-cancel-approval*)
+  emit "$INIT_286"
+  emit '{"type":"control_request","request_id":"cr-perm","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"touch cc01-should-not-run"},"tool_use_id":"toolu_cc01"}}'
+  # The CLI withdraws its prompt (e.g. the turn was interrupted elsewhere).
+  emit '{"type":"control_cancel_request","request_id":"cr-perm"}'
+  # The test answers "Allow once" late, inside this window.
+  sleep 1
+  emit '{"type":"control_request","request_id":"cr-after","request":{"subtype":"luna_future_subtype"}}'
+  read -r reply || exit 1
+  case "$reply" in *'"request_id":"cr-after"'*) ;; *) fail "late reply after withdrawal: $reply" ;; esac
+  ok "cancel-ok"
+  ;;
+
+*scenario:cc01-lifecycle-steer*)
+  emit "$INIT_286"
+  uuid0=$(uuid_of "$first")
+  [ -n "$uuid0" ] || fail "opening prompt carried no uuid"
+  lifecycle "$uuid0" queued
+  lifecycle "$uuid0" started
+  delta "first"
+  read -r steer || exit 1
+  suuid=$(uuid_of "$steer")
+  [ -n "$suuid" ] || fail "steer carried no uuid"
+  [ "$suuid" != "$uuid0" ] || fail "uuid reused across inputs"
+  lifecycle "$suuid" queued
+  # A foreign uuid (another client's prompt) must not settle anything.
+  lifecycle "c0000000-0000-4000-8000-000000000003" started
+  lifecycle "$suuid" started
+  lifecycle "$suuid" started
+  delta "steered"
+  lifecycle "$suuid" completed
+  ok "lifecycle-ok"
+  lifecycle "$uuid0" completed
+  ;;
+
+*scenario:cc01-lifecycle-refused*)
+  emit "$INIT_286"
+  delta "first"
+  read -r steer || exit 1
+  suuid=$(uuid_of "$steer")
+  [ -n "$suuid" ] || fail "steer carried no uuid"
+  lifecycle "$suuid" refused
+  delta "after"
+  ok "refused-ok"
+  ;;
+
+*scenario:cc01-lifecycle-silent*)
+  emit "$INIT_286"
+  delta "first"
+  read -r steer || exit 1
+  sleep 3
+  ok "silent-ok"
+  ;;
+
+*scenario:cc01-stop-cancels-queued*)
+  emit "$INIT_286"
+  delta "working"
+  read -r steer || exit 1
+  suuid=$(uuid_of "$steer")
+  read -r ctl || exit 1
+  rid=$(printf '%s\n' "$ctl" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"still_queued\":[],\"cancelled\":[\"$suuid\"]}}}"
+  lifecycle "$suuid" cancelled
+  emit '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["[ede_diagnostic] turn aborted (interrupt) stop_reason=null"],"usage":{"input_tokens":1,"output_tokens":1},"terminal_reason":"aborted_streaming","session_id":"sess-cc01"}'
+  while read -r _; do :; done
+  ;;
+
+*scenario:cc01-interrupt-receipt*)
+  trap 'printf term > sigterm-marker; exit 143' TERM
+  emit "$INIT_286"
+  delta "working"
+  read -r ctl || exit 1
+  printf '%s\n' "$ctl" > interrupt-request.json
+  rid=$(printf '%s\n' "$ctl" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"still_queued\":[],\"cancelled\":[]}}}"
+  emit '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["[ede_diagnostic] turn aborted (interrupt) stop_reason=null"],"usage":{"input_tokens":1,"output_tokens":1},"terminal_reason":"aborted_streaming","session_id":"sess-cc01"}'
+  # Drain: LUNA must end input before sending any signal.
+  while read -r _; do :; done
+  printf eof > drained-marker
+  exit 0
+  ;;
+
+*scenario:cc01-auth-variants*)
+  emit "$INIT_286"
+  emit '{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":500,"error_status":529,"error":"overloaded","uuid":"d0000000-0000-4000-8000-000000000004","session_id":"sess-cc01"}'
+  emit '{"type":"auth_status","isAuthenticating":false,"output":[],"error":"token expired","uuid":"d0000000-0000-4000-8000-000000000005","session_id":"sess-cc01"}'
+  emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[]},"error":"verification_required","session_id":"sess-cc01"}'
+  emit '{"type":"result","subtype":"error_luna_future_kind","is_error":true,"errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-cc01"}'
+  ;;
 
 *scenario:runtime-instructions*)
   [ "$LUNA_THREAD_ID" = 'thread-a' ] || exit 1

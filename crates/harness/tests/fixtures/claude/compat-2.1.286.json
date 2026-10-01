@@ -1,0 +1,96 @@
+{
+  "schema": "luna.claude.compat-ledger/v1",
+  "cli": {
+    "version": "2.1.286",
+    "build_time": "2026-09-30T15:45:16Z",
+    "darwin_arm64_sha256": "75e3016e9d2570767b08e43a7467d4817a4f149232c169ca295f2c95fef21433",
+    "sources": [
+      "zod SDK schema descriptions embedded in the installed binary (strings)",
+      "initialization-only control handshakes, no user message: evidence/cc01-transport/probes/run-1",
+      "@anthropic-ai/claude-agent-sdk 0.3.276 sdk.mjs dispatch (the version T3 pins)"
+    ]
+  },
+  "launch": {
+    "transport_flags": ["--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--thinking-display", "summarized", "--permission-prompt-tool", "stdio"],
+    "note": "The Agent SDK spawns the same CLI with the same --output-format/--input-format stream-json and --permission-prompt-tool stdio; every SDK Query method is a control_request on this stream.",
+    "permission_args": {
+      "ask": ["--restricted", "--permission-mode", "acceptEdits"],
+      "auto": ["--restricted", "--permission-mode", "auto"],
+      "full": ["--permission-mode", "bypassPermissions", "--dangerously-skip-permissions"]
+    },
+    "policy_observations": {
+      "ask_initialize_current_permission_mode": "acceptEdits",
+      "auto_initialize_current_permission_mode": "auto",
+      "set_permission_mode_bypass_under_restricted": "error, error_code=bypass_restricted, 'bypassPermissions not supported in restricted mode'",
+      "owner_of_ask_auto_settings_gap": "cc00-baseline (G1)"
+    }
+  },
+  "capabilities": {
+    "system_init": ["interrupt_receipt_v1", "interrupt_cancel_queued_v1", "msg_lifecycle_v1"],
+    "system_init_evidence": "live 2.1.228 capture (tests/fixtures/claude/live-2.1.228-background-subagent.jsonl) and the 2.1.286 binary's advertised list",
+    "initialize_response_observed": ["ui_surface_v1"],
+    "other_known_names": ["task_list_restore_v1", "task_list_restored_v1", "mcp_tool_ui_meta_v1", "mcp_read_resource_v1", "queued_notifications"],
+    "luna_uses": {
+      "interrupt_receipt_v1": "decode still_queued on the interrupt reply",
+      "interrupt_cancel_queued_v1": "Stop always sends cancel_queued:true (documented as ignored by older CLIs); cancelled uuids reject unreceipted explicit steers",
+      "msg_lifecycle_v1": "uuid-stamped stdin user lines; explicit steer acceptance waits for queued, incorporation needs started"
+    },
+    "rule": "feature-detect from the advertised set; never version-sniff; unknown names are retained and ignored"
+  },
+  "inbound_requests": [
+    {"subtype": "can_use_tool", "luna": "handled", "detail": "approval through the engine input bridge; AskUserQuestion answers via updatedInput; Full allows"},
+    {"subtype": "hook_callback", "luna": "unsupported_error", "detail": "LUNA registers no SDK hooks in initialize, so this is never expected"},
+    {"subtype": "mcp_message", "luna": "unsupported_error", "detail": "no SDK-hosted MCP servers registered; candidate transport for the CC-07 callable bridge"},
+    {"subtype": "elicitation", "luna": "unsupported_error", "detail": "MCP form/URL elicitation; mapping owned by cc03-permissions"},
+    {"subtype": "request_user_dialog", "luna": "unsupported_error", "detail": "native dialogs; mapping owned by cc03-permissions"},
+    {"subtype": "oauth_token_refresh", "luna": "unsupported_error", "detail": "only sent to hosts that supplied an OAuth token"},
+    {"subtype": "host_auth_token_refresh", "luna": "unsupported_error", "detail": "hosted/remote sessions only"},
+    {"subtype": "remote_control_work_secret", "luna": "unsupported_error", "detail": "Remote Control hosts only"},
+    {"subtype": "luna_future_subtype", "luna": "unsupported_error", "detail": "synthetic future subtype: every unrecognised subtype gets an explicit error reply"}
+  ],
+  "inbound_frames": [
+    {"type": "control_cancel_request", "luna": "handled", "detail": "aborts the in-flight waiter for that request id; no late reply; unknown ids ignored"},
+    {"type": "control_response", "luna": "handled", "detail": "correlated to LUNA's outbound request id; unmatched/late replies ignored"},
+    {"type": "command_lifecycle", "luna": "handled", "detail": "queued/started/completed/cancelled/discarded/refused for LUNA-minted uuids; foreign uuids and duplicates ignored"},
+    {"type": "keep_alive", "luna": "ignored"},
+    {"type": "auth_status", "luna": "observe_only", "detail": "falls to wire Frame::Other; sign-in failures surface through assistant error codes"},
+    {"type": "transcript_mirror", "luna": "observe_only"},
+    {"type": "conversation_reset", "luna": "not_decoded", "owner": "cc02-events / cc10-history"},
+    {"type": "tool_progress", "luna": "not_decoded", "owner": "cc02-events"},
+    {"type": "tool_use_summary", "luna": "not_decoded", "owner": "cc02-events"},
+    {"type": "prompt_suggestion", "luna": "not_decoded", "owner": "cc02-events"},
+    {"type": "active_goal", "luna": "not_decoded", "owner": "cc14-goals-review"},
+    {"type": "autocompact_state", "luna": "not_decoded", "owner": "cc02-events"}
+  ],
+  "outbound_requests": [
+    {"subtype": "initialize", "luna": "sent", "where": "command/model discovery probe only (cc00 owns its flags)", "probe": "success; capabilities subset, current_permission_mode, models, commands"},
+    {"subtype": "interrupt", "luna": "sent", "where": "Stop", "shape": {"request_id": "luna-interrupt-<n>", "cancel_queued": true}, "probe": "idle: {still_queued:[]}; with cancel_queued: {still_queued:[], cancelled:[]}"},
+    {"subtype": "set_permission_mode", "luna": "not_sent", "probe": "same mode: {mode}; bypassPermissions under --restricted: error bypass_restricted", "candidate_owner": "cc06-models-usage"},
+    {"subtype": "set_model", "luna": "not_sent", "note": "error_code values: invalid_request, catalog_unknown, restricted_by_org, unavailable_for_account, not_offered, alias_1m_disabled, alias_1m_unsupported, blocked_by_hook, check_failed", "candidate_owner": "cc06-models-usage"},
+    {"subtype": "set_max_thinking_tokens", "luna": "not_sent", "probe": "null reset: success, empty payload"},
+    {"subtype": "apply_flag_settings", "luna": "not_sent", "probe": "{}: success, empty payload"},
+    {"subtype": "get_settings", "luna": "not_sent", "probe": "success: {effective, sources, applied:{model, effort, advisor, ultracode, ultracodeRequested, ultracodeAvailable}}; isolated config: effective {} and sources []"},
+    {"subtype": "mcp_status", "luna": "not_sent", "probe": "success: {mcpServers:[]}", "candidate_owner": "cc11-mcp-inventory"},
+    {"subtype": "cancel_async_message", "luna": "not_sent", "probe": "unknown uuid: {cancelled:false}"},
+    {"subtype": "stop_task", "luna": "not_sent", "probe": "unknown task id: success, empty payload (no error)", "candidate_owner": "cc08-native-agents"},
+    {"subtype": "get_binary_version", "luna": "not_sent", "probe": "success: {version:'2.1.286', buildTime}"},
+    {"subtype": "rewind_files", "luna": "not_sent", "candidate_owner": "cc10-history"},
+    {"subtype": "get_context_usage", "luna": "not_sent", "candidate_owner": "cc06-models-usage"},
+    {"subtype": "reload_plugins", "luna": "not_sent", "candidate_owner": "cc12-extensions"},
+    {"subtype": "unknown subtype", "luna": "n/a", "probe": "error: 'Unsupported control request subtype: <name>' (the CLI's own unknown-request reply, same wording LUNA now uses)"}
+  ],
+  "errors": {
+    "assistant_error_codes": ["authentication_failed", "oauth_org_not_allowed", "account_on_hold", "verification_required", "billing_error", "rate_limit", "overloaded", "invalid_request", "model_not_found", "server_error", "unknown", "max_output_tokens", "cloud_credential_error"],
+    "assistant_error_codes_luna": "all mapped to readable wording; an unknown future code reads 'Claude error: <code>'",
+    "result_error_subtypes": ["error_during_execution", "error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"],
+    "result_error_subtypes_luna": "mapped; an unknown future subtype ends the turn Errored with fallback wording",
+    "rate_limit_event_status": ["allowed", "allowed_warning", "rejected"],
+    "rate_limit_event_luna": "rejected surfaces a readable error; allowed/allowed_warning stay quiet (warning display owned by cc06)",
+    "api_retry": "system/api_retry not surfaced (observe-only)"
+  },
+  "process": {
+    "idle_stdin_eof_exit": "exit 0 within ~7 ms (probe)",
+    "idle_sigterm_exit": "exit 143 within ~9 ms (probe)",
+    "luna_stop": "interrupt(cancel_queued) -> wait for the interrupted result -> close stdin -> wait up to kill_grace -> SIGTERM -> SIGKILL; an unresponsive CLI still escalates at interrupt_grace"
+  }
+}

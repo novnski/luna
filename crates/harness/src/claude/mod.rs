@@ -32,6 +32,7 @@
 
 pub mod catalog;
 mod normalize;
+mod transport;
 mod wire;
 
 use std::path::PathBuf;
@@ -568,6 +569,18 @@ impl ClaudeHarness {
             &apply_ultrathink(request.reasoning, &request.prompt),
             &images,
         );
+        let permission_mode = request
+            .permission_policy
+            .as_ref()
+            .map(|policy| policy.effective_mode)
+            .unwrap_or(luna_proto::PermissionMode::Ask);
+        let mut transport = transport::ControlChannel::new(
+            claude_permission_args(permission_mode)
+                .windows(2)
+                .find(|pair| pair[0] == "--permission-mode")
+                .map(|pair| pair[1]),
+        );
+        let (first, _) = transport.stamp_user_line(first, transport::InputKind::Initial, None);
         let _ = stdin_tx.send(StdinMsg::line(first));
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
@@ -579,11 +592,8 @@ impl ClaudeHarness {
             event_tx,
             controls,
             reasoning: request.reasoning,
-            permission_mode: request
-                .permission_policy
-                .as_ref()
-                .map(|policy| policy.effective_mode)
-                .unwrap_or(luna_proto::PermissionMode::Ask),
+            permission_mode,
+            transport,
             permission_policy: request.permission_policy.clone().unwrap_or_default(),
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
@@ -732,6 +742,8 @@ struct Session {
     controls: RunControls,
     reasoning: Option<ReasoningLevel>,
     permission_mode: luna_proto::PermissionMode,
+    /// Control-channel state: request ids, receipts, capabilities.
+    transport: transport::ControlChannel,
     permission_policy: luna_proto::PermissionPolicy,
     interrupt_grace: Duration,
     kill_grace: Duration,
@@ -751,6 +763,7 @@ async fn run_session(session: Session) {
         controls,
         reasoning,
         permission_mode,
+        mut transport,
         permission_policy,
         interrupt_grace,
         kill_grace,
@@ -777,11 +790,28 @@ async fn run_session(session: Session) {
     let mut escalation: Option<tokio::task::JoinHandle<()>> = None;
 
     'main: loop {
+        let receipt_deadline = transport.next_deadline();
         tokio::select! {
             line = stdout_lines.next_line() => match line {
                 Ok(Some(line)) => {
                     let line = line.trim();
                     if line.is_empty() {
+                        continue;
+                    }
+                    if let transport::Intercept::Consumed(effects) = transport.intercept(line) {
+                        for user_message_id in effects.incorporated {
+                            // Exact native receipt: this steer's uuid drained into a turn.
+                            explicit_steer_unconfirmed = false;
+                            let (prev, next) = norm.rotate_for_steer();
+                            let ev = AgentEvent::Steered {
+                                user_message_id: Some(user_message_id),
+                                assistant_message_id: Some(prev),
+                                next_assistant_message_id: Some(next),
+                            };
+                            if event_tx.send(Ok(ev)).await.is_err() {
+                                break 'main;
+                            }
+                        }
                         continue;
                     }
                     let frame = match wire::parse_frame(line) {
@@ -792,11 +822,16 @@ async fn run_session(session: Session) {
                         }
                     };
                     if let Frame::ControlRequest(req) = frame {
-                        if title_only {
+                        if transport.admit_inbound(&req.request_id) != transport::Admission::Fresh {
+                            continue;
+                        }
+                        let request_id = req.request_id.clone();
+                        let waiter = if title_only && req.request.subtype == "can_use_tool" {
                             let line = control_response_line(&req.request_id, serde_json::json!({
                                 "behavior": "deny", "message": "Tools are disabled for title generation"
                             }));
                             let _ = stdin_tx.send(StdinMsg::line(line));
+                            None
                         } else {
                             handle_control_request(
                                 req,
@@ -804,8 +839,9 @@ async fn run_session(session: Session) {
                                 &permission_policy,
                                 &request_input,
                                 &stdin_tx,
-                            );
-                        }
+                            )
+                        };
+                        transport.track_inbound(&request_id, waiter);
                         continue;
                     }
                     for ev in norm.normalize(frame, interrupted) {
@@ -839,8 +875,13 @@ async fn run_session(session: Session) {
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
                     let prompt = apply_ultrathink(reasoning, &msg.prompt);
-                    let line = wire::user_message_line(&prompt);
-                    if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
+                    let explicit = msg.delivery == crate::SteerDelivery::RequireActiveTurn;
+                    let (line, uuid) = transport.stamp_user_line(
+                        wire::user_message_line(&prompt),
+                        if explicit { transport::InputKind::Explicit } else { transport::InputKind::Ordinary },
+                        msg.message_id.clone(),
+                    );
+                    if explicit {
                         if explicit_steer_unconfirmed {
                             if let Some(tx) = msg.acceptance {
                                 let _ = tx.send(crate::SteerAcceptance::Rejected(
@@ -880,9 +921,7 @@ async fn run_session(session: Session) {
                         match written {
                             Ok(Ok(())) => {
                                 explicit_steer_unconfirmed = true;
-                                if let Some(tx) = msg.acceptance {
-                                    let _ = tx.send(crate::SteerAcceptance::Accepted);
-                                }
+                                transport.explicit_written(&uuid, msg.acceptance);
                             }
                             Ok(Err(error)) => {
                                 if let Some(tx) = msg.acceptance {
@@ -924,10 +963,14 @@ async fn run_session(session: Session) {
                 }
             },
 
+            () = sleep_until(receipt_deadline), if receipt_deadline.is_some() => {
+                transport.expire_due(std::time::Instant::now());
+            },
+
             _ = interrupt.cancelled(), if !interrupt_sent => {
                 interrupt_sent = true;
                 interrupted = true;
-                let _ = stdin_tx.send(StdinMsg::line(wire::interrupt_request_line("int_1")));
+                let _ = stdin_tx.send(StdinMsg::line(transport.interrupt_line()));
                 // Escalate if the CLI doesn't wind down within the grace
                 // periods: SIGTERM (kills bash trees, runs SessionEnd hooks),
                 // then SIGKILL. Aborted once the child is reaped.
@@ -970,9 +1013,22 @@ async fn run_session(session: Session) {
         }
     }
 
+    transport.finish();
+    if done_after_interrupt {
+        // Stop = interrupt, then end input and let the CLI exit on its own
+        // before the SIGTERM → SIGKILL ladder.
+        let _ = stdin_tx.send(StdinMsg::Close);
+        transport::drain_exit(&mut child, kill_grace).await;
+    }
     shutdown_child(&mut child, kill_grace).await;
     if let Some(handle) = escalation {
         handle.abort();
+    }
+}
+
+async fn sleep_until(deadline: Option<std::time::Instant>) {
+    if let Some(deadline) = deadline {
+        tokio::time::sleep_until(deadline.into()).await;
     }
 }
 
@@ -996,24 +1052,23 @@ fn handle_control_request(
     permission_policy: &luna_proto::PermissionPolicy,
     request_input: &Arc<RequestInputFn>,
     stdin_tx: &mpsc::UnboundedSender<StdinMsg>,
-) {
+) -> Option<tokio::task::AbortHandle> {
     if req.request.subtype != "can_use_tool" {
-        tracing::debug!(
-            target: "luna_harness::claude",
-            "unhandled control_request subtype: {}", req.request.subtype
-        );
-        return;
+        // Never leave the CLI waiting on a request LUNA cannot serve.
+        let line = transport::unsupported_reply(&req.request_id, &req.request.subtype);
+        let _ = stdin_tx.send(StdinMsg::line(line));
+        return None;
     }
     if req.request.tool_name != "AskUserQuestion" {
         if permission_mode == luna_proto::PermissionMode::Full {
             let line = control_response_line(&req.request_id, allow_response(req.request.input));
             let _ = stdin_tx.send(StdinMsg::line(line));
-            return;
+            return None;
         }
         let request_input = Arc::clone(request_input);
         let stdin_tx = stdin_tx.clone();
         let permission_policy = permission_policy.clone();
-        tokio::spawn(async move {
+        let waiter = tokio::spawn(async move {
             let summary = format!("Claude requests the {} tool", req.request.tool_name);
             let question = UserInputQuestion {
                 id: req.request_id.clone(),
@@ -1067,11 +1122,11 @@ fn handle_control_request(
             let line = control_response_line(&req.request_id, response);
             let _ = stdin_tx.send(StdinMsg::line(line));
         });
-        return;
+        return Some(waiter.abort_handle());
     }
     let request_input = Arc::clone(request_input);
     let stdin_tx = stdin_tx.clone();
-    tokio::spawn(async move {
+    let waiter = tokio::spawn(async move {
         let request_id = req.request_id;
         let input = req.request.input;
         let questions = parse_questions(&input);
@@ -1089,6 +1144,7 @@ fn handle_control_request(
         let line = control_response_line(&request_id, allow_response(updated));
         let _ = stdin_tx.send(StdinMsg::line(line));
     });
+    Some(waiter.abort_handle())
 }
 
 /// Parse Claude's `AskUserQuestion` tool input into [`UserInputQuestion`]s

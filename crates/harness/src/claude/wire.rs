@@ -364,16 +364,6 @@ pub(crate) fn allow_response(updated_input: Value) -> Value {
     json!({ "behavior": "allow", "updatedInput": updated_input })
 }
 
-/// Client→CLI interrupt control request.
-pub(crate) fn interrupt_request_line(request_id: &str) -> String {
-    json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": { "subtype": "interrupt" },
-    })
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
