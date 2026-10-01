@@ -130,6 +130,12 @@ fn main() -> anyhow::Result<()> {
         project.join(".fake-claude-mcp.json"),
         json!({"state": state_path, "log": temp.path().join("fake-claude-log.jsonl")}).to_string(),
     )?;
+    // Synthetic provider-native account; no credential exists anywhere here.
+    std::fs::create_dir_all(&providers)?;
+    std::fs::write(
+        providers.join("claude.json"),
+        json!({"oauthAccount": {"accountUuid": "cc11-fixture", "emailAddress": "cc11@example.test"}}).to_string(),
+    )?;
     let runtime = tokio::runtime::Runtime::new()?;
     let registry = luna_engine::HarnessRegistry::new();
     registry.register(Arc::new(
@@ -181,8 +187,8 @@ fn main() -> anyhow::Result<()> {
     )?;
     // A real Claude run on the production path: its own init frame is the
     // selected chat's session evidence.
-    let memory = luna_rpc::memory_client(core.rpc_service());
     runtime.block_on(async {
+        let memory = luna_rpc::memory_client(core.rpc_service());
         core.doc_host.open(TASK)?;
         core.doc_host.queue_command_with_id_and_transfers(
             TASK,

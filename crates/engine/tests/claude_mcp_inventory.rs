@@ -80,7 +80,7 @@ fn state() -> Value {
 }
 
 struct World {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     core: EngineCore,
     client: RpcClient,
     project: PathBuf,
@@ -97,6 +97,14 @@ fn world() -> World {
     std::fs::write(
         project.join(".fake-claude-mcp.json"),
         json!({"state": state_path, "log": dir.path().join("log.jsonl")}).to_string(),
+    )
+    .unwrap();
+    // A synthetic provider-native account: the engine refuses Claude runs
+    // without one (no real credential exists anywhere in this test).
+    std::fs::create_dir_all(&providers).unwrap();
+    std::fs::write(
+        providers.join("claude.json"),
+        json!({"oauthAccount": {"accountUuid": "cc11-fixture", "emailAddress": "cc11@example.test"}}).to_string(),
     )
     .unwrap();
     let registry = HarnessRegistry::new();
@@ -125,7 +133,7 @@ fn world() -> World {
         .unwrap();
     let client = luna_rpc::memory_client(core.rpc_service());
     World {
-        _dir: dir,
+        dir,
         core,
         client,
         project,
@@ -410,10 +418,19 @@ async fn claude_effective_mcp_inventory_actions_and_resources() {
         if view.items.iter().any(|item| item.attached.is_some()) {
             break view;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "no session evidence: {view:?}"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            let doc = world.core.doc_host.open(TASK).unwrap();
+            let identity = client
+                .call(methods::GET_TASK_IDENTITY, json!({"taskId": TASK}))
+                .await;
+            panic!(
+                "no session evidence: {view:?}\nentries: {:#?}\ncommands: {:#?}\nchat: {:#?}\nidentity: {identity:?}\nfake log: {}",
+                doc.doc().read_entries(),
+                doc.doc().read_commands(),
+                world.core.workspace.chat(TASK),
+                std::fs::read_to_string(world.dir.path().join("log.jsonl")).unwrap_or_default()
+            );
+        }
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     let session_demo = mcp(&attached, "userdemo");
