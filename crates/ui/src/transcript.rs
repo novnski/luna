@@ -13575,4 +13575,17 @@ impl Transcript {
         self.list.scroll_to(gpui::ListOffset::default());
         cx.notify();
     }
+
+    /// Pin every collapsible tool group open, without the fold tween, so a
+    /// capture of a completed turn shows its chips.
+    pub fn fixture_open_tool_groups(&mut self, cx: &mut Context<Self>) {
+        for row in &self.rows {
+            if matches!(row.kind, RowKind::ToolGroup { .. }) {
+                let fold = self.folds.entry(row.id.clone()).or_default();
+                fold.open = Some(true);
+                fold.toggled_at = None;
+            }
+        }
+        cx.notify();
+    }
 }

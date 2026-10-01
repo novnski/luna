@@ -428,6 +428,8 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                     settle(cx, 700).await;
+                    shell.update(cx, |shell, _, cx| shell.fixture_open_tool_groups(cx))?;
+                    settle(cx, 500).await;
                     capture(shell.into(), cx, output.join("01-hook-chips.png"))?;
                     let tools = parts["tools"].as_array().cloned().unwrap_or_default();
                     let find = |id: &str| tools.iter().find(|t| t["id"] == id).cloned().unwrap_or_default();
