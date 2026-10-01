@@ -316,6 +316,7 @@ pub fn resolve_preview_for(
 ) -> PermissionPolicy {
     let mut request = RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: String::new(),
         harness: Some(harness),
@@ -344,6 +345,7 @@ mod tests {
     fn request(mode: PermissionMode) -> RunRequest {
         RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: "safe test".into(),
             harness: Some(HarnessId::Codex),

@@ -470,7 +470,13 @@ impl RunJournal {
                 if let Some(AgentEvent::ToolActivity { kind, text, .. }) = event {
                     if diff && *kind == luna_proto::ToolActivityKind::Patch {
                         found = Some(text.clone());
-                    } else if !diff && *kind != luna_proto::ToolActivityKind::Patch {
+                    } else if !diff
+                        && !matches!(
+                            kind,
+                            luna_proto::ToolActivityKind::Patch
+                                | luna_proto::ToolActivityKind::Progress
+                        )
+                    {
                         if *kind == luna_proto::ToolActivityKind::Stdin {
                             activity.push_str("\n[stdin]\n");
                         }

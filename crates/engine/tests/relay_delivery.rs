@@ -249,6 +249,7 @@ async fn rows_dark_command_delivers_over_the_peer_relay_exactly_once() {
     let command = serde_json::to_value(SessionCommandPayload::Run {
         request: RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: "over the relay".into(),
             harness: None,

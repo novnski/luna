@@ -626,6 +626,10 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                             *diff_stats = Some(vec![diff_stat(&diff)]);
                             *output = Some("Patch updated".into());
                         }
+                    } else if *kind == ToolActivityKind::Progress {
+                        // A provider status line for the running call (MCP
+                        // progress): display-only, replaced by the result.
+                        *output = Some(text.clone());
                     } else {
                         *output_bytes =
                             Some(output_bytes.unwrap_or(0).saturating_add(text.len() as u64));
@@ -871,6 +875,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::ProviderTurnStarted { .. }
         | AgentEvent::GoalChanged { .. }
         | AgentEvent::ChildStatus { .. }
+        | AgentEvent::ProviderNotice { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
 }

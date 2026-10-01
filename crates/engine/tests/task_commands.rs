@@ -509,6 +509,7 @@ fn task_config(model: &str) -> ChatConfig {
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: Some(HarnessId::Mock),

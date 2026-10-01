@@ -46,6 +46,7 @@ fn native_client() -> CodexNativeClient {
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
@@ -1160,6 +1161,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1209,6 +1211,7 @@ async fn explicit_steer_native_record_emits_one_correlated_boundary() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1244,6 +1247,7 @@ async fn explicit_steer_ignores_stale_and_duplicate_echoes() {
                 message_id: Some(message_id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(acceptance),
+                goal: None,
             })
             .await
             .expect("steer queued");
@@ -1291,6 +1295,7 @@ async fn explicit_steer_uncorrelated_ack_stays_unknown_without_replay() {
                 message_id: Some("uncorrelated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(accepted_tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -1327,6 +1332,7 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1362,6 +1368,7 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1404,6 +1411,7 @@ async fn explicit_steer_ack_only_remains_pending_without_boundary() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1440,6 +1448,7 @@ async fn rejected_steer_falls_back_to_a_follow_up_turn() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1891,6 +1900,7 @@ async fn next_turn_response_owns_approval_before_started_notification() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .unwrap();
@@ -2224,7 +2234,9 @@ async fn models_discovers_visible_catalog_with_pagination() {
 
 #[tokio::test]
 async fn resumed_parent_recovers_v1_and_v2_child_owners_without_replaying_chips() {
-    for mode in ["v1", "v2"] {
+    // "legacy": a non-paginated thread reads its history once (thread/read)
+    // instead of one rollout replay per thread/turns/list page.
+    for mode in ["v1", "v2", "legacy"] {
         let mut req = request("scenario:resumed-child");
         req.resume = Some(format!("resume-with-child-{mode}"));
         let (controls, _steer, _token) = controls("Yes");
@@ -2569,6 +2581,7 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
                 message_id: None,
                 delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                 acceptance: None,
+                goal: None,
             }).await.unwrap();
         }
         if turn == 2 {
@@ -2757,6 +2770,7 @@ async fn live_real_app_server_tool_and_steer() {
                     message_id: Some("luna-audit-live-steer".into()),
                     delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                     acceptance: Some(tx),
+                    goal: None,
                 }).await.unwrap();
                 acceptance = Some(rx);
                 sent = true;
@@ -3166,6 +3180,7 @@ async fn native_steering_reconciles_lost_ack_and_terminal_readback() {
                 message_id: Some("native-correlated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -3212,6 +3227,7 @@ async fn native_steering_records_multiple_ids_once_in_order() {
                 message_id: Some(id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -3432,7 +3448,6 @@ async fn generic_mcp_elicitation_roundtrips_typed_fields_and_actions() {
             "foreign"
                 | "bad-schema"
                 | "foreign-thread"
-                | "null-turn"
                 | "bad-default"
                 | "bad-required"
                 | "too-many"
@@ -3461,4 +3476,579 @@ async fn generic_mcp_elicitation_roundtrips_typed_fields_and_actions() {
         )
         .unwrap();
     }
+}
+
+// ---- send as goal (frames: evidence/goal-parity/probes, installed 0.159.0) ----
+
+fn goal_request(objective: &str) -> RunRequest {
+    let mut req = request(objective);
+    req.goal = Some(luna_proto::GoalStartRequest {
+        objective: objective.into(),
+        token_budget: None,
+    });
+    req
+}
+
+fn goal_event(
+    events: &[AgentEvent],
+    status: luna_proto::GoalStatus,
+    turn: Option<&str>,
+) -> Option<usize> {
+    events.iter().position(|event| {
+        matches!(event, AgentEvent::GoalChanged { goal: Some(goal), turn_id, .. }
+            if goal.status == status && turn_id.as_deref() == turn)
+    })
+}
+
+fn no_peer_errors(events: &[AgentEvent]) {
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Error { .. })),
+        "the fake Codex reported a protocol violation: {events:?}"
+    );
+}
+
+/// Cold "send as goal": no turn/start; Codex's own `turn/started` is adopted
+/// as the run's turn, and the model's completion arrives with its turn id.
+#[tokio::test]
+async fn goal_start_adopts_the_turn_codex_starts_itself() {
+    let (controls, _steer, _token) = controls("Yes");
+    let objective = "scenario:goal-start count to three";
+    let events = run_to_end(&harness(), goal_request(objective), controls).await;
+    no_peer_errors(&events);
+    let set = goal_event(&events, luna_proto::GoalStatus::Active, None).expect("goal set");
+    let started = events
+        .iter()
+        .position(|event| {
+            matches!(event, AgentEvent::ProviderTurnStarted { thread_id, turn_id }
+                if thread_id == "th-1" && turn_id == "goal-turn-1")
+        })
+        .expect("the server-started goal turn is adopted");
+    let complete = goal_event(
+        &events,
+        luna_proto::GoalStatus::Complete,
+        Some("goal-turn-1"),
+    )
+    .expect("completion carries the goal turn id");
+    assert!(set < started && started < complete, "{events:?}");
+    match &events[complete] {
+        AgentEvent::GoalChanged {
+            goal: Some(goal), ..
+        } => {
+            assert_eq!(goal.objective, objective);
+            assert_eq!(goal.time_used_seconds, 14);
+        }
+        other => panic!("{other:?}"),
+    }
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text.trim_end(), "1\n2\n3");
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Done {
+            status: DoneStatus::Completed,
+            result: None,
+            error: None,
+            session_id: Some("th-1".into()),
+        })
+    );
+}
+
+/// A cold goal on an existing thread clears the stale goal before
+/// `thread/resume` (else resume auto-starts the OLD goal's continuation) and
+/// freezes reasoning summaries into the thread (no turn/start carries them).
+#[tokio::test]
+async fn goal_start_on_a_resumed_thread_clears_before_loading_it() {
+    let (controls, _steer, _token) = controls("Yes");
+    let mut req = goal_request("scenario:goal-start after resume");
+    req.resume = Some("goal-resume".into());
+    let events = run_to_end(&harness(), req, controls).await;
+    no_peer_errors(&events);
+    assert!(
+        events.iter().any(|event| matches!(event, AgentEvent::SessionStarted { session_id, .. } if session_id == "goal-resume")),
+        "{events:?}"
+    );
+    assert!(
+        goal_event(
+            &events,
+            luna_proto::GoalStatus::Complete,
+            Some("goal-turn-1")
+        )
+        .is_some()
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+/// Codex accepts the goal but never starts a turn (Plan mode refuses
+/// automatic input): the run settles with an explanation, never Working.
+#[tokio::test]
+async fn goal_start_without_a_server_turn_settles_with_an_error() {
+    // SAFETY: only goal starts read this knob; no other test sets it.
+    unsafe { std::env::set_var("LUNA_CODEX_GOAL_TURN_START_MS", "300") };
+    let (controls, _steer, _token) = controls("Yes");
+    let events = run_to_end(
+        &harness(),
+        goal_request("scenario:goal-no-turn idle"),
+        controls,
+    )
+    .await;
+    assert!(goal_event(&events, luna_proto::GoalStatus::Active, None).is_some());
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ProviderTurnStarted { .. })),
+        "{events:?}"
+    );
+    match events
+        .iter()
+        .find(|event| matches!(event, AgentEvent::Done { .. }))
+    {
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            error: Some(error),
+            ..
+        }) => assert!(error.contains("did not start working"), "{error}"),
+        other => panic!("expected an errored Done: {other:?} in {events:?}"),
+    }
+}
+
+/// A correlated rejection reports Codex's message and never falls back to an
+/// ordinary turn.
+#[tokio::test]
+async fn rejected_goal_start_reports_the_provider_message() {
+    let (controls, _steer, _token) = controls("Yes");
+    let events = run_to_end(
+        &harness(),
+        goal_request("scenario:goal-rejected please"),
+        controls,
+    )
+    .await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ProviderTurnStarted { .. })),
+        "{events:?}"
+    );
+    match events.last() {
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            error: Some(error),
+            ..
+        }) => assert!(
+            error.contains("Codex rejected the goal: goals feature is disabled"),
+            "{error}"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Warm "send as goal": the loaded runtime runs clear+set on its own
+/// connection (no turn/start or turn/steer); acceptance reports the set, and
+/// the turn Codex starts arrives as an autonomous turn after the first Done.
+#[tokio::test]
+async fn warm_goal_starts_on_the_loaded_runtime() {
+    let (controls, steer, _token) = controls("Yes");
+    let mut stream = harness()
+        .run(request("scenario:goal-warm"), controls)
+        .await
+        .expect("run starts");
+    let mut events = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            let first_done = matches!(event, AgentEvent::Done { .. });
+            events.push(event);
+            if first_done {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("first turn ends");
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "Ship the warm goal".into(),
+            attachments: Vec::new(),
+            input_items: Vec::new(),
+            message_id: Some("goal-message".into()),
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: Some(accepted_tx),
+            goal: Some(luna_proto::GoalStartRequest {
+                objective: "Ship the warm goal".into(),
+                token_budget: None,
+            }),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), accepted_rx)
+            .await
+            .expect("acceptance in time")
+            .expect("acceptance sent"),
+        luna_harness::SteerAcceptance::Accepted
+    );
+    let rest = tokio::time::timeout(
+        Duration::from_secs(10),
+        stream.map(|r| r.expect("stream event")).collect::<Vec<_>>(),
+    )
+    .await
+    .expect("run finished in time");
+    no_peer_errors(&rest);
+    assert!(
+        !rest
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "a goal is not a steer: {rest:?}"
+    );
+    let started = rest
+        .iter()
+        .position(|event| matches!(event, AgentEvent::ProviderTurnStarted { turn_id, .. } if turn_id == "goal-turn-2"))
+        .expect("Codex's goal turn after the first Done");
+    let complete =
+        goal_event(&rest, luna_proto::GoalStatus::Complete, Some("goal-turn-2")).unwrap();
+    assert!(started < complete);
+    assert!(matches!(
+        rest.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// codex-adapter fixes. Failure cases were written first in
+// `evidence/codex-adapter/failure-cases.md`; the peer replays frame shapes
+// from codex-rs source and `evidence/codex-adapter/probes/`.
+// ---------------------------------------------------------------------------
+
+fn adapter_peer() -> CodexHarness {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-adapter-peer.py");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+    }
+    CodexHarness::new().with_executable(path)
+}
+
+fn peer_request(scenario: &str, home: &std::path::Path) -> RunRequest {
+    let mut request = computer_use_request(scenario, home);
+    request.auto_approve = false;
+    request.cwd = "/tmp".into();
+    request
+}
+
+/// Drive the peer to completion while `answer` decides each parked request.
+/// Returns the events and every (questions, sender) the adapter parked.
+async fn run_peer(
+    scenario: &str,
+    mut answer: impl FnMut(&[UserInputQuestion]) -> Option<Vec<UserInputAnswer>> + Send + 'static,
+) -> (Vec<AgentEvent>, Vec<ParkedApproval>) {
+    let home = tempfile::tempdir().unwrap();
+    let (controls, mut parked, _steer) = parked_computer_controls();
+    let mut stream = adapter_peer()
+        .run(peer_request(scenario, home.path()), controls)
+        .await
+        .expect("peer run starts");
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let kept_by_answerer = kept.clone();
+    let answerer = tokio::spawn(async move {
+        while let Some((questions, sender)) = parked.recv().await {
+            match answer(&questions) {
+                Some(answers) => {
+                    let _ = sender.send(answers);
+                    kept_by_answerer
+                        .lock()
+                        .unwrap()
+                        .push((questions, oneshot::channel().0));
+                }
+                None => kept_by_answerer.lock().unwrap().push((questions, sender)),
+            }
+        }
+    });
+    let events = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event.expect("stream event"));
+        }
+        events
+    })
+    .await
+    .expect("peer run settles");
+    answerer.abort();
+    let kept = std::mem::take(&mut *kept.lock().unwrap());
+    if let Some(directory) = std::env::var_os("LUNA_CODEX_ADAPTER_EVIDENCE_DIR") {
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let name: String = scenario
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let questions: Vec<_> = kept
+            .iter()
+            .map(|(questions, _)| questions.clone())
+            .collect();
+        std::fs::write(
+            directory.join(format!("{name}.json")),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "provider": "deterministic codex-adapter peer (codex-rs frame shapes)",
+                "scenario": scenario, "questions": questions, "events": events,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    (events, kept)
+}
+
+fn label_answer(
+    questions: &[UserInputQuestion],
+    pick: impl Fn(&UserInputQuestion) -> &str,
+) -> Vec<UserInputAnswer> {
+    questions
+        .iter()
+        .map(|question| UserInputAnswer {
+            question_id: question.id.clone(),
+            labels: vec![pick(question).to_owned()],
+        })
+        .collect()
+}
+
+fn peer_verified(events: &[AgentEvent]) -> bool {
+    events.iter().any(
+        |event| matches!(event, AgentEvent::TextDelta { text } if text.contains("peer-verified")),
+    ) && matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    )
+}
+
+#[tokio::test]
+async fn subagent_approval_and_null_turn_mcp_prompt_reach_the_user() {
+    let (events, parked) = run_peer("subagent:command", |questions| {
+        Some(label_answer(questions, |question| {
+            match question.header.as_str() {
+                "name" => "Ada",
+                _ if question.mcp.is_some() => "Accept",
+                _ => "Allow once",
+            }
+        }))
+    })
+    .await;
+    assert!(peer_verified(&events), "{events:?}");
+    // Ghost thread and stale child turn were declined without a card.
+    assert_eq!(parked.len(), 2, "{parked:#?}");
+    let approval = parked
+        .iter()
+        .flat_map(|(questions, _)| questions)
+        .find_map(|question| question.approval.as_ref().map(|a| (question, a)))
+        .expect("sub-agent approval card");
+    assert_eq!(approval.0.header, "Approve command · sub-agent alpha");
+    let details = approval.1.details.as_ref().unwrap();
+    assert_eq!(details.subagent.as_deref(), Some("alpha"));
+    assert_eq!(details.provider_thread_id.as_deref(), Some("child-alpha"));
+    assert_eq!(approval.1.turn_id.as_deref(), Some("child-turn-1"));
+    assert_eq!(approval.1.expires_at_ms, luna_proto::APPROVAL_NO_EXPIRY);
+    let mcp = parked
+        .iter()
+        .flat_map(|(questions, _)| questions)
+        .find_map(|question| question.mcp.as_ref())
+        .expect("child MCP prompt card");
+    assert_eq!(mcp.thread_id, "child-alpha");
+    assert_eq!(
+        mcp.turn_id, "child-turn-1",
+        "null turnId binds to the child's live turn"
+    );
+    assert_eq!(mcp.expires_at_ms, luna_proto::APPROVAL_NO_EXPIRY);
+}
+
+#[tokio::test]
+async fn subagent_approvals_close_on_resolution_and_child_turn_end() {
+    let (events, parked) = run_peer("subagent:closed", |_| None).await;
+    assert!(peer_verified(&events), "{events:?}");
+    assert_eq!(parked.len(), 2, "{parked:#?}");
+    for (questions, sender) in parked {
+        assert!(
+            sender.send(Vec::new()).is_err(),
+            "parked answer must close: {:?}",
+            questions[0].header
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_tool_call_approval_renders_tool_context_and_sends_persist() {
+    for (scenario, label) in [
+        ("mcp-tool:once", "Allow once"),
+        ("mcp-tool:session", "Allow for session"),
+        ("mcp-tool:always", "Always allow"),
+        ("mcp-tool:deny", "Deny"),
+        ("mcp-tool:cancel", "Cancel"),
+        ("mcp-tool:forged", "Always allow"),
+    ] {
+        let (events, parked) = run_peer(scenario, move |questions| {
+            Some(label_answer(questions, |_| label))
+        })
+        .await;
+        assert!(peer_verified(&events), "{scenario}: {events:?}");
+        assert_eq!(parked.len(), 1, "{scenario}");
+        let question = &parked[0].0[0];
+        assert!(question.mcp.is_none(), "an approval, not a data form");
+        assert_eq!(question.header, "Approve MCP tool");
+        let approval = question.approval.as_ref().unwrap();
+        assert_eq!(approval.summary, "fixture wants to run Create issue");
+        assert_eq!(approval.expires_at_ms, luna_proto::APPROVAL_NO_EXPIRY);
+        let details = approval.details.as_ref().unwrap();
+        let tool = details.tool.as_ref().unwrap();
+        assert_eq!(tool.server, "fixture");
+        assert_eq!(tool.tool.as_deref(), Some("Create issue"));
+        assert_eq!(
+            tool.arguments,
+            vec![
+                ("Title".to_owned(), "Bug".to_owned()),
+                ("Labels".to_owned(), "[\"p1\"]".to_owned())
+            ]
+        );
+        let labels: Vec<_> = details.choices.iter().map(|c| c.label.as_str()).collect();
+        if scenario == "mcp-tool:forged" {
+            assert_eq!(
+                labels,
+                ["Allow once", "Allow for session", "Deny", "Cancel"]
+            );
+        } else {
+            assert_eq!(
+                labels,
+                [
+                    "Allow once",
+                    "Allow for session",
+                    "Always allow",
+                    "Deny",
+                    "Cancel"
+                ]
+            );
+        }
+        let rows = details.display_rows();
+        assert!(
+            rows.contains(&("Argument · Title".into(), "Bug".into())),
+            "{rows:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn retrying_errors_warnings_and_mcp_progress_are_transient() {
+    let (events, _) = run_peer("notices", |_| None).await;
+    assert!(peer_verified(&events), "{events:?}");
+    let notices: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ProviderNotice { notice } => Some((false, notice)),
+            AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                AgentEvent::ProviderNotice { notice } => Some((true, notice)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(notices.iter().any(|(child, n)| !child
+        && n.kind == luna_proto::ProviderNoticeKind::Retrying
+        && n.message == "Reconnecting... 1/5"));
+    assert!(notices.iter().any(|(child, n)| *child
+        && n.kind == luna_proto::ProviderNoticeKind::Retrying
+        && n.message == "Reconnecting... 2/5"));
+    assert!(
+        notices
+            .iter()
+            .any(|(_, n)| n.kind == luna_proto::ProviderNoticeKind::Warning
+                && n.message == "Model rerouted to gpt-6.1-sol")
+    );
+    // Only the non-retrying error is an Error; no retry became one.
+    let errors: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Error { message } => Some(message.as_str()),
+            AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                AgentEvent::Error { message } => Some(message.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(errors, ["quota exhausted"]);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolActivity { id, kind: luna_proto::ToolActivityKind::Progress, text }
+            if id == "mcp-call-1" && text == "Indexed 40 of 100 files"
+    )));
+}
+
+#[tokio::test]
+async fn request_user_input_keeps_descriptions_free_text_and_secret_flags() {
+    let (events, parked) = run_peer("request-input", |questions| {
+        Some(label_answer(questions, |question| {
+            if question.header == "Color" {
+                "Blue"
+            } else {
+                "s3cret"
+            }
+        }))
+    })
+    .await;
+    assert!(peer_verified(&events), "{events:?}");
+    let questions = &parked[0].0;
+    let color = &questions[0];
+    assert_eq!(color.options, ["Blue", "Red"]);
+    assert_eq!(color.option_description(0), Some("Calm"));
+    assert!(!color.accepts_typed_answer(), "isOther:false with options");
+    assert!(!color.is_secret());
+    let token = &questions[1];
+    assert!(token.accepts_typed_answer());
+    assert!(token.is_secret());
+}
+
+#[tokio::test]
+async fn initial_turn_start_carries_the_engine_user_message_id() {
+    let home = tempfile::tempdir().unwrap();
+    let mut request = peer_request("initial-client-id", home.path());
+    request.model_options.insert(
+        luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION.into(),
+        "luna-user-message-1".into(),
+    );
+    let (controls, _parked, _steer) = parked_computer_controls();
+    let events = tokio::time::timeout(
+        Duration::from_secs(10),
+        adapter_peer()
+            .run(request, controls)
+            .await
+            .unwrap()
+            .map(|event| event.unwrap())
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .unwrap();
+    assert!(peer_verified(&events), "{events:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "the first message is not a steer boundary: {events:?}"
+    );
 }

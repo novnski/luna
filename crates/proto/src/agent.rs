@@ -214,6 +214,13 @@ pub enum ApprovalActionKind {
     LunaCrossTask,
 }
 
+/// `ApprovalRequest::expires_at_ms` for a provider request that carries no
+/// expiry of its own (Codex app-server v2 approvals and elicitations). The
+/// request waits until the user answers, the provider resolves it, the turn
+/// ends or the session closes. Out of chrono's range, so it never renders as
+/// a clock time.
+pub const APPROVAL_NO_EXPIRY: i64 = i64::MAX;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ApprovalRequest {
@@ -256,6 +263,28 @@ pub struct ApprovalDetails {
     pub proposed_network_policy_amendments: Vec<serde_json::Value>,
     #[serde(default)]
     pub choices: Vec<ApprovalChoice>,
+    /// Native sub-agent (child provider thread) that raised the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<String>,
+    /// MCP/app tool-call approval context, as the provider rendered it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ApprovalToolContext>,
+}
+
+/// Display-only MCP tool-call approval context (Codex `_meta` keys).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApprovalToolContext {
+    pub server: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// `(display name, rendered value)` in provider order.
+    #[serde(default)]
+    pub arguments: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -279,6 +308,27 @@ impl ApprovalDetails {
     /// remains exact so filesystem deny entries and host rules stay visible.
     pub fn display_rows(&self) -> Vec<(String, String)> {
         let mut rows = Vec::new();
+        if let Some(subagent) = &self.subagent {
+            rows.push(("Requested by sub-agent".into(), subagent.clone()));
+        }
+        if let Some(tool) = &self.tool {
+            if let Some(name) = &tool.tool {
+                rows.push(("Tool".into(), name.clone()));
+            }
+            rows.push((
+                "MCP server".into(),
+                match &tool.connector {
+                    Some(connector) => format!("{connector} ({})", tool.server),
+                    None => tool.server.clone(),
+                },
+            ));
+            if let Some(description) = &tool.description {
+                rows.push(("Tool description".into(), description.clone()));
+            }
+            for (name, value) in &tool.arguments {
+                rows.push((format!("Argument · {name}"), value.clone()));
+            }
+        }
         for (label, value) in [
             ("Action", self.kind.as_ref()),
             ("Command / input", self.command.as_ref()),
@@ -346,6 +396,11 @@ impl ApprovalDetails {
 }
 
 impl ApprovalRequest {
+    /// The provider's deadline, or `None` when the request waits for an answer.
+    pub fn expires(&self) -> Option<i64> {
+        (self.expires_at_ms != APPROVAL_NO_EXPIRY).then_some(self.expires_at_ms)
+    }
+
     /// Persisted marker for recovery only. This client-visible value cannot
     /// authorize a live approval; SessionsEngine keeps that kind separately.
     pub fn is_luna_cross_task(&self) -> bool {
@@ -424,6 +479,11 @@ pub struct RunRequest {
     /// the adapter always runs inline in that chat's own provider binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<NativeReviewRequest>,
+    /// "Send as goal" (Codex only): start a native goal instead of an ordinary
+    /// turn. The adapter loads the thread, runs Codex's clear+set sequence and
+    /// adopts the turn Codex starts itself. Never replayed by recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<crate::GoalStartRequest>,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_items: Vec<ComposerInput>,
@@ -746,6 +806,47 @@ pub struct UserInputQuestion {
     /// Generic MCP form/URL input; not a permission grant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<crate::McpInput>,
+    /// Provider answer policy for a content question (Codex
+    /// `item/tool/requestUserInput`). `None` keeps the legacy behaviour:
+    /// options plus an always-available typed answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<UserInputDetails>,
+}
+
+/// Codex `ToolRequestUserInputQuestion` answer policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInputDetails {
+    /// Parallel to `UserInputQuestion::options`; empty strings when absent.
+    #[serde(default)]
+    pub option_descriptions: Vec<String>,
+    /// `isOther`: a typed answer is accepted in addition to the options.
+    #[serde(default)]
+    pub allow_other: bool,
+    /// `isSecret`: mask the typed answer while it is entered.
+    #[serde(default)]
+    pub secret: bool,
+}
+
+impl UserInputQuestion {
+    /// Whether a typed answer is offered. Questions without options always
+    /// take text; provider policy decides when options exist.
+    pub fn accepts_typed_answer(&self) -> bool {
+        self.options.is_empty() || self.input.as_ref().is_none_or(|input| input.allow_other)
+    }
+
+    pub fn option_description(&self, index: usize) -> Option<&str> {
+        self.input
+            .as_ref()?
+            .option_descriptions
+            .get(index)
+            .map(String::as_str)
+            .filter(|text| !text.is_empty())
+    }
+
+    pub fn is_secret(&self) -> bool {
+        self.input.as_ref().is_some_and(|input| input.secret)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -790,6 +891,27 @@ pub enum ToolActivityKind {
     Stdout,
     Stdin,
     Patch,
+    /// Provider progress status for a running tool (latest message wins).
+    Progress,
+}
+
+/// Transient provider status shown beside the working indicator. Never a
+/// transcript part and never a turn failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderNoticeKind {
+    /// The provider is retrying (e.g. Codex `error {willRetry:true}`).
+    Retrying,
+    /// An informational provider warning (e.g. Codex `warning`).
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderNotice {
+    pub kind: ProviderNoticeKind,
+    pub message: String,
+    pub at_ms: i64,
 }
 
 /// The normalized streaming event every harness emits.
@@ -914,6 +1036,11 @@ pub enum AgentEvent {
     GoalChanged {
         thread_id: String,
         goal: Option<crate::ThreadGoal>,
+        /// Codex's `turnId`: set when the change happened inside a provider
+        /// turn (accounting, or the model's `update_goal`), null for client
+        /// controls and resume snapshots.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     /// Internal supported-provider notification that asks the engine to
     /// refresh task metadata. It is consumed before journal/doc publication.
@@ -942,6 +1069,12 @@ pub enum AgentEvent {
     },
     Error {
         message: String,
+    },
+    /// Transient provider status (retry, warning). The engine projects the
+    /// latest notice onto task metadata and clears it when the turn settles.
+    #[serde(rename_all = "camelCase")]
+    ProviderNotice {
+        notice: ProviderNotice,
     },
     #[serde(rename_all = "camelCase")]
     InputRequested {

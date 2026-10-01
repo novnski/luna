@@ -1154,6 +1154,24 @@ impl DocHost {
         Ok(())
     }
 
+    /// Update the durable "Sent as goal" / "Goal achieved" transcript marks.
+    pub fn persist_goal_mark(
+        &self,
+        chat_id: &str,
+        event_id: &str,
+        update: impl FnOnce(&mut luna_proto::GoalMarks),
+    ) -> Result<(), EngineError> {
+        let handle = self.open(chat_id)?;
+        self.persist_queue_projection(&handle, event_id, move |doc| {
+            let mut state = doc.context_control();
+            update(&mut state.goal_marks);
+            doc.set_context_control(&state)?;
+            Ok(())
+        })?;
+        handle.publish_messages();
+        Ok(())
+    }
+
     /// Install native goal readback and its receipt atomically without replacing
     /// other provider control state that changed while the RPC was in flight.
     pub fn complete_goal_operation(
@@ -5973,6 +5991,7 @@ impl DocHost {
             request.permission_mode = execution.permission_mode;
         }
         request.review = None;
+        request.goal = None;
         request.prompt = prompt;
         request.resume = None; // dispatch re-derives the harness session
         request.attachments = attachments;
@@ -7459,6 +7478,22 @@ impl DocHost {
                         Some("no pending input request".into()),
                     ));
                 };
+                if questions.iter().any(UserInputQuestion::is_secret) {
+                    // A secret request whose resolver is gone ends cancelled:
+                    // its answer is never resumed into a new turn or stored.
+                    handle.doc.resolve_input(request_id)?;
+                    let answered = answers
+                        .iter()
+                        .any(|answer| answer.labels.iter().any(|label| !label.is_empty()));
+                    return Ok((
+                        if answered {
+                            SessionCommandStatus::Rejected
+                        } else {
+                            SessionCommandStatus::Applied
+                        },
+                        Some("secret request ended; the answer was not sent or replayed".into()),
+                    ));
+                }
                 if questions.iter().any(|question| {
                     question
                         .approval
@@ -7514,6 +7549,7 @@ impl DocHost {
                     ));
                 };
                 request.review = None;
+                request.goal = None;
                 request.prompt = respond_input_prompt(&questions, answers);
                 request.resume = None; // dispatch re-derives the harness session
                 request.attachments = Vec::new();
@@ -7685,6 +7721,7 @@ impl DocHost {
                     ));
                 };
                 request.review = None;
+                request.goal = None;
                 request.prompt = prompt;
                 request.resume = None; // dispatch re-derives the harness session
                 // Replace the previous turn's envelope with this input's
@@ -7894,6 +7931,7 @@ impl DocHost {
         let config = chat.config;
         Some(luna_proto::RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),
@@ -8111,6 +8149,7 @@ mod luna_approval_recovery_tests {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 

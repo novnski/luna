@@ -72,6 +72,11 @@ pub struct SteerMessage {
     /// Provider-level acceptance for explicit steering. `None` for ordinary
     /// warm routing, whose existing boundary fallback remains valid.
     pub acceptance: Option<oneshot::Sender<SteerAcceptance>>,
+    /// Codex "send as goal" on the warm runtime: the adapter runs Codex's
+    /// clear+set sequence on its own connection instead of `turn/steer` or
+    /// `turn/start`; Codex starts (or extends) the turn itself. Acceptance
+    /// reports the `thread/goal/set` outcome.
+    pub goal: Option<luna_proto::GoalStartRequest>,
 }
 
 /// What the provider wire proved about an explicit in-turn steer request.

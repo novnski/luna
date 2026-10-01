@@ -1,8 +1,20 @@
-//! The goal card: a compact tray stacked on top of the composer while a Codex
-//! goal exists (adapted from BB's ThreadGoalCard). Nothing renders without a
-//! goal; `/goal [objective]` creates or edits one. Edits are bound to the chat
-//! that opened the editor, every control re-checks its owning chat, and
-//! provider snapshots drive every status and usage label.
+//! Codex goals in the composer, matching Codex's own app:
+//!
+//! - **Goal mode.** A "Goal" switch beside the access chip (Codex chats only),
+//!   or `/goal <objective>`, makes Send start a native goal instead of a
+//!   message. The engine runs Codex's own sequence (`thread/goal/clear`, then
+//!   `thread/goal/set {status: active}`) on a loaded runtime, starting or
+//!   waking it like a send, so Codex begins working immediately. The message
+//!   is marked "Sent as goal" in the transcript.
+//! - **The goal bar.** While a goal is unfinished, a strip stacked on the
+//!   composer reads "Pursuing goal · objective · live timer" with Edit,
+//!   Pause/Resume and Clear. Edit opens an inline editor (objective, budget,
+//!   "Updated …", Undo, Save) bound to the chat that opened it.
+//! - **Completion** is Codex's: when the model completes the goal the bar goes
+//!   away and the turn shows "Goal achieved in …" (transcript goal marks).
+//!
+//! Every control re-checks its owning chat, one pending change disables every
+//! control, and uncertain changes are never replayed.
 use super::*;
 use gpui::AnyElement;
 use luna_proto::{GoalBudget, GoalOperation, GoalStatus, ThreadGoal};
@@ -13,17 +25,21 @@ mod e2e;
 #[cfg(feature = "appshots-fixture")]
 pub use e2e::run_goal_card_e2e;
 
-/// LUNA's own slash command, offered on existing Codex chats only.
+/// LUNA's own slash command, offered on Codex chats only.
 pub(super) const GOAL_COMMAND: &str = "goal";
+/// Codex's goal-mode placeholder.
+pub(super) const GOAL_PLACEHOLDER: &str =
+    "Describe your goal, define measurable outcomes for best results";
+const MESSAGE_PLACEHOLDER: &str = "Do anything…";
 /// The queue tray's corner, so stacked trays read as one family.
 const CARD_RADIUS: f32 = 16.0;
-const HEADER_HEIGHT: f32 = 36.0;
+const HEADER_HEIGHT: f32 = 38.0;
 const GLYPH: f32 = 14.0;
-const META_GLYPH: f32 = 12.0;
-const BUDGET_METER_WIDTH: f32 = 56.0;
 /// LUNA's working glyph (3×3 accent cells), ~10px at this cell size.
 const SPINNER_CELL: f32 = 2.5;
 const BUSY_REASON: &str = "Unavailable while a goal change is in progress.";
+const TEXT_ONLY: &str =
+    "A goal is text only. Remove attachments, mentions and comments, then send it again.";
 
 #[derive(Default)]
 pub(super) struct GoalUi {
@@ -31,19 +47,18 @@ pub(super) struct GoalUi {
     pending: Option<GoalPending>,
     task: Option<Task<()>>,
     error: Option<(String, String)>,
-    /// Chats whose card body is open. Cards start collapsed.
-    expanded: HashSet<String>,
+    /// Composer keys (a chat id, or the new-chat canvas key) in goal mode.
+    mode: HashSet<String>,
     /// Move keyboard focus into a freshly opened editor on the next frame.
     focus_editor: bool,
+    /// Repaints the live timer once a second while a goal is being pursued.
+    ticker: Option<Task<()>>,
 }
 
 /// One in-flight goal change. Every goal control is disabled while it exists.
 struct GoalPending {
     chat_id: String,
     kind: PendingKind,
-    /// The `/goal …` text that issued this change. The composer clears it only
-    /// once the change is applied, so a failure leaves it in place for retry.
-    command_text: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,7 +66,6 @@ enum PendingKind {
     Save,
     Clear,
     Toggle,
-    Complete,
     Refresh,
 }
 
@@ -59,7 +73,9 @@ struct GoalEditor {
     chat_id: String,
     objective: Entity<ComposerInput>,
     budget: Entity<ComposerInput>,
-    creating: bool,
+    /// The provider values the editor opened with, restored by Undo.
+    original_objective: String,
+    original_budget: String,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -68,6 +84,7 @@ enum GoalAction {
     Edit,
     Save,
     Cancel,
+    Undo,
     Dismiss,
     Operation(GoalOperation, PendingKind),
 }
@@ -84,10 +101,20 @@ struct GoalControl {
     action: GoalAction,
 }
 
+/// What Send does with the composer text.
+pub(super) enum GoalSend {
+    /// An ordinary message.
+    Message,
+    /// Handled here (goal mode switched on, or a validation message shown).
+    Consumed,
+    /// Start this objective as a Codex goal.
+    Goal(String),
+}
+
 pub(super) fn goal_slash_command() -> SlashCommand {
     SlashCommand {
         name: GOAL_COMMAND.into(),
-        description: "Set a goal Codex keeps working toward".into(),
+        description: "Send as a goal Codex keeps working on until it is done".into(),
         input_hint: Some("objective".into()),
     }
 }
@@ -116,51 +143,30 @@ fn grouped(value: i64) -> String {
 fn token_usage(goal: &ThreadGoal) -> String {
     match goal.token_budget {
         Some(budget) => format!("{} / {} tokens", grouped(goal.tokens_used), grouped(budget)),
-        None => format!("{} tokens", grouped(goal.tokens_used)),
+        None => format!("{} tokens used", grouped(goal.tokens_used)),
     }
 }
 
-fn elapsed(seconds: i64) -> String {
-    let seconds = seconds.max(0);
-    if seconds < 60 {
-        return format!("{seconds}s");
-    }
-    let minutes = seconds / 60;
-    if minutes < 60 {
-        let rest = seconds % 60;
-        return if rest > 0 {
-            format!("{minutes}m {rest}s")
-        } else {
-            format!("{minutes}m")
-        };
-    }
-    let (hours, rest) = (minutes / 60, minutes % 60);
-    if rest > 0 {
-        format!("{hours}h {rest}m")
-    } else {
-        format!("{hours}h")
-    }
-}
-
-/// The cached observation's age, never a wall-clock timestamp.
-fn checked_ago(checked_at_ms: i64, now_ms: i64) -> String {
-    let seconds = (now_ms - checked_at_ms).max(0) / 1000;
+/// "Updated just now" from Codex's `updatedAt` (unix seconds).
+fn updated_ago(updated_at: i64, now_ms: i64) -> String {
+    let seconds = (now_ms / 1000 - updated_at).max(0);
     match seconds {
-        0..=44 => "checked just now".into(),
-        45..=3_599 => format!("checked {}m ago", (seconds / 60).max(1)),
-        3_600..=86_399 => format!("checked {}h ago", seconds / 3_600),
-        _ => format!("checked {}d ago", seconds / 86_400),
+        0..=44 => "Updated just now".into(),
+        45..=3_599 => format!("Updated {}m ago", (seconds / 60).max(1)),
+        3_600..=86_399 => format!("Updated {}h ago", seconds / 3_600),
+        _ => format!("Updated {}d ago", seconds / 86_400),
     }
 }
 
-fn status_chip_label(status: GoalStatus) -> Option<&'static str> {
+/// The bar's leading words, Codex style.
+fn status_title(status: GoalStatus) -> &'static str {
     match status {
-        GoalStatus::Active => None,
-        GoalStatus::Paused => Some("Paused"),
-        GoalStatus::Blocked => Some("Blocked"),
-        GoalStatus::UsageLimited => Some("Usage limit reached"),
-        GoalStatus::BudgetLimited => Some("Budget reached"),
-        GoalStatus::Complete => Some("Complete"),
+        GoalStatus::Active => "Pursuing goal",
+        GoalStatus::Paused => "Goal paused",
+        GoalStatus::Blocked => "Goal blocked",
+        GoalStatus::UsageLimited => "Goal paused at usage limit",
+        GoalStatus::BudgetLimited => "Goal budget reached",
+        GoalStatus::Complete => "Goal achieved",
     }
 }
 
@@ -173,31 +179,122 @@ fn status_tone(theme: &Theme, status: GoalStatus) -> gpui::Hsla {
     }
 }
 
-/// Muted readback line: how the goal continues, then the observation's age.
-fn readback_note(goal: &ThreadGoal, continuation_ready: bool, checked: String) -> String {
-    match goal.status {
-        GoalStatus::Active if continuation_ready => {
-            format!("Codex continues on its own · {checked}")
-        }
-        GoalStatus::Active => format!("Continues after your next message · {checked}"),
-        _ => {
-            let mut checked = checked;
-            if let Some(first) = checked.get_mut(0..1) {
-                first.make_ascii_uppercase();
-            }
-            checked
-        }
+/// Codex's live goal clock: accounted time plus the running turn since the
+/// last provider observation (TUI `GoalStatusState::indicator`). It advances
+/// only while the goal is active and the chat is working.
+fn live_seconds(goal: &ThreadGoal, checked_at_ms: i64, working: bool, now_ms: i64) -> i64 {
+    if goal.status == GoalStatus::Active && working {
+        goal.time_used_seconds + (now_ms - checked_at_ms).max(0) / 1000
+    } else {
+        goal.time_used_seconds
     }
 }
 
 impl Composer {
-    /// Goal controls need an existing Codex chat with its native thread.
+    /// `/goal` is offered on existing Codex chats.
     pub(super) fn goal_command_available(&self, cx: &App) -> bool {
         self.state
             .read(cx)
             .selected_chat_row()
             .and_then(|chat| chat.config.as_ref())
             .is_some_and(|config| config.harness == HarnessId::Codex)
+    }
+
+    /// Goal mode needs Codex: the chat's provider, or the new-chat picker's.
+    pub(super) fn goal_mode_available(&self, cx: &App) -> bool {
+        if self.editing_queued.is_some() {
+            return false;
+        }
+        if self.state.read(cx).selected_chat.is_some() {
+            return self.goal_command_available(cx);
+        }
+        self.pickers.read(cx).resolved(cx).harness == Some(HarnessId::Codex)
+    }
+
+    pub(super) fn goal_mode_on(&self, cx: &App) -> bool {
+        self.goal_ui.mode.contains(&self.current_key) && self.goal_mode_available(cx)
+    }
+
+    fn set_goal_mode(&mut self, on: bool, cx: &mut Context<Self>) {
+        let key = self.current_key.clone();
+        if on {
+            self.goal_ui.mode.insert(key);
+        } else {
+            self.goal_ui.mode.remove(&key);
+        }
+        self.focus_pending = true;
+        cx.notify();
+    }
+
+    /// Codex's goal placeholder while goal mode is on.
+    pub(super) fn sync_goal_placeholder(&mut self, cx: &mut Context<Self>) {
+        let wanted = if self.goal_mode_on(cx) {
+            GOAL_PLACEHOLDER
+        } else {
+            MESSAGE_PLACEHOLDER
+        };
+        if self.input.read(cx).placeholder.as_ref() != wanted {
+            self.input
+                .update(cx, |input, cx| input.set_placeholder(wanted, cx));
+        }
+    }
+
+    /// Decide whether Send starts a goal. `/goal <objective>` always does on a
+    /// Codex chat; plain text does while goal mode is on. Bare `/goal` turns
+    /// goal mode on, like Codex's command.
+    pub(super) fn goal_send(&mut self, text: &str, cx: &mut Context<Self>) -> GoalSend {
+        let command = goal_command_objective(text);
+        if command.is_none() && !self.goal_mode_on(cx) {
+            return GoalSend::Message;
+        }
+        if !self.goal_mode_available(cx) {
+            return GoalSend::Message;
+        }
+        if command == Some("") {
+            self.input.update(cx, |input, cx| input.set_text("", cx));
+            self.set_goal_mode(true, cx);
+            return GoalSend::Consumed;
+        }
+        let objective = command.unwrap_or(text).trim().to_owned();
+        if objective.is_empty() {
+            return GoalSend::Consumed;
+        }
+        if self.goal_ui.pending.is_some() {
+            self.failure = Some("Wait for the current goal change to finish.".into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return GoalSend::Consumed;
+        }
+        let staged = self.staged().len()
+            + self.staged_appshots().len()
+            + self.input_items.get(&self.current_key).map_or(0, Vec::len)
+            + self.staged_comments(cx).len();
+        let limit = (objective.chars().count() > 4_000)
+            .then_some("A goal objective must be at most 4000 characters.");
+        if let Some(reason) = (staged > 0).then_some(TEXT_ONLY).or(limit) {
+            self.failure = Some(reason.into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return GoalSend::Consumed;
+        }
+        // Like Codex's toggle, goal mode ends once the goal is handed off; a
+        // rejected send restores it with the draft.
+        self.goal_ui.mode.remove(&self.current_key);
+        if let Some(chat) = self.state.read(cx).selected_chat.clone()
+            && self
+                .goal_ui
+                .error
+                .as_ref()
+                .is_some_and(|(owner, _)| *owner == chat)
+        {
+            self.goal_ui.error = None;
+        }
+        GoalSend::Goal(objective)
+    }
+
+    /// A rejected goal send hands its draft back in goal mode.
+    pub(super) fn restore_goal_mode(&mut self, key: &str) {
+        self.goal_ui.mode.insert(key.to_owned());
     }
 
     fn current_goal(&self, cx: &App) -> Option<ThreadGoal> {
@@ -209,64 +306,6 @@ impl Composer {
             .and_then(|readback| readback.goal.clone())
     }
 
-    /// `/goal [objective]` on a Codex chat becomes an explicit goal change
-    /// instead of a message. Returns true when the text was consumed.
-    pub(super) fn try_goal_command(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
-        let Some(objective) = goal_command_objective(text) else {
-            return false;
-        };
-        if self.editing_queued.is_some() || !self.goal_command_available(cx) {
-            return false;
-        }
-        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
-            return false;
-        };
-        let staged = self.staged().len()
-            + self.staged_appshots().len()
-            + self.input_items.get(&self.current_key).map_or(0, Vec::len)
-            + self.staged_comments(cx).len();
-        if staged > 0 {
-            self.goal_ui.error = Some((
-                chat_id,
-                "A goal is text only. Remove attachments, mentions and comments, then send /goal again."
-                    .into(),
-            ));
-            cx.notify();
-            return true;
-        }
-        if objective.is_empty() {
-            self.input.update(cx, |input, cx| input.set_text("", cx));
-            self.open_goal_editor(cx);
-            return true;
-        }
-        let operation = match self.current_goal(cx).map(|goal| goal.status) {
-            None => GoalOperation::Set {
-                objective: Some(objective.to_owned()),
-                status: Some(GoalStatus::Active),
-                token_budget: Some(GoalBudget::Unlimited),
-            },
-            // A finished goal restarts with the new objective.
-            Some(GoalStatus::Complete) => GoalOperation::Set {
-                objective: Some(objective.to_owned()),
-                status: Some(GoalStatus::Active),
-                token_budget: None,
-            },
-            // Otherwise only the objective changes; status and budget stay.
-            Some(_) => GoalOperation::Set {
-                objective: Some(objective.to_owned()),
-                status: None,
-                token_budget: None,
-            },
-        };
-        self.submit_goal_operation(
-            operation,
-            PendingKind::Save,
-            Some(text.trim().to_owned()),
-            cx,
-        );
-        true
-    }
-
     fn open_goal_editor(&mut self, cx: &mut Context<Self>) {
         if self.goal_ui.pending.is_some() {
             return;
@@ -274,27 +313,25 @@ impl Composer {
         let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
             return;
         };
-        let goal = self.current_goal(cx);
-        let objective_text = goal
-            .as_ref()
-            .map(|goal| goal.objective.clone())
-            .unwrap_or_default();
+        let Some(goal) = self.current_goal(cx) else {
+            return;
+        };
+        let objective_text = goal.objective.clone();
         let budget_text = goal
-            .as_ref()
-            .and_then(|goal| goal.token_budget)
+            .token_budget
             .map(|tokens| tokens.to_string())
             .unwrap_or_default();
         let objective = cx.new(|cx| {
             let mut input = ComposerInput::new("What should Codex keep working toward?", cx)
                 .with_text_metrics(12.5, 18.0);
-            input.set_text(objective_text, cx);
+            input.set_text(objective_text.clone(), cx);
             input
         });
         let budget = cx.new(|cx| {
             let mut input = ComposerInput::new("No limit", cx)
                 .with_single_line()
                 .with_text_metrics(12.5, 18.0);
-            input.set_text(budget_text, cx);
+            input.set_text(budget_text.clone(), cx);
             input
         });
         let mut subscriptions = vec![
@@ -323,7 +360,8 @@ impl Composer {
             chat_id,
             objective,
             budget,
-            creating: goal.is_none(),
+            original_objective: objective_text,
+            original_budget: budget_text,
             _subscriptions: subscriptions,
         });
         self.goal_ui.focus_editor = true;
@@ -343,6 +381,29 @@ impl Composer {
             }
             self.focus_pending = true;
         }
+        cx.notify();
+    }
+
+    fn goal_editor_dirty(&self, cx: &App) -> bool {
+        self.goal_ui.editor.as_ref().is_some_and(|editor| {
+            editor.objective.read(cx).text() != editor.original_objective
+                || editor.budget.read(cx).text() != editor.original_budget
+        })
+    }
+
+    /// Undo: put back what Codex last reported.
+    fn undo_goal_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(editor) = self.goal_ui.editor.as_ref() else {
+            return;
+        };
+        let (objective, budget) = (editor.objective.clone(), editor.budget.clone());
+        let (objective_text, budget_text) = (
+            editor.original_objective.clone(),
+            editor.original_budget.clone(),
+        );
+        objective.update(cx, |input, cx| input.set_text(objective_text, cx));
+        budget.update(cx, |input, cx| input.set_text(budget_text, cx));
+        self.goal_ui.focus_editor = true;
         cx.notify();
     }
 
@@ -372,29 +433,37 @@ impl Composer {
                 }
             }
         };
+        // Codex steers a running goal turn with a changed objective.
         let operation = GoalOperation::Set {
             objective: Some(objective),
-            status: editor.creating.then_some(GoalStatus::Active),
+            status: None,
             token_budget: Some(token_budget),
         };
-        self.submit_goal_operation(operation, PendingKind::Save, None, cx);
+        self.submit_goal_operation(operation, PendingKind::Save, cx);
     }
 
-    fn toggle_goal_expanded(&mut self, cx: &mut Context<Self>) {
-        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+    /// Run the live timer while a goal is pursued; stop it otherwise.
+    fn drive_goal_timer(&mut self, live: bool, cx: &mut Context<Self>) {
+        if !live {
+            self.goal_ui.ticker = None;
             return;
-        };
-        if !self.goal_ui.expanded.remove(&chat_id) {
-            self.goal_ui.expanded.insert(chat_id);
         }
-        cx.notify();
+        if self.goal_ui.ticker.is_none() {
+            self.goal_ui.ticker = Some(cx.spawn(async move |this, cx| {
+                loop {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    if this.update(cx, |_, cx| cx.notify()).is_err() {
+                        break;
+                    }
+                }
+            }));
+        }
     }
 
     fn submit_goal_operation(
         &mut self,
         operation: GoalOperation,
         kind: PendingKind,
-        command_text: Option<String>,
         cx: &mut Context<Self>,
     ) {
         if self.goal_ui.pending.is_some() {
@@ -420,14 +489,13 @@ impl Composer {
         self.goal_ui.pending = Some(GoalPending {
             chat_id: chat_id.clone(),
             kind,
-            command_text,
         });
         self.goal_ui.error = None;
         self.goal_ui.task = Some(cx.spawn(async move |this, cx| {
             let intent = serde_json::json!({"kind": "goal", "operation": operation});
             let result = crate::task_commands::execute(&engine, &chat_id, intent).await;
             this.update(cx, |composer, cx| {
-                let pending = composer.goal_ui.pending.take();
+                composer.goal_ui.pending = None;
                 match result {
                     Ok(receipt) if receipt.status == CommandReceiptStatus::Applied => {
                         if composer
@@ -438,17 +506,6 @@ impl Composer {
                         {
                             composer.goal_ui.editor = None;
                             composer.focus_pending = composer.current_key == chat_id;
-                        }
-                        // Clear `/goal …` only if it is still the same text in
-                        // the same chat: never erase a newer draft.
-                        let issued = pending.and_then(|pending| pending.command_text);
-                        if let Some(issued) = issued
-                            && composer.current_key == chat_id
-                            && composer.input.read(cx).text().trim() == issued
-                        {
-                            composer
-                                .input
-                                .update(cx, |input, cx| input.set_text("", cx));
                         }
                     }
                     Ok(_) => composer.goal_ui.error = Some((
@@ -581,12 +638,13 @@ impl Composer {
                     GoalAction::Edit => this.open_goal_editor(cx),
                     GoalAction::Save => this.save_goal_editor(cx),
                     GoalAction::Cancel => this.close_goal_editor(cx),
+                    GoalAction::Undo => this.undo_goal_editor(cx),
                     GoalAction::Dismiss => {
                         this.goal_ui.error = None;
                         cx.notify();
                     }
                     GoalAction::Operation(operation, kind) => {
-                        this.submit_goal_operation(operation.clone(), *kind, None, cx)
+                        this.submit_goal_operation(operation.clone(), *kind, cx)
                     }
                 }
             }))
@@ -595,39 +653,112 @@ impl Composer {
             .into_any_element()
     }
 
-    /// The goal card, or `None` when this chat has nothing to show. Its
-    /// placement (stacked behind the queue tray and the composer) belongs to
-    /// the caller.
+    /// The composer's "Goal" switch, beside the access chip on Codex chats.
+    pub(super) fn render_goal_mode_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.goal_mode_available(cx) {
+            return None;
+        }
+        let theme = Theme::of(cx);
+        let on = self.goal_mode_on(cx);
+        let accent = theme.accent;
+        let (rest, wash) = if on {
+            (theme.readable_tone(accent, 0.95), accent.opacity(0.14))
+        } else {
+            (theme.text_muted, gpui::transparent_black())
+        };
+        let hover_wash = if on {
+            accent.opacity(0.2)
+        } else {
+            theme.element_hover
+        };
+        let hover_text = if on { rest } else { theme.text };
+        let owner = self.current_key.clone();
+        Some(
+            gpui_base::Button::new("goal-mode")
+                .role(Role::Switch)
+                .accessibility_id("goal-mode")
+                .accessibility_label("Goal mode")
+                .aria_toggled(if on {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .aria_description(if on {
+                    "On: Send starts a goal Codex keeps working on until it is done."
+                } else {
+                    "Off: Send posts an ordinary message."
+                })
+                .tab_index(0)
+                .flex_none()
+                .h(px(32.0))
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .rounded(px(8.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rest)
+                .bg(wash)
+                .cursor_pointer()
+                .hover(move |style| style.bg(hover_wash).text_color(hover_text))
+                .focus_visible(move |style| style.bg(accent.opacity(0.18)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.current_key == owner {
+                        let on = this.goal_mode_on(cx);
+                        this.set_goal_mode(!on, cx);
+                    }
+                }))
+                .child(
+                    crate::icons::icon(crate::icons::TARGET)
+                        .size(px(15.0))
+                        .text_color(if on { rest } else { theme.text_muted }),
+                )
+                .child("Goal")
+                .into_any_element(),
+        )
+    }
+
+    /// The goal bar, or `None` when this chat has no unfinished goal (Codex
+    /// removes it once the goal is achieved). Placement belongs to the caller.
     pub(super) fn render_goal_card(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let (chat_id, readback) = {
+        let selected = {
             let state = self.state.read(cx);
-            let chat = state.selected_chat_row()?;
-            if chat
-                .config
-                .as_ref()
-                .is_none_or(|config| config.harness != HarnessId::Codex)
-            {
-                return None;
-            }
-            (chat.id.clone(), state.context_control.goal.clone())
+            state
+                .selected_chat_row()
+                .filter(|chat| {
+                    chat.config
+                        .as_ref()
+                        .is_some_and(|config| config.harness == HarnessId::Codex)
+                })
+                .map(|chat| {
+                    let working = matches!(
+                        state.indicator_for(&chat.id, chrono::Utc::now()),
+                        crate::state::Indicator::Working
+                    );
+                    (chat.id.clone(), state.context_control.goal.clone(), working)
+                })
         };
-        let goal = readback.as_ref().and_then(|readback| readback.goal.clone());
+        let Some((chat_id, readback, working)) = selected else {
+            self.drive_goal_timer(false, cx);
+            return None;
+        };
+        let checked_at_ms = readback
+            .as_ref()
+            .map_or(0, |readback| readback.checked_at_ms);
+        let goal = readback
+            .and_then(|readback| readback.goal)
+            .filter(|goal| goal.status != GoalStatus::Complete);
         let editor = self
             .goal_ui
             .editor
             .as_ref()
             .filter(|editor| editor.chat_id == chat_id)
-            .map(|editor| {
-                (
-                    editor.objective.clone(),
-                    editor.budget.clone(),
-                    editor.creating,
-                )
-            });
+            .map(|editor| (editor.objective.clone(), editor.budget.clone()));
         let error = self
             .goal_ui
             .error
@@ -641,55 +772,63 @@ impl Composer {
             .as_ref()
             .filter(|pending| pending.chat_id == chat_id)
             .map(|pending| pending.kind);
-        if goal.is_none() && editor.is_none() && error.is_none() && pending.is_none() {
+        if goal.is_none() && error.is_none() && pending.is_none() {
+            self.drive_goal_timer(false, cx);
             return None;
         }
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let live = goal
+            .as_ref()
+            .is_some_and(|goal| goal.status == GoalStatus::Active && working);
+        self.drive_goal_timer(live, cx);
         if std::mem::take(&mut self.goal_ui.focus_editor)
-            && let Some((objective, _, _)) = &editor
+            && let Some((objective, _)) = &editor
         {
             let focus = objective.read(cx).focus_handle.clone();
             window.focus(&focus, cx);
         }
         let theme = Theme::of(cx).clone();
-        let editing = editor.is_some();
-        let expanded = editing || (goal.is_some() && self.goal_ui.expanded.contains(&chat_id));
+        let editing = editor.is_some() && goal.is_some();
 
-        // ---- header: target, title, status, preview | clear ----
+        // ---- the bar: target · title · objective · timer | controls ----
         let status = goal.as_ref().map(|goal| goal.status);
         let tone = status.map_or(theme.accent, |status| status_tone(&theme, status));
-        let title = match (&goal, editing, pending) {
-            (Some(_), _, _) => "Goal",
-            (None, true, _) => "New goal",
-            (None, false, Some(PendingKind::Save)) => "Setting goal…",
-            (None, false, _) => "Goal",
-        };
-        let chip = status.and_then(status_chip_label).map(|label| {
-            let chip_tone = status.map_or(tone, |status| status_tone(&theme, status));
-            div()
-                .flex_none()
-                .h(px(18.0))
-                .px(px(6.0))
-                .flex()
-                .items_center()
-                .rounded(px(5.0))
-                .bg(chip_tone.opacity(0.14))
-                .text_size(crate::typography::ui_rems(10.5))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.readable_tone(chip_tone, 0.95))
-                .child(label)
-        });
-        let preview = goal.as_ref().filter(|_| !expanded).map(|goal| {
+        let title = status.map_or("Goal", status_title);
+        let objective_preview = goal.as_ref().map(|goal| {
             goal.objective
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join(" ")
         });
-        let accent = theme.accent;
-        let hover_wash = theme.ink(0.035);
-        let header_main = div()
+        let timer = goal.as_ref().map(|goal| {
+            crate::transcript::format_elapsed(live_seconds(goal, checked_at_ms, working, now_ms))
+        });
+        let timer_label = timer.clone().map(|timer| {
+            if live {
+                format!("{timer} so far")
+            } else {
+                format!("{timer} worked")
+            }
+        });
+        let summary = div()
+            .id("goal-summary")
+            .role(Role::Status)
+            .aria_label(
+                [
+                    Some(title.to_owned()),
+                    objective_preview.clone(),
+                    timer_label,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(", "),
+            )
             .flex_1()
             .min_w_0()
             .h_full()
+            .pl(px(14.0))
+            .pr(px(6.0))
             .flex()
             .items_center()
             .gap(px(7.0))
@@ -706,86 +845,87 @@ impl Composer {
                     .text_color(theme.text)
                     .child(title),
             )
-            .children(chip)
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.readable_muted(0.75))
-                    .children(preview),
-            );
-        let has_goal = goal.is_some();
-        let header_lead: AnyElement = if has_goal && !editing {
-            // The whole leading area is the disclosure toggle (BB).
-            let owner = Some(chat_id.clone());
-            let status_word = status.map_or("active", |status| match status {
-                GoalStatus::Active => "active",
-                GoalStatus::Paused => "paused",
-                GoalStatus::Blocked => "blocked",
-                GoalStatus::UsageLimited => "usage limit reached",
-                GoalStatus::BudgetLimited => "budget reached",
-                GoalStatus::Complete => "complete",
-            });
-            gpui_base::Button::new("goal-expand")
-                .role(Role::Button)
-                .accessibility_id("goal-expand")
-                .accessibility_label(format!("Goal, {status_word}"))
-                .aria_expanded(expanded)
-                .aria_description(if expanded {
-                    "Hide goal details"
-                } else {
-                    "Show goal details"
-                })
-                .tab_index(0)
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .pl(px(14.0))
-                .pr(px(10.0))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .rounded_tl(px(CARD_RADIUS - 1.0))
-                .cursor_pointer()
-                .hover(move |style| style.bg(hover_wash))
-                .focus_visible(move |style| style.bg(accent.opacity(0.12)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if this.state.read(cx).selected_chat == owner {
-                        this.toggle_goal_expanded(cx);
-                    }
-                }))
-                .child(header_main)
-                .child(
-                    crate::icons::icon(if expanded {
-                        crate::icons::ALT_ARROW_UP
-                    } else {
-                        crate::icons::ALT_ARROW_DOWN
-                    })
-                    .size(px(12.0))
-                    .text_color(theme.readable_muted(0.7)),
+                    .text_size(crate::typography::ui_rems(12.5))
+                    .text_color(theme.readable_muted(0.8))
+                    .children(objective_preview),
+            )
+            .when_some(timer, |el, timer| {
+                el.child(
+                    div()
+                        .id("goal-timer")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(if live {
+                            theme.text.opacity(0.85)
+                        } else {
+                            theme.readable_muted(0.75)
+                        })
+                        .child(div().text_color(theme.readable_faint(0.8)).child("·"))
+                        .child(timer),
                 )
-                .into_any_element()
-        } else {
-            div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .pl(px(14.0))
-                .pr(px(10.0))
-                .flex()
-                .items_center()
-                .child(header_main)
-                .into_any_element()
-        };
-        let trailing: Option<AnyElement> = if has_goal {
-            Some(self.goal_control(
+            });
+        let mut controls: Vec<AnyElement> = Vec::new();
+        if let Some(goal) = goal.as_ref() {
+            controls.push(self.goal_control(
+                GoalControl {
+                    id: "goal-edit",
+                    label: "Edit goal".into(),
+                    text: None,
+                    glyph: crate::icons::PEN,
+                    enabled: !busy && !editing,
+                    spinning: false,
+                    primary: false,
+                    action: GoalAction::Edit,
+                },
+                &theme,
+                cx,
+            ));
+            // Pause keeps the running turn (Codex semantics); Resume is not
+            // offered for a reached budget: raise it with Edit instead.
+            let toggle = match goal.status {
+                GoalStatus::Active => Some(("Pause goal", crate::icons::PAUSE, GoalStatus::Paused)),
+                GoalStatus::Paused | GoalStatus::Blocked | GoalStatus::UsageLimited => {
+                    Some(("Resume goal", crate::icons::PLAY, GoalStatus::Active))
+                }
+                GoalStatus::BudgetLimited | GoalStatus::Complete => None,
+            };
+            if let Some((label, glyph, next)) = toggle {
+                controls.push(self.goal_control(
+                    GoalControl {
+                        id: "goal-toggle",
+                        label: label.into(),
+                        text: None,
+                        glyph,
+                        enabled: !busy,
+                        spinning: pending == Some(PendingKind::Toggle),
+                        primary: false,
+                        action: GoalAction::Operation(
+                            GoalOperation::Set {
+                                objective: None,
+                                status: Some(next),
+                                token_budget: None,
+                            },
+                            PendingKind::Toggle,
+                        ),
+                    },
+                    &theme,
+                    cx,
+                ));
+            }
+            controls.push(self.goal_control(
                 GoalControl {
                     id: "goal-clear",
                     label: "Clear goal".into(),
                     text: None,
-                    glyph: crate::icons::CLOSE,
+                    glyph: crate::icons::TRASH_BIN_MINIMALISTIC,
                     enabled: !busy,
                     spinning: pending == Some(PendingKind::Clear),
                     primary: false,
@@ -793,9 +933,9 @@ impl Composer {
                 },
                 &theme,
                 cx,
-            ))
-        } else if pending.is_some() && !editing {
-            Some(
+            ));
+        } else if pending.is_some() {
+            controls.push(
                 div()
                     .id("goal-progress")
                     .role(Role::ProgressIndicator)
@@ -805,16 +945,16 @@ impl Composer {
                     .items_center()
                     .justify_center()
                     .child(crate::loaders::gradient_spinner(
-                        "goal-create-spinner",
+                        "goal-change-spinner",
                         &theme,
                         SPINNER_CELL,
                         cx.entity_id(),
                         cx,
                     ))
                     .into_any_element(),
-            )
-        } else if !editing {
-            Some(self.goal_control(
+            );
+        } else {
+            controls.push(self.goal_control(
                 GoalControl {
                     id: "goal-dismiss",
                     label: "Dismiss goal message".into(),
@@ -827,157 +967,33 @@ impl Composer {
                 },
                 &theme,
                 cx,
-            ))
-        } else {
-            None
-        };
+            ));
+        }
         let header = div()
-            .id("goal-card-header")
+            .id("goal-bar-header")
             .h(px(HEADER_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
-            .child(header_lead)
-            .when_some(trailing, |header, trailing| {
-                // BB's divider before the dismiss control.
-                header.child(
-                    div()
-                        .h_full()
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .px(px(6.0))
-                        .border_l_1()
-                        .border_color(theme.border.opacity(0.6))
-                        .child(trailing),
-                )
-            });
-
-        // ---- body: objective, usage, readback, actions — or the editor ----
-        let body: Option<AnyElement> = if let Some((objective, budget, creating)) = editor {
-            Some(
-                self.render_goal_editor(objective, budget, creating, has_goal, pending, &theme, cx),
-            )
-        } else if let (true, Some(goal)) = (expanded, goal.as_ref()) {
-            let readback = readback.as_ref()?;
-            let note = readback_note(
-                goal,
-                readback.continuation_ready,
-                checked_ago(
-                    readback.checked_at_ms,
-                    chrono::Utc::now().timestamp_millis(),
-                ),
-            );
-            let meter = goal
-                .token_budget
-                .filter(|budget| *budget > 0)
-                .map(|budget| {
-                    let fraction = (goal.tokens_used as f32 / budget as f32).clamp(0.0, 1.0);
-                    let fill = if fraction >= 1.0 || goal.status == GoalStatus::BudgetLimited {
-                        theme.warning
-                    } else {
-                        theme.accent
-                    };
-                    div()
-                        .w(px(BUDGET_METER_WIDTH))
-                        .h(px(4.0))
-                        .rounded_full()
-                        .bg(theme.ink(0.1))
-                        .child(
-                            div()
-                                .h_full()
-                                .w(px(BUDGET_METER_WIDTH * fraction))
-                                .rounded_full()
-                                .bg(fill),
-                        )
-                });
-            let muted = theme.readable_muted(0.85);
-            let meta_item = |glyph: &'static str, label: String| {
+            .child(summary)
+            .child(
                 div()
+                    .flex_none()
+                    .h_full()
+                    .pr(px(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
-                    .child(
-                        crate::icons::icon(glyph)
-                            .size(px(META_GLYPH))
-                            .text_color(muted),
-                    )
-                    .child(label)
-            };
-            let (toggle_label, toggle_text, toggle_glyph, toggle_status) =
-                if goal.status == GoalStatus::Active {
-                    (
-                        "Pause goal",
-                        "Pause",
-                        crate::icons::PAUSE,
-                        GoalStatus::Paused,
-                    )
-                } else {
-                    (
-                        "Resume goal",
-                        "Resume",
-                        crate::icons::PLAY,
-                        GoalStatus::Active,
-                    )
-                };
-            let edit = self.goal_control(
-                GoalControl {
-                    id: "goal-edit",
-                    label: "Edit goal".into(),
-                    text: Some("Edit"),
-                    glyph: crate::icons::PEN,
-                    enabled: !busy,
-                    spinning: false,
-                    primary: false,
-                    action: GoalAction::Edit,
-                },
-                &theme,
-                cx,
+                    .gap(px(2.0))
+                    .children(controls),
             );
-            let toggle = self.goal_control(
-                GoalControl {
-                    id: "goal-toggle",
-                    label: toggle_label.into(),
-                    text: Some(toggle_text),
-                    glyph: toggle_glyph,
-                    enabled: !busy,
-                    spinning: pending == Some(PendingKind::Toggle),
-                    primary: false,
-                    action: GoalAction::Operation(
-                        GoalOperation::Set {
-                            objective: None,
-                            status: Some(toggle_status),
-                            token_budget: None,
-                        },
-                        PendingKind::Toggle,
-                    ),
-                },
-                &theme,
-                cx,
-            );
-            let complete = (goal.status != GoalStatus::Complete).then(|| {
-                self.goal_control(
-                    GoalControl {
-                        id: "goal-complete",
-                        label: "Mark goal complete".into(),
-                        text: Some("Mark complete"),
-                        glyph: crate::icons::CHECK,
-                        enabled: !busy,
-                        spinning: pending == Some(PendingKind::Complete),
-                        primary: false,
-                        action: GoalAction::Operation(
-                            GoalOperation::Set {
-                                objective: None,
-                                status: Some(GoalStatus::Complete),
-                                token_budget: None,
-                            },
-                            PendingKind::Complete,
-                        ),
-                    },
-                    &theme,
-                    cx,
-                )
-            });
+
+        let body = match (editor, goal.as_ref()) {
+            (Some((objective, budget)), Some(goal)) => {
+                Some(self.render_goal_editor(objective, budget, goal, pending, now_ms, &theme, cx))
+            }
+            _ => None,
+        };
+        let error = error.map(|error| {
             let refresh = self.goal_control(
                 GoalControl {
                     id: "goal-refresh",
@@ -992,80 +1008,26 @@ impl Composer {
                 &theme,
                 cx,
             );
-            Some(
-                div()
-                    .id("goal-card-body")
-                    .border_t_1()
-                    .border_color(theme.border.opacity(0.6))
-                    .px(px(14.0))
-                    .pt(px(10.0))
-                    .pb(px(10.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(12.5))
-                            .line_height(crate::typography::ui_rems(18.0))
-                            .text_color(theme.text.opacity(0.92))
-                            .child(goal.objective.trim().to_owned()),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .items_center()
-                            .gap_x(px(14.0))
-                            .gap_y(px(4.0))
-                            .text_size(crate::typography::ui_rems(11.5))
-                            .text_color(muted)
-                            .child(meta_item(crate::icons::BOLT, token_usage(goal)).children(meter))
-                            .child(meta_item(
-                                crate::icons::CLOCK_CIRCLE,
-                                elapsed(goal.time_used_seconds),
-                            )),
-                    )
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.readable_faint(0.9))
-                            .child(note),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(2.0))
-                            .ml(px(-8.0))
-                            .child(edit)
-                            .child(toggle)
-                            .children(complete)
-                            .child(div().flex_1())
-                            .child(refresh),
-                    )
-                    .into_any_element(),
-            )
-        } else {
-            None
-        };
-
-        let error = error.map(|error| {
             div()
                 .id("goal-error")
                 .role(Role::Alert)
                 .mx(px(12.0))
                 .mb(px(10.0))
-                .when(body.is_none(), |el| el.mt(px(2.0)))
-                .px(px(10.0))
-                .py(px(7.0))
+                .pl(px(10.0))
+                .pr(px(4.0))
+                .py(px(4.0))
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(theme.danger.opacity(0.22))
                 .bg(theme.danger.opacity(0.07))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
                 .text_size(crate::typography::ui_rems(11.5))
                 .line_height(crate::typography::ui_rems(16.0))
                 .text_color(theme.readable_tone(theme.danger_muted, 0.92))
-                .child(error)
+                .child(div().flex_1().min_w_0().py(px(3.0)).child(error))
+                .child(refresh)
         });
 
         let tray = div()
@@ -1089,18 +1051,21 @@ impl Composer {
         Some(crate::frost::frosted(CARD_RADIUS, crate::frost::MENU_BLUR, tray).into_any_element())
     }
 
+    /// Codex's "Edit goal" surface, inline: objective, budget, "Updated …",
+    /// Undo and Save. It stays bound to the chat that opened it.
     #[allow(clippy::too_many_arguments)]
     fn render_goal_editor(
         &self,
         objective: Entity<ComposerInput>,
         budget: Entity<ComposerInput>,
-        creating: bool,
-        has_goal: bool,
+        goal: &ThreadGoal,
         pending: Option<PendingKind>,
+        now_ms: i64,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let busy = self.goal_ui.pending.is_some();
+        let dirty = self.goal_editor_dirty(cx);
         let field = |label: &'static str, input: Entity<ComposerInput>| {
             div()
                 .flex()
@@ -1123,10 +1088,24 @@ impl Composer {
                         .child(input),
                 )
         };
+        let undo = self.goal_control(
+            GoalControl {
+                id: "goal-undo",
+                label: "Undo goal edits".into(),
+                text: Some("Undo"),
+                glyph: crate::icons::RESTART,
+                enabled: !busy && dirty,
+                spinning: false,
+                primary: false,
+                action: GoalAction::Undo,
+            },
+            theme,
+            cx,
+        );
         let cancel = self.goal_control(
             GoalControl {
                 id: "goal-cancel",
-                label: "Cancel goal edit".into(),
+                label: "Close goal editor".into(),
                 text: Some("Cancel"),
                 glyph: crate::icons::CLOSE,
                 enabled: !busy,
@@ -1140,8 +1119,8 @@ impl Composer {
         let save = self.goal_control(
             GoalControl {
                 id: "goal-save",
-                label: if creating { "Set goal" } else { "Save goal" }.into(),
-                text: Some(if creating { "Set goal" } else { "Save" }),
+                label: "Save goal".into(),
+                text: Some("Save"),
                 glyph: crate::icons::CHECK,
                 enabled: !busy,
                 spinning: pending == Some(PendingKind::Save),
@@ -1153,11 +1132,12 @@ impl Composer {
         );
         div()
             .id("goal-editor")
-            .when(has_goal, |el| {
-                el.border_t_1().border_color(theme.border.opacity(0.6))
-            })
+            .role(Role::Group)
+            .aria_label("Edit goal")
+            .border_t_1()
+            .border_color(theme.border.opacity(0.6))
             .px(px(14.0))
-            .pt(px(if has_goal { 10.0 } else { 2.0 }))
+            .pt(px(10.0))
             .pb(px(12.0))
             .flex()
             .flex_col()
@@ -1190,13 +1170,19 @@ impl Composer {
                     .gap(px(6.0))
                     .child(
                         div()
+                            .id("goal-updated")
                             .flex_1()
                             .min_w_0()
                             .truncate()
                             .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.readable_faint(0.9))
-                            .child("Enter to save · Esc to cancel"),
+                            .child(format!(
+                                "{} · {}",
+                                updated_ago(goal.updated_at, now_ms),
+                                token_usage(goal)
+                            )),
                     )
+                    .child(undo)
                     .child(cancel)
                     .child(save),
             )

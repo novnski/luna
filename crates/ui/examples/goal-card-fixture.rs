@@ -1,11 +1,14 @@
-//! Self-contained headless GPUI E2E for the composer goal card.
+//! Self-contained headless GPUI E2E for Codex goals in the composer.
 //!
-//! Drives the production composer, goal card, `/goal` command, slash popup,
-//! key bindings and AccessKit tree in a hidden window with a temporary UI
-//! profile and an in-memory synthetic engine that holds each goal change until
-//! the fixture releases it. It never starts a real engine, contacts a provider,
-//! touches LUNA Dev or its data directory, or opens a visible app window. It
-//! proves presentation and dispatch only, not Codex goal behaviour.
+//! Drives the production composer (Goal switch, goal-mode Send, `/goal`, the
+//! goal bar and its editor), the production transcript ("Sent as goal",
+//! "Goal achieved in …"), key bindings and the AccessKit tree in a hidden
+//! window with a temporary UI profile and an in-memory synthetic engine that
+//! holds each command until the fixture releases it. It never starts a real
+//! engine, contacts a provider, touches LUNA Dev or its data directory, or
+//! opens a visible app window. It proves presentation and dispatch only; the
+//! Codex protocol is proven by `luna-harness --test codex` and
+//! `luna-engine --test codex_goals`.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example goal-card-fixture
@@ -22,13 +25,14 @@ use luna_ui::*;
 
 struct Root {
     composer: Entity<composer::Composer>,
+    transcript: Entity<transcript::Transcript>,
 }
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(typography::font_size(cx).pixels()));
         let theme = theme::Theme::of(cx);
-        // The slash popup and the goal card open above the composer.
+        // The transcript fills the space the slash popup and goal bar open into.
         div()
             .size_full()
             .flex()
@@ -38,6 +42,7 @@ impl Render for Root {
             .text_color(theme.text)
             .font_family(theme.font_sans.clone())
             .p(px(24.0))
+            .child(div().flex_1().min_h_0().child(self.transcript.clone()))
             .child(self.composer.clone())
     }
 }
@@ -87,19 +92,25 @@ fn main() -> anyhow::Result<()> {
             composer::init(cx, settings.composer_send_behavior);
             let state = cx.new(|_| state::AppState::new());
             let composer = cx.new(|cx| composer::Composer::new(state.clone(), cx));
+            let transcript = cx.new(|cx| transcript::Transcript::new(state.clone(), cx));
             let view = composer.clone();
             let window: gpui::AnyWindowHandle = match cx.open_window(
                 WindowOptions {
                     window_background: gpui::WindowBackgroundAppearance::Opaque,
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                         gpui::point(px(20.0), px(20.0)),
-                        size(px(900.0), px(620.0)),
+                        size(px(900.0), px(760.0)),
                     ))),
                     show: false,
                     focus: false,
                     ..Default::default()
                 },
-                |_, cx| cx.new(|_| Root { composer: view }),
+                |_, cx| {
+                    cx.new(|_| Root {
+                        composer: view,
+                        transcript,
+                    })
+                },
             ) {
                 Ok(window) => window.into(),
                 Err(error) => {
@@ -120,7 +131,7 @@ fn main() -> anyhow::Result<()> {
                     )?;
                     std::fs::write(
                         output.join("goal-card.pass"),
-                        "PASS: headless GPUI goal card + /goal dispatch + AccessKit fixture; synthetic engine, no provider proof\n",
+                        "PASS: headless GPUI goal mode + goal bar + transcript goal marks + AccessKit fixture; synthetic engine, no provider proof\n",
                     )?;
                     Ok(())
                 }
