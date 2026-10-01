@@ -1484,7 +1484,7 @@ async fn run_session(session: Session) {
             .get(LUNA_STRICT_RESUME_OPTION)
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let thread = if let Some(resume) = &request.resume {
+        let (thread, resumed) = if let Some(resume) = &request.resume {
             let mut p = start_params.clone();
             // Dynamic tools are retained in the provider's original thread
             // metadata; thread/resume has no replacement dynamicTools field.
@@ -1495,23 +1495,25 @@ async fn run_session(session: Session) {
             // sub-agents is rebuilt from `thread/turns/list` below.
             p.insert("excludeTurns".into(), true.into());
             match client.request("thread/resume", Value::Object(p)).await {
-                Ok(thread) => thread,
+                Ok(thread) => (thread, true),
                 // A missing/foreign rollout falls back to a fresh thread.
                 Err(e) if !strict_resume => {
                     tracing::debug!(
                         target: "luna_harness::codex",
                         "thread/resume failed (starting fresh): {e}"
                     );
-                    client
+                    let thread = client
                         .request("thread/start", Value::Object(start_params.clone()))
-                        .await?
+                        .await?;
+                    (thread, false)
                 }
                 Err(e) => return Err(e),
             }
         } else {
-            client
+            let thread = client
                 .request("thread/start", Value::Object(start_params.clone()))
-                .await?
+                .await?;
+            (thread, false)
         };
         let thread_id = thread["thread"]["id"].as_str().unwrap_or("").to_owned();
         if request.review.is_some() && thread_id.is_empty() {
@@ -1553,7 +1555,7 @@ async fn run_session(session: Session) {
         {
             // An older app-server that ignores excludeTurns still hydrates.
             children.restore(&thread["thread"]);
-        } else if !title_only && request.resume.as_deref() == Some(thread_id.as_str()) {
+        } else if resumed && !title_only && !thread_id.is_empty() {
             match native::page_turns(&client, &thread_id, false, 100, |_| true).await {
                 Ok(turns) => children.restore_turns(&turns),
                 // Fail open: unbound child traffic still waits for its spawn.

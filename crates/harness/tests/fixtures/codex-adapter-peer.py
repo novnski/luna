@@ -35,14 +35,24 @@ def log(direction, value):
             stream.write(json.dumps({'dir': direction, 'msg': value}) + '\n')
 
 
+_pending = b''
+
+
 def read(timeout=None):
-    if timeout is not None:
-        ready, _, _ = select.select([sys.stdin], [], [], timeout)
-        if not ready:
-            return None
-    line = sys.stdin.readline()
-    if not line:
-        raise SystemExit(0)
+    """One JSON line from stdin. Unbuffered on the fd: Python's buffered
+    `sys.stdin` can hold a complete line that `select` cannot see."""
+    global _pending
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while b'\n' not in _pending:
+        if deadline is not None:
+            left = deadline - time.monotonic()
+            if left <= 0 or not select.select([0], [], [], left)[0]:
+                return None
+        chunk = os.read(0, 65536)
+        if not chunk:
+            raise SystemExit(0)
+        _pending += chunk
+    line, _pending = _pending.split(b'\n', 1)
     value = json.loads(line)
     log('in', value)
     return value
