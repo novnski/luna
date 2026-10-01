@@ -283,6 +283,8 @@ case "$first" in
   u2=$(uuid_of "$second")
   stamped_text sess-eng "$u2" SECOND-ANSWER se-h2
   own_result sess-eng "$u2" res-second
+  # Post-turn lifecycle while the session is parked (journal-only evidence).
+  bg_notification sess-eng 3
   # Stay warm like the real CLI until LUNA closes stdin.
   while read -r _; do :; done
   ;;
