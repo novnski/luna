@@ -94,7 +94,8 @@ async fn start(scenario: &str, mode: PermissionMode, extra_prompt: &str) -> Run 
     };
     let harness = ClaudeHarness::new()
         .with_executable(peer())
-        .with_graces(Duration::from_millis(800), Duration::from_millis(800));
+        // Room for the peer to verify silence after Stop before SIGTERM.
+        .with_graces(Duration::from_secs(4), Duration::from_millis(800));
     let stream = harness.run(request, controls).await.expect("run starts");
     let events = tokio::spawn(async move {
         stream
