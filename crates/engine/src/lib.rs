@@ -140,6 +140,7 @@ pub mod local_import;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
 mod model_cache;
+mod native_tasks;
 pub mod permissions;
 pub mod profile;
 pub mod project_commands;

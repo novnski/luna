@@ -921,6 +921,13 @@ pub enum AgentEvent {
     ProviderTaskChanged {
         change: String,
     },
+    /// Provider-native coordination task observation (Claude workflow,
+    /// teammate, remote agent). Control-plane state persisted per document;
+    /// never transcript content, a turn boundary or human authority.
+    #[serde(rename_all = "camelCase")]
+    NativeTaskChanged {
+        task: Box<crate::NativeTaskSnapshot>,
+    },
     Error {
         message: String,
     },

@@ -89,6 +89,12 @@ pub mod methods {
     /// Messages typed while the agent was busy, held on the chat doc so every
     /// device sees the same queue. `{ chatId }` → `{ items: QueuedMessage[] }`.
     pub const WATCH_QUEUE: &str = "WatchQueue";
+    /// Provider-native workflows/teammates observed for a chat (read-only).
+    /// `{ chatId }` → stream of `NativeTaskLedger`.
+    pub const WATCH_NATIVE_TASKS: &str = "WatchNativeTasks";
+    /// Claude Code's own session supervisor (`claude agents --json`), read-only.
+    /// `{}` → `ClaudeExternalSessionsView`. IPC-only, engine-device local.
+    pub const LIST_CLAUDE_EXTERNAL_SESSIONS: &str = "ListClaudeExternalSessions";
     /// Append to the queue. `{ chatId, text, attachments?, holdForTurnEnd? }` → `{ id }`.
     pub const QUEUE_MESSAGE: &str = "QueueMessage";
     /// Retype a queued message; empty text deletes it.
@@ -346,6 +352,8 @@ pub mod methods {
         UNLOAD_SIDE_CHAT,
         WATCH_DOC_MESSAGES,
         WATCH_QUEUE,
+        WATCH_NATIVE_TASKS,
+        LIST_CLAUDE_EXTERNAL_SESSIONS,
         QUEUE_MESSAGE,
         UPDATE_QUEUED_MESSAGE,
         BEGIN_QUEUED_MESSAGE_EDIT,

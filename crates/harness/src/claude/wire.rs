@@ -57,6 +57,9 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// Workflow/teammate task fields (tolerant raw values; see coordination).
+    #[serde(flatten)]
+    pub task_fields: super::coordination::TaskFrameFields,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown

@@ -898,6 +898,9 @@ pub struct AppState {
     pub queue: Vec<luna_doc::QueuedMessage>,
     pub context_usage: Option<luna_proto::ContextUsage>,
     pub context_control: luna_proto::ContextControlState,
+    /// Provider-native workflows/teammates of the selected chat, as last
+    /// observed by its host (read-only; never transcript content).
+    pub native_tasks: luna_proto::NativeTaskLedger,
     /// The selected chat's opening `WatchDocMessages` reset has landed. An
     /// empty transcript is otherwise indistinguishable from the pre-replay
     /// gap after selection, where optimistic echoes may already be visible.
@@ -941,6 +944,7 @@ pub struct AppState {
     change_requests: ChangeRequestClientState,
     change_request_tasks: HashMap<ChangeRequestWatchKey, Task<()>>,
     queue_task: Option<Task<()>>,
+    native_tasks_task: Option<Task<()>>,
     change_requests_visible: bool,
     /// SUBAGENT transcripts keyed by subagent doc id (the right pane's
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
@@ -1015,6 +1019,8 @@ impl AppState {
             change_requests: ChangeRequestClientState::default(),
             change_request_tasks: HashMap::new(),
             queue_task: None,
+            native_tasks: Default::default(),
+            native_tasks_task: None,
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
@@ -1147,11 +1153,13 @@ impl AppState {
             self.transcript.clear();
             self.context_usage = None;
             self.context_control = Default::default();
+            self.native_tasks = Default::default();
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
             self.transcript_task = None;
             self.queue.clear();
             self.queue_task = None;
+            self.native_tasks_task = None;
         }
     }
 
@@ -1946,6 +1954,7 @@ impl AppState {
         self.transcript_baselines.clear();
         self.context_usage = None;
         self.context_control = Default::default();
+        self.native_tasks = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         self.echoes.clear();
@@ -2103,6 +2112,11 @@ impl AppState {
         if let Some(chat_id) = self.selected_chat.clone() {
             self.transcript_task =
                 Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+            self.native_tasks_task = Some(spawn_native_tasks_watch(
+                cx,
+                handle.clone(),
+                chat_id.clone(),
+            ));
             if handle
                 .engine_info()
                 .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
@@ -2256,11 +2270,13 @@ impl AppState {
         self.transcript.clear();
         self.context_usage = None;
         self.context_control = Default::default();
+        self.native_tasks = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         self.transcript_task = None;
         self.queue.clear();
         self.queue_task = None;
+        self.native_tasks_task = None;
         if let Some(id) = chat_id.as_deref() {
             // A chat implies its project; `select_chat(None)` (the new-session
             // canvas) keeps the current project pick.
@@ -2276,6 +2292,11 @@ impl AppState {
         if let (Some(chat_id), Some(handle)) = (chat_id, self.engine.clone()) {
             self.transcript_task =
                 Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+            self.native_tasks_task = Some(spawn_native_tasks_watch(
+                cx,
+                handle.clone(),
+                chat_id.clone(),
+            ));
             if handle
                 .engine_info()
                 .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
@@ -2764,6 +2785,52 @@ fn spawn_queue_watch(
                     // Guard against a stale pump racing a newer selection.
                     if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
                         state.queue = frame.items;
+                        cx.notify();
+                    }
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+            if this.update(cx, |_, _| {}).is_err() {
+                return;
+            }
+            cx.background_executor().timer(RETRY_DELAY).await;
+        }
+    })
+}
+
+/// The selected chat's provider-native workflows/teammates. An engine that
+/// does not offer the watch (older host) is simply not asked again until the
+/// next attach; a dropped stream retries like the queue watch.
+fn spawn_native_tasks_watch(
+    cx: &mut Context<AppState>,
+    handle: EngineHandle,
+    chat_id: String,
+) -> Task<()> {
+    cx.spawn(async move |this, cx| {
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+        loop {
+            let params = serde_json::json!({ "chatId": chat_id });
+            let Ok(mut rx) = handle
+                .client()
+                .subscribe_checked(methods::WATCH_NATIVE_TASKS, params)
+                .await
+            else {
+                tracing::debug!(%chat_id, "native task watch unavailable");
+                return;
+            };
+            while let Some(value) = rx.recv().await {
+                let Ok(ledger) = serde_json::from_value::<luna_proto::NativeTaskLedger>(value)
+                else {
+                    tracing::warn!(%chat_id, "dropping malformed native task frame");
+                    continue;
+                };
+                let alive = this.update(cx, |state, cx| {
+                    if state.selected_chat.as_deref() == Some(chat_id.as_str())
+                        && state.native_tasks != ledger
+                    {
+                        state.native_tasks = ledger;
                         cx.notify();
                     }
                 });

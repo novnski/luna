@@ -25,6 +25,8 @@ use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
 
+mod claude_sessions;
+
 fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
     widgets::meta_line(
         theme,
@@ -108,6 +110,8 @@ pub struct HarnessesPage {
     runtime_contract: Loadable<RuntimeContractView>,
     runtime_task: Option<Task<()>>,
     runtime_task_id: Option<String>,
+    claude_sessions: crate::claude_advanced::ExternalSessionsState,
+    claude_sessions_task: Option<Task<()>>,
     _state_observer: Subscription,
 }
 
@@ -179,9 +183,12 @@ impl HarnessesPage {
             runtime_contract: Loadable::Idle,
             runtime_task: None,
             runtime_task_id: None,
+            claude_sessions: Default::default(),
+            claude_sessions_task: None,
             _state_observer: state_observer,
         };
         page.load(cx);
+        page.load_claude_sessions(cx);
         page
     }
 
@@ -1777,6 +1784,7 @@ impl HarnessesPage {
                     )
                     .child(self.render_instructions(&theme, cx))
                     .child(self.render_runtime_contract(&theme, cx))
+                    .child(self.render_claude_advanced(&theme, cx))
             })
             .child(self.render_titles(&theme, cx))
             .into_any_element()

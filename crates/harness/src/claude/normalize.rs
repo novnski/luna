@@ -233,6 +233,8 @@ pub(crate) struct Normalizer {
     assistant_message_id: String,
     /// Last session id seen (init or result) — used for synthetic Dones.
     pub session_id: Option<String>,
+    /// Native workflows/teammates/remote agents (never subagent spawns).
+    coordination: super::coordination::CoordinationTracker,
 }
 
 impl Normalizer {
@@ -245,6 +247,7 @@ impl Normalizer {
             agent_spawn_tools: std::collections::HashSet::new(),
             assistant_message_id: new_message_id(),
             session_id: None,
+            coordination: Default::default(),
         }
     }
 
@@ -267,6 +270,9 @@ impl Normalizer {
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
             Frame::System(f) => {
+                if let Some(events) = self.coordination.observe(&f) {
+                    return events;
+                }
                 // A background subagent's completion arrives as an UNTAGGED
                 // `task_notification` carrying the spawning tool's id — the
                 // wire's only terminal signal for it (live-verified 2.1.228:

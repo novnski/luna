@@ -6976,6 +6976,10 @@ async fn drive_run(
 
     let mut final_completed_turn = None;
     let mut journal_failure: Option<EngineError> = None;
+    // Last report from a still-active native workflow/teammate. Pushes the
+    // parked-session reaper out so it never kills a child mid-workflow; a
+    // task that goes silent still lets the reaper end eventually.
+    let mut native_activity_at: Option<tokio::time::Instant> = None;
     let final_status = loop {
         let event: AgentEvent = if let Some(event) = prepared_events.pop_front() {
             event
@@ -7007,7 +7011,9 @@ async fn drive_run(
                 // nobody returned to in 30 minutes releases its child. The turn
                 // was finalized at Done, so this end is clean — no aborted stamp.
                 _ = tokio::time::sleep_until(
-                    idle_since.map(|at| at + SESSION_IDLE).unwrap_or_else(tokio::time::Instant::now)
+                    idle_since
+                        .map(|at| at.max(native_activity_at.unwrap_or(at)) + SESSION_IDLE)
+                        .unwrap_or_else(tokio::time::Instant::now)
                 ), if idle_since.is_some() => {
                     tracing::info!(chat = %chat_id, "reaping idle persistent session");
                     if let Some(token) = lock(&inner.runs)
@@ -7394,6 +7400,14 @@ async fn drive_run(
         if let AgentEvent::ContextUsage { tokens, window } = &event {
             if let Err(err) = doc_ref.update_context_usage(*tokens, *window) {
                 tracing::warn!(%chat_id, error = %err, "context usage write failed");
+            }
+            continue;
+        }
+        // Native workflow/teammate state keeps arriving after the launching
+        // turn's Done; persist it without reopening the parked turn.
+        if let AgentEvent::NativeTaskChanged { task } = &event {
+            if crate::native_tasks::persist(doc_ref, &chat_id, task) {
+                native_activity_at = Some(tokio::time::Instant::now());
             }
             continue;
         }
@@ -8421,6 +8435,7 @@ async fn drive_run(
             let _ = doc_ref.update_subagent_chip(parent_id, None, Some("unobserved"), None, None);
         }
     }
+    crate::native_tasks::settle_session_ended(doc_ref, &chat_id);
     // Any child transcript still streaming freezes as-is: the parent event
     // stream is gone, so this sink cannot receive more content in this run.
     for (_, sink) in subagents.drain() {

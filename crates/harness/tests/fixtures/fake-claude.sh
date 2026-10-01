@@ -50,6 +50,82 @@ case "$first" in
   ;;
 
 
+*scenario:workflow*)
+  # Native dynamic workflow (task_type local_workflow) plus an experimental
+  # teammate and a CC-08-owned shell task. Shapes follow the 2.1.286 binary's
+  # SDK schema (task_started/task_updated/task_notification) and its workflow
+  # emitter (task_progress.workflow_progress, logs filtered). The launching
+  # turn settles first; the run then reports while the session is parked and
+  # ends in a wake turn — the 2.1.228 background-task shape.
+  S='"session_id":"sess-wf"'
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Workflow","Agent","Bash"],"cwd":"/tmp","session_id":"sess-wf"}'
+  emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"toolu_wf","name":"Workflow","input":{"script":"export const meta = { name: \"audit-routes\", description: \"Audit routes\" }\nphase(\"Discover\")\nawait agent(\"List routes\", { label: \"list routes\" })"}}]}}'
+  emit '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"wf1","task_type":"local_workflow","description":"Audit routes"}],"uuid":"u-btc-1",'"$S"'}'
+  emit '{"type":"system","subtype":"task_started","task_id":"wf1","tool_use_id":"toolu_wf","description":"Audit routes","task_type":"local_workflow","workflow_name":"audit-routes","prompt":"","uuid":"u-ts-1",'"$S"'}'
+  emit '{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_wf","content":"Workflow running in background (task wf1).","is_error":false}]}}'
+  emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"Started the audit workflow."}]}}'
+  emit '{"type":"result","subtype":"success","result":"Started the audit workflow.","errors":[],"usage":{"input_tokens":5,"output_tokens":5},'"$S"'}'
+  P1='{"type":"workflow_phase","index":1,"title":"Discover","kind":"agent"}'
+  A1RUN='{"type":"workflow_agent","index":1,"label":"list routes","phaseIndex":1,"phaseTitle":"Discover","model":"claude-haiku-4-5","state":"progress","queuedAt":1790000000000,"promptPreview":"List routes","lastProgressAt":1790000001000}'
+  PROG1='{"type":"system","subtype":"task_progress","task_id":"wf1","tool_use_id":"toolu_wf","description":"Discover: list routes","usage":{"total_tokens":1200,"tool_uses":2,"duration_ms":4000},"last_tool_name":"list routes","summary":"Audit routes","workflow_progress":['"$P1,$A1RUN"'],"uuid":"u-tp-1",'"$S"'}'
+  emit "$PROG1"
+  emit "$PROG1"
+  emit '{"type":"system","subtype":"task_progress","task_id":"wf1","tool_use_id":"toolu_wf","description":"Discover: list routes","usage":{"total_tokens":1500,"tool_uses":3,"duration_ms":6000},"last_tool_name":"list routes","summary":"Audit routes","uuid":"u-tp-2",'"$S"'}'
+  A1DONE='{"type":"workflow_agent","index":1,"label":"list routes","phaseIndex":1,"phaseTitle":"Discover","agentId":"ag-1","model":"claude-haiku-4-5","state":"done","tokens":1400,"toolCalls":3,"resultPreview":"12 routes","lastProgressAt":1790000002000}'
+  P2='{"type":"workflow_phase","index":2,"title":"Audit","kind":"pipeline"}'
+  A2='{"type":"workflow_agent","index":2,"label":"audit a.ts","phaseIndex":2,"phaseTitle":"Audit","model":"claude-haiku-4-5","state":"progress","tokens":300,"toolCalls":1,"lastProgressAt":1790000003000}'
+  A3='{"type":"workflow_agent","index":3,"label":"audit b.ts","phaseIndex":2,"phaseTitle":"Audit","state":"error","blocked":true,"error":"[audit b.ts] blocked by safety classifier: writes outside the project","lastProgressAt":1790000003500}'
+  emit '{"type":"system","subtype":"task_progress","task_id":"wf1","tool_use_id":"toolu_wf","description":"Audit: audit a.ts","usage":{"total_tokens":3100,"tool_uses":5,"duration_ms":9000},"last_tool_name":"audit a.ts","summary":"Audit routes","workflow_progress":['"$P1,$A1DONE,$P2,$A2,$A3"'],"uuid":"u-tp-3",'"$S"'}'
+  emit '{"type":"system","subtype":"task_updated","task_id":"wf1","patch":{"status":"paused"},"uuid":"u-tu-1",'"$S"'}'
+  emit '{"type":"system","subtype":"task_updated","task_id":"wf1","patch":{"status":"running","total_paused_ms":1200},"uuid":"u-tu-2",'"$S"'}'
+  # Frames for an id no task_started announced: never attached anywhere.
+  emit '{"type":"system","subtype":"task_progress","task_id":"ghost","description":"ghost","usage":{"total_tokens":1,"tool_uses":0,"duration_ms":1},"uuid":"u-g-1",'"$S"'}'
+  emit '{"type":"system","subtype":"task_updated","task_id":"ghost","patch":{"status":"completed"},"uuid":"u-g-2",'"$S"'}'
+  emit '{"type":"system","subtype":"task_notification","task_id":"ghost","tool_use_id":"toolu_ghost","status":"completed","output_file":"","summary":"ghost","uuid":"u-g-3",'"$S"'}'
+  # Experimental teammate (only with external opt-in) and a CC-08 shell job.
+  emit '{"type":"system","subtype":"task_started","task_id":"tm1","tool_use_id":"toolu_team","description":"reviewer teammate","task_type":"in_process_teammate","uuid":"u-ts-2",'"$S"'}'
+  emit '{"type":"system","subtype":"task_started","task_id":"bg1","tool_use_id":"toolu_bash","description":"sleep 1","task_type":"local_bash","uuid":"u-ts-3",'"$S"'}'
+  emit '{"type":"system","subtype":"task_notification","task_id":"bg1","tool_use_id":"toolu_bash","status":"completed","output_file":"","summary":"sleep 1","uuid":"u-tn-0",'"$S"'}'
+  emit '{"type":"system","subtype":"task_notification","task_id":"tm1","tool_use_id":"toolu_team","status":"stopped","reason":"worker_restart","output_file":"","summary":"reviewer teammate","uuid":"u-tn-1",'"$S"'}'
+  emit '{"type":"system","subtype":"background_tasks_changed","tasks":[],"uuid":"u-btc-2",'"$S"'}'
+  emit '{"type":"system","subtype":"task_updated","task_id":"wf1","patch":{"status":"completed","end_time":1790000009000},"uuid":"u-tu-3",'"$S"'}'
+  emit '{"type":"system","subtype":"task_notification","task_id":"wf1","tool_use_id":"toolu_wf","status":"completed","output_file":"/tmp/claude-501/-tmp/sess-wf/tasks/wf1.output","summary":"Dynamic workflow \"Audit routes\" completed","usage":{"total_tokens":3400,"tool_uses":6,"duration_ms":9500},"uuid":"u-tn-2",'"$S"'}'
+  # Late frames after the terminal: no resurrection, no flip.
+  emit '{"type":"system","subtype":"task_progress","task_id":"wf1","tool_use_id":"toolu_wf","description":"late","usage":{"total_tokens":9999,"tool_uses":9,"duration_ms":9999},"uuid":"u-tp-late",'"$S"'}'
+  emit '{"type":"system","subtype":"task_notification","task_id":"wf1","tool_use_id":"toolu_wf","status":"failed","output_file":"","summary":"late failure","uuid":"u-tn-late",'"$S"'}'
+  # Wake turn: same session re-init (deduped) and a second result.
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Workflow","Agent","Bash"],"cwd":"/tmp","session_id":"sess-wf"}'
+  emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"The audit found one blocked file."}]}}'
+  emit '{"type":"result","subtype":"success","result":"The audit found one blocked file.","errors":[],"usage":{"input_tokens":5,"output_tokens":7},'"$S"'}'
+  ;;
+
+*scenario:workflow-abandoned*)
+  # The provider process exits while its workflow is still running (crash,
+  # reaper, app quit): nothing it owned can still be running afterwards.
+  S='"session_id":"sess-wf-gone"'
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Workflow"],"cwd":"/tmp","session_id":"sess-wf-gone"}'
+  emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"toolu_wf2","name":"Workflow","input":{"scriptPath":"/tmp/wf.js"}}]}}'
+  emit '{"type":"system","subtype":"task_started","task_id":"wf2","tool_use_id":"toolu_wf2","description":"Long migration","task_type":"local_workflow","workflow_name":"migrate","prompt":"","uuid":"u-ts-9",'"$S"'}'
+  emit '{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_wf2","content":"Workflow running in background.","is_error":false}]}}'
+  emit '{"type":"result","subtype":"success","result":"started","errors":[],"usage":{"input_tokens":1,"output_tokens":1},'"$S"'}'
+  emit '{"type":"system","subtype":"task_progress","task_id":"wf2","tool_use_id":"toolu_wf2","description":"Migrate: a.js","usage":{"total_tokens":10,"tool_uses":1,"duration_ms":100},"workflow_progress":[{"type":"workflow_phase","index":1,"title":"Migrate","kind":"pipeline"},{"type":"workflow_agent","index":1,"label":"a.js","phaseIndex":1,"state":"progress"}],"uuid":"u-tp-9",'"$S"'}'
+  ;;
+
+*scenario:env-scrub*)
+  # A LUNA-launched child must not inherit a parent Claude session's
+  # messaging/bridge identity.
+  for name in CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_CODE_BRIDGE_SESSION_ID CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ATTENDED CLAUDE_JOB_DIR; do
+    eval "present=\${$name+x}"
+    if [ -n "$present" ]; then
+      emit '{"type":"result","subtype":"error_during_execution","errors":["inherited '"$name"'"],"usage":{"input_tokens":0,"output_tokens":0},"session_id":"sess-env"}'
+      exit 0
+    fi
+  done
+  [ "$LUNA_ENV_SENTINEL" = "kept" ] || { emit '{"type":"result","subtype":"error_during_execution","errors":["unrelated env was scrubbed"],"usage":{"input_tokens":0,"output_tokens":0},"session_id":"sess-env"}'; exit 0; }
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":[],"cwd":"/tmp","session_id":"sess-env"}'
+  emit '{"type":"result","subtype":"success","result":"clean","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-env"}'
+  ;;
+
 *scenario:happy*)
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Bash","Read"],"cwd":"/tmp","session_id":"sess-1"}'
   # Re-emitted init mid-run (background-task wakeup): must be deduped.

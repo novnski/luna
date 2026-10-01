@@ -30,7 +30,9 @@
 //! - Interrupt: cancelling [`RunControls::interrupt`] sends the protocol-level
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
+pub mod background_sessions;
 pub mod catalog;
+mod coordination;
 mod normalize;
 mod wire;
 
@@ -148,6 +150,7 @@ impl ClaudeHarness {
     fn build_command(&self, exe: &PathBuf, request: &RunRequest) -> Command {
         let mut cmd = Command::new(exe);
         crate::compose_child_path(&mut cmd, exe);
+        coordination::scrub_inherited_session_env(&mut cmd);
         cmd.args([
             "--print",
             "--input-format",
@@ -264,6 +267,7 @@ impl ClaudeHarness {
         let exe = self.resolve_executable()?;
         let mut cmd = Command::new(&exe);
         crate::compose_child_path(&mut cmd, &exe);
+        coordination::scrub_inherited_session_env(&mut cmd);
         cmd.args([
             "--print",
             "--input-format",
@@ -512,6 +516,9 @@ impl ClaudeHarness {
             .model_options
             .remove(crate::LUNA_PROVIDER_AUTH_INSTANCE_OPTION);
         let exe = self.resolve_executable()?;
+        if !title_only && let Some(resume) = request.resume.as_deref() {
+            background_sessions::refuse_concurrent_writer(&exe, resume).await?;
+        }
         let mut cmd = self.build_command(&exe, &request);
         if title_only {
             cmd.args([
