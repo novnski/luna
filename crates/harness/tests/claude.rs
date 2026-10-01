@@ -857,3 +857,349 @@ async fn title_run_disables_tools_and_denies_unexpected_permissions() {
         "{events:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// cc01 transport/control (CLI 2.1.286 shapes). Failure cases:
+// $B/evidence/cc01-transport/failure-cases.md. Frames come from the installed
+// binary's SDK schema and initialization-only handshakes; no model turn.
+// ---------------------------------------------------------------------------
+
+fn compat_ledger() -> serde_json::Value {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude/compat-2.1.286.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("ledger fixture")).expect("ledger")
+}
+
+fn explicit_steer(id: &str) -> (SteerMessage, oneshot::Receiver<SteerAcceptance>) {
+    let (acceptance_tx, acceptance_rx) = oneshot::channel();
+    (
+        SteerMessage {
+            input_items: Vec::new(),
+            attachments: Vec::new(),
+            prompt: "redirect please".into(),
+            message_id: Some(id.into()),
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(acceptance_tx),
+        },
+        acceptance_rx,
+    )
+}
+
+/// Drive a run; once the CLI's init is normalized (so its capabilities are
+/// known), queue `steer`, and optionally interrupt `stop_after` later.
+async fn run_steering_after_start(
+    harness: &ClaudeHarness,
+    req: RunRequest,
+    controls: RunControls,
+    steer_tx: mpsc::Sender<SteerMessage>,
+    steer: SteerMessage,
+    stop: Option<(CancellationToken, Duration)>,
+) -> Vec<AgentEvent> {
+    let mut stream = harness.run(req, controls).await.expect("run starts");
+    let mut steer = Some(steer);
+    tokio::time::timeout(Duration::from_secs(15), async move {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            if matches!(event, AgentEvent::SessionStarted { .. })
+                && let Some(steer) = steer.take()
+            {
+                steer_tx.send(steer).await.expect("steer queued");
+                if let Some((token, after)) = stop.clone() {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(after).await;
+                        token.cancel();
+                    });
+                }
+            }
+            events.push(event);
+        }
+        events
+    })
+    .await
+    .expect("run finished in time")
+}
+
+fn assert_completed(events: &[AgentEvent], result: &str) {
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done { status: DoneStatus::Completed, result: Some(text), error: None, .. }
+                if text == result
+        )),
+        "expected Completed({result}): {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn cc01_every_unsupported_inbound_control_gets_one_explicit_error() {
+    let ledger = compat_ledger();
+    let refused: Vec<&str> = ledger["transport"]["inbound_requests"]
+        .as_array()
+        .expect("inbound_requests")
+        .iter()
+        .filter(|row| row["luna"] == "unsupported_error")
+        .map(|row| row["subtype"].as_str().expect("subtype"))
+        .collect();
+    assert!(refused.contains(&"elicitation") && refused.contains(&"luna_future_subtype"));
+    let prompt = format!("scenario:cc01-unknown-controls {}", refused.join(" "));
+    let (controls, _steer, _token) = controls("Allow once");
+    let events = run_to_end(&harness(), request(&prompt), controls).await;
+    // The fake ends Completed only if every subtype got exactly one error
+    // reply with its id and reason, and the duplicate id, the id-less request,
+    // the stray response, the unknown withdrawal and the heartbeat got none.
+    assert_completed(&events, "controls-ok");
+}
+
+#[tokio::test]
+async fn cc01_withdrawn_approval_is_never_answered_late() {
+    let root = tempfile::tempdir().unwrap();
+    let surfaced = root.path().join("surfaced");
+    let asked = Arc::new(Mutex::new(0usize));
+    let (steer_tx, steer_rx) = mpsc::channel(8);
+    let token = CancellationToken::new();
+    let counter = Arc::clone(&asked);
+    let controls = RunControls {
+        // Surfacing drops a marker; the fake then withdraws the prompt, and
+        // "Allow once" arrives later still: it must never reach the CLI.
+        request_input: Box::new(move |questions: Vec<UserInputQuestion>| {
+            *counter.lock().unwrap() += 1;
+            std::fs::write(&surfaced, b"1").unwrap();
+            let (tx, rx) = oneshot::channel();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let _ = tx.send(
+                    questions
+                        .iter()
+                        .map(|q| UserInputAnswer {
+                            question_id: q.id.clone(),
+                            labels: vec!["Allow once".into()],
+                        })
+                        .collect(),
+                );
+            });
+            rx
+        }),
+        steering: steer_rx,
+        interrupt: token.clone(),
+        invoke_luna_tool: None,
+    };
+    let mut req = request("scenario:cc01-cancel-approval");
+    req.cwd = root.path().to_str().unwrap().into();
+    let events = run_to_end(&harness(), req, controls).await;
+    drop(steer_tx);
+    assert_completed(&events, "cancel-ok");
+    assert_eq!(*asked.lock().unwrap(), 1, "the approval was surfaced once");
+}
+
+#[tokio::test]
+async fn cc01_explicit_steer_settles_only_on_its_exact_lifecycle_receipt() {
+    let (controls, steer_tx, _token) = controls("A");
+    let (steer, acceptance) = explicit_steer("queued-steer");
+    let events = run_steering_after_start(
+        &harness(),
+        request("scenario:cc01-lifecycle-steer"),
+        controls,
+        steer_tx,
+        steer,
+        None,
+    )
+    .await;
+    assert_eq!(
+        acceptance.await.expect("acceptance"),
+        SteerAcceptance::Accepted
+    );
+    let steered: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(at, event)| matches!(event, AgentEvent::Steered { .. }).then_some(at))
+        .collect();
+    assert_eq!(
+        steered.len(),
+        1,
+        "one exact receipt, duplicates and foreign uuids ignored: {events:?}"
+    );
+    let AgentEvent::Steered {
+        user_message_id,
+        assistant_message_id,
+        next_assistant_message_id,
+    } = &events[steered[0]]
+    else {
+        unreachable!()
+    };
+    assert_eq!(user_message_id.as_deref(), Some("queued-steer"));
+    assert!(assistant_message_id.is_some() && next_assistant_message_id.is_some());
+    assert_ne!(assistant_message_id, next_assistant_message_id);
+    let position = |text: &str| {
+        events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::TextDelta { text: t } if t == text))
+            .unwrap_or_else(|| panic!("missing delta {text}: {events:?}"))
+    };
+    assert!(position("first") < steered[0] && steered[0] < position("steered"));
+    assert_completed(&events, "lifecycle-ok");
+}
+
+#[tokio::test]
+async fn cc01_refused_steer_is_rejected_not_accepted() {
+    let (controls, steer_tx, _token) = controls("A");
+    let (steer, acceptance) = explicit_steer("refused-steer");
+    let events = run_steering_after_start(
+        &harness(),
+        request("scenario:cc01-lifecycle-refused"),
+        controls,
+        steer_tx,
+        steer,
+        None,
+    )
+    .await;
+    assert!(
+        matches!(acceptance.await.expect("acceptance"), SteerAcceptance::Rejected(reason) if reason.contains("refused")),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Steered { .. })),
+        "{events:?}"
+    );
+    assert_completed(&events, "refused-ok");
+}
+
+#[tokio::test]
+async fn cc01_silent_lifecycle_falls_back_to_the_write_acknowledgement() {
+    let (controls, steer_tx, _token) = controls("A");
+    let (steer, acceptance) = explicit_steer("silent-steer");
+    let started = std::time::Instant::now();
+    let run = tokio::spawn(async move {
+        run_steering_after_start(
+            &harness(),
+            request("scenario:cc01-lifecycle-silent"),
+            controls,
+            steer_tx,
+            steer,
+            None,
+        )
+        .await
+    });
+    assert_eq!(
+        acceptance.await.expect("acceptance"),
+        SteerAcceptance::Accepted
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(1500),
+        "acceptance waited for a receipt before falling back"
+    );
+    let events = run.await.unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Steered { .. })),
+        "{events:?}"
+    );
+    assert_completed(&events, "silent-ok");
+}
+
+#[tokio::test]
+async fn cc01_stop_rejects_an_unreceipted_steer_the_cli_cancelled() {
+    let harness = ClaudeHarness::new()
+        .with_executable(fixture_path())
+        .with_graces(Duration::from_secs(5), Duration::from_secs(2));
+    let (controls, steer_tx, token) = controls("A");
+    let (steer, acceptance) = explicit_steer("stopped-steer");
+    let events = run_steering_after_start(
+        &harness,
+        request("scenario:cc01-stop-cancels-queued"),
+        controls,
+        steer_tx,
+        steer,
+        Some((token, Duration::from_millis(300))),
+    )
+    .await;
+    assert!(
+        matches!(acceptance.await.expect("acceptance"), SteerAcceptance::Rejected(reason) if reason.contains("stopped")),
+        "the interrupt receipt's cancelled list must reject the queued steer: {events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn cc01_stop_sends_a_unique_cancel_queued_interrupt_and_drains_before_signals() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = ClaudeHarness::new()
+        .with_executable(fixture_path())
+        .with_graces(Duration::from_secs(5), Duration::from_secs(2));
+    let (controls, _steer, token) = controls("A");
+    let mut req = request("scenario:cc01-interrupt-receipt");
+    req.cwd = root.path().to_str().unwrap().into();
+    let mut stream = harness.run(req, controls).await.expect("run starts");
+    let events = tokio::time::timeout(Duration::from_secs(10), async move {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            if matches!(&event, AgentEvent::TextDelta { text } if text == "working") {
+                token.cancel();
+            }
+            events.push(event);
+        }
+        events
+    })
+    .await
+    .expect("stop completed in time");
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                error: None,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+    let request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("interrupt-request.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(request["type"], "control_request");
+    assert_eq!(request["request"]["subtype"], "interrupt");
+    assert_eq!(request["request"]["cancel_queued"], true);
+    assert_eq!(request["request_id"], "luna-interrupt-1");
+    assert!(
+        root.path().join("drained-marker").exists(),
+        "stdin was closed after the interrupted result"
+    );
+    assert!(
+        !root.path().join("sigterm-marker").exists(),
+        "the CLI exited on its own before any signal"
+    );
+}
+
+#[tokio::test]
+async fn cc01_auth_and_limit_variants_end_with_readable_errors() {
+    let (controls, _steer, _token) = controls("A");
+    let events = run_to_end(&harness(), request("scenario:cc01-auth-variants"), controls).await;
+    assert!(
+        events.contains(&AgentEvent::Error {
+            message: "Claude needs you to verify your account — sign in again.".into()
+        }),
+        "{events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done { status: DoneStatus::Errored, error: Some(error), .. })
+                if error == "The run ended with an error."
+        ),
+        "an unknown future result subtype still ends the turn visibly: {events:?}"
+    );
+}

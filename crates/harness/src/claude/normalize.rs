@@ -42,6 +42,13 @@ fn assistant_error_text(code: &str) -> String {
     match code {
         "authentication_failed" => "Authentication failed — sign in to Claude again.".into(),
         "oauth_org_not_allowed" => "This organization isn't allowed to use Claude here.".into(),
+        "account_on_hold" => "Your Claude account is on hold — check your account status.".into(),
+        "verification_required" => {
+            "Claude needs you to verify your account — sign in again.".into()
+        }
+        "cloud_credential_error" => {
+            "Claude couldn't use the cloud provider credentials — check them and retry.".into()
+        }
         "billing_error" => "Billing error — check your Claude plan or payment method.".into(),
         "rate_limit" => "Claude usage limit reached — try again after the limit resets.".into(),
         "overloaded" => "Claude is overloaded right now — try again shortly.".into(),
