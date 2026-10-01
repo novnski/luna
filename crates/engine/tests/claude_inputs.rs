@@ -201,8 +201,8 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
     std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
     std::fs::write(&skill, "---\nname: fixture-skill\n---\nFixture body\n").unwrap();
 
-    // 1. A steer-intent image row queued while idle holds (not
-    //    AttachmentsUnsupported) until there is a turn to steer.
+    // 1. A steer-intent image row queued while idle holds until there is a
+    //    turn to steer; Claude images are not "attachments unsupported".
     let queued = client
         .call(
             methods::QUEUE_MESSAGE,
@@ -217,7 +217,12 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
         .queued_message(CHAT, &queued_id)
         .unwrap()
         .unwrap();
-    assert_eq!(held.hold_reason, None, "{held:?}");
+    // Idle means "steering unavailable" for now, never "attachments unsupported".
+    assert_ne!(
+        held.hold_reason,
+        Some(luna_doc::QueueHoldReason::AttachmentsUnsupported),
+        "{held:?}"
+    );
 
     // 2. Cold first turn from a durable Run command with a staged ref. It
     //    holds the provider turn open for the in-turn steer below.
