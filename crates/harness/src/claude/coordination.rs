@@ -282,8 +282,8 @@ fn apply_workflow_progress(task: &mut NativeTaskSnapshot, entries: &[Value]) {
                 ) else {
                     continue;
                 };
-                match phases.iter_mut().find(|phase| phase.index == index) {
-                    Some(existing) => existing.title = title,
+                match phases.iter().position(|phase| phase.index == index) {
+                    Some(at) => phases[at].title = title,
                     None if phases.len() < NATIVE_TASK_MAX_PHASES => {
                         phases.push(NativeWorkflowPhase { index, title })
                     }
@@ -322,8 +322,8 @@ fn apply_workflow_progress(task: &mut NativeTaskSnapshot, entries: &[Value]) {
                         .unwrap_or(false),
                     error: entry.get("error").and_then(|v| bounded(v, MAX_ERROR_CHARS)),
                 };
-                match agents.iter_mut().find(|a| a.index == index) {
-                    Some(existing) => *existing = agent,
+                match agents.iter().position(|a| a.index == index) {
+                    Some(at) => agents[at] = agent,
                     None if agents.len() < NATIVE_TASK_MAX_AGENTS => agents.push(agent),
                     None => {}
                 }
