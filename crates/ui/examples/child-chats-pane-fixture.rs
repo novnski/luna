@@ -853,8 +853,7 @@ fn main() -> anyhow::Result<()> {
                     for _ in 0..200 {
                         settle(cx, 100).await;
                         settled = readback(window, cx)?;
-                        let composer = &settled["paneComposerStates"][DONE];
-                        if composer["sending"] == false && composer["submitting"].as_array().is_some_and(|items| items.is_empty()) && composer["receiptWatches"].as_array().is_some_and(|items| items.is_empty()) {
+                        if settled["paneComposerStates"][DONE]["sending"] == false {
                             break;
                         }
                     }
@@ -878,10 +877,26 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(returned["openInput"] == "" && returned["openComposer"]["failure"].is_null() && returned["openSending"] == false, "the in-flight send did not settle cleanly: {returned}");
                     let prompt_id = returned["openTranscriptUserIds"].as_array().into_iter().flatten().filter_map(|id| id.as_str()).last().map(str::to_string);
                     anyhow::ensure!(prompt_id.is_some(), "no user message id: {returned}");
+                    let prompt_id = prompt_id.unwrap_or_default();
+                    let done_composer = returned["paneComposerStates"][DONE].clone();
                     record.insert("sendSettled".into(), returned);
                     record.insert("sendSettledComposer".into(), settled);
-                    let receipt = runtime_receipt(window, cx, prompt_id.clone().unwrap_or_default()).await?;
-                    anyhow::ensure!(receipt["status"] == "applied", "the original command id has no applied receipt: {receipt}");
+                    // The engine's receipt is keyed by the ORIGINAL command id,
+                    // which is also the transcript message id (no resend with
+                    // a new id). The Mock harness never reports provider
+                    // correlation, so its receipt truthfully stays Pending; the
+                    // composer then keeps a read-only receipt watch on that same
+                    // id instead of offering a resend.
+                    let receipt = runtime_receipt(window, cx, prompt_id.clone()).await?;
+                    anyhow::ensure!(receipt["commandId"] == prompt_id.as_str(), "no receipt for the original command id {prompt_id}: {receipt}");
+                    let status = receipt["status"].as_str().unwrap_or_default().to_string();
+                    anyhow::ensure!(status == "applied" || status == "pending", "unexpected receipt state: {receipt}");
+                    if status == "pending" {
+                        anyhow::ensure!(
+                            ids(&done_composer["receiptWatches"]).contains(&prompt_id),
+                            "a pending delivery must be checked read-only under its original id: {done_composer}"
+                        );
+                    }
                     record.insert("originalCommandReceipt".into(), receipt);
 
                     // p07-p10. Light theme and a narrow pane.
@@ -923,7 +938,13 @@ fn main() -> anyhow::Result<()> {
                     capture(window, cx, output.join("p12-open-as-main-draft.png"))?;
                     anyhow::ensure!(promoted["activeChat"] == IDLE, "Open as main did not select the child: {promoted}");
                     anyhow::ensure!(promoted["mainComposer"]["input"] == DRAFT_KEEP, "the pane draft did not move to the main composer: {promoted}");
-                    anyhow::ensure!(!ids(&promoted["paneComposers"]).contains(&IDLE.to_string()), "the idle pane composer must be dropped after the handoff: {promoted}");
+                    // An idle pane composer is dropped; one still owning a
+                    // receipt check for an earlier send keeps owning it.
+                    let kept = ids(&promoted["paneComposers"]).contains(&IDLE.to_string());
+                    anyhow::ensure!(
+                        !kept || !ids(&promoted["paneComposerStates"][IDLE]["receiptWatches"]).is_empty(),
+                        "an idle pane composer must be dropped after the handoff: {promoted}"
+                    );
                     anyhow::ensure!(ids(&promoted["paneChats"]).is_empty(), "Open as main leaked the pane watch: {promoted}");
                     record.insert("openAsMain".into(), promoted);
                     // Leave the handed-over draft empty for the remaining steps.
