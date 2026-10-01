@@ -140,6 +140,7 @@ def handshake():
         "sse": sse[0],
         "tools": sorted(tool["name"] for tool in ((listed[1] or {}).get("result") or {}).get("tools", [])),
         "readOnly": {tool["name"]: tool.get("annotations", {}).get("readOnlyHint") for tool in ((listed[1] or {}).get("result") or {}).get("tools", [])},
+        "schemas": {tool["name"]: tool.get("inputSchema") for tool in ((listed[1] or {}).get("result") or {}).get("tools", [])},
     }
 
 
@@ -298,7 +299,7 @@ def plan(label):
     plan_path = os.path.join(CWD, f".luna-claude-plan-{label}.json")
     with open(plan_path) as source:
         calls = json.load(source)
-    results = {"attachment": attachment_evidence()}
+    results = {"attachment": attachment_evidence(), "systemPrompt": flag_value("--append-system-prompt")}
     hs = handshake()
     LISTED_TOOLS.extend(hs["tools"])
     results["handshake"] = hs
@@ -324,6 +325,12 @@ if "scenario:luna-fence" in prompt:
 elif "scenario:luna-plan:" in prompt:
     plan(prompt.split("scenario:luna-plan:", 1)[1].split()[0])
 else:
+    # A plain turn (for example a child started by create_thread) records the
+    # LUNA instructions it was launched with, keyed by its LUNA thread id.
+    thread = os.environ.get("LUNA_THREAD_ID")
+    if thread:
+        with open(os.path.join(CWD, f".luna-claude-turn-{thread}.txt"), "w") as out:
+            out.write(flag_value("--append-system-prompt") or "")
     init_frame()
     assistant_text("ok")
     result_frame("ok")

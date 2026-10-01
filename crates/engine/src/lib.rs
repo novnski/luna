@@ -916,7 +916,6 @@ impl EngineCore {
         if let Some(importer) = self.local_import.clone() {
             rpc = rpc.with_local_import(importer);
         }
-        rpc.set_new_task_preferences_path(self.device_write.root().join("composer-defaults.json"));
         let rpc = Arc::new(rpc);
         if tokio::runtime::Handle::try_current().is_ok() {
             let mut worker = self

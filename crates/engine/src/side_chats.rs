@@ -781,6 +781,16 @@ impl SideChats {
         }
     }
 
+    /// Stop this side chat's current turn only. The lease stays writable and
+    /// the parent's run, queue and status are never touched.
+    pub async fn stop(&self, id: &str, token: &str) -> Result<()> {
+        let _gate = self.0.gate.lock().await;
+        self.require_lease(id, token)?;
+        self.0.sessions.interrupt_for_stop(id).await?;
+        self.project(id)?;
+        Ok(())
+    }
+
     pub async fn answer(
         &self,
         id: &str,
