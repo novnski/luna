@@ -3638,6 +3638,16 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
+        if request.goal.is_some() && let Some(h) = lock(&self.inner.runs).get(chat_id) {
+            let now = RuntimeConfig::from_request(harness_id, &request);
+            let key = luna_proto::LUNA_RUNTIME_CONTRACT_OPTION;
+            if let (Some(serde_json::Value::Object(a)), Some(serde_json::Value::Object(b))) = (h.runtime_config.model_options.get(key), now.model_options.get(key)) {
+                for (k, v) in a { if b.get(k) != Some(v) { eprintln!("GOALDEBUG contract {k}: {} VS {}", v.to_string().chars().take(300).collect::<String>(), b.get(k).map(|x| x.to_string()).unwrap_or_default().chars().take(300).collect::<String>()); } }
+            }
+            let mut a = h.runtime_config.clone(); a.model_options.clear(); let mut b = now.clone(); b.model_options.clear();
+            if a != b { eprintln!("GOALDEBUG config {a:?} vs {b:?}"); }
+            eprintln!("GOALDEBUG goal route {}", h.runtime_config.can_route_goal(harness_id, &request));
+        }
         let goal_runtime = request.goal.is_some()
             && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
                 h.workspace_repair_revision == workspace_repair_revision
