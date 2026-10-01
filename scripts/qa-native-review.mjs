@@ -162,6 +162,8 @@ try {
       expectedBindingGeneration: snapshot.bindingGeneration, expectedTurnId: snapshot.activeTurnId,
       intent: { kind: 'session', command: { kind: 'interrupt' } } });
     await until(async () => capture().some(item => item.method === 'turn/interrupt'), 'native interrupt');
+    const interruptTurn = capture().filter(item => item.method === 'turn/interrupt').at(-1).params.turnId;
+    assert.ok(!String(interruptTurn).endsWith('-review'), `Stop must target the review root turn, not the sub-turn ${interruptTurn}`);
     await until(async () => !(await call('WatchSessions')).some(item => item.chatId === sourceId && item.status === 'working'), 'interrupted review settled');
   });
   await check('unexpected review thread fails without rebinding', async () => {

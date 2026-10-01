@@ -16,6 +16,17 @@ pub(super) const CHILD_SUMMARY_OMITTED: &str =
 /// Delivered outcomes are already in the parent transcript; keep a short tail.
 const CHILD_DELIVERED_HISTORY: usize = 16;
 
+fn child_creation_failure(receipt: &CommandReceipt) -> String {
+    let status = format!("{:?}", receipt.status).to_lowercase();
+    match receipt.reason.as_ref() {
+        Some(reason) if !reason.message.trim().is_empty() => {
+            format!("child creation {status}: {}", reason.message.trim())
+        }
+        Some(reason) => format!("child creation {status} ({:?})", reason.code),
+        None => format!("child creation {status}"),
+    }
+}
+
 pub(super) fn child_row_bytes(chat: &Chat) -> usize {
     serde_json::to_vec(chat).map_or(usize::MAX, |bytes| bytes.len())
 }
@@ -152,10 +163,7 @@ impl EngineRpc {
         command.actor_id = "luna-user:child-create".into();
         let receipt = self.execute_task_command(command, true).await?;
         if receipt.status != CommandReceiptStatus::Applied {
-            return Err(RpcError::Failed(format!(
-                "Child creation {:?}: {:?}",
-                receipt.status, receipt.reason
-            )));
+            return Err(RpcError::Failed(child_creation_failure(&receipt)));
         }
         let child = self
             .workspace
@@ -206,10 +214,10 @@ impl EngineRpc {
             .await
             .map_err(|error| CrossTaskError::Backend(error.to_string()))?;
         if receipt.status != CommandReceiptStatus::Applied {
-            return Err(CrossTaskError::CommandOutcome {
-                status: receipt.status,
-                reason: receipt.reason.as_ref().map(|r| r.code),
-            });
+            // The receipt's reason is the actionable cause (for example a
+            // provider default that differs from the parent). Surface it to
+            // the model and the tool chip instead of a bare status/code.
+            return Err(CrossTaskError::Backend(child_creation_failure(&receipt)));
         }
         let chat = self
             .workspace
