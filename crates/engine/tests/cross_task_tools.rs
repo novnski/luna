@@ -626,7 +626,7 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
         allow_projectless: false,
         granted_scopes: HashSet::from(["threads.read".into()]),
         explicit_user_request: false,
-        delivery: RuntimeDelivery::CodexDynamicTools,
+        delivery: RuntimeDelivery::CodexMcpTools,
     };
     let tools = CrossTaskTools::new(rpc);
     let (attached, omitted) = tools.catalog(&authority);
@@ -1033,4 +1033,633 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
             ..
         }
     ));
+}
+
+/// One live endpoint published by the `mcp-hold` fake Codex scenario.
+struct HeldEndpoint {
+    url: String,
+    token: String,
+    thread: String,
+    turn: String,
+}
+
+async fn held_endpoint(
+    hold_dir: &std::path::Path,
+    task: &str,
+    events: &mut tokio::sync::broadcast::Receiver<luna_engine::JournaledEvent>,
+) -> HeldEndpoint {
+    let file = hold_dir.join(task);
+    let mut seen = Vec::new();
+    for _ in 0..600 {
+        if let Ok(text) = std::fs::read_to_string(&file) {
+            let lines = text.lines().map(str::to_owned).collect::<Vec<_>>();
+            if lines.len() == 4 {
+                return HeldEndpoint {
+                    url: lines[0].clone(),
+                    token: lines[1].clone(),
+                    thread: lines[2].clone(),
+                    turn: lines[3].clone(),
+                };
+            }
+        }
+        while let Ok(event) = events.try_recv() {
+            seen.push(format!("{:?}", event.event));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("fake Codex never published its LUNA MCP endpoint for {task}; events: {seen:#?}");
+}
+
+/// What Codex 0.159 sends to an MCP server for one tool call.
+fn mcp_tool_call(
+    id: u64,
+    name: &str,
+    arguments: serde_json::Value,
+    thread: &str,
+    turn: &str,
+    call_id: &str,
+) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{
+        "name":name,"arguments":arguments,
+        "_meta":{"threadId":thread,"callId":call_id,"sessionId":thread,
+            "x-codex-turn-metadata":{"turn_id":turn,"thread_id":thread}}
+    }})
+}
+
+async fn mcp_post(
+    client: &reqwest::Client,
+    url: &str,
+    token: &str,
+    body: &serde_json::Value,
+) -> (u16, serde_json::Value) {
+    let response = client
+        .post(url)
+        .bearer_auth(token)
+        .header("accept", "application/json, text/event-stream")
+        .json(body)
+        .send()
+        .await
+        .expect("loopback MCP endpoint reachable");
+    let status = response.status().as_u16();
+    let text = response.text().await.unwrap_or_default();
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+fn tool_text(reply: &serde_json::Value) -> (bool, String) {
+    (
+        reply["result"]["isError"].as_bool().expect("tool result"),
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
+/// E2E over the real per-process endpoint: the test is the MCP client the way
+/// Codex is, against the engine, the Codex adapter and the durable backend.
+#[tokio::test]
+async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
+    use luna_proto::{ApprovalDecision, ChatConfig, PermissionMode, RunRequest, SandboxLevel};
+
+    let root = TempDir::new().unwrap();
+    let registry = Arc::new(HarnessRegistry::new());
+    registry.register(Arc::new(
+        CodexHarness::new().with_executable(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../harness/tests/fixtures/fake-codex.sh"),
+        ),
+    ));
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(
+            &root.path().join("engine"),
+            "synthetic-org",
+            "synthetic-user",
+        ),
+        registry,
+        HarnessId::Codex,
+        None,
+        account_config(root.path()),
+    )
+    .unwrap();
+    let _rpc = core.rpc_service();
+    let project_a = root.path().join("project-a");
+    let project_b = root.path().join("project-b");
+    std::fs::create_dir_all(&project_a).unwrap();
+    std::fs::create_dir_all(&project_b).unwrap();
+    for (id, path) in [("project-a", &project_a), ("project-b", &project_b)] {
+        core.workspace
+            .create_space(id, &core.device_id, path.to_str().unwrap(), None, false)
+            .unwrap();
+    }
+    // The fake publishes each run's endpoint under the run's cwd.
+    let hold_dir = project_a.join(".luna-mcp-hold");
+    // Concurrent held chats need distinct provider threads (one binding each).
+    std::fs::write(project_a.join(".luna-fake-thread-per-task"), b"").unwrap();
+    let config = ChatConfig {
+        harness: HarnessId::Codex,
+        provider_account_id: None,
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        sandbox: SandboxLevel::ReadOnly,
+        permission_mode: PermissionMode::Ask,
+        effective_permission_mode: PermissionMode::Ask,
+        permission_ceiling_source: None,
+        permission_degradation_reason: None,
+        permission_audit: Vec::new(),
+    };
+    let new_task = |project: &str, path: &std::path::Path, parent: Option<&str>| {
+        let id = uuid::Uuid::new_v4().to_string();
+        core.workspace
+            .create_chat(&id, Some(project), None, Some(config.clone()), None)
+            .unwrap();
+        core.task_identity
+            .register_new_task(
+                &id,
+                Some(project),
+                None,
+                path.to_str(),
+                TaskLineage {
+                    parent_task_id: parent.map(str::to_owned),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        id
+    };
+    let source = new_task("project-a", &project_a, None);
+    let other = new_task("project-a", &project_a, None);
+    let sibling = new_task("project-a", &project_a, None);
+    let foreign = new_task("project-b", &project_b, None);
+    // Four levels: a child of `deep4` would be the forbidden fifth level.
+    let deep1 = new_task("project-a", &project_a, None);
+    let deep2 = new_task("project-a", &project_a, Some(&deep1));
+    let deep3 = new_task("project-a", &project_a, Some(&deep2));
+    let deep4 = new_task("project-a", &project_a, Some(&deep3));
+
+    let hold = |task: String| {
+        let core = &core;
+        let cwd = project_a.display().to_string();
+        async move {
+            core.sessions
+                .dispatch(
+                    &task,
+                    HarnessId::Codex,
+                    RunRequest {
+                        review: None,
+                        goal: None,
+                        input_items: Vec::new(),
+                        prompt: "scenario:mcp-hold".into(),
+                        harness: None,
+                        provider_account_id: None,
+                        model: None,
+                        reasoning: None,
+                        model_options: Default::default(),
+                        cwd,
+                        sandbox: SandboxLevel::ReadOnly,
+                        auto_approve: false,
+                        permission_mode: PermissionMode::Ask,
+                        parent_permission_ceiling: None,
+                        environment_permission_ceiling: None,
+                        permission_policy: None,
+                        attachments: vec![],
+                        worktree: None,
+                        resume: None,
+                    },
+                    Some(format!("mcp-hold-{task}")),
+                )
+                .await
+                .unwrap();
+        }
+    };
+    let (_, mut events) = core.sessions.subscribe(&source, 0).unwrap();
+    hold(source.clone()).await;
+    let a = held_endpoint(&hold_dir, &source, &mut events).await;
+    let http = reqwest::Client::new();
+    assert!(a.url.starts_with("http://127.0.0.1:") && a.url.ends_with("/mcp"));
+
+    // Identity: token, Origin, Host, method and path checks happen before any
+    // JSON-RPC reaches the session loop.
+    let list = serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
+    let status = http.post(&a.url).json(&list).send().await.unwrap().status();
+    assert_eq!(status.as_u16(), 401, "missing bearer token");
+    assert_eq!(mcp_post(&http, &a.url, "wrong-token", &list).await.0, 401);
+    let forged_origin = http
+        .post(&a.url)
+        .bearer_auth(&a.token)
+        .header("origin", "https://attacker.example")
+        .json(&list)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forged_origin.status().as_u16(), 403);
+    let rebinding = http
+        .post(&a.url)
+        .bearer_auth(&a.token)
+        .header("host", "attacker.example")
+        .json(&list)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rebinding.status().as_u16(), 403);
+    let sse = http.get(&a.url).bearer_auth(&a.token).send().await.unwrap();
+    assert_eq!(sse.status().as_u16(), 405);
+    let wrong_path = http
+        .post(a.url.replace("/mcp", "/other"))
+        .bearer_auth(&a.token)
+        .json(&list)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong_path.status().as_u16(), 404);
+    let oversized = http
+        .post(&a.url)
+        .bearer_auth(&a.token)
+        .body(vec![b' '; (1 << 20) + 1])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(oversized.status().as_u16(), 413);
+    let batch = serde_json::json!([list.clone()]);
+    assert_eq!(
+        mcp_post(&http, &a.url, &a.token, &batch).await.1["error"]["code"],
+        -32600
+    );
+
+    // Codex's handshake and catalog: the current LUNA tools, read-only marked.
+    let (status, init) = mcp_post(
+        &http,
+        &a.url,
+        &a.token,
+        &serde_json::json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},
+            "clientInfo":{"name":"codex-mcp-client","version":"0.159.0"}}}),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(init["result"]["serverInfo"]["name"], "luna");
+    let (_, listed) = mcp_post(&http, &a.url, &a.token, &list).await;
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    let names = tools
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect::<HashSet<_>>();
+    for name in [
+        "luna_status",
+        "list_threads",
+        "read_thread",
+        "wait_threads",
+        "send_message_to_thread",
+        "create_thread",
+    ] {
+        assert!(names.contains(name), "{name} missing from {names:?}");
+    }
+    for tool in tools {
+        let read_only = !matches!(
+            tool["name"].as_str(),
+            Some("send_message_to_thread" | "create_thread")
+        );
+        assert_eq!(tool["annotations"]["readOnlyHint"], read_only, "{tool}");
+    }
+
+    // Thread, turn and call-ID fence.
+    let call = |id, name, args, thread: &str, turn: &str, call_id: &str| {
+        mcp_tool_call(id, name, args, thread, turn, call_id)
+    };
+    let empty = serde_json::json!({});
+    let (failed, text) = tool_text(
+        &mcp_post(
+            &http,
+            &a.url,
+            &a.token,
+            &call(
+                10,
+                "luna_status",
+                empty.clone(),
+                "foreign-thread",
+                &a.turn,
+                "c-foreign",
+            ),
+        )
+        .await
+        .1,
+    );
+    assert!(failed && text.contains("not attached"), "{text}");
+    let (failed, text) = tool_text(
+        &mcp_post(
+            &http,
+            &a.url,
+            &a.token,
+            &call(
+                11,
+                "luna_status",
+                empty.clone(),
+                &a.thread,
+                "t-stale",
+                "c-stale",
+            ),
+        )
+        .await
+        .1,
+    );
+    assert!(failed && text.contains("not attached"), "{text}");
+    let (failed, text) = tool_text(
+        &mcp_post(
+            &http,
+            &a.url,
+            &a.token,
+            &call(12, "luna_status", empty.clone(), &a.thread, &a.turn, ""),
+        )
+        .await
+        .1,
+    );
+    assert!(failed && text.contains("call ID"), "{text}");
+    let status_call = call(
+        13,
+        "luna_status",
+        empty.clone(),
+        &a.thread,
+        &a.turn,
+        "c-status",
+    );
+    let (failed, text) = tool_text(&mcp_post(&http, &a.url, &a.token, &status_call).await.1);
+    assert!(!failed, "{text}");
+    assert!(text.contains(&source), "{text}");
+    let (failed, text) = tool_text(&mcp_post(&http, &a.url, &a.token, &status_call).await.1);
+    assert!(
+        failed && text.contains("repeated"),
+        "replayed call ID: {text}"
+    );
+
+    // Ownership and project scope come from the engine-built authority.
+    let (failed, text) = tool_text(
+        &mcp_post(
+            &http,
+            &a.url,
+            &a.token,
+            &call(
+                14,
+                "list_threads",
+                serde_json::json!({"limit": 20}),
+                &a.thread,
+                &a.turn,
+                "c-list",
+            ),
+        )
+        .await
+        .1,
+    );
+    assert!(!failed, "{text}");
+    assert!(
+        text.contains(&sibling) && !text.contains(&foreign),
+        "{text}"
+    );
+    let (failed, _) = tool_text(
+        &mcp_post(
+            &http,
+            &a.url,
+            &a.token,
+            &call(
+                15,
+                "read_thread",
+                serde_json::json!({"taskId": foreign}),
+                &a.thread,
+                &a.turn,
+                "c-read-foreign",
+            ),
+        )
+        .await
+        .1,
+    );
+    assert!(failed, "foreign-project read must be rejected");
+
+    // create_thread parks on the exact local approval; nothing times it out
+    // before the user answers.
+    let create_args = serde_json::json!({
+        "prompt": "MCP child brief", "idempotencyKey": "mcp-child-1", "title": "MCP child"
+    });
+    let pending_create = {
+        let http = http.clone();
+        let body = call(
+            20,
+            "create_thread",
+            create_args,
+            &a.thread,
+            &a.turn,
+            "c-create-1",
+        );
+        let (url, token) = (a.url.clone(), a.token.clone());
+        tokio::spawn(async move { mcp_post(&http, &url, &token, &body).await })
+    };
+    let request_id = next_approval(&mut events).await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(!pending_create.is_finished(), "approval must stay parked");
+    assert_eq!(
+        core.sessions.respond_luna_local_ui_approval(
+            &source,
+            &request_id,
+            ApprovalDecision::AllowOnce
+        ),
+        luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
+    );
+    let (failed, text) = tool_text(&pending_create.await.unwrap().1);
+    assert!(!failed, "{text}");
+    let receipt: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let child = receipt["taskId"].as_str().unwrap().to_owned();
+    assert_eq!(receipt["parentTaskId"], source.as_str());
+    assert_eq!(
+        core.task_identity
+            .view(&child)
+            .unwrap()
+            .task
+            .lineage
+            .parent_task_id
+            .as_deref(),
+        Some(source.as_str())
+    );
+
+    // Codex abandons a parked call (notifications/cancelled): the executor is
+    // dropped, the card retired, and nothing is created.
+    let abandoned_args =
+        serde_json::json!({"prompt": "Abandoned brief", "idempotencyKey": "mcp-abandoned"});
+    let abandoned = {
+        let http = http.clone();
+        let body = call(
+            30,
+            "create_thread",
+            abandoned_args,
+            &a.thread,
+            &a.turn,
+            "c-abandon",
+        );
+        let (url, token) = (a.url.clone(), a.token.clone());
+        tokio::spawn(async move { mcp_post(&http, &url, &token, &body).await })
+    };
+    let request_id = next_approval(&mut events).await;
+    let (status, _) = mcp_post(
+        &http,
+        &a.url,
+        &a.token,
+        &serde_json::json!({"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":30}}),
+    )
+    .await;
+    assert_eq!(status, 202);
+    let (failed, text) = tool_text(&abandoned.await.unwrap().1);
+    assert!(failed && text.contains("cancelled"), "{text}");
+    wait_resolved(&mut events, &request_id).await;
+    assert_eq!(
+        core.sessions.respond_luna_local_ui_approval(
+            &source,
+            &request_id,
+            ApprovalDecision::AllowOnce
+        ),
+        luna_engine::sessions::LunaApprovalOutcome::Stale
+    );
+    assert!(
+        !core.workspace.read_chats().unwrap().iter().any(|chat| chat
+            .child_thread
+            .as_ref()
+            .is_some_and(|child| child.initial_prompt == "Abandoned brief")),
+        "abandoned create_thread created a child"
+    );
+
+    // Cross-chat and cross-account: each Codex process (and so each account
+    // home) has its own endpoint and token.
+    let (_, mut other_events) = core.sessions.subscribe(&other, 0).unwrap();
+    hold(other.clone()).await;
+    let b = held_endpoint(&hold_dir, &other, &mut other_events).await;
+    assert_ne!(a.url, b.url);
+    assert_eq!(mcp_post(&http, &b.url, &a.token, &list).await.0, 401);
+    assert_eq!(mcp_post(&http, &a.url, &b.token, &list).await.0, 401);
+
+    // Depth limit: a fifth level is refused before any approval card.
+    let (_, mut deep_events) = core.sessions.subscribe(&deep4, 0).unwrap();
+    hold(deep4.clone()).await;
+    let d = held_endpoint(&hold_dir, &deep4, &mut deep_events).await;
+    let (failed, text) = tool_text(
+        &mcp_post(
+            &http,
+            &d.url,
+            &d.token,
+            &call(
+                40,
+                "create_thread",
+                serde_json::json!({"prompt":"too deep","idempotencyKey":"too-deep"}),
+                &d.thread,
+                &d.turn,
+                "c-deep",
+            ),
+        )
+        .await
+        .1,
+    );
+    assert!(failed && text.contains("four levels"), "{text}");
+
+    // Stop while create_thread is parked: the provider gets an error result
+    // before the session retires its endpoint, and no child is created.
+    let stopped = {
+        let http = http.clone();
+        let body = call(
+            50,
+            "create_thread",
+            serde_json::json!({"prompt": "Stopped brief", "idempotencyKey": "mcp-stopped"}),
+            &a.thread,
+            &a.turn,
+            "c-stop",
+        );
+        let (url, token) = (a.url.clone(), a.token.clone());
+        tokio::spawn(async move { mcp_post(&http, &url, &token, &body).await })
+    };
+    next_approval(&mut events).await;
+    assert!(core.sessions.interrupt_for_stop(&source).await.unwrap());
+    let (failed, text) = tool_text(
+        &tokio::time::timeout(std::time::Duration::from_secs(10), stopped)
+            .await
+            .expect("Stop answers the parked MCP call")
+            .unwrap()
+            .1,
+    );
+    assert!(failed, "{text}");
+    assert!(
+        !core.workspace.read_chats().unwrap().iter().any(|chat| chat
+            .child_thread
+            .as_ref()
+            .is_some_and(|child| child.initial_prompt == "Stopped brief")),
+        "Stop created a child"
+    );
+
+    // Retired binding: once the run ends, its endpoint and token are gone.
+    for task in [&source, &other, &deep4] {
+        std::fs::write(hold_dir.join(format!("release-{task}")), b"").unwrap();
+    }
+    wait_done(&mut events).await;
+    let retired = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            match http
+                .post(&a.url)
+                .bearer_auth(&a.token)
+                .json(&list)
+                .send()
+                .await
+            {
+                Err(_) => break "refused",
+                Ok(response) if response.status().as_u16() == 401 => break "unauthorized",
+                Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(50)).await,
+            }
+        }
+    })
+    .await
+    .expect("retired endpoint stops serving");
+    assert!(matches!(retired, "refused" | "unauthorized"));
+    core.shutdown().await;
+}
+
+async fn next_approval(
+    events: &mut tokio::sync::broadcast::Receiver<luna_engine::JournaledEvent>,
+) -> String {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if let luna_proto::AgentEvent::InputRequested { request_id, .. } =
+                events.recv().await.unwrap().event
+            {
+                return request_id;
+            }
+        }
+    })
+    .await
+    .expect("LUNA approval requested")
+}
+
+async fn wait_resolved(
+    events: &mut tokio::sync::broadcast::Receiver<luna_engine::JournaledEvent>,
+    expected: &str,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if let luna_proto::AgentEvent::InputResolved { request_id } =
+                events.recv().await.unwrap().event
+                && request_id == expected
+            {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("abandoned approval card retired");
+}
+
+async fn wait_done(events: &mut tokio::sync::broadcast::Receiver<luna_engine::JournaledEvent>) {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if let luna_proto::AgentEvent::Done { .. } = events.recv().await.unwrap().event {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("held source turn settled");
 }

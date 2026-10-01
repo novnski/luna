@@ -7817,7 +7817,7 @@ fn require_local_control_evidence_scope(
     authority: &CrossTaskAuthority,
     local_device_id: &str,
 ) -> Result<(), CrossTaskError> {
-    if authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools {
+    if !authority.delivery.attaches_luna_tools() {
         return Err(CrossTaskError::Unavailable);
     }
     if !authority.granted_scopes.contains("threads.read") {
@@ -7874,7 +7874,7 @@ async fn local_control_evidence_target(
     if task_id.is_empty() || task_id.len() > 128 {
         return Err(CrossTaskError::Input);
     }
-    if authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools {
+    if !authority.delivery.attaches_luna_tools() {
         return Err(CrossTaskError::Unavailable);
     }
     if !authority.granted_scopes.contains("threads.read") {

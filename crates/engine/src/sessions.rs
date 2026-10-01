@@ -843,7 +843,7 @@ impl PreparedControlEvidence {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into()]),
             explicit_user_request: false,
-            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexMcpTools,
         }
     }
 }
@@ -1624,7 +1624,7 @@ impl SessionsEngine {
         use crate::cross_task_tools::{
             ApprovedSendFence, CrossTaskAuthority, CrossTaskError, CrossTaskTools,
         };
-        use luna_proto::{CrossTaskSendMode, CrossTaskSendRequest, RuntimeDelivery};
+        use luna_proto::{CrossTaskSendMode, CrossTaskSendRequest};
         let fail = |error: CrossTaskError| EngineError::Other(error.to_string());
         let Some(tool) = contract
             .tools
@@ -1634,7 +1634,7 @@ impl SessionsEngine {
             return Err(fail(CrossTaskError::Unavailable));
         };
         if contract.context.thread_id != chat_id
-            || contract.delivery != RuntimeDelivery::CodexDynamicTools
+            || !contract.delivery.attaches_luna_tools()
             || !tool
                 .required_scopes
                 .iter()
@@ -1718,7 +1718,11 @@ impl SessionsEngine {
                     evidence.source_environment_id,
                 )
             };
-        let expires_at_ms = now_ms().saturating_add(30_000);
+        // Like Codex-native approvals, the card has no deadline: it ends on
+        // an answer or Stop here, and the shared resolver watch retires it
+        // when the adapter abandons the call (MCP cancel or disconnect, turn
+        // or session end). The commit window is stamped at approval.
+        let expires_at_ms = luna_proto::APPROVAL_NO_EXPIRY;
         let fence = ApprovedSendFence {
             source_task_id: claim.source_task_id.clone(),
             source_run_id: claim.source_run_id.clone(),
@@ -1765,6 +1769,14 @@ impl SessionsEngine {
             );
             (pending, run.engine_tx.clone())
         };
+        // The same watch as Codex-native no-expiry approvals: once this
+        // waiter is dropped (`_answer_rx` closes), the card is retired.
+        schedule_approval_expiry(
+            pending.clone(),
+            engine_tx.clone(),
+            request_id.clone(),
+            std::slice::from_ref(&question),
+        );
         if engine_tx
             .send(AgentEvent::InputRequested {
                 request_id: request_id.clone(),
@@ -1777,16 +1789,12 @@ impl SessionsEngine {
         }
         let grant = tokio::select! {
             _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
-            result = tokio::time::timeout(std::time::Duration::from_secs(30), grant_rx) => {
-                match result {
-                    Ok(Ok(fence)) => Ok(fence),
-                    Ok(Err(_)) => Err(CrossTaskError::UserRequest),
-                    Err(_) => Err(CrossTaskError::Deadline),
-                }
-            }
+            result = grant_rx => result.map_err(|_| CrossTaskError::UserRequest),
         };
         expire_pending_approval(&pending, &engine_tx, &request_id);
-        let fence = grant.map_err(fail)?;
+        let mut fence = grant.map_err(fail)?;
+        // Approval opens the bounded commit window checked at the durable write.
+        fence.expires_at_ms = now_ms().saturating_add(30_000);
         self.with_live_approved_send(&fence, || Ok(()))?;
         if let Some(child) = child_request {
             let child_fence = crate::cross_task_tools::ApprovedChildFence {
@@ -1895,7 +1903,7 @@ impl SessionsEngine {
         use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
         if authority.caller_task_id != claim.source_task_id
             || authority.local_environment_id != self.inner.device_id
-            || authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools
+            || !authority.delivery.attaches_luna_tools()
             || authority.explicit_user_request
             || authority.allow_projectless
             || authority.granted_scopes.len() != 1
@@ -3905,27 +3913,8 @@ impl SessionsEngine {
         } else if request.resume.is_none() {
             request.resume = self.inner.resume_for(chat_id, &request.cwd);
         }
-        // The compiler's no-tools legacy resume decision is valid only for
-        // the exact provider session inspected before warm routing.
-        if let Some(contract) = request
-            .model_options
-            .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
-            .and_then(|value| {
-                serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
-            })
-            && contract.delivery == luna_proto::RuntimeDelivery::CodexDynamicTools
-            && request.resume.is_some()
-            && self
-                .inner
-                .journal
-                .runtime_contract(chat_id, request.resume.as_deref().unwrap())?
-                .is_none()
-        {
-            return Err(EngineError::Other(
-                "Codex resume has no verified LUNA tool contract; start a fresh provider binding"
-                    .into(),
-            ));
-        }
+        // Codex LUNA tools ride the per-process MCP endpoint, so any resume
+        // target (including a pre-L23 thread) gets the compiled tool set.
         if harness_id == HarnessId::Codex
             && let Some(workspace) = self.inner.workspace()
             && let Ok(Some(chat)) = workspace.chat(chat_id)
