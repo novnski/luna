@@ -97,6 +97,7 @@ fn request_entry(id: &str, approval: bool, device: &str) -> SessionMessageEntry 
                     supports_task_allowance: false,
                     details: None,
                 }),
+                input: None,
             }],
             resolved: false,
         }],

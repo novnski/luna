@@ -71,6 +71,8 @@ pub fn render(
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
+        .role(gpui::Role::Label)
+        .aria_label(badge.label.clone())
         .min_h(crate::typography::ui_rems(BADGE_HEIGHT))
         .flex()
         .flex_row()

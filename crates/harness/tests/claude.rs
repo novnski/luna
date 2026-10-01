@@ -40,6 +40,7 @@ fn harness() -> ClaudeHarness {
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
@@ -403,6 +404,7 @@ async fn steering_lines_are_written_to_stdin_mid_run() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -450,6 +452,7 @@ async fn explicit_steer_does_not_claim_incorporation_from_a_text_echo() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(acceptance_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -479,6 +482,7 @@ async fn explicit_claude_write_ack_without_echo_is_not_incorporated() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(acceptance_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");

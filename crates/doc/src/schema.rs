@@ -373,6 +373,36 @@ impl SessionDoc {
         Ok(())
     }
 
+    /// Latest transient provider status (retry/warning). Task metadata, never
+    /// a transcript part; the host clears it when the turn settles.
+    pub fn provider_notice(&self) -> Option<luna_proto::ProviderNotice> {
+        let loro::ValueOrContainer::Value(LoroValue::String(value)) =
+            self.doc.get_map("meta").get("providerNotice")?
+        else {
+            return None;
+        };
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn set_provider_notice(
+        &self,
+        notice: Option<&luna_proto::ProviderNotice>,
+    ) -> Result<(), DocError> {
+        if self.provider_notice().as_ref() == notice {
+            return Ok(());
+        }
+        match notice {
+            Some(notice) => {
+                self.doc
+                    .get_map("meta")
+                    .insert("providerNotice", serde_json::to_string(notice)?)?;
+            }
+            None => self.doc.get_map("meta").delete("providerNotice")?,
+        }
+        self.doc.commit();
+        Ok(())
+    }
+
     pub fn clear_context_usage(&self) -> Result<(), DocError> {
         self.doc.get_map("meta").delete("contextUsage")?;
         self.doc.commit();

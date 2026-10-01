@@ -128,6 +128,9 @@ pub struct ContextControlState {
     pub provider_summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<String>,
+    /// "Sent as goal" / "Goal achieved" transcript marks.
+    #[serde(default, skip_serializing_if = "crate::GoalMarks::is_empty")]
+    pub goal_marks: crate::GoalMarks,
 }
 
 impl Default for ContextControlState {
@@ -143,6 +146,7 @@ impl Default for ContextControlState {
             last_handoff: None,
             provider_summary: None,
             notice: None,
+            goal_marks: Default::default(),
         }
     }
 }

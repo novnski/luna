@@ -39,6 +39,7 @@ type RequestLog = Arc<Mutex<Vec<RunRequest>>>;
 fn run_request(prompt: &str, cwd: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
@@ -889,6 +890,7 @@ async fn real_claude_remembers_codeword_across_engine_restart() {
 
     let real_request = |prompt: &str| RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,

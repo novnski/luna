@@ -695,6 +695,7 @@ impl SideChats {
         );
         let request = RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: if first {
                 let mut seed = if meta.context_mode == "contextSnapshot" {

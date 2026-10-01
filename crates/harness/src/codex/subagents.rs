@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use luna_proto::AgentEvent;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use super::normalize::{ChildStream, Phase, collab_spawn_child, item_type, map_item};
 
@@ -25,6 +26,11 @@ pub(super) struct Subagents {
     streams: HashMap<String, ChildStream>,
     emitted_spawns: HashSet<String>,
     resolved_spawns: HashSet<String>,
+    /// Child thread → its live turn, observed from `turn/started` on that
+    /// thread. Server requests from a child are honoured only for this turn.
+    live_turns: HashMap<String, (String, CancellationToken)>,
+    /// Child thread → display label (agentPath leaf).
+    labels: HashMap<String, String>,
 }
 
 impl Subagents {
@@ -38,24 +44,31 @@ impl Subagents {
             streams: HashMap::new(),
             emitted_spawns: HashSet::new(),
             resolved_spawns: HashSet::new(),
+            live_turns: HashMap::new(),
+            labels: HashMap::new(),
         }
     }
 
     /// thread/resume returns the stored parent items. Rebuild ownership without
     /// replaying chips or content that already lives in Luna's documents.
     pub(super) fn restore(&mut self, thread: &Value) {
-        for item in thread
-            .get("turns")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .flat_map(|turn| {
-                turn.get("items")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-            })
-        {
+        self.restore_turns(
+            thread
+                .get("turns")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        );
+    }
+
+    /// Same ownership rebuild from paginated `thread/turns/list` pages.
+    pub(super) fn restore_turns(&mut self, turns: &[Value]) {
+        for item in turns.iter().flat_map(|turn| {
+            turn.get("items")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        }) {
             if super::normalize::is_collab_spawn(item)
                 || matches!(item_type(item), "subAgentActivity" | "sub_agent_activity")
             {
@@ -70,6 +83,7 @@ impl Subagents {
         method: &str,
         params: &Value,
     ) -> Vec<AgentEvent> {
+        self.track_turn(child, method, params);
         let events = self
             .streams
             .entry(child.to_owned())
@@ -78,12 +92,97 @@ impl Subagents {
         self.route(child, events)
     }
 
+    /// The routing for a server request addressed to `child`: only a child
+    /// whose turn this connection saw start, and only while it is live.
+    pub(super) fn request_route(&self, child: &str) -> Option<super::approvals::SubagentRequest> {
+        if child.is_empty() || child == self.root {
+            return None;
+        }
+        let (turn_id, cancel) = self.live_turns.get(child)?;
+        Some(super::approvals::SubagentRequest {
+            thread_id: child.to_owned(),
+            turn_id: turn_id.clone(),
+            label: self.label(child),
+            cancel: cancel.clone(),
+        })
+    }
+
+    /// A child thread this connection has seen (for `serverRequest/resolved`).
+    pub(super) fn knows(&self, child: &str) -> bool {
+        child != self.root
+            && (self.spawns.contains_key(child)
+                || self.streams.contains_key(child)
+                || self.live_turns.contains_key(child))
+    }
+
+    fn label(&self, child: &str) -> String {
+        self.labels.get(child).cloned().unwrap_or_else(|| {
+            let short: String = child.chars().take(8).collect();
+            format!("agent {short}")
+        })
+    }
+
+    fn track_turn(&mut self, child: &str, method: &str, params: &Value) {
+        if child.is_empty() || child == self.root {
+            return;
+        }
+        let turn = params
+            .pointer("/turn/id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        match method {
+            "turn/started" if !turn.is_empty() => {
+                if let Some((previous, cancel)) = self.live_turns.get(child) {
+                    if previous == turn {
+                        return;
+                    }
+                    cancel.cancel();
+                }
+                self.live_turns.insert(
+                    child.to_owned(),
+                    (turn.to_owned(), CancellationToken::new()),
+                );
+            }
+            "turn/completed" => {
+                if self
+                    .live_turns
+                    .get(child)
+                    .is_some_and(|(live, _)| live == turn)
+                    && let Some((_, cancel)) = self.live_turns.remove(child)
+                {
+                    cancel.cancel();
+                }
+            }
+            "thread/closed" => {
+                if let Some((_, cancel)) = self.live_turns.remove(child) {
+                    cancel.cancel();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Session teardown: every parked child request closes.
+    pub(super) fn close_all(&mut self) {
+        for (_, (_, cancel)) in self.live_turns.drain() {
+            cancel.cancel();
+        }
+    }
+
     pub(super) fn parent_item(&mut self, phase: Phase, item: &Value) -> Vec<AgentEvent> {
         let activity = matches!(item_type(item), "subAgentActivity" | "sub_agent_activity");
         let child = if activity {
             let path = item.get("agentPath").and_then(Value::as_str).unwrap_or("");
             if matches!(path, "/" | "/root") {
                 return Vec::new();
+            }
+            if let Some(thread) = item.get("agentThreadId").and_then(Value::as_str)
+                && let Some(leaf) = path.rsplit('/').find(|leaf| !leaf.is_empty())
+                && thread != self.root
+            {
+                self.labels
+                    .entry(thread.to_owned())
+                    .or_insert_with(|| leaf.to_owned());
             }
             if !matches!(
                 item.get("kind").and_then(Value::as_str),

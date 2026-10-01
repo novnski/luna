@@ -68,6 +68,7 @@ fn input(id: &str, request: &str, approval: bool, device_id: &str) -> SessionMes
                     supports_task_allowance: false,
                     details: None,
                 }),
+                input: None,
             }],
             resolved: false,
         }],

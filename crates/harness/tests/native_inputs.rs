@@ -86,6 +86,7 @@ async fn image_only_start_and_attached_steer_preserve_native_identity() {
                     message_id: Some("steer-input-id".into()),
                     delivery: SteerDelivery::RequireActiveTurn,
                     acceptance: None,
+                    goal: None,
                 })
                 .await
                 .unwrap();
@@ -234,6 +235,7 @@ async fn correlated_warm_steer_fallback_keeps_the_complete_input() {
                     message_id: Some("fallback-id".into()),
                     delivery: SteerDelivery::AllowFollowUpTurn,
                     acceptance: None,
+                    goal: None,
                 })
                 .await
                 .unwrap();

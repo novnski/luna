@@ -78,6 +78,7 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
             HarnessId::Codex,
             RunRequest {
                 review: None,
+                goal: None,
                 input_items: Vec::new(),
                 prompt: format!("scenario:l25-send:{target}:{foreign}"),
                 harness: None,
@@ -290,6 +291,7 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
             HarnessId::Codex,
             RunRequest {
                 review: None,
+                goal: None,
                 input_items: Vec::new(),
                 prompt: format!("scenario:l25-send-stale:{target}"),
                 harness: None,
@@ -430,6 +432,7 @@ async fn approved_provider_send_sql_failure_has_no_queued_receipt_or_row() {
             HarnessId::Codex,
             RunRequest {
                 review: None,
+                goal: None,
                 input_items: Vec::new(),
                 prompt: format!("scenario:l25-send-storage-fail:{target}"),
                 harness: None,

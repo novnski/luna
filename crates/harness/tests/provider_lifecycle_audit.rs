@@ -103,6 +103,7 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
     };
     let mut request = RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: "disposable QA".into(),
         harness: None,
@@ -164,6 +165,7 @@ async fn blocked_reply(mode: &str, drop_consumer: bool) {
                     SteerDelivery::AllowFollowUpTurn
                 },
                 acceptance: Some(tx),
+                goal: None,
             })
             .await
             .unwrap();

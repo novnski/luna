@@ -173,6 +173,38 @@ pub fn validate_composer_inputs(
     Ok(())
 }
 
+/// LUNA's attachment transport (engine `doc_host.rs`, UI `attachments.rs`):
+/// the prompt ends with this header and one `- <path>` line per image. The
+/// trailer stays in the transcript for display/restore and for providers
+/// that open files with tools.
+const ATTACHMENT_PROMPT_HEADER: &str = "Attached images (local files — open them to view):";
+
+/// Codex receives these images natively as `localImage`; telling it to also
+/// "open" them only causes a redundant `viewImage` call. Drop the lines for
+/// natively sent paths and keep any path that is not sent natively.
+fn without_native_image_trailer(prompt: &str, native: &HashSet<&str>) -> String {
+    let marker = format!("\n\n{ATTACHMENT_PROMPT_HEADER}\n");
+    let Some(at) = prompt.rfind(&marker) else {
+        return prompt.to_owned();
+    };
+    let mut kept = Vec::new();
+    for line in prompt[at + marker.len()..].lines() {
+        let Some(path) = line.strip_prefix("- ") else {
+            // Not LUNA's transport shape: leave the user's text alone.
+            return prompt.to_owned();
+        };
+        if !native.contains(path) {
+            kept.push(line);
+        }
+    }
+    let body = &prompt[..at];
+    if kept.is_empty() {
+        body.to_owned()
+    } else {
+        format!("{body}{marker}{}", kept.join("\n"))
+    }
+}
+
 /// Build native input once for initial, steered and rejected-steer fallback turns.
 pub(crate) fn codex_input(
     prompt: &str,
@@ -181,6 +213,12 @@ pub(crate) fn codex_input(
 ) -> Result<Vec<Value>, HarnessError> {
     validate_composer_inputs(attachments, selections)?;
     let mut input = Vec::new();
+    let native: HashSet<&str> = attachments.iter().map(String::as_str).collect();
+    let prompt = if native.is_empty() {
+        prompt.to_owned()
+    } else {
+        without_native_image_trailer(prompt, &native)
+    };
     if !prompt.trim().is_empty() {
         input.push(json!({"type":"text", "text":prompt}));
     }
