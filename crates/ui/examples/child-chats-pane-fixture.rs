@@ -988,6 +988,44 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(chip["activeChat"] == PARENT && chip["rightPaneOpen"] == true && chip["rightActive"] == "ChildChats", "count chip did not open the parent's list: {chip}");
                     anyhow::ensure!(ids(&chip["collapsedChildChats"]) == [LEGACY_COLLAPSED], "legacy setting changed: {chip}");
                     record.insert("chip".into(), chip);
+
+                    // p13-p15. "New child chat…": checkout, branch, access with
+                    // an explicit grant above the parent's access.
+                    window.update(cx, |shell, _, cx| shell.fixture_open_child_dialog(PARENT.into(), cx))?;
+                    settle(cx, 400).await;
+                    let defaults = window.update(cx, |shell, _, cx| shell.fixture_child_dialog_readback(cx))?;
+                    anyhow::ensure!(defaults["request"]["checkout"]["kind"] == "current" && defaults["request"].get("permissionMode").is_none() && defaults["request"].get("model").is_none(), "the dialog must default to the parent's checkout, model and access: {defaults}");
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_child_dialog_fill(
+                            "Spike the settings rename on its own branch.",
+                            true,
+                            "spike/settings-rename",
+                            Some(luna_proto::PermissionMode::Full),
+                            cx,
+                        )
+                    })?;
+                    settle(cx, 500).await;
+                    capture(window, cx, output.join("p13-create-dialog-grant.png"))?;
+                    let ungranted = window.update(cx, |shell, _, cx| shell.fixture_child_dialog_readback(cx))?;
+                    anyhow::ensure!(ungranted["exceedsParent"] == true && ungranted["grantConfirmed"] == false, "Full above the parent's Ask must need a grant: {ungranted}");
+                    window.update(cx, |shell, _, cx| shell.fixture_child_dialog_submit(cx))?;
+                    settle(cx, 300).await;
+                    let refused = window.update(cx, |shell, _, cx| shell.fixture_child_dialog_readback(cx))?;
+                    anyhow::ensure!(refused["busy"] == false && refused["error"].as_str().is_some_and(|error| error.contains("Confirm the grant")), "an unconfirmed escalation must not be submitted: {refused}");
+                    window.update(cx, |shell, _, cx| shell.fixture_child_dialog_confirm_grant(cx))?;
+                    settle(cx, 400).await;
+                    capture(window, cx, output.join("p14-create-dialog-confirmed.png"))?;
+                    let granted = window.update(cx, |shell, _, cx| shell.fixture_child_dialog_readback(cx))?;
+                    anyhow::ensure!(granted["grantConfirmed"] == true, "grant not recorded: {granted}");
+                    anyhow::ensure!(granted["request"]["permissionMode"] == "full", "request must carry the granted access: {granted}");
+                    anyhow::ensure!(granted["request"]["checkout"] == serde_json::json!({"kind": "newWorktree", "branch": "spike/settings-rename"}), "request must carry the worktree plan: {granted}");
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
+                    settle(cx, 500).await;
+                    capture(window, cx, output.join("p15-create-dialog-light.png"))?;
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
+                    record.insert("createDefaults".into(), defaults);
+                    record.insert("createRefused".into(), refused);
+                    record.insert("createGranted".into(), granted);
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -1000,7 +1038,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("child-chats-pane.pass"),
-                                "PASS: headless production Shell; child chats folded out of the sidebar, picker card + count, list order/status; open child = shared pane chat view (main transcript + main composer bound to the child); one set of pane watches per open child released on Back/close; real composer send answered by the Mock harness with parent isolation; approval card and goal bar in the pane bound to the child; draft retained across Back and pane close; send-then-Back delivers exactly once and the engine receipt is keyed by the original command id (Mock: Pending, checked read-only by the composer's receipt watch); dark/light and a 360 px pane captured; Open as main hands the draft over\n",
+                                "PASS: headless production Shell; child chats folded out of the sidebar, picker card + count, list order/status; open child = shared pane chat view (main transcript + main composer bound to the child); one set of pane watches per open child released on Back/close; real composer send answered by the Mock harness with parent isolation; approval card and goal bar in the pane bound to the child; draft retained across Back and pane close; send-then-Back delivers exactly once and the engine receipt is keyed by the original command id (Mock: Pending, checked read-only by the composer's receipt watch); dark/light and a 360 px pane captured; Open as main hands the draft over; New child chat dialog defaults from the parent, carries checkout/branch/access and refuses an unconfirmed access escalation\n",
                             )
                         });
                         if let Err(error) = written {
