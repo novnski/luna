@@ -850,14 +850,22 @@ impl CodexHarness {
                 serde_json::from_value(value.clone()).map_err(|error| {
                     HarnessError::Protocol(format!("invalid LUNA runtime contract: {error}"))
                 })?;
+            // Legacy `codexDynamicTools` is fail-closed: this adapter serves
+            // LUNA tools only over its MCP endpoint, never as dynamicTools.
             if contract.context.harness != HarnessId::Codex
                 || !matches!(
                     contract.delivery,
                     luna_proto::RuntimeDelivery::CodexMcpTools
                         | luna_proto::RuntimeDelivery::CodexInstructionsOnly
                 )
-                || (contract.delivery == luna_proto::RuntimeDelivery::CodexInstructionsOnly
-                    && !contract.tools.is_empty())
+            {
+                return Err(HarnessError::Protocol(format!(
+                    "Codex cannot deliver a LUNA runtime contract for {:?} via {:?}",
+                    contract.context.harness, contract.delivery
+                )));
+            }
+            if (contract.delivery == luna_proto::RuntimeDelivery::CodexInstructionsOnly
+                && !contract.tools.is_empty())
                 || (!contract.tools.is_empty() && controls.invoke_luna_tool.is_none())
             {
                 return Err(HarnessError::Protocol(
