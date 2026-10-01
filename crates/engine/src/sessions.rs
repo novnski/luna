@@ -1809,7 +1809,7 @@ impl SessionsEngine {
         let runs = lock(&self.inner.runs);
         let valid = runs.get(&fence.source_task_id).is_some_and(|run| {
             run.run_id == fence.source_run_id
-                && run.runtime_config.harness_id == HarnessId::Codex
+                && provider_turn_fence(run.runtime_config.harness_id)
                 && !run.interrupt_token.is_cancelled()
                 && !*run.cancel.subscribe().borrow()
                 && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
