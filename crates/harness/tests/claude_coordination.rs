@@ -489,3 +489,63 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
         .await;
     assert!(view.unavailable_reason.unwrap().contains("agents --json"));
 }
+
+/// Lead QA only: replays a REAL 2.1.286 workflow capture (from
+/// `evidence/cc13-advanced/live-acceptance.py`) through the production
+/// harness. Run with `LUNA_CLAUDE_WORKFLOW_CAPTURE=<abs frames.jsonl>` and
+/// `--ignored`. Prints how workflow agents' own frames were attributed.
+#[tokio::test]
+#[ignore = "needs a live capture from live-acceptance.py"]
+async fn live_workflow_capture_replays_into_a_settled_graph() {
+    let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let capture = std::env::var("LUNA_CLAUDE_WORKFLOW_CAPTURE").expect("capture path");
+    let dir = tempfile::tempdir().unwrap();
+    let exe = dir.path().join("claude");
+    std::fs::write(
+        &exe,
+        format!("#!/bin/sh\nread -r first\ncat '{capture}'\nsleep 1\n"),
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let events = run_to_end(
+        &ClaudeHarness::new().with_executable(&exe),
+        request("live workflow replay"),
+    )
+    .await;
+    let tasks = native_tasks(&events);
+    let workflow: Vec<_> = tasks
+        .iter()
+        .filter(|t| t.kind == NativeTaskKind::Workflow)
+        .collect();
+    assert!(!workflow.is_empty(), "no local_workflow task observed");
+    let last = workflow.last().unwrap();
+    assert!(
+        last.status.is_terminal(),
+        "workflow never settled: {:?}",
+        last.status
+    );
+    assert!(
+        tasks.windows(2).all(|w| w[0].revision < w[1].revision),
+        "revisions are monotonic"
+    );
+    let mut parents = std::collections::BTreeMap::<String, usize>::new();
+    for event in &events {
+        if let AgentEvent::Subagent {
+            parent_tool_use_id, ..
+        } = event
+        {
+            *parents.entry(parent_tool_use_id.clone()).or_default() += 1;
+        }
+    }
+    println!(
+        "LIVE workflow: id={} name={:?} status={:?} phases={} agents={} graph_observed={} tool_use_id={:?} subagent_events_by_parent={parents:?}",
+        last.task_id,
+        last.name,
+        last.status,
+        last.phases.len(),
+        last.agents.len(),
+        last.graph_observed,
+        last.tool_use_id,
+    );
+}
