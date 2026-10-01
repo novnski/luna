@@ -1002,8 +1002,20 @@ case "$turnline" in
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"type":"agentMessage","id":"warm-msg","text":"ready"}}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
-  read -r clearline || exit 0
-  has "$clearline" '"method":"thread/goal/clear"' || { emit '{"method":"error","params":{"threadId":"th-1","message":"warm goal must clear first, not turn/start or turn/steer"}}'; exit 0; }
+  # Metadata reads may share the warm connection between turns; answer them
+  # as unsupported. A turn/start or turn/steer here is the bug under test.
+  while read -r clearline; do
+    has "$clearline" '"method":"thread/goal/clear"' && break
+    [ -z "$CODEX_HOME" ] || printf '%s\n' "$clearline" >> "$CODEX_HOME/goal-warm-skipped"
+    if has "$clearline" '"method":"turn/start"' || has "$clearline" '"method":"turn/steer"'; then
+      emit '{"method":"error","params":{"threadId":"th-1","message":"warm goal must clear first, not turn/start or turn/steer"}}'
+      exit 0
+    fi
+    if has "$clearline" '"id":'; then
+      emit "{\"id\":$(rid "$clearline"),\"error\":{\"code\":-32601,\"message\":\"fake goal-warm: unsupported\"}}"
+    fi
+  done
+  [ -n "$clearline" ] || exit 0
   goal_start "$clearline" || exit 0
   goal_turn th-1 goal-turn-2 'warm goal done'
   ;;

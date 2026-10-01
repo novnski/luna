@@ -198,7 +198,13 @@ fn control(core: &EngineCore, task_id: &str) -> ContextControlState {
 }
 
 /// Wait for the goal to be marked achieved and the provider turn to settle.
-async fn wait_for_achieved(core: &EngineCore, client: &RpcClient, task_id: &str, marks: usize) {
+async fn wait_for_achieved(
+    core: &EngineCore,
+    client: &RpcClient,
+    task_id: &str,
+    marks: usize,
+    peer_home: &Path,
+) {
     let settled = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let achieved = control(core, task_id).goal_marks.achieved.len() >= marks;
@@ -216,14 +222,13 @@ async fn wait_for_achieved(core: &EngineCore, client: &RpcClient, task_id: &str,
     })
     .await;
     let view = core.task_identity.view(task_id);
+    let peer_log = std::fs::read_to_string(peer_home.join("goal-warm-skipped")).unwrap_or_default();
     assert!(
         settled.is_ok(),
-        "goal never completed: {:?}\nbinding: {:?}\nenvironment: {:?} device: {}\nentries: {:?}",
+        "goal never completed: {:?}\nbinding: {:?}\nstatus: {:?}\npeer skipped: {peer_log}\nentries: {:?}",
         control(core, task_id),
         view.as_ref().and_then(|view| view.current_binding.clone()),
-        view.as_ref()
-            .map(|view| view.workspace.environment_id.clone()),
-        core.device_id,
+        core.sessions.session_status(task_id),
         entries(core, task_id)
             .iter()
             .map(|entry| (entry.role, entry.id.clone(), text(entry)))
@@ -272,7 +277,14 @@ async fn goal_sent_to_a_cold_task_starts_working_and_is_marked_achieved() {
         CommandReceiptStatus::Rejected,
         "{receipt:?}"
     );
-    wait_for_achieved(&core, &client, task, 1).await;
+    wait_for_achieved(
+        &core,
+        &client,
+        task,
+        1,
+        &root.path().join("synthetic-codex"),
+    )
+    .await;
 
     let entries = entries(&core, task);
     let users: Vec<_> = entries
@@ -345,7 +357,14 @@ async fn goal_sent_to_a_warm_task_starts_on_the_loaded_runtime() {
         CommandReceiptStatus::Rejected,
         "{receipt:?}"
     );
-    wait_for_achieved(&core, &client, task, 1).await;
+    wait_for_achieved(
+        &core,
+        &client,
+        task,
+        1,
+        &root.path().join("synthetic-codex"),
+    )
+    .await;
 
     let entries = entries(&core, task);
     let goal_index = entries
