@@ -248,6 +248,10 @@ pub struct IntegrationInventoryItem {
     pub actions: IntegrationActionFacts,
     #[serde(default)]
     pub help_route: IntegrationHelpRoute,
+    /// Redacted provider-reported MCP details (CC-11). None for skills and for
+    /// sources that only read configuration files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<crate::IntegrationMcpDetails>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

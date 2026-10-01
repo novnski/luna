@@ -50,6 +50,10 @@ name = "queue-image-steer-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "mcp-inventory-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "goal-card-fixture"
 required-features = ["appshots-fixture"]
 
