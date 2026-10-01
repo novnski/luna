@@ -1131,6 +1131,15 @@ fn apply_goal_marks(
         && let Some(mark) = marks.achieved(&entry.id)
     {
         let label = goal_achieved_label(mark.time_used_seconds);
+        // The footer closes the turn (Codex's turn footer): the entry's hover
+        // timestamp/copy lane moves below it instead of separating the two.
+        let (timestamp, copy_text) = rows
+            .last_mut()
+            .map(|last| (last.timestamp.take(), last.copy_text.take()))
+            .unwrap_or_default();
+        if let Some(last) = rows.last_mut() {
+            last.version ^= GOAL_SENT_VERSION_BIT >> 1;
+        }
         rows.push(Row {
             id: format!("{}#goal-achieved", entry.id).into(),
             version: mark.time_used_seconds.unsigned_abs(),
@@ -1140,8 +1149,8 @@ fn apply_goal_marks(
             },
             role: entry.role,
             entry_id: entry.id.clone().into(),
-            timestamp: None,
-            copy_text: None,
+            timestamp,
+            copy_text,
         });
     }
     rows

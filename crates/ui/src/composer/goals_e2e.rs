@@ -902,6 +902,10 @@ pub async fn run_goal_card_e2e(
     })
     .await?;
     input_edit(&composer, window, cx, |input, _, cx| input.set_text("", cx))?;
+    composer_do(&composer, window, cx, |this, cx| {
+        this.failure = None;
+        cx.notify();
+    })?;
     engine_state(
         &state,
         window,
@@ -993,6 +997,9 @@ pub async fn run_goal_card_e2e(
     steps.push(json!({"step": "goal-command", "completing": completing, "bare": bare, "intent": command["intent"]}));
 
     // 10. A goal is text only: mentions are explained, never dropped.
+    input_edit(&composer, window, cx, |input, window, cx| {
+        input.replace_text_in_range(None, "Summarize the readme", window, cx)
+    })?;
     composer_do(&composer, window, cx, |this, cx| {
         this.input_items.insert(
             this.current_key.clone(),
@@ -1002,9 +1009,6 @@ pub async fn run_goal_card_e2e(
             }],
         );
         this.set_goal_mode(true, cx);
-    })?;
-    input_edit(&composer, window, cx, |input, window, cx| {
-        input.replace_text_in_range(None, "Summarize the readme", window, cx)
     })?;
     focus_input(&composer, window, cx)?;
     key_press(window, cx, "enter")?;
