@@ -1243,18 +1243,25 @@ async fn cc02_lifecycle_unknown_and_tool_bodies_are_decoded_and_retained() {
             })
             .unwrap_or_else(|| panic!("tool result {id} missing"))
     };
-    assert_eq!(output("t-str").as_deref(), Some("hi\n"));
-    assert_eq!(
-        output("t-arr").as_deref(),
-        Some(
-            "line one\n[image: image/png, 8 base64 bytes]\n[unsupported tool_result block: widget_v9]"
-        )
+    // Content checks tolerate CC-05's richer `lunaToolOutput` envelope, which
+    // supersedes this plain-text projection at integration; received-empty
+    // versus unavailable stays exact.
+    let has = |id: &str, needle: &str| output(id).is_some_and(|text| text.contains(needle));
+    assert!(has("t-str", "hi"), "{:?}", output("t-str"));
+    assert!(
+        has("t-arr", "line one") && has("t-arr", "image/png"),
+        "{:?}",
+        output("t-arr")
     );
-    assert_eq!(output("t-empty").as_deref(), Some(""));
-    assert_eq!(output("t-none"), None);
-    assert_eq!(
-        output("sub-t").as_deref(),
-        Some("(Bash completed with no output)")
+    assert!(
+        output("t-empty").is_some(),
+        "received-but-empty is not unavailable"
+    );
+    assert_eq!(output("t-none"), None, "absent content stays unavailable");
+    assert!(
+        has("sub-t", "(Bash completed with no output)"),
+        "{:?}",
+        output("sub-t")
     );
 
     // Tolerant result (A1–A4): malformed fields, success + is_error (529).

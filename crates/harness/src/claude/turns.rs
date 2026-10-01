@@ -132,16 +132,27 @@ impl TurnLedger {
     /// Record a written send and return its native uuid.
     pub fn register(&mut self, kind: SendKind, luna_id: Option<String>) -> String {
         let native_uuid = uuid::Uuid::new_v4().to_string();
+        self.register_native(kind, luna_id, native_uuid.clone());
+        native_uuid
+    }
+
+    /// Record a written send whose native uuid was minted elsewhere (one uuid
+    /// per send, shared with any other per-send receipt ledger).
+    pub fn register_native(
+        &mut self,
+        kind: SendKind,
+        luna_id: Option<String>,
+        native_uuid: String,
+    ) {
         if self.pending.len() >= MAX_PENDING_SENDS {
             self.pending.pop_front();
         }
         self.pending.push_back(PendingSend {
-            native_uuid: native_uuid.clone(),
+            native_uuid,
             luna_id,
             kind,
             boundary_owed: kind == SendKind::FollowUp && self.echo_capable,
         });
-        native_uuid
     }
 
     /// Whether an ordinary follow-up's `Steered` waits for native evidence
@@ -386,11 +397,7 @@ impl NativeTracker {
                             boundaries = self.ledger.on_started(&[lifecycle.command_uuid.as_str()]);
                         }
                         "cancelled" | "discarded" | "refused" => {
-                            if self.ledger.on_abandoned(&lifecycle.command_uuid)
-                                && let Some(done) = self.withheld_done.take()
-                            {
-                                out.push(done);
-                            }
+                            out.extend(self.abandoned(&lifecycle.command_uuid));
                         }
                         _ => {}
                     }
@@ -425,6 +432,16 @@ impl NativeTracker {
             }
         }
         (boundaries, out)
+    }
+
+    /// A send the CLI will never run: release a foreign `Done` that was only
+    /// withheld because this send was still pending.
+    fn abandoned(&mut self, native_uuid: &str) -> Option<AgentEvent> {
+        if self.ledger.on_abandoned(native_uuid) {
+            self.withheld_done.take()
+        } else {
+            None
+        }
     }
 
     /// Evidence for a stdout line that failed to parse (non-JSON or a known
@@ -534,6 +551,36 @@ impl NativeTracker {
 }
 
 impl Normalizer {
+    fn boundary_event(&mut self, boundary: Boundary) -> AgentEvent {
+        let (previous, next) = self.rotate_for_steer();
+        AgentEvent::Steered {
+            user_message_id: boundary.correlation_id,
+            assistant_message_id: Some(previous),
+            next_assistant_message_id: Some(next),
+        }
+    }
+
+    /// Lifecycle receipt hooks for a transport layer that consumes
+    /// `command_lifecycle` frames before they reach `normalize_native`:
+    /// `started` releases a deferred follow-up boundary; a terminal
+    /// non-run state releases a foreign `Done` withheld behind that send.
+    #[allow(dead_code)] // Called by a lifecycle-intercepting transport (cc01) at integration.
+    pub fn native_input_lifecycle(&mut self, native_uuid: &str, state: &str) -> Vec<AgentEvent> {
+        match state {
+            "started" => self
+                .native
+                .ledger
+                .on_started(&[native_uuid])
+                .into_iter()
+                .map(|boundary| self.boundary_event(boundary))
+                .collect(),
+            "cancelled" | "discarded" | "refused" => {
+                self.native.abandoned(native_uuid).into_iter().collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
     /// Production entry point: the established [`Normalizer::normalize`]
     /// plus CC-02 turn identity, decoded lifecycle evidence and bounded
     /// retention of everything it does not project.
@@ -587,12 +634,7 @@ impl Normalizer {
             }
         };
         for boundary in boundaries.into_iter().chain(late_boundaries) {
-            let (previous, next) = self.rotate_for_steer();
-            out.push(AgentEvent::Steered {
-                user_message_id: boundary.correlation_id,
-                assistant_message_id: Some(previous),
-                next_assistant_message_id: Some(next),
-            });
+            out.push(self.boundary_event(boundary));
         }
         // Result evidence precedes its Done so the journal still ends on Done.
         out.extend(evidence);
