@@ -17,7 +17,8 @@
 # Like the real CLI, report the physical cwd (LUNA validates it on binding).
 cwd=$(pwd -P)
 log="$cwd/.cc09-fake.log"
-printf 'ARGV %s %s\n' "$$" "$*" >> "$log"
+# One physical line per invocation (the appended system prompt has newlines).
+printf 'ARGV %s %s\n' "$$" "$(printf '%s ' "$@" | tr '\n\r' '  ')" >> "$log"
 
 resume=""
 replay=false
