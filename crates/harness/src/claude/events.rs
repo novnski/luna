@@ -638,7 +638,7 @@ pub(crate) struct CommandLifecycle {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "family", rename_all = "camelCase")]
 pub(crate) enum NativeEvent {
-    Task(TaskEvent),
+    Task(Box<TaskEvent>),
     Hook(HookEvent),
     Compaction(CompactionEvent),
     ConversationReset(ResetEvent),
@@ -803,7 +803,7 @@ pub(crate) fn decode_system(subtype: &str, value: &Value, line: &str) -> NativeF
                 "task_summary" => "summary",
                 _ => "backgroundChanged",
             };
-            NativeBody::Event(NativeEvent::Task(TaskEvent::decode(phase, value)))
+            NativeBody::Event(NativeEvent::Task(Box::new(TaskEvent::decode(phase, value))))
         }
         "hook_started" | "hook_progress" | "hook_response" => {
             let phase = match subtype {

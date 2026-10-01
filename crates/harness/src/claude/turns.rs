@@ -597,7 +597,7 @@ impl Normalizer {
             }
             Frame::System(f) => {
                 if let Some(native) = f.native.take() {
-                    let (owed, retained) = self.native.native_frame(native);
+                    let (owed, retained) = self.native.native_frame(*native);
                     boundaries = owed;
                     evidence = retained;
                 }
@@ -615,7 +615,7 @@ impl Normalizer {
                 boundaries = owed;
                 evidence = retained;
             }
-            Frame::Result(f) => envelope = Some(std::mem::take(&mut f.envelope)),
+            Frame::Result(f) => envelope = Some(*std::mem::take(&mut f.envelope)),
             Frame::Other => self.native.budget.count("transport"),
             _ => {}
         }

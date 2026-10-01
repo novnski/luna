@@ -65,7 +65,7 @@ pub(crate) struct SystemFrame {
     /// CC-02 classification of this system frame (task/hook/compaction
     /// lifecycle, init readback, progress, unprojected or unknown).
     #[serde(skip)]
-    pub native: Option<NativeFrame>,
+    pub native: Option<Box<NativeFrame>>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -265,7 +265,7 @@ pub(crate) struct ResultFrame {
     pub session_id: Option<String>,
     /// CC-02: the complete, per-field tolerant decode this frame came from.
     #[serde(skip)]
-    pub envelope: ResultEnvelope,
+    pub envelope: Box<ResultEnvelope>,
 }
 
 impl ResultFrame {
@@ -282,7 +282,7 @@ impl ResultFrame {
                 output_tokens: envelope.usage.output_tokens,
             },
             session_id: envelope.session_id.clone(),
-            envelope,
+            envelope: Box::new(envelope),
         }
     }
 }
@@ -333,7 +333,7 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
             let native = events::decode_system(&subtype, &value, line);
             let mut system: SystemFrame = serde_json::from_value(value)?;
             system.integration_observation = observation;
-            system.native = Some(native);
+            system.native = Some(Box::new(native));
             Frame::System(system)
         }
         "stream_event" => {
