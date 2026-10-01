@@ -1107,7 +1107,7 @@ pub async fn run_goal_card_e2e(
     steps.push(json!({"step": "goal-command", "completing": completing, "bare": bare, "intent": command["intent"]}));
     // E23 (cc00-baseline G-17): any discovery is scoped to this chat and its
     // effective mode, so the engine probes the run's own configuration.
-    // (Main's goal flow may serve `/goal` without a ListCommands call.)
+    // LUNA's own `/goal` needs none; step 12 requires the Claude chat's call.
     let list_calls: Vec<Value> = rpc
         .calls
         .lock()
@@ -1244,14 +1244,32 @@ pub async fn run_goal_card_e2e(
         .as_array()
         .map(|names| names.iter().filter(|name| *name == "goal").count())
         .unwrap_or_default();
+    // E23: the Claude chat's discovery is scoped to it and its mode.
+    let claude_scope = rpc
+        .calls
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(method, _)| method == methods::LIST_COMMANDS)
+        .map(|(_, params)| params.clone())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        claude_scope["chatId"] == CLAUDE_CHAT
+            && claude_scope["harness"] == "claude-code"
+            && claude_scope["permissionMode"].is_string(),
+        "Claude ListCommands was not scoped to the chat and mode: {claude_scope}"
+    );
+    // Clear the whole `/go` draft (a `None` range is only the caret).
     input_edit(&composer, window, cx, |input, window, cx| {
-        input.replace_text_in_range(None, "", window, cx)
+        let end = input.text().encode_utf16().count();
+        input.replace_text_in_range(Some(0..end), "", window, cx)
     })?;
     anyhow::ensure!(
         goal_entries == 1,
         "Claude `/goal` must be offered once: {slash}"
     );
-    steps.push(json!({"step": "claude-goal-mode", "tabWalk": walk, "card": on, "slash": slash}));
+    steps.push(json!({"step": "claude-goal-mode", "tabWalk": walk, "card": on, "slash": slash, "listCommands": claude_scope}));
 
     // 13. Send in goal mode: ONE run carrying the goal for the Claude chat
     // (the harness turns it into Claude's own `/goal <condition>` line).

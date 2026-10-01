@@ -122,6 +122,10 @@ pub(crate) struct TurnLedger {
     stamps_observed: bool,
     runtime_version: Option<String>,
     withheld_foreign: u32,
+    /// Own sends the current turn's root frames (or a `started` lifecycle)
+    /// named, and whether any of them named another sender; reset per result.
+    turn_own: Vec<String>,
+    turn_foreign: bool,
 }
 
 fn remember(ring: &mut VecDeque<String>, id: String) {
@@ -184,6 +188,13 @@ impl TurnLedger {
             self.echo_capable = true;
             self.stamps_observed = true;
         }
+        for uuid in echoed {
+            if !self.is_ours(uuid) {
+                self.turn_foreign = true;
+            } else if !self.turn_own.iter().any(|own| own == uuid) {
+                self.turn_own.push((*uuid).to_owned());
+            }
+        }
         let mut out = Vec::new();
         for uuid in echoed {
             if let Some(send) = self
@@ -228,6 +239,8 @@ impl TurnLedger {
             }
             remember(&mut self.seen_results, id.clone());
         }
+        let turn_own = std::mem::take(&mut self.turn_own);
+        let turn_foreign = std::mem::take(&mut self.turn_foreign);
         let echoed = stamp.echoed();
         let owner = if !echoed.is_empty() {
             if echoed.iter().any(|uuid| self.is_ours(uuid)) {
@@ -253,6 +266,18 @@ impl TurnLedger {
                     .pending
                     .drain(..)
                     .partition(|send| echoed.contains(&send.native_uuid.as_str()));
+                self.pending = kept.into();
+                out.consumed = consumed;
+            }
+            ResultOwner::Foreign if !turn_own.is_empty() && !turn_foreign => {
+                // The turn this result closes visibly ran only our send(s):
+                // our answer is not still to come, so withholding would strand
+                // the run. Settle those sends; the foreign echo still never
+                // checkpoints or attributes the result to another sender.
+                let (consumed, kept): (Vec<_>, Vec<_>) = self
+                    .pending
+                    .drain(..)
+                    .partition(|send| turn_own.contains(&send.native_uuid));
                 self.pending = kept.into();
                 out.consumed = consumed;
             }

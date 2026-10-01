@@ -951,7 +951,15 @@ async fn cc01_every_unsupported_inbound_control_gets_one_explicit_error() {
         .filter(|row| row["luna"] == "unsupported_error")
         .map(|row| row["subtype"].as_str().expect("subtype"))
         .collect();
-    assert!(refused.contains(&"elicitation") && refused.contains(&"luna_future_subtype"));
+    // cc03 answers `elicitation` and leaves undeclared dialogs to the CLI
+    // deadline; every other unsupported subtype is still refused once.
+    assert!(
+        !refused.contains(&"elicitation")
+            && !refused.contains(&"request_user_dialog")
+            && refused.contains(&"hook_callback")
+            && refused.contains(&"luna_future_subtype"),
+        "{refused:?}"
+    );
     let prompt = format!("scenario:cc01-unknown-controls {}", refused.join(" "));
     let (controls, _steer, _token) = controls("Allow once");
     let events = run_to_end(&harness(), request(&prompt), controls).await;
@@ -1730,11 +1738,17 @@ async fn native_nested_agents_keep_ownership_model_usage_and_completion() {
     for spawn in ["toolu_ghost", "toolu_wf", "agent-a", "ghost", "wf-1"] {
         assert!(tagged(spawn).is_empty(), "{spawn} attached: {events:?}");
     }
-    // CC-02 provider evidence is host-journal retention, never transcript
-    // content; leaks are judged on the events a transcript can show.
+    // CC-02 provider evidence is host-journal retention and CC-13 native task
+    // snapshots feed the Agents surface; neither is transcript content, so
+    // leaks are judged on the events a transcript can show.
     let visible: Vec<&AgentEvent> = events
         .iter()
-        .filter(|e| !matches!(e, AgentEvent::ProviderEvidence { .. }))
+        .filter(|e| {
+            !matches!(
+                e,
+                AgentEvent::ProviderEvidence { .. } | AgentEvent::NativeTaskChanged { .. }
+            )
+        })
         .collect();
     let debug = format!("{visible:?}");
     for leaked in [
