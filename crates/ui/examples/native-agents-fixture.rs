@@ -356,12 +356,17 @@ fn main() -> anyhow::Result<()> {
                     let mut record = serde_json::Map::new();
                     // 1. Root transcript loads; the Agents surface lists the
                     // three ROOT children with provider-reported activity.
+                    // The Shell adopts the selected chat asynchronously; a
+                    // surface opened before that is a no-op, so retry.
                     let mut agents = serde_json::Value::Null;
-                    window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                    settle(cx, 900).await;
                     for _ in 0..80 {
+                        if agents["rightActive"] != "Agents" {
+                            window.update(cx, |shell, _, cx| shell.fixture_open_agents(cx))?;
+                        }
                         settle(cx, 100).await;
                         agents = readback(window, cx)?;
-                        if agents["total"] == 3 {
+                        if agents["total"] == 3 && agents["rightActive"] == "Agents" {
                             break;
                         }
                     }
