@@ -1206,6 +1206,88 @@ impl Repos {
         })
     }
 
+    /// Child-chat worktree at the deterministic
+    /// `{worktrees_root}/<repoName>/<dir_name>`, on a NEW `branch` off `base`.
+    /// A retry finds the same directory: it is reused only when it is a linked
+    /// worktree of `repo_path` already on `branch`. Returns `(worktree, fresh)`.
+    pub(crate) async fn provision_child_worktree(
+        &self,
+        repo_path: &Path,
+        dir_name: &str,
+        branch: &str,
+        base: &str,
+    ) -> Result<(Worktree, bool), EngineError> {
+        let repo_name = repo_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "repo".to_string());
+        let parent = self.inner.worktrees_root.join(&repo_name);
+        let path = parent.join(dir_name);
+        let canonical_repo = std::fs::canonicalize(repo_path)?;
+        let worktree = |path: &Path, checkout_id: Option<String>| Worktree {
+            repo_path: repo_path.to_string_lossy().to_string(),
+            path: path.to_string_lossy().to_string(),
+            branch: branch.to_string(),
+            name: dir_name.to_string(),
+            checkout_id,
+        };
+        if Self::path_exists(&path).await {
+            let owned = crate::workspace_host::linked_worktree_root(&path)
+                .and_then(|root| std::fs::canonicalize(root).ok())
+                .is_some_and(|root| root == canonical_repo);
+            if owned && self.current_branch(&path).await.ok().as_deref() == Some(branch) {
+                let path = std::fs::canonicalize(&path)?;
+                let checkout = self.checkout_identity(&path).await?;
+                return Ok((worktree(&path, Some(checkout.id)), false));
+            }
+            return Err(EngineError::Other(format!(
+                "Worktree folder {} already exists and is not this child's checkout",
+                path.display()
+            )));
+        }
+        self.git(&["check-ref-format", "--branch", branch], Some(repo_path))
+            .await
+            .map_err(|_| EngineError::Other(format!("Invalid branch name: {branch}")))?;
+        if self.branch_exists(repo_path, branch).await {
+            return Err(EngineError::Other(format!(
+                "Branch already exists: {branch}; choose a new branch name"
+            )));
+        }
+        self.git(
+            &["rev-parse", "--verify", "--quiet", &format!("{base}^{{commit}}")],
+            Some(repo_path),
+        )
+        .await
+        .map_err(|_| EngineError::Other(format!("Base ref does not resolve to a commit: {base}")))?;
+        std::fs::create_dir_all(&parent)?;
+        self.git(
+            &["worktree", "add", "-b", branch, &path.to_string_lossy(), base],
+            Some(repo_path),
+        )
+        .await?;
+        let path = std::fs::canonicalize(&path)?;
+        let checkout = self.checkout_identity(&path).await?;
+        Ok((worktree(&path, Some(checkout.id)), true))
+    }
+
+    /// Undo a fresh [`Self::provision_child_worktree`] whose child was never
+    /// committed: remove the worktree through Git, then the branch it created.
+    pub(crate) async fn discard_child_worktree(
+        &self,
+        repo_path: &Path,
+        worktree: &Worktree,
+    ) -> Result<(), EngineError> {
+        self.git(
+            &["worktree", "remove", "--force", &worktree.path],
+            Some(repo_path),
+        )
+        .await?;
+        let _ = self.git(&["worktree", "prune"], Some(repo_path)).await;
+        self.git(&["branch", "-D", &worktree.branch], Some(repo_path))
+            .await
+            .map(drop)
+    }
+
     async fn branch_exists(&self, path: &Path, branch: &str) -> bool {
         self.git(
             &[

@@ -19,7 +19,7 @@ pub(crate) enum ParentContinuation {
     Skip(String),
 }
 
-fn mode_label(mode: PermissionMode) -> &'static str {
+pub(crate) fn mode_label(mode: PermissionMode) -> &'static str {
     match mode {
         PermissionMode::Ask => "Ask",
         PermissionMode::Auto => "Auto",

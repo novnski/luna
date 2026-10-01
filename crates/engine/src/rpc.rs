@@ -320,6 +320,9 @@ enum TaskCommandIntent {
     CreateChildChat {
         parent_task_id: String,
         request: luna_proto::CreateChildThreadRequest,
+        /// Engine-set only; absent for legacy payloads (unchanged hash).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_grant: Option<child_threads::ChildAccessGrant>,
     },
     ChildOutcome {
         outcome: luna_proto::ChildThreadOutcome,
@@ -1246,7 +1249,10 @@ pub struct EngineRpc {
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
     cleanup_boot_id: String,
-    new_task_preferences_path: Option<std::path::PathBuf>,
+    /// Child worktrees provisioned for an in-flight creation command.
+    pending_child_worktrees: std::sync::Mutex<
+        std::collections::HashMap<String, child_threads::ProvisionedChildWorktree>,
+    >,
     activity_cancel: CancellationToken,
 }
 
@@ -1577,7 +1583,7 @@ impl EngineRpc {
             local_import: None,
             engine_info,
             cleanup_boot_id,
-            new_task_preferences_path: None,
+            pending_child_worktrees: Default::default(),
             activity_cancel: CancellationToken::new(),
         };
         rpc.spawn_activity_bootstrap();
@@ -5116,8 +5122,16 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id,
                 request,
+                access_grant,
             } => self
-                .apply_child_creation(command_id, task_id, &parent_task_id, request, send_fence)
+                .apply_child_creation(
+                    command_id,
+                    task_id,
+                    &parent_task_id,
+                    request,
+                    access_grant,
+                    send_fence,
+                )
                 .map(Some),
             TaskCommandIntent::CreateChat {
                 side_parent_id,

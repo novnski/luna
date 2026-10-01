@@ -1355,6 +1355,11 @@ impl WorkspaceHost {
         self.read(|doc| doc.side_chat_parent(chat_id).is_some())
     }
 
+    /// The parent conversation of a side chat, from its registry row.
+    pub fn side_chat_parent(&self, chat_id: &str) -> Option<String> {
+        self.read(|doc| doc.side_chat_parent(chat_id))
+    }
+
     pub fn read_chats(&self) -> Result<Vec<Chat>, EngineError> {
         Ok(self.read(|doc| doc.read_chats())?)
     }

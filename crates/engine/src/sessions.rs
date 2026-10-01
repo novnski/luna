@@ -190,6 +190,9 @@ enum PendingInputKind {
 #[derive(Debug)]
 struct LunaSendProposal {
     child_request: Option<luna_proto::CreateChildThreadRequest>,
+    /// Engine-resolved defaults and policy for a child card. Derived from the
+    /// caller's own chat row when the card is raised, never from tool input.
+    child_plan: Option<ChildCardPlan>,
     request_id: String,
     claim: ClaimedProviderCall,
     fence: crate::cross_task_tools::ApprovedSendFence,
@@ -197,27 +200,136 @@ struct LunaSendProposal {
     environment_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct ChildCardPlan {
+    /// The parent's effective access when the card was raised.
+    ceiling: PermissionMode,
+    /// Access the child gets on "Allow once".
+    capped: PermissionMode,
+    /// Requested access above the ceiling: the explicit grant choice.
+    escalation: Option<PermissionMode>,
+    checkout: String,
+    model: String,
+    reasoning: String,
+}
+
+const CHILD_CARD_DENY: &str = "Deny";
+const CHILD_CARD_ALLOW: &str = "Allow once";
+
+/// What a server-owned child card's answer authorises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildCardAnswer {
+    Deny,
+    /// Create with access capped at the parent's ceiling.
+    Allow,
+    /// Create with the requested access above the ceiling.
+    AllowAndGrant,
+}
+
+impl ChildCardPlan {
+    fn grant_label(&self) -> Option<String> {
+        self.escalation.map(|mode| {
+            format!(
+                "Allow once and grant {} access",
+                crate::claude_child_reports::mode_label(mode).trim_end_matches(" access")
+            )
+        })
+    }
+
+    fn choices(&self) -> Vec<luna_proto::ApprovalChoice> {
+        let label = crate::claude_child_reports::mode_label;
+        let mut choices = vec![
+            luna_proto::ApprovalChoice {
+                label: CHILD_CARD_DENY.into(),
+                scope: "request".into(),
+                description: "Do not create the child chat.".into(),
+            },
+            luna_proto::ApprovalChoice {
+                label: CHILD_CARD_ALLOW.into(),
+                scope: "request".into(),
+                description: match self.escalation {
+                    Some(requested) => format!(
+                        "Create the child once with {} access, this chat's ceiling. The requested {} access is not granted.",
+                        label(self.capped),
+                        label(requested)
+                    ),
+                    None => format!("Create the child once with {} access.", label(self.capped)),
+                },
+            },
+        ];
+        if let (Some(requested), Some(grant)) = (self.escalation, self.grant_label()) {
+            choices.push(luna_proto::ApprovalChoice {
+                label: grant,
+                scope: "request".into(),
+                description: format!(
+                    "Create the child once with {} access, above this chat's {} access. You are granting it to the child.",
+                    label(requested),
+                    label(self.ceiling)
+                ),
+            });
+        }
+        choices
+    }
+
+    /// Server-side reading of a decision against the advertised choices.
+    fn answer(&self, decision: luna_proto::ApprovalDecision) -> ChildCardAnswer {
+        match decision {
+            luna_proto::ApprovalDecision::AllowOnce => ChildCardAnswer::Allow,
+            luna_proto::ApprovalDecision::ProviderChoice { index } => {
+                let choices = self.choices();
+                match choices.get(index as usize).map(|choice| choice.label.as_str()) {
+                    Some(CHILD_CARD_ALLOW) => ChildCardAnswer::Allow,
+                    Some(label) if Some(label) == self.grant_label().as_deref() => {
+                        ChildCardAnswer::AllowAndGrant
+                    }
+                    _ => ChildCardAnswer::Deny,
+                }
+            }
+            luna_proto::ApprovalDecision::Deny
+            | luna_proto::ApprovalDecision::Cancel
+            | luna_proto::ApprovalDecision::AllowTask => ChildCardAnswer::Deny,
+        }
+    }
+}
+
 impl LunaSendProposal {
     fn question(&self) -> UserInputQuestion {
-        if let Some(request) = &self.child_request {
+        if let (Some(request), Some(plan)) = (&self.child_request, &self.child_plan) {
+            let label = crate::claude_child_reports::mode_label;
+            let access = match plan.escalation {
+                Some(requested) => format!(
+                    "{} requested, above this chat's {} access. Allow once caps it at {}; only the grant choice gives {}.",
+                    label(requested),
+                    label(plan.ceiling),
+                    label(plan.capped),
+                    label(requested)
+                ),
+                None => format!(
+                    "{} (this chat's access is {}).",
+                    label(plan.capped),
+                    label(plan.ceiling)
+                ),
+            };
+            let choices = plan.choices();
             return UserInputQuestion {
                 id: format!("question-{}", self.request_id),
                 header: "LUNA approval".into(),
                 question: format!(
-                    "Create a fresh persistent child {} under {} in project {} on {}?\nExisting checkout: {}\nModel: {:?}; reasoning: {:?}; title: {:?}\nResults: {}; queue parent continuation: {}. Permissions are capped by the parent. Only the explicit prompt is copied.\n\n{}",
+                    "Create a fresh persistent child {} under {} in project {} on {}?\nCheckout: {}\nModel: {}; reasoning: {}; title: {:?}\nAccess: {}\nResults: {}; queue parent continuation: {}. Only the explicit prompt is copied.\n\n{}",
                     self.fence.request.task_id,
                     self.claim.source_task_id,
                     self.project_id,
                     self.environment_id,
-                    request.cwd.as_deref().unwrap_or("parent checkout"),
-                    request.model,
-                    request.reasoning,
+                    plan.checkout,
+                    plan.model,
+                    plan.reasoning,
                     request.title,
+                    access,
                     request.report_results,
                     request.continue_parent,
                     request.prompt
                 ),
-                options: vec!["Deny".into(), "Allow once".into()],
+                options: choices.iter().map(|choice| choice.label.clone()).collect(),
                 multi_select: false,
                 mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
@@ -226,11 +338,25 @@ impl LunaSendProposal {
                     turn_id: Some(self.claim.provider_turn_id.clone()),
                     machine_name: self.environment_id.clone(),
                     action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
-                    summary: "Create a persistent child chat".into(),
-                    requested_scope: luna_proto::PermissionScope::Workspace,
+                    summary: if plan.escalation.is_some() {
+                        "Create a persistent child chat (requests more access)".into()
+                    } else {
+                        "Create a persistent child chat".into()
+                    },
+                    requested_scope: if plan.escalation == Some(PermissionMode::Full) {
+                        luna_proto::PermissionScope::Full
+                    } else {
+                        luna_proto::PermissionScope::Workspace
+                    },
                     expires_at_ms: self.fence.expires_at_ms,
                     supports_task_allowance: false,
-                    details: None,
+                    details: Some(luna_proto::ApprovalDetails {
+                        kind: Some("createChildThread".into()),
+                        cwd: Some(plan.checkout.clone()),
+                        reason: Some(format!("Access: {access}")),
+                        choices,
+                        ..Default::default()
+                    }),
                 }),
                 input: None,
             };
@@ -1373,7 +1499,23 @@ impl SessionsEngine {
         };
         let authority =
             crate::cross_task_tools::CrossTaskAuthority::from_context(context, delivery, false);
-        crate::cross_task_tools::CrossTaskTools::new(backend).catalog(&authority)
+        let (mut tools, mut omitted) =
+            crate::cross_task_tools::CrossTaskTools::new(backend).catalog(&authority);
+        // The backend rejects children of side chats; never advertise it.
+        if context
+            .chat
+            .as_ref()
+            .is_some_and(|chat| chat.role == luna_proto::RuntimeChatRole::Side)
+            && let Some(index) = tools.iter().position(|tool| tool.name == "create_thread")
+        {
+            tools.remove(index);
+            omitted.push(luna_proto::OmittedRuntimeTool {
+                name: "create_thread".into(),
+                reason: "side chats cannot create child chats; create them from the main conversation"
+                    .into(),
+            });
+        }
+        (tools, omitted)
     }
 
     pub fn set_agent_accounts(&self, accounts: crate::agent_accounts::AgentAccounts) {
@@ -1629,6 +1771,61 @@ impl SessionsEngine {
         self.claimed_call_cancel_state(claim).is_some()
     }
 
+    /// Defaults and policy shown on a child card, from the caller's own row.
+    fn child_card_plan(
+        &self,
+        chat_id: &str,
+        request: &luna_proto::CreateChildThreadRequest,
+    ) -> ChildCardPlan {
+        let parent = self
+            .inner
+            .workspace()
+            .and_then(|workspace| workspace.chat(chat_id).ok().flatten());
+        let config = parent.as_ref().and_then(|parent| parent.config.clone());
+        let ceiling = config
+            .as_ref()
+            .map(|config| config.effective_permission_mode)
+            .unwrap_or_default();
+        let requested = request.permission_mode.unwrap_or(ceiling);
+        let parent_branch = parent.as_ref().and_then(|parent| parent.branch.clone());
+        let checkout = match (&request.checkout, &request.cwd) {
+            (Some(luna_proto::ChildCheckoutRequest::NewWorktree { branch, base }), _) => format!(
+                "new worktree on branch {} from {}",
+                branch.as_deref().unwrap_or("luna/child-… (generated)"),
+                base.clone()
+                    .or_else(|| parent_branch.clone().map(|branch| format!("{branch} (this chat's branch)")))
+                    .unwrap_or_else(|| "this chat's HEAD".into())
+            ),
+            (_, Some(cwd)) => format!("existing directory {cwd}"),
+            _ => format!(
+                "this chat's checkout {}{}",
+                parent
+                    .as_ref()
+                    .and_then(|parent| parent.cwd.as_deref())
+                    .unwrap_or("(unknown)"),
+                parent_branch
+                    .map(|branch| format!(" on branch {branch}"))
+                    .unwrap_or_default()
+            ),
+        };
+        ChildCardPlan {
+            ceiling,
+            capped: std::cmp::min(requested, ceiling),
+            escalation: (requested > ceiling).then_some(requested),
+            checkout,
+            model: request
+                .model
+                .clone()
+                .or_else(|| config.as_ref().and_then(|config| config.model.clone()))
+                .unwrap_or_else(|| "provider default".into()),
+            reasoning: request
+                .reasoning
+                .or_else(|| config.as_ref().and_then(|config| config.reasoning))
+                .map(|level| format!("{level:?}").to_lowercase())
+                .unwrap_or_else(|| "provider default".into()),
+        }
+    }
+
     async fn invoke_approved_luna_send(
         &self,
         chat_id: &str,
@@ -1751,9 +1948,14 @@ impl SessionsEngine {
             target_snapshot,
             request: request.clone(),
             expires_at_ms,
+            child_access_grant: false,
         };
+        let child_plan = child_request
+            .as_ref()
+            .map(|child| self.child_card_plan(chat_id, child));
         let proposal = LunaSendProposal {
             child_request: child_request.clone(),
+            child_plan,
             request_id: new_id(),
             claim,
             fence,
@@ -1815,6 +2017,7 @@ impl SessionsEngine {
         self.with_live_approved_send(&fence, || Ok(()))?;
         if let Some(child) = child_request {
             let child_fence = crate::cross_task_tools::ApprovedChildFence {
+                access_granted: fence.child_access_grant,
                 source: fence,
                 request: child.clone(),
             };
@@ -2590,13 +2793,25 @@ impl SessionsEngine {
             .as_ref()
             .is_some_and(|chat| chat.device_id == machine_id);
         let read_granted = local_managed_task && self.cross_task_backend().is_some();
+        let chat_identity = self.runtime_chat_identity(
+            &workspace,
+            chat_id,
+            chat.as_ref(),
+            identity.as_ref().map(|view| &view.task.lineage),
+        );
+        let parent_thread_id = chat_identity
+            .parent_thread_id
+            .clone()
+            .or_else(|| {
+                identity
+                    .as_ref()
+                    .and_then(|view| view.task.lineage.parent_task_id.clone())
+            });
         Ok(luna_proto::RuntimeContext {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: 1,
             thread_id: chat_id.into(),
-            parent_thread_id: identity
-                .as_ref()
-                .and_then(|view| view.task.lineage.parent_task_id.clone()),
+            parent_thread_id,
             source_thread_id: identity
                 .as_ref()
                 .and_then(|view| view.task.lineage.source_task_id.clone()),
@@ -2627,8 +2842,130 @@ impl SessionsEngine {
             } else {
                 Vec::new()
             },
-            chat: None,
+            chat: Some(chat_identity),
         })
+    }
+
+    /// Explicit role and static capabilities. Tool flags are filled from the
+    /// attached catalog by [`Self::apply_chat_tool_capabilities`].
+    fn runtime_chat_identity(
+        &self,
+        workspace: &crate::WorkspaceHost,
+        chat_id: &str,
+        chat: Option<&luna_proto::Chat>,
+        lineage: Option<&luna_proto::TaskLineage>,
+    ) -> luna_proto::RuntimeChatIdentity {
+        use luna_proto::{
+            ChildCheckoutKind, RuntimeChatCapabilities, RuntimeChatIdentity, RuntimeChatRole,
+            RuntimeCheckoutOwnership, RuntimeContextOrigin,
+        };
+        let side_parent = workspace.side_chat_parent(chat_id);
+        let side = side_parent.is_some()
+            || self
+                .inner
+                .side_chat_lookup
+                .get()
+                .is_some_and(|lookup| lookup(chat_id));
+        let native_fork = lineage
+            .is_some_and(|lineage| lineage.parent_task_id.is_none() && lineage.source_task_id.is_some());
+        let base = RuntimeChatCapabilities {
+            context_origin: RuntimeContextOrigin::Fresh,
+            checkout: RuntimeCheckoutOwnership::Own,
+            create_child_threads: false,
+            message_other_threads: false,
+            reports_to_parent: false,
+            persistent: true,
+            granted_access: None,
+            access_granted_by_user: false,
+            access_capped_by_parent: false,
+        };
+        if side {
+            return RuntimeChatIdentity {
+                role: RuntimeChatRole::Side,
+                parent_thread_id: side_parent.or_else(|| {
+                    lineage.and_then(|lineage| {
+                        lineage
+                            .source_task_id
+                            .clone()
+                            .or_else(|| lineage.parent_task_id.clone())
+                    })
+                }),
+                capabilities: RuntimeChatCapabilities {
+                    context_origin: if native_fork {
+                        RuntimeContextOrigin::NativeFork
+                    } else {
+                        RuntimeContextOrigin::ContextSnapshot
+                    },
+                    checkout: RuntimeCheckoutOwnership::SharedWithParent,
+                    persistent: false,
+                    access_capped_by_parent: true,
+                    ..base
+                },
+            };
+        }
+        if let Some(child) = chat.and_then(|chat| chat.child_thread.as_ref()) {
+            let provisioning = child.provisioning.as_ref();
+            let checkout = match provisioning.map(|provisioning| provisioning.checkout_kind) {
+                Some(ChildCheckoutKind::NewWorktree) => RuntimeCheckoutOwnership::OwnWorktree,
+                Some(ChildCheckoutKind::ExistingPath) => RuntimeCheckoutOwnership::ExistingPath,
+                Some(ChildCheckoutKind::Current) => RuntimeCheckoutOwnership::SharedWithParent,
+                // Legacy rows: the parent's checkout unless another path.
+                None => {
+                    let parent_cwd = workspace
+                        .chat(&child.parent_task_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|parent| parent.cwd);
+                    if parent_cwd.is_some() && parent_cwd == chat.and_then(|chat| chat.cwd.clone()) {
+                        RuntimeCheckoutOwnership::SharedWithParent
+                    } else {
+                        RuntimeCheckoutOwnership::ExistingPath
+                    }
+                }
+            };
+            let granted_by_user = provisioning.is_some_and(|provisioning| provisioning.granted_by_user);
+            return RuntimeChatIdentity {
+                role: RuntimeChatRole::Child,
+                parent_thread_id: Some(child.parent_task_id.clone()),
+                capabilities: RuntimeChatCapabilities {
+                    checkout,
+                    reports_to_parent: child.report_results,
+                    granted_access: provisioning.map(|provisioning| provisioning.granted_permission_mode),
+                    access_granted_by_user: granted_by_user,
+                    access_capped_by_parent: !granted_by_user,
+                    ..base
+                },
+            };
+        }
+        RuntimeChatIdentity {
+            role: RuntimeChatRole::Main,
+            parent_thread_id: None,
+            capabilities: RuntimeChatCapabilities {
+                context_origin: if native_fork {
+                    RuntimeContextOrigin::NativeFork
+                } else {
+                    RuntimeContextOrigin::Fresh
+                },
+                ..base
+            },
+        }
+    }
+
+    /// Accurate tool capabilities: only what this session actually attaches.
+    fn apply_chat_tool_capabilities(
+        context: &mut luna_proto::RuntimeContext,
+        delivery: luna_proto::RuntimeDelivery,
+        tools: &[luna_proto::RuntimeToolDefinition],
+    ) {
+        let attached = |name: &str| {
+            delivery.attaches_luna_tools() && tools.iter().any(|tool| tool.name == name)
+        };
+        let create = attached("create_thread");
+        let message = attached("send_message_to_thread");
+        if let Some(chat) = context.chat.as_mut() {
+            chat.capabilities.create_child_threads = create;
+            chat.capabilities.message_other_threads = message;
+        }
     }
 
     /// Whether this harness takes a prompt *during* a turn, rather than only at
@@ -3618,12 +3955,19 @@ impl SessionsEngine {
             .and_then(|workspace| workspace.chat(chat_id).ok().flatten())
             .and_then(|chat| chat.child_thread);
         if let Some(child) = &child {
+            // A user-granted child keeps the access the user granted; every
+            // other child stays capped by its parent's current access.
+            let user_granted = child
+                .provisioning
+                .as_ref()
+                .is_some_and(|provisioning| provisioning.granted_by_user);
             let current_parent_ceiling = self
                 .inner
                 .workspace()
                 .and_then(|workspace| workspace.chat(&child.parent_task_id).ok().flatten())
                 .and_then(|parent| parent.config)
                 .map(|config| config.effective_permission_mode)
+                .filter(|_| !user_granted)
                 .unwrap_or(child.permission_ceiling);
             let ceiling = std::cmp::min(child.permission_ceiling, current_parent_ceiling);
             request.parent_permission_ceiling = Some(
@@ -3698,7 +4042,7 @@ impl SessionsEngine {
                 .map(|session_id| self.inner.journal.runtime_contract(chat_id, session_id))
                 .transpose()?
                 .flatten();
-            let context = self.runtime_context_for(chat_id, harness_id, &request)?;
+            let mut context = self.runtime_context_for(chat_id, harness_id, &request)?;
             let (user_instructions, workspace_instructions) = self
                 .integration_settings()
                 .map(|settings| settings.contributions(context.project_id.as_deref()))
@@ -3710,6 +4054,7 @@ impl SessionsEngine {
                 .luna_runtime_delivery();
             let (cross_task_tools, cross_task_omissions) =
                 self.cross_task_catalog(&context, provider_delivery);
+            Self::apply_chat_tool_capabilities(&mut context, provider_delivery, &cross_task_tools);
             let compiled =
                 crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
                     context,
@@ -4747,7 +5092,14 @@ impl SessionsEngine {
         else {
             unreachable!("checked LUNA send input")
         };
-        let approved = decision == luna_proto::ApprovalDecision::AllowOnce && !expired;
+        // A child card reads its answer against the server-owned advertised
+        // choices; the access grant exists only as its explicit choice.
+        let answer = match &proposal.child_plan {
+            Some(plan) => plan.answer(decision),
+            None if decision == luna_proto::ApprovalDecision::AllowOnce => ChildCardAnswer::Allow,
+            None => ChildCardAnswer::Deny,
+        };
+        let approved = answer != ChildCardAnswer::Deny && !expired;
         let outcome = if expired {
             LunaApprovalOutcome::Expired
         } else if approved {
@@ -4758,11 +5110,20 @@ impl SessionsEngine {
         let _ = run.engine_tx.send(AgentEvent::InputResolved {
             request_id: request_id.to_owned(),
         });
+        let label = match (&proposal.child_plan, answer) {
+            (Some(plan), ChildCardAnswer::AllowAndGrant) if approved => {
+                plan.grant_label().unwrap_or_else(|| CHILD_CARD_ALLOW.into())
+            }
+            _ if approved => CHILD_CARD_ALLOW.into(),
+            _ => CHILD_CARD_DENY.into(),
+        };
         let _ = pending.resolver.send(vec![UserInputAnswer {
             question_id: pending.questions[0].id.clone(),
-            labels: vec![if approved { "Allow once" } else { "Deny" }.into()],
+            labels: vec![label],
         }]);
-        if approved && grant_tx.send(proposal.fence).is_err() {
+        let mut fence = proposal.fence;
+        fence.child_access_grant = answer == ChildCardAnswer::AllowAndGrant;
+        if approved && grant_tx.send(fence).is_err() {
             return LunaApprovalOutcome::RunEnded;
         }
         outcome
@@ -10817,6 +11178,7 @@ mod tests {
                 idempotency_key: "source-fence".into(),
             },
             expires_at_ms: crate::now_ms() + 30_000,
+            child_access_grant: false,
         };
         core.sessions
             .with_live_approved_send(&fence, || Ok(()))
@@ -10894,6 +11256,7 @@ mod tests {
                 .snapshot,
             request: request.clone(),
             expires_at_ms: crate::now_ms() + 30_000,
+            child_access_grant: false,
         };
         core.doc_host.fail_next_approved_queue_install_for_test();
         let rpc = core.rpc_service();
