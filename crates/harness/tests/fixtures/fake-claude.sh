@@ -99,7 +99,14 @@ case "$first" in
     [ "$arg" = '--forward-subagent-text' ] && forwarded=true
   done
   [ "$forwarded" = true ] || exit 1
-  cat "$(dirname "$0")/claude/native-agents-2.1.286.jsonl"
+  # Replay; a `luna_fixture_pause` line is the fixture's own timing marker
+  # (never sent): the real wake turn starts seconds after the eager result.
+  while IFS= read -r frame; do
+    case "$frame" in
+      *'"type":"luna_fixture_pause"'*) sleep 1.5 ;;
+      *) emit "$frame" ;;
+    esac
+  done < "$(dirname "$0")/claude/native-agents-2.1.286.jsonl"
   ;;
 
 *scenario:native-stop*)
