@@ -71,9 +71,9 @@ pub(crate) struct SystemFrame {
     pub native: Option<Box<NativeFrame>>,
     /// `init`: raw MCP rows and capability words, decoded only by `mcp.rs`.
     #[serde(default)]
-    pub mcp_servers: Option<Box<Value>>,
+    pub mcp_servers: Option<OpaqueJson>,
     #[serde(default)]
-    pub capabilities: Option<Box<Value>>,
+    pub capabilities: Option<OpaqueJson>,
     /// Allowlisted `task_*` fields (type, usage, patch, summary…), read
     /// leniently by `native_tasks`; nothing else is retained.
     #[serde(flatten)]
@@ -82,11 +82,33 @@ pub(crate) struct SystemFrame {
     #[serde(flatten)]
     pub peer_hold: Box<super::peer::PeerHoldFields>,
     /// Workflow/teammate task fields (tolerant raw values; see coordination).
-    #[serde(flatten)]
+    /// Decoded from the raw frame in `parse_frame`, not flattened: serde's
+    /// flattened structs consume the keys they match, and `native_task_fields`
+    /// shares several of these.
+    #[serde(skip)]
     pub task_fields: super::coordination::TaskFrameFields,
     /// Hook lifecycle / `commands_changed` (decoded by `hooks.rs`).
     #[serde(skip)]
     pub extension: Option<Box<super::hooks::ExtensionFrame>>,
+}
+
+/// Raw provider JSON kept for one decoder (`mcp.rs`). MCP rows can carry
+/// credentials (auth blocks, URLs), so `Debug` never prints the value.
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct OpaqueJson(Box<Value>);
+
+impl std::ops::Deref for OpaqueJson {
+    type Target = Value;
+    fn deref(&self) -> &Value {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for OpaqueJson {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<opaque>")
+    }
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -361,7 +383,10 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
             let observation = (subtype == "init").then(|| init_integration_observation(&value));
             let native = events::decode_system(&subtype, &value, line);
             let extension = super::hooks::parse_extension_frame(&value);
+            let task_fields =
+                super::coordination::TaskFrameFields::deserialize(&value).unwrap_or_default();
             let mut system: SystemFrame = serde_json::from_value(value)?;
+            system.task_fields = task_fields;
             system.integration_observation = observation;
             system.native = Some(Box::new(native));
             system.extension = extension.map(Box::new);

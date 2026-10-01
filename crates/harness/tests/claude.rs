@@ -1388,8 +1388,8 @@ async fn e24_foreign_results_never_complete_the_pending_human_turn() {
 }
 
 /// E24 / B2: a warm follow-up written while Claude starts a wake turn waits in
-/// the CLI queue. Its `Steered` carries the LUNA message id and lands only
-/// when the CLI starts it; the wake result completes nothing.
+/// the CLI queue. The wake result completes nothing; only the follow-up's own
+/// echoed result settles it (its receipt names the LUNA message id).
 #[tokio::test]
 async fn e24_follow_up_queued_behind_a_wake_turn_settles_only_its_own_receipt() {
     let events =
@@ -1397,13 +1397,13 @@ async fn e24_follow_up_queued_behind_a_wake_turn_settles_only_its_own_receipt() 
 
     let dones = done_positions(&events);
     assert_eq!(dones.len(), 2, "first answer + follow-up only: {events:?}");
+    // The ordinary boundary stays at the stdin write (legacy timing).
     let steers = steer_positions(&events);
     assert_eq!(steers.len(), 1, "{events:?}");
     let (steer_at, correlation) = &steers[0];
-    assert_eq!(correlation.as_deref(), Some("luna-msg-2"));
-    assert!(dones[0] < text_at(&events, "WAKE-TURN"));
-    assert!(text_at(&events, "WAKE-TURN") < *steer_at);
-    assert!(*steer_at < text_at(&events, "SECOND-ANSWER"));
+    assert_eq!(correlation.as_deref(), None);
+    assert!(dones[0] < *steer_at && *steer_at < text_at(&events, "WAKE-TURN"));
+    // The wake result completes nothing: the next Done follows the answer.
     assert!(text_at(&events, "SECOND-ANSWER") < dones[1]);
 
     let records = result_records(&events);
@@ -1444,18 +1444,14 @@ async fn e24_follow_up_folded_into_a_wake_turn_settles_without_waiting() {
 
     let dones = done_positions(&events);
     assert_eq!(dones.len(), 2, "{events:?}");
-    let steers = steer_positions(&events);
-    assert_eq!(steers.len(), 1, "{events:?}");
-    assert_eq!(steers[0].1.as_deref(), Some("luna-msg-2"));
-    assert!(text_at(&events, "WAKE-PART") < steers[0].0);
-    assert!(steers[0].0 < text_at(&events, "FOLDED-ANSWER"));
+    assert!(text_at(&events, "FOLDED-ANSWER") < dones[1]);
     let records = result_records(&events);
     assert_eq!(records[1]["owner"], "own");
     assert_eq!(records[1]["stamp"]["origin"]["kind"], "task-notification");
 }
 
-/// E24 / B5, B8: two follow-ups merged into one turn both get their exact
-/// boundary (in send order) and one result consumes both.
+/// E24 / B5: two follow-ups merged into one turn: one result consumes both,
+/// in send order.
 #[tokio::test]
 async fn e24_batched_follow_ups_settle_together() {
     let events = run_with_follow_ups(
@@ -1465,10 +1461,11 @@ async fn e24_batched_follow_ups_settle_together() {
     .await;
 
     assert_eq!(done_positions(&events).len(), 2, "{events:?}");
-    let steers = steer_positions(&events);
-    let ids: Vec<_> = steers.iter().map(|(_, id)| id.as_deref()).collect();
-    assert_eq!(ids, [Some("luna-2"), Some("luna-3")], "{events:?}");
-    assert!(steers[1].0 < text_at(&events, "BATCH-ANSWER"));
+    assert_eq!(
+        steer_positions(&events).len(),
+        2,
+        "one boundary per write: {events:?}"
+    );
     let records = result_records(&events);
     let consumed: Vec<_> = records[1]["consumed"]
         .as_array()
@@ -1733,7 +1730,13 @@ async fn native_nested_agents_keep_ownership_model_usage_and_completion() {
     for spawn in ["toolu_ghost", "toolu_wf", "agent-a", "ghost", "wf-1"] {
         assert!(tagged(spawn).is_empty(), "{spawn} attached: {events:?}");
     }
-    let debug = format!("{events:?}");
+    // CC-02 provider evidence is host-journal retention, never transcript
+    // content; leaks are judged on the events a transcript can show.
+    let visible: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|e| !matches!(e, AgentEvent::ProviderEvidence { .. }))
+        .collect();
+    let debug = format!("{visible:?}");
     for leaked in [
         "ghost finished",
         "spec workflow done",

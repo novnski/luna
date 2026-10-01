@@ -117,6 +117,9 @@ pub(crate) struct TurnLedger {
     seen_results: VecDeque<String>,
     echo_capable: bool,
     echo_observed: bool,
+    /// A content frame of one of this run's own turns carried its stamp:
+    /// only then may a follow-up's boundary wait for the native start.
+    stamps_observed: bool,
     runtime_version: Option<String>,
     withheld_foreign: u32,
 }
@@ -144,14 +147,19 @@ impl TurnLedger {
             native_uuid,
             luna_id,
             kind,
-            boundary_owed: kind == SendKind::FollowUp && self.echo_capable,
+            boundary_owed: kind == SendKind::FollowUp && self.defers_follow_up_boundary(),
         });
     }
 
     /// Whether an ordinary follow-up's `Steered` waits for native evidence
     /// that the CLI started it (instead of the stdin write).
     pub fn defers_follow_up_boundary(&self) -> bool {
-        self.echo_capable
+        // Not deferred: an ordinary follow-up keeps its boundary at the stdin
+        // write. Waiting for the native start loses output whenever an
+        // unstamped delta precedes the stamped frame (the engine is parked
+        // then and drops it). E24 does not need it: a foreign result still
+        // never emits `Done` while this send is unconsumed.
+        false
     }
 
     pub fn observe_init(&mut self, init: &InitInfo) {
@@ -174,6 +182,7 @@ impl TurnLedger {
         if echoed.iter().any(|uuid| self.is_ours(uuid)) {
             self.echo_observed = true;
             self.echo_capable = true;
+            self.stamps_observed = true;
         }
         let mut out = Vec::new();
         for uuid in echoed {
@@ -290,6 +299,7 @@ impl TurnLedger {
         json!({
             "echoCapable": self.echo_capable,
             "echoObserved": self.echo_observed,
+            "stampsObserved": self.stamps_observed,
             "runtimeVersion": self.runtime_version,
             "pendingSends": self.pending.iter().map(|send| json!({
                 "nativeUuid": send.native_uuid,

@@ -999,13 +999,13 @@
       },
       {
         "subtype": "elicitation",
-        "luna": "unsupported_error",
-        "detail": "MCP form/URL elicitation; mapping owned by cc03-permissions"
+        "luna": "handled",
+        "detail": "MCP form/URL elicitation through the engine input wizard (cc03 controls.rs); one correlated reply"
       },
       {
         "subtype": "request_user_dialog",
-        "luna": "unsupported_error",
-        "detail": "native dialogs; mapping owned by cc03-permissions"
+        "luna": "left_to_cli_deadline",
+        "detail": "LUNA declares no supportedDialogKinds; the protocol forbids answering an undeclared kind, so the CLI deadline settles it (cc03 controls.rs)"
       },
       {
         "subtype": "oauth_token_refresh",

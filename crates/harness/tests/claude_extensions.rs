@@ -322,8 +322,12 @@ async fn hook_lifecycle_becomes_root_hook_chips_with_truthful_outcomes() {
     // D4: commands_changed is a typed replacement list.
     assert!(events.iter().any(|e| matches!(e, AgentEvent::AvailableCommands { commands }
         if commands.iter().any(|c| c.name == "deploy-notes" && c.input_hint.as_deref() == Some("<version>")))));
+    // CC-02 provider evidence (host-journal only) may follow the Done.
     assert!(matches!(
-        events.last(),
+        events
+            .iter()
+            .rev()
+            .find(|e| !matches!(e, AgentEvent::ProviderEvidence { .. })),
         Some(AgentEvent::Done {
             status: DoneStatus::Completed,
             ..

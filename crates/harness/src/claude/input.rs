@@ -455,12 +455,15 @@ fn claude_skill(name: &str, path: &str) -> Result<String, HarnessError> {
             .and_then(Path::parent)
             .and_then(Path::file_name)
             .is_some_and(|f| f == "skills");
+    // A custom slash command (`commands/**/<name>.md`) is invoked the same
+    // way; CC-12's effective catalog offers both.
+    let command = file.extension().is_some_and(|ext| ext == "md") && in_component("commands");
     let config_root = std::env::var_os("CLAUDE_CONFIG_DIR")
         .filter(|root| !root.is_empty())
         .is_some_and(|root| file.starts_with(root));
-    if !shaped || !(in_component(".claude") || config_root) {
+    if !(shaped || command) || !(in_component(".claude") || config_root) {
         return Err(reject(format!(
-            "Skill \"{name}\" is not in a Claude Code skills folder ({path}); {KEPT}."
+            "Skill \"{name}\" is not in a Claude Code skills or commands folder ({path}); {KEPT}."
         )));
     }
     let metadata = std::fs::metadata(file).map_err(|error| {

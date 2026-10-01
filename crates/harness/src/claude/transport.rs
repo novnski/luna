@@ -420,16 +420,23 @@ impl ControlChannel {
 
     // ---- input receipts -------------------------------------------------
 
-    /// Stamp a fresh v4 uuid onto a `wire` user line and start tracking it.
-    /// Returns the stamped line and its uuid. LUNA message ids are never sent
-    /// as the native uuid (the CLI types it as a UUID).
+    /// Stamp the line's native uuid onto a `wire` user line and start
+    /// tracking it; returns the stamped line and its uuid. A UUID-shaped LUNA
+    /// message id is reused (CC-06: the provider transcript and LUNA share
+    /// one identity); any other id, or one already sent by this process,
+    /// gets a fresh v4 uuid (the CLI types the field as a UUID).
     pub(crate) fn stamp_user_line(
         &mut self,
         line: String,
         kind: InputKind,
         luna_message_id: Option<String>,
     ) -> (String, String) {
-        let uuid = uuid::Uuid::new_v4().to_string();
+        let uuid = luna_message_id
+            .as_deref()
+            .and_then(|id| uuid::Uuid::parse_str(id).ok())
+            .map(|id| id.hyphenated().to_string())
+            .filter(|id| !self.inputs.contains_key(id))
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let Some(rest) = line.strip_prefix('{').filter(|rest| rest.len() > 1) else {
             return (line, uuid);
         };
