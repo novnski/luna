@@ -1067,6 +1067,11 @@ struct Inner {
     doc_host: Mutex<Option<DocHost>>,
     /// chat_id → live run.
     runs: Mutex<HashMap<String, RunHandle>>,
+    /// Dispatches between run-ticket admission and run registration. Shutdown
+    /// waits for them so a run registered after its first sweep (for example
+    /// a queue drain already in flight) is still interrupted instead of
+    /// outliving the engine with its device-write ticket and InstanceLock.
+    dispatches_in_flight: std::sync::atomic::AtomicUsize,
     /// Serializes runtime replacement/start with permission-mode mutation for
     /// one chat. Without this, an async idle retirement can cancel a fresh run
     /// that started after the mutation returned.
@@ -1117,6 +1122,22 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Counts one `dispatch_inner` call until it returns or is dropped.
+struct DispatchInFlight<'a>(&'a Inner);
+
+impl<'a> DispatchInFlight<'a> {
+    fn enter(inner: &'a Inner) -> Self {
+        inner.dispatches_in_flight.fetch_add(1, Ordering::AcqRel);
+        Self(inner)
+    }
+}
+
+impl Drop for DispatchInFlight<'_> {
+    fn drop(&mut self) {
+        self.0.dispatches_in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
 #[derive(Clone)]
 pub struct SessionsEngine {
     inner: Arc<Inner>,
@@ -1143,6 +1164,7 @@ impl SessionsEngine {
                 statuses: Mutex::new(HashMap::new()),
                 sessions_tx,
                 recovery_tasks: Mutex::new(HashMap::new()),
+                dispatches_in_flight: std::sync::atomic::AtomicUsize::new(0),
                 recovery_settings_path: Mutex::new(None),
                 last_requests: Mutex::new(HashMap::new()),
                 harness_sessions: Mutex::new(HashMap::new()),
@@ -3135,6 +3157,7 @@ impl SessionsEngine {
         recovery: Option<RecoveryAttemptContext>,
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
+        let _in_flight = DispatchInFlight::enter(&self.inner);
         if !request.input_items.is_empty() && harness_id != HarnessId::Codex {
             return Err(EngineError::Other("Native plugin, app and skill selections require Codex. Keep the draft and choose Codex or remove the selections.".into()));
         }
@@ -5526,11 +5549,38 @@ impl SessionsEngine {
         for (_, timer) in lock(&self.inner.recovery_tasks).drain() {
             timer.abort();
         }
-        let chats: Vec<String> = lock(&self.inner.runs).keys().cloned().collect();
-        for chat_id in chats {
-            if let Err(err) = self.interrupt(&chat_id).await {
-                tracing::warn!(chat = %chat_id, error = %err, "shutdown interrupt failed");
+        // A dispatch admitted before shutdown can register its run after the
+        // first sweep. Interrupt each run once, then wait (bounded) for
+        // in-flight dispatches and sweep again until no new run appears.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut interrupted: HashSet<String> = HashSet::new();
+        loop {
+            let runs: Vec<(String, String)> = lock(&self.inner.runs)
+                .iter()
+                .map(|(chat, handle)| (chat.clone(), handle.run_id.clone()))
+                .collect();
+            let mut swept = false;
+            for (chat_id, run_id) in runs {
+                if !interrupted.insert(run_id) {
+                    continue;
+                }
+                swept = true;
+                if let Err(err) = self.interrupt(&chat_id).await {
+                    tracing::warn!(chat = %chat_id, error = %err, "shutdown interrupt failed");
+                    clean = false;
+                }
+            }
+            let idle = self.inner.dispatches_in_flight.load(Ordering::Acquire) == 0;
+            if idle && !swept {
+                break;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!("shutdown left a run dispatch unsettled");
                 clean = false;
+                break;
+            }
+            if !idle {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }
         clean
