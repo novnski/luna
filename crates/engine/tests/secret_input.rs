@@ -231,35 +231,83 @@ async fn secret_answer_is_delivered_in_memory_and_never_stored() {
     assert_no_secret_anywhere(root.path());
 }
 
+/// What a crash leaves behind: an unresolved secret question in the
+/// transcript with no live resolver (no graceful shutdown ran).
+fn crash_left_secret_card(core: &EngineCore, chat: &str) -> (String, String) {
+    let handle = core.doc_host.open(chat).unwrap();
+    let request = format!("{chat}-request");
+    let question = luna_proto::UserInputQuestion {
+        id: format!("{chat}-question"),
+        header: "API token".into(),
+        question: "Paste the deploy token".into(),
+        options: Vec::new(),
+        multi_select: false,
+        approval: None,
+        mcp: None,
+        input: Some(luna_proto::UserInputDetails {
+            option_descriptions: Vec::new(),
+            allow_other: true,
+            secret: true,
+        }),
+    };
+    let writer = luna_doc::SegmentWriter::begin(
+        handle.doc(),
+        &format!("{chat}-assistant"),
+        core.doc_host.device_id(),
+        1,
+    )
+    .unwrap();
+    writer
+        .finish(
+            &[MessagePart::Input {
+                id: format!("{chat}-part"),
+                request_id: request.clone(),
+                questions: vec![question.clone()],
+                resolved: false,
+            }],
+            luna_doc::MessageStatus::Aborted,
+        )
+        .unwrap();
+    (request, question.id)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn secret_request_after_restart_closes_without_replay() {
     trace_log();
     let root = tempfile::tempdir().unwrap();
-    let (in_memory, durable) = ("secret-restart-a", "secret-restart-b");
+    let parked = "secret-restart-parked";
     let core = engine(root.path());
-    run(&core, in_memory, "secret-input-hold");
-    run(&core, durable, "secret-input-hold");
+    run(&core, parked, "secret-input-hold");
     wait_for(
-        || open_request(&core, in_memory).is_some() && open_request(&core, durable).is_some(),
-        "both secret questions parked",
+        || open_request(&core, parked).is_some(),
+        "secret question parked",
     )
     .await;
+    // LUNA stops before the user answers.
     core.shutdown().await;
     drop(core);
 
-    // LUNA restarts before delivery: the resolver is gone.
     let core = engine(root.path());
-    let (request_id, question_id) = open_request(&core, in_memory).expect("card survives");
+    assert!(
+        open_request(&core, parked).is_none(),
+        "graceful shutdown ended the request (declined, nothing to replay)"
+    );
+
+    // A crash-left card: the in-memory path closes it and drops the answer.
+    let crashed = "secret-restart-crashed";
+    let (request_id, question_id) = crash_left_secret_card(&core, crashed);
     assert_eq!(
         core.sessions
-            .respond_secret_input(in_memory, &request_id, answer(&question_id, SENTINEL)),
+            .respond_secret_input(crashed, &request_id, answer(&question_id, SENTINEL)),
         SecretInputOutcome::Closed,
         "ends cancelled, the answer is dropped"
     );
-    assert!(open_request(&core, in_memory).is_none(), "card closed");
+    assert!(open_request(&core, crashed).is_none(), "card closed");
 
-    // An older client's durable answer is refused and never resumed as a turn.
-    let (request_id, question_id) = open_request(&core, durable).expect("card survives");
+    // An older client's durable answer to a crash-left card is refused,
+    // closes the card and is never resumed as a new turn.
+    let durable = "secret-restart-durable";
+    let (request_id, question_id) = crash_left_secret_card(&core, durable);
     core.doc_host
         .queue_command_with_id_and_transfers(
             durable,
@@ -296,7 +344,7 @@ async fn secret_request_after_restart_closes_without_replay() {
     );
     assert!(open_request(&core, durable).is_none(), "card closed");
     tokio::time::sleep(Duration::from_millis(300)).await;
-    for chat in [in_memory, durable] {
+    for chat in [parked, crashed, durable] {
         let entries = handle_entries(&core, chat);
         assert!(
             !entries.iter().any(|entry| entry.role == MessageRole::User
