@@ -482,6 +482,8 @@ fn main() -> anyhow::Result<()> {
                 state.spaces_synced = true;
                 state.auto_selected = true;
                 state.connection = state::ConnectionStatus::Ready;
+                // The engine profile is a development workspace: no sign-in gate.
+                state.workspace_scope = Some(luna_proto::WorkspaceScope::Development);
                 // Real RPC client, no workspace watches: the seeded rows and
                 // sessions above stay exactly as written.
                 state.fixture_attachment_engine(handle);
