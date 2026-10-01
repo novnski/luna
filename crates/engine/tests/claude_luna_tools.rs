@@ -147,13 +147,27 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_appr
     let source = uuid::Uuid::new_v4().to_string();
     let target = uuid::Uuid::new_v4().to_string();
     let foreign = uuid::Uuid::new_v4().to_string();
+    // A Claude parent configuration: create_thread children inherit it.
+    let config = luna_proto::ChatConfig {
+        harness: HarnessId::ClaudeCode,
+        provider_account_id: None,
+        model: None,
+        reasoning: None,
+        model_options: Default::default(),
+        sandbox: SandboxLevel::ReadOnly,
+        permission_mode: PermissionMode::Ask,
+        effective_permission_mode: PermissionMode::Ask,
+        permission_ceiling_source: None,
+        permission_degradation_reason: None,
+        permission_audit: Vec::new(),
+    };
     for (id, project, path) in [
         (&source, "project-a", &project_a),
         (&target, "project-a", &project_a),
         (&foreign, "project-b", &project_b),
     ] {
         core.workspace
-            .create_chat(id, Some(project), None, None, None)
+            .create_chat(id, Some(project), None, Some(config.clone()), None)
             .unwrap();
         core.task_identity
             .register_new_task(
