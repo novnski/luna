@@ -53,6 +53,8 @@ use crate::registry::{HarnessDescriptor, HarnessRegistry};
 use crate::run_journal::RunJournal;
 use crate::{EngineError, new_id, now_ms};
 
+mod native_subagents;
+
 /// One journaled event: the durable seq plus the event, as broadcast to subscribers.
 #[derive(Debug, Clone)]
 pub struct JournaledEvent {
@@ -220,7 +222,7 @@ impl LunaSendProposal {
                 mcp: None,
                 approval: Some(luna_proto::ApprovalRequest {
                     provider_request_id: self.claim.provider_call_id.clone(),
-                    provider: HarnessId::Codex,
+                    provider: self.claim.source_provider,
                     turn_id: Some(self.claim.provider_turn_id.clone()),
                     machine_name: self.environment_id.clone(),
                     action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
@@ -250,7 +252,7 @@ impl LunaSendProposal {
             mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: self.claim.provider_call_id.clone(),
-                provider: HarnessId::Codex,
+                provider: self.claim.source_provider,
                 turn_id: Some(self.claim.provider_turn_id.clone()),
                 machine_name: self.environment_id.clone(),
                 action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
@@ -365,7 +367,7 @@ impl LunaSyntheticArchiveProposal {
         current_binding: Option<&ProviderBindingKey>,
     ) -> bool {
         self.source_run_id == run.run_id
-            && run.runtime_config.harness_id == HarnessId::Codex
+            && provider_turn_fence(run.runtime_config.harness_id)
             && current_binding == Some(&self.source_binding)
             && run.run_provider_binding.as_ref() == Some(&self.source_binding)
             && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
@@ -506,13 +508,16 @@ fn schedule_approval_expiry(
     else {
         return;
     };
-    // A request with native choices, or a Codex request that waits without a
-    // provider deadline (v2 sends none), is retired as soon as the adapter
-    // closes it (`serverRequest/resolved`, Stop or the end of its turn).
+    // A request with native choices, a Codex request that waits without a
+    // provider deadline (v2 sends none), or a no-expiry LUNA tool card from
+    // any provider (Codex or Claude), is retired as soon as its waiter closes
+    // (`serverRequest/resolved`, an abandoned call, Stop or the turn's end).
     let native_choices = questions.iter().any(|question| {
         question.approval.as_ref().is_some_and(|approval| {
             approval.details.is_some()
-                || (approval.provider == HarnessId::Codex && approval.expires().is_none())
+                || (approval.expires().is_none()
+                    && (approval.provider == HarnessId::Codex
+                        || approval.action_kind == luna_proto::ApprovalActionKind::LunaCrossTask))
         })
     });
     tokio::spawn(async move {
@@ -735,11 +740,14 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        // Codex's warm mailbox carries typed inputs and attachments; other
-        // harnesses take text only. Native review targets require a fresh
-        // adapter dispatch (resuming the same binding) at a safe boundary.
+        // Codex's warm mailbox carries typed inputs and attachments. Other
+        // harnesses' typed inputs take a fresh (resumed) dispatch, whose
+        // rejection is recoverable; the warm fallback is at-least-once.
+        // Native review targets require a fresh adapter dispatch (resuming
+        // the same binding) at a safe boundary.
         request.review.is_none()
-            && (harness_id == HarnessId::Codex || request.attachments.is_empty())
+            && (harness_id == HarnessId::Codex
+                || (request.attachments.is_empty() && request.input_items.is_empty()))
             && self == &Self::from_request(harness_id, request)
     }
 }
@@ -794,6 +802,8 @@ struct ClaimedProviderCall {
     source_task_id: String,
     source_run_id: String,
     source_binding: ProviderBindingKey,
+    /// The adapter that supplied the turn/call evidence (Codex or Claude).
+    source_provider: HarnessId,
     provider_turn_id: String,
     provider_call_id: String,
 }
@@ -802,7 +812,8 @@ impl ClaimedProviderCall {
     fn matches_live(&self, run: &RunHandle, binding: Option<&ProviderBindingKey>) -> bool {
         self.source_run_id == run.run_id
             && self.source_binding.task_id == self.source_task_id
-            && run.runtime_config.harness_id == HarnessId::Codex
+            && run.runtime_config.harness_id == self.source_provider
+            && provider_turn_fence(self.source_provider)
             && binding == Some(&self.source_binding)
             && run.run_provider_binding.as_ref() == Some(&self.source_binding)
             && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
@@ -873,7 +884,7 @@ impl LunaProspectiveInterruptProposal {
             mcp: None,
             approval: Some(luna_proto::ApprovalRequest {
                 provider_request_id: evidence.claim.provider_call_id.clone(),
-                provider: HarnessId::Codex,
+                provider: evidence.claim.source_provider,
                 turn_id: Some(evidence.claim.provider_turn_id.clone()),
                 machine_name: evidence.source_environment_id.clone(),
                 action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
@@ -938,6 +949,14 @@ impl LunaProspectiveInterruptProposal {
 }
 
 /// A checkpoint is evidence for one active provider turn, never authorization.
+/// Adapters whose native turn evidence arms the provider-turn fence below:
+/// Codex (`turn/started`, checkpoints) and Claude (`system:init` .. `result`,
+/// with each call's `tool_use` id matched in `claude::luna_tools`). Other
+/// providers never attach LUNA tools, so their claims fail closed.
+fn provider_turn_fence(harness: HarnessId) -> bool {
+    matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode)
+}
+
 /// Claiming a call ID only reserves it for a future engine-owned proposal; it
 /// does not mint a grant or dispatch a tool.
 #[derive(Debug)]
@@ -975,7 +994,7 @@ impl RunHandle {
             return false;
         }
         let ready = binding.is_some_and(|binding| {
-            self.runtime_config.harness_id == HarnessId::Codex
+            provider_turn_fence(self.runtime_config.harness_id)
                 && !self.interrupt_token.is_cancelled()
                 && !*self.cancel.subscribe().borrow()
                 && binding.task_id == task_id
@@ -1003,7 +1022,7 @@ impl RunHandle {
         if self.run_id != run_id {
             return false;
         }
-        let ready = self.runtime_config.harness_id == HarnessId::Codex
+        let ready = provider_turn_fence(self.runtime_config.harness_id)
             && !self.interrupt_token.is_cancelled()
             && !*self.cancel.subscribe().borrow()
             && binding.is_some_and(|binding| {
@@ -1035,7 +1054,7 @@ impl RunHandle {
             matches!(
                 *self.provider_turn_readiness.borrow(),
                 ProviderTurnReadiness::AwaitingCheckpoint | ProviderTurnReadiness::Ready
-            ) && self.runtime_config.harness_id == HarnessId::Codex
+            ) && provider_turn_fence(self.runtime_config.harness_id)
                 && !self.interrupt_token.is_cancelled()
                 && !*self.cancel.subscribe().borrow()
                 && self.run_provider_binding.as_ref() == Some(binding)
@@ -1079,7 +1098,7 @@ impl RunHandle {
         const MAX_CALL_ID_BYTES: usize = 256;
         const MAX_CLAIMS_PER_TURN: usize = 4_096;
         if self.run_id != run_id
-            || self.runtime_config.harness_id != HarnessId::Codex
+            || !provider_turn_fence(self.runtime_config.harness_id)
             || self.interrupt_token.is_cancelled()
             || *self.cancel.subscribe().borrow()
             || *self.provider_turn_readiness.borrow() != ProviderTurnReadiness::Ready
@@ -1148,6 +1167,8 @@ struct Inner {
     /// Last dispatched request per chat — the steer→new-turn fallback re-derives its
     /// run config from this (chat config rows land with the workspace doc in M4).
     last_requests: Mutex<HashMap<String, RunRequest>>,
+    /// CC-06 live provider accounting (Usage page; never journaled).
+    live_usage: crate::live_usage::LiveUsageLedger,
     /// Harness-native session ids per chat (resume continuity across turns) —
     /// the live-process cache over the durable copy on the workspace chat row
     /// (luna kept the same pair on `chats.harness_session_id`). An empty
@@ -1178,6 +1199,10 @@ struct Inner {
 /// Turn-start hook: called with `(chat_id, cwd)`.
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type SideChatLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// CC-06 live accounting and native live model/effort switch hooks.
+#[path = "sessions_cc06.rs"]
+mod cc06;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -1228,6 +1253,7 @@ impl SessionsEngine {
                 dispatches_in_flight: std::sync::atomic::AtomicUsize::new(0),
                 recovery_settings_path: Mutex::new(None),
                 last_requests: Mutex::new(HashMap::new()),
+                live_usage: Default::default(),
                 harness_sessions: Mutex::new(HashMap::new()),
                 titles: OnceLock::new(),
                 task_identity: OnceLock::new(),
@@ -1519,7 +1545,9 @@ impl SessionsEngine {
         provider_call_id: &str,
     ) -> Option<ClaimedProviderCall> {
         let binding = self.inner.current_codex_binding_key(chat_id)?;
+        let mut source_provider = None;
         let claimed = lock(&self.inner.runs).get_mut(chat_id).is_some_and(|run| {
+            source_provider = Some(run.runtime_config.harness_id);
             run.claim_codex_invocation(
                 chat_id,
                 run_id,
@@ -1538,6 +1566,7 @@ impl SessionsEngine {
             source_task_id: chat_id.to_owned(),
             source_run_id: run_id.to_owned(),
             source_binding: binding,
+            source_provider: source_provider?,
             provider_turn_id: provider_turn_id.to_owned(),
             provider_call_id: provider_call_id.to_owned(),
         })
@@ -1828,7 +1857,7 @@ impl SessionsEngine {
         let runs = lock(&self.inner.runs);
         let valid = runs.get(&fence.source_task_id).is_some_and(|run| {
             run.run_id == fence.source_run_id
-                && run.runtime_config.harness_id == HarnessId::Codex
+                && provider_turn_fence(run.runtime_config.harness_id)
                 && !run.interrupt_token.is_cancelled()
                 && !*run.cancel.subscribe().borrow()
                 && *run.provider_turn_readiness.borrow() == ProviderTurnReadiness::Ready
@@ -2631,6 +2660,29 @@ impl SessionsEngine {
             .clone()
     }
 
+    /// CC-14: hold the dispatch transition gate with no runtime for this
+    /// chat (a parked warm runtime is retired first, as permission changes
+    /// do), so a one-shot provider control is the only native writer.
+    /// `None` while a turn is running.
+    pub(crate) async fn exclusive_idle_runtime(
+        &self,
+        chat_id: &str,
+    ) -> Result<Option<OwnedMutexGuard<()>>, EngineError> {
+        let transition = self.transition_gate(chat_id).lock_owned().await;
+        if self.turn_in_flight(chat_id) {
+            return Ok(None);
+        }
+        if self.has_live_run(chat_id) {
+            self.interrupt(chat_id).await?;
+            if self.has_live_run(chat_id) {
+                return Err(EngineError::Other(
+                    "the parked provider runtime did not retire before the deadline".into(),
+                ));
+            }
+        }
+        Ok(Some(transition))
+    }
+
     pub(crate) fn prepare_workspace_repair_execution(
         &self,
         chat_id: &str,
@@ -3299,12 +3351,7 @@ impl SessionsEngine {
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
         let _in_flight = DispatchInFlight::enter(&self.inner);
-        if !request.input_items.is_empty() && harness_id != HarnessId::Codex {
-            return Err(EngineError::Other("Native plugin, app and skill selections require Codex. Keep the draft and choose Codex or remove the selections.".into()));
-        }
-        if harness_id == HarnessId::Codex {
-            luna_harness::validate_composer_inputs(&request.attachments, &request.input_items)?;
-        }
+        crate::provider_inputs::admit(harness_id, &request.attachments, &request.input_items)?;
         if recovery.is_some()
             && self
                 .inner
@@ -3317,8 +3364,13 @@ impl SessionsEngine {
             ));
         }
         if let Some(goal) = request.goal.as_ref() {
-            if harness_id != HarnessId::Codex {
-                return Err(EngineError::Other("Goals require a Codex task".into()));
+            if !matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode) {
+                return Err(EngineError::Other(
+                    "Goals need a Codex or Claude Code task".into(),
+                ));
+            }
+            if harness_id == HarnessId::ClaudeCode {
+                crate::claude_ongoing::admit_goal_start(goal, self.turn_in_flight(chat_id))?;
             }
             goal.validate()
                 .map_err(|error| EngineError::Other(error.into()))?;
@@ -3333,6 +3385,23 @@ impl SessionsEngine {
             }
             // The transcript message is exactly the objective Codex received.
             request.prompt = goal.objective.clone();
+        }
+        // CC-15: Claude's review is its own `/code-review` line (or an
+        // ordinary message for custom instructions), never `review/start`.
+        if harness_id == HarnessId::ClaudeCode
+            && let Some(review) = request.review.take()
+        {
+            if self.turn_in_flight(chat_id) {
+                return Err(EngineError::Other(
+                    "Wait for the active turn to finish before starting a review".into(),
+                ));
+            }
+            if !request.attachments.is_empty() || request.worktree.is_some() {
+                return Err(EngineError::Other(
+                    "A review uses the task's existing checkout without attachments".into(),
+                ));
+            }
+            request.prompt = crate::claude_ongoing::review_prompt(&review.target)?;
         }
         if let Some(review) = request.review.as_ref() {
             if harness_id != HarnessId::Codex {
@@ -3708,37 +3777,59 @@ impl SessionsEngine {
             {
                 return Ok(run_id);
             }
-            let accepted = if steerable && same_runtime && request.goal.is_none() {
-                // Warm dispatch uses the same mailbox as explicit steering.
-                // Register acceptance before a fast boundary can retire it.
-                let mut pending = lock(&ledger);
-                let message = SteerMessage {
-                    input_items: request.input_items.clone(),
-                    attachments: request.attachments.clone(),
-                    prompt: request.prompt.clone(),
-                    message_id: Some(user_id.clone()),
-                    delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
-                    acceptance: None,
-                    goal: None,
-                };
-                if steer_tx.try_send(message).is_ok() {
-                    pending.push_back(RoutedSteer {
-                        attachments: request.attachments.clone(),
+            // CC-06: a parked Claude run applies a model/effort-only change
+            // natively (acks + readback before the prompt) instead of restarting.
+            let same_runtime = same_runtime
+                || (steerable
+                    && self.stage_live_switch(
+                        chat_id,
+                        &run_id,
+                        harness_id,
+                        &request,
+                        &user_id,
+                        workspace_repair_revision,
+                    ));
+            // A Claude goal is Claude's own `/goal` line through the same
+            // warm mailbox (the harness writes it); Codex goals never are.
+            let claude_goal = request
+                .goal
+                .clone()
+                .filter(|_| harness_id == HarnessId::ClaudeCode);
+            let accepted =
+                if steerable && same_runtime && (request.goal.is_none() || claude_goal.is_some()) {
+                    // Warm dispatch uses the same mailbox as explicit steering.
+                    // Register acceptance before a fast boundary can retire it.
+                    let mut pending = lock(&ledger);
+                    let message = SteerMessage {
                         input_items: request.input_items.clone(),
+                        attachments: request.attachments.clone(),
                         prompt: request.prompt.clone(),
-                        message_id: user_id.clone(),
+                        message_id: Some(user_id.clone()),
                         delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
-                    });
-                    true
+                        acceptance: None,
+                        goal: claude_goal,
+                    };
+                    if steer_tx.try_send(message).is_ok() {
+                        pending.push_back(RoutedSteer {
+                            attachments: request.attachments.clone(),
+                            input_items: request.input_items.clone(),
+                            prompt: request.prompt.clone(),
+                            message_id: user_id.clone(),
+                            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+                        });
+                        true
+                    } else {
+                        false
+                    }
                 } else {
                     false
-                }
-            } else {
-                false
-            };
+                };
             if accepted {
                 let handle = self.doc_handle(chat_id)?;
                 handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+                if request.goal.is_some() {
+                    self.mark_goal_sent(chat_id, &user_id);
+                }
                 if self.is_live(chat_id, &run_id) {
                     // Working BEFORE the lastMessageAt bump: both ride the
                     // workspace doc from this one peer, so causal order makes it
@@ -4161,12 +4252,12 @@ impl SessionsEngine {
         let Some((harness_id, run_id, steer_tx, ledger)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
-        if (!attachments.is_empty() || !input_items.is_empty()) && harness_id != HarnessId::Codex {
+        if (!attachments.is_empty() || !input_items.is_empty())
+            && !crate::provider_inputs::steers_native_inputs(harness_id)
+        {
             return Ok(SteerOutcome::Rejected);
         }
-        if harness_id == HarnessId::Codex {
-            luna_harness::validate_composer_inputs(attachments, input_items)?;
-        }
+        crate::provider_inputs::admit(harness_id, attachments, input_items)?;
         let user_id = message_id.unwrap_or_else(new_id);
         self.inner
             .recovery
@@ -6317,7 +6408,7 @@ impl Inner {
             || view.workspace.environment_id != self.device_id
             || binding.task_id != chat_id
             || binding.environment_id != self.device_id
-            || binding.provider_id != HarnessId::Codex
+            || !provider_turn_fence(binding.provider_id)
             || binding.binding_id.is_empty()
             || binding.provider_task_id.is_empty()
         {
@@ -7241,9 +7332,15 @@ async fn drive_run(
         std::collections::HashMap::new();
     let mut child_activity: std::collections::HashMap<String, luna_doc::SubagentActivity> =
         std::collections::HashMap::new();
+    // Nested spawn chips live in their owning child's transcript.
+    let mut nested_spawns = native_subagents::NestedSpawns::default();
 
     let mut final_completed_turn = None;
     let mut journal_failure: Option<EngineError> = None;
+    // Last report from a still-active native workflow/teammate. Pushes the
+    // parked-session reaper out so it never kills a child mid-workflow; a
+    // task that goes silent still lets the reaper end eventually.
+    let mut native_activity_at: Option<tokio::time::Instant> = None;
     let final_status = loop {
         let event: AgentEvent = if let Some(event) = prepared_events.pop_front() {
             event
@@ -7275,7 +7372,9 @@ async fn drive_run(
                 // nobody returned to in 30 minutes releases its child. The turn
                 // was finalized at Done, so this end is clean — no aborted stamp.
                 _ = tokio::time::sleep_until(
-                    idle_since.map(|at| at + SESSION_IDLE).unwrap_or_else(tokio::time::Instant::now)
+                    idle_since
+                        .map(|at| at.max(native_activity_at.unwrap_or(at)) + SESSION_IDLE)
+                        .unwrap_or_else(tokio::time::Instant::now)
                 ), if idle_since.is_some() => {
                     tracing::info!(chat = %chat_id, "reaping idle persistent session");
                     if let Some(token) = lock(&inner.runs)
@@ -7424,6 +7523,23 @@ async fn drive_run(
             event
         };
 
+        // Native provider evidence is host-journal retention only: never a
+        // transcript part, turn boundary, resume or liveness signal, so it
+        // bypasses the subagent router and the parked gate entirely.
+        if matches!(&event, AgentEvent::ProviderEvidence { .. }) {
+            if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                tracing::warn!(chat = %chat_id, %error, "provider evidence journal append failed");
+            }
+            continue;
+        }
+
+        // CC-06: live accounting is control-plane data for the Usage page; it
+        // never reaches the journal, the transcript or turn state.
+        if let AgentEvent::ProviderAccounting { report } = &event {
+            inner.live_usage.record(&chat_id, report);
+            continue;
+        }
+
         // ── transient provider status ─────────────────────────────────
         // Retry/warning notices (root or sub-agent) are task metadata for the
         // working indicator: never a transcript part, never a turn failure.
@@ -7491,6 +7607,7 @@ async fn drive_run(
                 // pre-viz behavior), never a reopened doc.
                 continue;
             }
+            nested_spawns.observe(parent_tool_use_id, sub_event);
             let sub_id = subagent_doc_id(&chat_id, parent_tool_use_id);
             let observation = child_activity
                 .entry(parent_tool_use_id.clone())
@@ -7505,6 +7622,7 @@ async fn drive_run(
                 AgentEvent::Usage { .. }
                     | AgentEvent::ContextUsage { .. }
                     | AgentEvent::ChildStatus { .. }
+                    | AgentEvent::ChildProgress { .. }
             );
             // A Done with NO sink (a subagent that never streamed — codex
             // turn ends can beat registration) is chip-only: minting a doc
@@ -7512,6 +7630,26 @@ async fn drive_run(
             // would link the chip to that never-created doc (an empty tab
             // on click).
             let done_only = !sink_known && matches!(sub_event.as_ref(), AgentEvent::Done { .. });
+            // A nested spawn's chip is in its owning child's transcript; any
+            // chip refresh below targets that doc instead of the root's.
+            let nested_chip_doc = (!chip_streaming
+                && (!sink_known
+                    || subagent_chip_update(sub_event).is_some()
+                    || matches!(
+                        sub_event.as_ref(),
+                        AgentEvent::Usage { .. } | AgentEvent::ChildProgress { .. }
+                    )))
+            .then(|| {
+                nested_spawns.chip_doc(
+                    parent_tool_use_id,
+                    &inner,
+                    &chat_id,
+                    &mut subagents,
+                    &device_id,
+                )
+            })
+            .flatten();
+            let chip_doc: &SessionDoc = nested_chip_doc.as_deref().unwrap_or(doc_ref);
             if chip_streaming {
                 if !sink_known && !done_only {
                     for p in folded.iter_mut() {
@@ -7563,7 +7701,7 @@ async fn drive_run(
                         },
                     );
                     if !chip_streaming {
-                        let _ = doc_ref.update_subagent_chip(
+                        let _ = chip_doc.update_subagent_chip(
                             parent_tool_use_id,
                             Some(&sub_id),
                             Some("running"),
@@ -7581,13 +7719,15 @@ async fn drive_run(
                 && (done_only
                     || matches!(
                         sub_event.as_ref(),
-                        AgentEvent::Usage { .. } | AgentEvent::ChildStatus { .. }
+                        AgentEvent::Usage { .. }
+                            | AgentEvent::ChildStatus { .. }
+                            | AgentEvent::ChildProgress { .. }
                     ))
                 && !chip_streaming
             {
                 // Completion or usage can arrive before child content. Update
                 // the chip without manufacturing an empty transcript doc.
-                let _ = doc_ref.update_subagent_chip(
+                let _ = chip_doc.update_subagent_chip(
                     parent_tool_use_id,
                     None,
                     subagent_chip_update(sub_event),
@@ -7601,7 +7741,7 @@ async fn drive_run(
                     // sink level (the fold ignores UserMessage).
                     sink.push_user(&device_id, text);
                     if !chip_streaming {
-                        let _ = doc_ref.update_subagent_chip(
+                        let _ = chip_doc.update_subagent_chip(
                             parent_tool_use_id,
                             None,
                             Some("running"),
@@ -7609,6 +7749,7 @@ async fn drive_run(
                             Some(None),
                         );
                     }
+                    nested_spawns.refreeze(&inner, &chat_id);
                     continue;
                 }
                 if !metadata_only {
@@ -7618,11 +7759,14 @@ async fn drive_run(
                 }
                 if !chip_streaming
                     && (subagent_chip_update(sub_event).is_some()
-                        || matches!(sub_event.as_ref(), AgentEvent::Usage { .. }))
+                        || matches!(
+                            sub_event.as_ref(),
+                            AgentEvent::Usage { .. } | AgentEvent::ChildProgress { .. }
+                        ))
                 {
                     // In-place refresh only on observed status/usage/result.
                     // Text deltas never rewrite the parent doc.
-                    let _ = doc_ref.update_subagent_chip(
+                    let _ = chip_doc.update_subagent_chip(
                         parent_tool_use_id,
                         None,
                         subagent_chip_update(sub_event),
@@ -7663,6 +7807,7 @@ async fn drive_run(
                     }
                 }
             }
+            nested_spawns.refreeze(&inner, &chat_id);
             continue;
         }
 
@@ -7698,6 +7843,14 @@ async fn drive_run(
         if let AgentEvent::ContextUsage { tokens, window } = &event {
             if let Err(err) = doc_ref.update_context_usage(*tokens, *window) {
                 tracing::warn!(%chat_id, error = %err, "context usage write failed");
+            }
+            continue;
+        }
+        // Native workflow/teammate state keeps arriving after the launching
+        // turn's Done; persist it without reopening the parked turn.
+        if let AgentEvent::NativeTaskChanged { task } = &event {
+            if crate::native_tasks::persist(doc_ref, &chat_id, task) {
+                native_activity_at = Some(tokio::time::Instant::now());
             }
             continue;
         }
@@ -7751,6 +7904,87 @@ async fn drive_run(
                 {
                     tracing::warn!(chat = %chat_id, %error, "goal achieved mark persistence failed");
                 }
+            } else if harness_id == HarnessId::ClaudeCode
+                && let Some(host) = inner.doc_host()
+                && let Some(binding) = crate::claude_ongoing::claude_binding(
+                    inner.task_identity.get().and_then(|t| t.view(&chat_id)),
+                    &chat_id,
+                    &inner.device_id,
+                    Some(thread_id.as_str()),
+                )
+            {
+                crate::claude_ongoing::persist_run_goal(
+                    &host,
+                    &chat_id,
+                    &entry_id,
+                    &binding,
+                    goal.as_ref(),
+                    turn_id.is_some(),
+                );
+            }
+            continue;
+        }
+        // CC-14: Claude's own schedules (observation only; never published).
+        if let AgentEvent::NativeSchedules {
+            session_id,
+            schedules,
+        } = &event
+        {
+            if harness_id == HarnessId::ClaudeCode
+                && let Some(host) = inner.doc_host()
+                && crate::claude_ongoing::claude_binding(
+                    inner.task_identity.get().and_then(|t| t.view(&chat_id)),
+                    &chat_id,
+                    &inner.device_id,
+                    Some(session_id.as_str()),
+                )
+                .is_some()
+            {
+                crate::claude_ongoing::persist_schedules(&host, &chat_id, schedules);
+            }
+            continue;
+        }
+        // Native peer (cross-session) observations become attributed System
+        // entries, never user turns, and are recorded even while parked. A
+        // mid-turn arrival closes the streaming segment first so the reply
+        // that follows lands below it.
+        if matches!(event, AgentEvent::PeerMessage { .. }) {
+            if idle_since.is_none() && !folded.is_empty() {
+                if let Err(err) = finish_segment(
+                    doc_ref,
+                    writer.take(),
+                    &entry_id,
+                    &device_id,
+                    segment_started,
+                    &folded,
+                    MessageStatus::Complete,
+                ) {
+                    tracing::warn!(chat = %chat_id, error = %err, "segment finish failed");
+                }
+                inner.note_message(&chat_id, &folded_text(&folded));
+                folded.clear();
+                dirty = false;
+                entry_id = new_id();
+                segment_started = now_ms();
+            }
+            if let Err(error) =
+                crate::claude_peers::record_peer_message(doc_ref, &device_id, &event, now_ms())
+            {
+                tracing::warn!(chat = %chat_id, %error, "peer message record failed");
+            }
+            continue;
+        }
+        // Claude's adapter mints a turn id at each root `system:init`. It only
+        // arms the LUNA tool fence; wake turns keep their existing lifecycle.
+        if harness_id == HarnessId::ClaudeCode
+            && let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event
+        {
+            if inner
+                .current_codex_binding_key(&chat_id)
+                .is_some_and(|binding| binding.provider_thread_id == *thread_id)
+            {
+                inner.rearm_codex_checkpoint_after_done(&chat_id, &run_id, Some(thread_id));
+                inner.observe_codex_checkpoint(&chat_id, &run_id, Some(thread_id), turn_id);
             }
             continue;
         }
@@ -8406,7 +8640,7 @@ async fn drive_run(
                     }
                     return;
                 }
-                if harness_id == HarnessId::Codex {
+                if provider_turn_fence(harness_id) {
                     inner.observe_codex_binding(&chat_id, &run_id, session_id);
                 }
                 if let Some(contract) = runtime_contract.as_ref() {
@@ -8754,9 +8988,19 @@ async fn drive_run(
     // This also covers metadata-only children that never opened a transcript.
     for parent_id in child_activity.keys() {
         if !settled_subagents.contains(parent_id) {
-            let _ = doc_ref.update_subagent_chip(parent_id, None, Some("unobserved"), None, None);
+            let nested =
+                nested_spawns.chip_doc(parent_id, &inner, &chat_id, &mut subagents, &device_id);
+            let _ = nested.as_deref().unwrap_or(doc_ref).update_subagent_chip(
+                parent_id,
+                None,
+                Some("unobserved"),
+                None,
+                None,
+            );
         }
     }
+    nested_spawns.refreeze(&inner, &chat_id);
+    crate::native_tasks::settle_session_ended(doc_ref, &chat_id);
     // Any child transcript still streaming freezes as-is: the parent event
     // stream is gone, so this sink cannot receive more content in this run.
     for (_, sink) in subagents.drain() {

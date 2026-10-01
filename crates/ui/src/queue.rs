@@ -358,6 +358,22 @@ pub(crate) struct QueuePreview {
     _task: gpui::Task<()>,
 }
 
+/// Providers whose in-turn steer carries staged images and typed selections
+/// (mirrors the engine's admission gate).
+fn steers_native_inputs(harness: luna_proto::HarnessId) -> bool {
+    matches!(
+        harness,
+        luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode
+    )
+}
+
+// Headless fixture: queued image steering per provider.
+#[cfg(feature = "appshots-fixture")]
+#[path = "queue_steer_e2e.rs"]
+mod steer_e2e;
+#[cfg(feature = "appshots-fixture")]
+pub use steer_e2e::run_queue_image_steer_e2e;
+
 fn visible_queue_rows(offset: f32, height: f32, count: usize) -> std::ops::Range<usize> {
     let first = ((-offset).max(0.0) / ROW_SLOT).floor() as usize;
     let last = first.saturating_add((height.max(0.0) / ROW_SLOT).ceil() as usize + 1);
@@ -415,7 +431,7 @@ impl Composer {
             item.follow_up_behavior,
             run_live,
             self.pickers().read(cx).harness_steers_mid_turn(harness),
-            !item.attachments.is_empty() && harness != Some(luna_proto::HarnessId::Codex),
+            !item.attachments.is_empty() && !harness.is_some_and(steers_native_inputs),
             item.hold_reason.is_some(),
             blocked,
         )

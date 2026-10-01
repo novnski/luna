@@ -146,6 +146,9 @@ pub fn rich_tool_output_summary(text: &str, is_error: bool) -> Option<String> {
     if kind == "unsupported" {
         return Some("Unsupported item · diagnostic available".into());
     }
+    if kind == "native" {
+        return Some(crate::native_output::native_summary(payload, is_error));
+    }
     if !matches!(kind, "mcp" | "dynamic") {
         return None;
     }
@@ -285,6 +288,24 @@ pub struct SubagentActivity {
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
+    /// Model the provider reported for the child's own turns. A spawn's
+    /// requested model stays on its call; this is what actually answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Provider-reported task total. Never an input/output split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_uses: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_tool: Option<String>,
+    /// The provider's one-line progress summary while the child runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<bool>,
 }
 
 impl SubagentActivity {
@@ -299,7 +320,33 @@ impl SubagentActivity {
 
     pub fn apply(&mut self, event: &AgentEvent) {
         match event {
-            AgentEvent::UserMessage { .. } | AgentEvent::Steered { .. } => *self = Self::default(),
+            // A new assignment clears the previous outcome; the same child
+            // keeps its reported model and whether it runs in the background.
+            AgentEvent::UserMessage { .. } | AgentEvent::Steered { .. } => {
+                *self = Self {
+                    model: self.model.take(),
+                    background: self.background,
+                    ..Self::default()
+                }
+            }
+            AgentEvent::ChildProgress {
+                model,
+                total_tokens,
+                tool_uses,
+                duration_ms,
+                last_tool,
+                summary,
+                background,
+            } => {
+                let text = |value: &Option<String>| value.as_deref().and_then(Self::observed_text);
+                self.model = text(model).or(self.model.take());
+                self.total_tokens = total_tokens.or(self.total_tokens);
+                self.tool_uses = tool_uses.or(self.tool_uses);
+                self.duration_ms = duration_ms.or(self.duration_ms);
+                self.last_tool = text(last_tool).or(self.last_tool.take());
+                self.summary = text(summary).or(self.summary.take());
+                self.background = background.or(self.background);
+            }
             AgentEvent::Usage {
                 input_tokens,
                 output_tokens,
@@ -320,6 +367,13 @@ impl SubagentActivity {
             || self.error.is_some()
             || self.input_tokens.is_some()
             || self.output_tokens.is_some()
+            || self.model.is_some()
+            || self.total_tokens.is_some()
+            || self.tool_uses.is_some()
+            || self.duration_ms.is_some()
+            || self.last_tool.is_some()
+            || self.summary.is_some()
+            || self.background.is_some()
     }
 }
 
@@ -633,12 +687,16 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     } else {
                         *output_bytes =
                             Some(output_bytes.unwrap_or(0).saturating_add(text.len() as u64));
-                        if !matches!(
-                            call,
-                            ToolCall::Mcp { .. }
-                                | ToolCall::ComputerUse { .. }
-                                | ToolCall::Unknown { .. }
-                        ) {
+                        // Native hook runs print like a shell command; their
+                        // live tail is as shareable as a Run chip's.
+                        if call.native_hook_name().is_some()
+                            || !matches!(
+                                call,
+                                ToolCall::Mcp { .. }
+                                    | ToolCall::ComputerUse { .. }
+                                    | ToolCall::Unknown { .. }
+                            )
+                        {
                             *output = activity_tail(output.as_deref(), text, *kind);
                         }
                     }
@@ -670,15 +728,20 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     *resolved = true;
                     // Preserve a small synced preview for each tool kind;
                     // full text stays in the owning host's journal.
-                    let private_result = matches!(
-                        call,
-                        ToolCall::Mcp { .. }
-                            | ToolCall::ComputerUse { .. }
-                            | ToolCall::Unknown { .. }
-                    );
+                    let private_result = call.native_hook_name().is_none()
+                        && matches!(
+                            call,
+                            ToolCall::Mcp { .. }
+                                | ToolCall::ComputerUse { .. }
+                                | ToolCall::Unknown { .. }
+                        );
                     if let Some(full) = output {
                         *out_slot = if private_result {
                             rich_tool_output_summary(full, *is_error)
+                        } else if let Some(text) = crate::native_output::native_text(full) {
+                            // Typed built-in: summarize its text, never the envelope.
+                            summarize_tool_output(&text)
+                                .or_else(|| rich_tool_output_summary(full, *is_error))
                         } else {
                             summarize_tool_output(full)
                         };
@@ -866,15 +929,21 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         // subagent sink writes it), never a part of the assistant message.
         AgentEvent::AssistantMessageCompleted { .. }
         | AgentEvent::Usage { .. }
+        | AgentEvent::ProviderAccounting { .. }
         | AgentEvent::ContextUsage { .. }
         | AgentEvent::ContextCompaction { .. }
         | AgentEvent::ProviderCheckpoint { .. }
         | AgentEvent::AvailableCommands { .. }
         | AgentEvent::ProviderTaskChanged { .. }
+        | AgentEvent::ProviderEvidence { .. }
         | AgentEvent::ProviderTurnStarted { .. }
         | AgentEvent::GoalChanged { .. }
+        | AgentEvent::NativeSchedules { .. }
+        | AgentEvent::NativeTaskChanged { .. }
         | AgentEvent::ChildStatus { .. }
         | AgentEvent::ProviderNotice { .. }
+        | AgentEvent::ChildProgress { .. }
+        | AgentEvent::PeerMessage { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
 }

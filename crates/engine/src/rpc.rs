@@ -144,6 +144,9 @@ struct IntegrationInventoryParams {
     provider: HarnessId,
     #[serde(default)]
     project_id: Option<String>,
+    /// Selected chat whose own provider session report may mark attachment.
+    #[serde(default)]
+    task_id: Option<String>,
     #[serde(default)]
     target_device_id: Option<String>,
     #[serde(default)]
@@ -1203,6 +1206,9 @@ enum MutateParams {
     },
 }
 
+mod claude_goals;
+mod claude_history;
+mod native_extensions;
 mod prompt_stash;
 mod side_chats;
 
@@ -1273,6 +1279,28 @@ impl Drop for EngineRpc {
 }
 
 impl EngineRpc {
+    /// The selected task's current native Claude session id, only when that
+    /// task belongs to the selected project (never mix project evidence).
+    fn claude_session_for_inventory(
+        &self,
+        task_id: Option<&str>,
+        project_id: Option<&str>,
+    ) -> Option<String> {
+        let chat = self.workspace.chat(task_id?).ok().flatten()?;
+        if chat.space_id.as_deref() != project_id
+            || chat.config.as_ref()?.harness != HarnessId::ClaudeCode
+        {
+            return None;
+        }
+        self.task_identity
+            .view(&chat.id)
+            .and_then(|view| view.current_binding)
+            .filter(|binding| binding.provider_id == HarnessId::ClaudeCode)
+            .map(|binding| binding.provider_task_id)
+            .or(chat.harness_session_id)
+            .filter(|id| !id.is_empty())
+    }
+
     fn skill_roots(
         &self,
         project_id: Option<&str>,
@@ -3136,6 +3164,52 @@ impl EngineRpc {
                 "Stop the expected active turn, wait for settlement, then retry with a new command id.",
             );
         }
+        // CC-14/15: refuse what Claude cannot run here, never queue it: a goal
+        // sent mid-turn (Claude would run it later, unannounced) and a review
+        // target that is not a plain git ref for its `/code-review`.
+        if let TaskCommandIntent::Session {
+            command: SessionCommandPayload::Run { request, .. },
+            ..
+        } = &command.intent
+            && (request.goal.is_some() || request.review.is_some())
+            && self
+                .workspace
+                .chat(&command.task_id)
+                .ok()
+                .flatten()
+                .and_then(|chat| chat.config)
+                .is_some_and(|config| config.harness == HarnessId::ClaudeCode)
+        {
+            let refusal = if request.goal.is_some()
+                && self.sessions.turn_in_flight(&command.task_id)
+            {
+                Some((
+                    CommandReasonCode::ActiveTurnConflict,
+                    "Claude starts a goal between turns. Wait for the current turn to finish, or stop it, then send the goal.".to_owned(),
+                    "Send the goal again once Claude is idle.",
+                ))
+            } else if let Some(review) = request.review.as_ref()
+                && let Err(error) = crate::claude_ongoing::review_prompt(&review.target)
+            {
+                Some((
+                    CommandReasonCode::UnsupportedOperation,
+                    error.to_string(),
+                    "Choose a plain branch or commit name, then start the review again.",
+                ))
+            } else {
+                None
+            };
+            if let Some((code, message, recovery)) = refusal {
+                return self.finish_task_command(
+                    &command.command_id,
+                    CommandReceiptStatus::Rejected,
+                    false,
+                    code,
+                    &message,
+                    recovery,
+                );
+            }
+        }
         if matches!(command.intent, TaskCommandIntent::Delete {}) {
             if let Some(service) = &self.side_chats {
                 service
@@ -3299,7 +3373,8 @@ impl EngineRpc {
                 .as_ref()
                 .map(|execution| execution.harness)
                 .unwrap_or_else(|| self.doc_host.harness_for(&command.task_id));
-            if (!item.attachments.is_empty() && harness != HarnessId::Codex)
+            if (!item.attachments.is_empty()
+                && !crate::provider_inputs::steers_native_inputs(harness))
                 || !self.sessions.steers_mid_turn(harness)
             {
                 return self.finish_task_command(
@@ -4038,6 +4113,10 @@ impl EngineRpc {
                     .map(|path| path.to_string_lossy().into_owned()),
                 execution.codex_file_auth,
             )
+        } else if binding.provider_id == HarnessId::ClaudeCode {
+            // CC-10: Claude's native transcripts live under its config dir.
+            let (claude_home, _) = self.agent_accounts.skill_config_dirs();
+            (Some(claude_home.to_string_lossy().into_owned()), false)
         } else {
             (None, false)
         };
@@ -4324,12 +4403,18 @@ impl EngineRpc {
                 "Goals require a provider configuration".into(),
             ))
         })?;
+        if config.harness == HarnessId::ClaudeCode {
+            let cwd = chat.cwd.clone().unwrap_or_else(|| ".".into());
+            return self
+                .apply_claude_goal_operation(command_id, task_id, &cwd, operation)
+                .await;
+        }
         if config.harness != HarnessId::Codex {
             return self.reject_context_command(
                 command_id,
                 CommandReasonCode::UnsupportedOperation,
-                "Goals are supported by Codex tasks.",
-                "Choose a Codex task with an accepted provider binding.",
+                "Goals are supported by Codex and Claude Code tasks.",
+                "Choose a Codex or Claude Code task with an accepted provider binding.",
             );
         }
         let execution = self
@@ -5422,9 +5507,17 @@ impl EngineRpc {
                 let (chat, binding) = self
                     .ensure_history_operation_ready(task_id)
                     .map_err(TaskProjectionError::Mutation)?;
+                if binding.provider_id == HarnessId::ClaudeCode {
+                    return self
+                        .rewind_claude_conversation(
+                            command_id, task_id, message_id, review, chat, binding,
+                        )
+                        .await;
+                }
                 if binding.provider_id != HarnessId::Codex {
                     return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "Same-chat native rewind is supported only for Codex.".into(),
+                        "Same-chat native rewind is supported only for Codex and Claude Code."
+                            .into(),
                     )));
                 }
                 self.validate_history_review(task_id, &chat, &binding, &review)
@@ -5647,6 +5740,12 @@ impl EngineRpc {
                 }
             }
             TaskCommandIntent::ReconcileConversationRewind { rewind_command_id } => {
+                if let Some(receipt) = self
+                    .reconcile_claude_rewind(command_id, task_id, &rewind_command_id)
+                    .await?
+                {
+                    return Ok(Some(receipt));
+                }
                 use luna_harness::codex::native::CodexRewindObservation;
                 let (chat, binding) = self
                     .rewind_reconciliation_ready(task_id)
@@ -8475,6 +8574,9 @@ impl RpcService for EngineRpc {
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
         }
+        if claude_history::handles(method) {
+            return self.handle_native_file_rewind(method, params).await;
+        }
         if params
             .get("chatId")
             .or_else(|| params.get("taskId"))
@@ -8784,6 +8886,13 @@ impl RpcService for EngineRpc {
                 // Provider enablement can also change during the refresh.
                 let still_enabled = Self::usage_providers_for(&self.registry.enabled_set());
                 Self::retain_enabled_usage(&mut snapshot, &still_enabled);
+                // CC-06: live stream accounting beside history (never summed in).
+                crate::live_usage::attach(
+                    &mut snapshot,
+                    self.sessions.live_usage(),
+                    &still_enabled,
+                    include_limits && !synthetic,
+                );
                 for source in &mut snapshot.summary.sources {
                     source.environment_id = self.engine_info.device_id.clone();
                 }
@@ -9134,6 +9243,9 @@ impl RpcService for EngineRpc {
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&saved)
             }
+            methods::GET_NATIVE_EXTENSIONS => {
+                RpcReply::value(&native_extensions::get(self, parse_params(params)?).await?)
+            }
             methods::GET_INTEGRATION_INVENTORY => {
                 let p: IntegrationInventoryParams = parse_params(params)?;
                 require_local_integration_target(
@@ -9202,10 +9314,50 @@ impl RpcService for EngineRpc {
                         crate::integration_settings::mark_codex_mcp_config_unavailable(&mut view);
                     }
                     view
+                } else if p.provider == HarnessId::ClaudeCode {
+                    let mut view = crate::integration_settings::skill_inventory(p.provider, &roots);
+                    let harness = self
+                        .registry
+                        .resolve(HarnessId::ClaudeCode)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    let session = self
+                        .claude_session_for_inventory(p.task_id.as_deref(), p.project_id.as_deref())
+                        .and_then(|id| harness.session_mcp_observation(&id));
+                    crate::claude_mcp::augment_inventory(
+                        &mut view,
+                        harness.as_ref(),
+                        project_root,
+                        session,
+                        p.probe_provider,
+                    )
+                    .await;
+                    view
                 } else {
                     crate::integration_settings::skill_inventory(p.provider, &roots)
                 };
                 RpcReply::value(&view)
+            }
+            methods::SET_PROVIDER_MCP_SERVER_ENABLED | methods::READ_PROVIDER_MCP_APP_RESOURCE => {
+                let p: crate::claude_mcp::ProviderMcpServerParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                let roots = self.skill_roots(p.project_id.as_deref())?;
+                let harness = self
+                    .registry
+                    .resolve(HarnessId::ClaudeCode)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let value = crate::claude_mcp::dispatch(
+                    method,
+                    p,
+                    harness.as_ref(),
+                    &self.engine_info.device_id,
+                    roots.project_root.as_deref(),
+                )
+                .await
+                .map_err(RpcError::Failed)?;
+                RpcReply::value(&value)
             }
             methods::GET_SKILL_DOCUMENT => {
                 let p: SkillDocumentParams = parse_params(params)?;
@@ -9844,14 +9996,23 @@ impl RpcService for EngineRpc {
             methods::LIST_COMMANDS => {
                 // Same shape as ListModels: resolve the installed provider,
                 // then ask its own command discovery surface. The mock uses
-                // the trait's empty default.
-                let p: ListModelsParams = parse_params(params)?;
+                // the trait's empty default. Discovery runs under the scope the
+                // chat/space's next run launches with (G1, E23).
+                let p: crate::command_scope::ListCommandsParams = parse_params(params)?;
                 let harness = self
                     .registry
                     .resolve(p.harness)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let scope = crate::command_scope::resolve(
+                    &p,
+                    &self.workspace,
+                    &self.workspace_files,
+                    self.doc_host.device_id(),
+                    &self.agent_accounts,
+                )
+                .await?;
                 let commands = harness
-                    .commands()
+                    .commands_in(&scope)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&commands)
@@ -9912,6 +10073,20 @@ impl RpcService for EngineRpc {
                     handle.watch_messages(),
                     handle.doc_arc(),
                 )))
+            }
+            methods::WATCH_NATIVE_TASKS => {
+                let p: ChatParams = parse_params(params)?;
+                let handle = self
+                    .doc_host
+                    .open(&p.chat_id)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(crate::native_tasks::watch_stream(
+                    handle.watch_messages(),
+                    handle.doc_arc(),
+                )))
+            }
+            methods::LIST_CLAUDE_EXTERNAL_SESSIONS => {
+                RpcReply::value(&crate::native_tasks::list_claude_external_sessions().await)
             }
             methods::WATCH_QUEUE => {
                 let p: ChatParams = parse_params(params)?;

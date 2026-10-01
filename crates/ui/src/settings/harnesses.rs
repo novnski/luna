@@ -25,6 +25,11 @@ use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
 
+mod mcp;
+#[cfg(feature = "appshots-fixture")]
+pub use mcp::fixture as mcp_fixture;
+mod claude_sessions;
+
 fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
     widgets::meta_line(
         theme,
@@ -108,6 +113,12 @@ pub struct HarnessesPage {
     runtime_contract: Loadable<RuntimeContractView>,
     runtime_task: Option<Task<()>>,
     runtime_task_id: Option<String>,
+    /// CC-11 provider MCP actions and results.
+    mcp: mcp::McpPanel,
+    claude_sessions: crate::claude_advanced::ExternalSessionsState,
+    claude_sessions_task: Option<Task<()>>,
+    /// CC-12: effective Claude settings sources, style, hooks, commands.
+    native_extensions: Entity<super::native_extensions::NativeExtensionsPanel>,
     _state_observer: Subscription,
 }
 
@@ -124,6 +135,10 @@ impl HarnessesPage {
             let task_id = page.state.read(cx).selected_chat.clone();
             if task_id != page.runtime_task_id {
                 page.load_runtime_contract(cx);
+                // Claude MCP attachment is per selected chat session.
+                if page.integration_provider == HarnessId::ClaudeCode {
+                    page.load_inventory(false, cx);
+                }
                 cx.notify();
             }
             let project_id = page
@@ -138,6 +153,8 @@ impl HarnessesPage {
                 cx.notify();
             }
         });
+        let native_extensions =
+            cx.new(|cx| super::native_extensions::NativeExtensionsPanel::new(state.clone(), cx));
         let mut page = Self {
             title_settings: Loadable::Idle,
             title_models: Loadable::Idle,
@@ -179,9 +196,14 @@ impl HarnessesPage {
             runtime_contract: Loadable::Idle,
             runtime_task: None,
             runtime_task_id: None,
+            mcp: mcp::McpPanel::default(),
+            claude_sessions: Default::default(),
+            claude_sessions_task: None,
+            native_extensions,
             _state_observer: state_observer,
         };
         page.load(cx);
+        page.load_claude_sessions(cx);
         page
     }
 
@@ -470,13 +492,15 @@ impl HarnessesPage {
             .read(cx)
             .selected_space_row()
             .map(|space| space.id.clone());
+        let task_id = self.state.read(cx).selected_chat.clone();
+        self.mcp_sync_scope(cx);
         self.inventory = Loadable::Loading;
         self.inventory_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
                 .client()
                 .call(
                     methods::GET_INTEGRATION_INVENTORY,
-                    serde_json::json!({"provider": provider, "projectId": project_id, "probeProvider": probe_provider}),
+                    serde_json::json!({"provider": provider, "projectId": project_id, "taskId": task_id, "probeProvider": probe_provider}),
                 )
                 .await
                 .map_err(|e| e.to_string())
@@ -933,8 +957,8 @@ impl HarnessesPage {
         let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
             .child(widgets::row_title(theme, "Skill library and MCP"))
             .child(widgets::page_subtitle(theme,
-                "Browse provider-owned skills by global or project scope. Check provider reads Codex's native catalog; file presence and selected-session attachment are separate checks."))
-            .child(skill_button(theme, "refresh-integrations", "Check provider skill catalog", !self.skill_busy)
+                "Browse provider-owned skills by global or project scope. Check provider reads Codex's native catalog or Claude's own MCP server readback; file presence and selected-session attachment are separate checks."))
+            .child(skill_button(theme, "refresh-integrations", "Check provider skill and MCP catalog", !self.skill_busy)
                 .mt(px(8.0))
                 .when(!self.skill_busy, |el| el.hover(|s| widgets::ghost_hover(theme, s))
                     .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(true, cx); cx.notify(); })))
@@ -1065,6 +1089,9 @@ impl HarnessesPage {
                             .when_some(item.actions.reason.clone(), |el, reason| {
                                 el.child(meta_text(theme, reason))
                             })
+                            .when_some(item.mcp.as_ref(), |el, details| {
+                                el.child(self.render_mcp_details(theme, item, details, cx))
+                            })
                             .when(
                                 item.kind == IntegrationKind::Skill && item.identity.is_some(),
                                 |el| {
@@ -1089,6 +1116,9 @@ impl HarnessesPage {
                                 },
                             ),
                     );
+                }
+                if let Some(panel) = self.render_mcp_panel(theme) {
+                    card = card.child(panel);
                 }
                 card = card.child(div().mt(px(8.0)).child(meta_text(theme, view.help.clone())));
             }
@@ -1775,8 +1805,10 @@ impl HarnessesPage {
                             || self.skill_notice.is_some(),
                         |el| el.child(self.render_skill_editor(&theme, cx)),
                     )
+                    .child(self.native_extensions.clone())
                     .child(self.render_instructions(&theme, cx))
                     .child(self.render_runtime_contract(&theme, cx))
+                    .child(self.render_claude_advanced(&theme, cx))
             })
             .child(self.render_titles(&theme, cx))
             .into_any_element()

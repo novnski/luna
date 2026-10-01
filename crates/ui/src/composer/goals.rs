@@ -17,7 +17,9 @@
 //! control, and uncertain changes are never replayed.
 use super::*;
 use gpui::AnyElement;
-use luna_proto::{GoalBudget, GoalOperation, GoalStatus, ThreadGoal};
+use luna_proto::{
+    GoalBudget, GoalOperation, GoalStatus, NativeSchedule, NativeScheduleKind, ThreadGoal,
+};
 
 #[cfg(feature = "appshots-fixture")]
 #[path = "goals_e2e.rs"]
@@ -25,11 +27,51 @@ mod e2e;
 #[cfg(feature = "appshots-fixture")]
 pub use e2e::run_goal_card_e2e;
 
-/// LUNA's own slash command, offered on Codex chats only.
+/// LUNA's own slash command, offered on Codex and Claude Code chats.
 pub(super) const GOAL_COMMAND: &str = "goal";
 /// Codex's goal-mode placeholder.
 pub(super) const GOAL_PLACEHOLDER: &str =
     "Describe your goal, define measurable outcomes for best results";
+/// Claude's goal is a condition its checker confirms from the conversation.
+pub(super) const CLAUDE_GOAL_PLACEHOLDER: &str =
+    "Describe a condition Claude can show is met, like \u{201c}all tests in test/auth pass\u{201d}";
+const CLAUDE_CLEAR_BETWEEN_TURNS: &str =
+    "Claude clears a goal between turns. Stop the current turn first.";
+const CLAUDE_SCHEDULE_LIFETIME: &str = "Claude runs these only while this chat's Claude session is open. LUNA closes an idle session after 30 minutes and never runs them itself.";
+
+/// Whose goal semantics a composer surface follows. Claude's `/goal` is a
+/// condition checked after each turn; it has no pause, budget or in-place edit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GoalProvider {
+    Codex,
+    Claude,
+}
+
+impl GoalProvider {
+    pub(super) fn of(harness: HarnessId) -> Option<Self> {
+        match harness {
+            HarnessId::Codex => Some(Self::Codex),
+            HarnessId::ClaudeCode => Some(Self::Claude),
+            _ => None,
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Codex => GOAL_PLACEHOLDER,
+            Self::Claude => CLAUDE_GOAL_PLACEHOLDER,
+        }
+    }
+
+    fn mode_on_description(self) -> &'static str {
+        match self {
+            Self::Codex => "On: Send starts a goal Codex keeps working on until it is done.",
+            Self::Claude => {
+                "On: Send starts a goal Claude keeps working on until its checker confirms the condition."
+            }
+        }
+    }
+}
 const MESSAGE_PLACEHOLDER: &str = "Do anything…";
 /// The queue tray's corner, so stacked trays read as one family.
 const CARD_RADIUS: f32 = 16.0;
@@ -98,6 +140,8 @@ struct GoalControl {
     enabled: bool,
     spinning: bool,
     primary: bool,
+    /// Why a disabled control is unavailable (default: a goal change is in progress).
+    disabled_reason: Option<&'static str>,
     action: GoalAction,
 }
 
@@ -111,11 +155,20 @@ pub(super) enum GoalSend {
     Goal(String),
 }
 
-pub(super) fn goal_slash_command() -> SlashCommand {
-    SlashCommand {
-        name: GOAL_COMMAND.into(),
-        description: "Send as a goal Codex keeps working on until it is done".into(),
-        input_hint: Some("objective".into()),
+pub(super) fn goal_slash_command(provider: GoalProvider) -> SlashCommand {
+    match provider {
+        GoalProvider::Codex => SlashCommand {
+            name: GOAL_COMMAND.into(),
+            description: "Send as a goal Codex keeps working on until it is done".into(),
+            input_hint: Some("objective".into()),
+        },
+        GoalProvider::Claude => SlashCommand {
+            name: GOAL_COMMAND.into(),
+            description:
+                "Send as a goal Claude keeps working on until its checker confirms the condition"
+                    .into(),
+            input_hint: Some("condition".into()),
+        },
     }
 }
 
@@ -190,25 +243,154 @@ fn live_seconds(goal: &ThreadGoal, checked_at_ms: i64, working: bool, now_ms: i6
     }
 }
 
+/// Claude's own scheduled prompts. Claude fires them between turns while its
+/// session runs; LUNA only shows them, with their real lifetime.
+fn render_schedules(schedules: &[NativeSchedule], below_goal: bool, theme: &Theme) -> AnyElement {
+    const SHOWN: usize = 4;
+    let count = schedules.len();
+    let title = if count == 1 {
+        "1 prompt scheduled by Claude".to_owned()
+    } else {
+        format!("{count} prompts scheduled by Claude")
+    };
+    let rows = schedules
+        .iter()
+        .take(SHOWN)
+        .enumerate()
+        .map(|(index, schedule)| {
+            let kind = match (schedule.kind, schedule.recurring) {
+                (NativeScheduleKind::Wakeup, _) => "loop wakeup",
+                (_, true) => "recurring",
+                (_, false) => "one-shot",
+            };
+            let lifetime = if schedule.durable {
+                "saved in project"
+            } else {
+                "session-only"
+            };
+            div()
+                .id(("goal-schedule", index))
+                .role(Role::ListItem)
+                .aria_label(format!(
+                    "{}: {} ({kind}, {lifetime})",
+                    schedule.schedule, schedule.prompt
+                ))
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(7.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .child(
+                    crate::icons::icon(crate::icons::CLOCK_CIRCLE)
+                        .size(px(13.0))
+                        .text_color(theme.readable_muted(0.7)),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.text)
+                        .child(schedule.schedule.clone()),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.readable_muted(0.78))
+                        .child(schedule.prompt.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.readable_faint(0.85))
+                        .child(format!("{kind} \u{00b7} {lifetime}")),
+                )
+        });
+    div()
+        .id("goal-schedules")
+        .role(Role::Group)
+        .aria_label(title.clone())
+        .aria_description(CLAUDE_SCHEDULE_LIFETIME)
+        .mx(px(12.0))
+        .mb(px(10.0))
+        .when(below_goal, |el| {
+            el.pt(px(8.0))
+                .border_t_1()
+                .border_color(theme.border.opacity(0.7))
+        })
+        .when(!below_goal, |el| el.pt(px(10.0)))
+        .flex()
+        .flex_col()
+        .gap(px(6.0))
+        .child(
+            div()
+                .pl(px(2.0))
+                .text_size(crate::typography::ui_rems(12.5))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(title),
+        )
+        .child(
+            div()
+                .id("goal-schedule-list")
+                .role(Role::List)
+                .pl(px(2.0))
+                .flex()
+                .flex_col()
+                .gap(px(5.0))
+                .children(rows),
+        )
+        .when(count > SHOWN, |el| {
+            el.child(
+                div()
+                    .pl(px(22.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.readable_muted(0.72))
+                    .child(format!("+{} more", count - SHOWN)),
+            )
+        })
+        .child(
+            div()
+                .pl(px(2.0))
+                .text_size(crate::typography::ui_rems(11.0))
+                .line_height(crate::typography::ui_rems(15.0))
+                .text_color(theme.readable_faint(0.9))
+                .child(CLAUDE_SCHEDULE_LIFETIME),
+        )
+        .into_any_element()
+}
+
 impl Composer {
-    /// `/goal` is offered on existing Codex chats.
-    pub(super) fn goal_command_available(&self, cx: &App) -> bool {
+    /// The selected chat's goal provider (Codex or Claude Code).
+    fn chat_goal_provider(&self, cx: &App) -> Option<GoalProvider> {
         self.state
             .read(cx)
             .selected_chat_row()
             .and_then(|chat| chat.config.as_ref())
-            .is_some_and(|config| config.harness == HarnessId::Codex)
+            .and_then(|config| GoalProvider::of(config.harness))
     }
 
-    /// Goal mode needs Codex: the chat's provider, or the new-chat picker's.
-    pub(super) fn goal_mode_available(&self, cx: &App) -> bool {
-        if self.editing_queued.is_some() {
-            return false;
-        }
+    /// The goal provider for this composer: the chat's, or the new-chat picker's.
+    pub(super) fn goal_provider(&self, cx: &App) -> Option<GoalProvider> {
         if self.state.read(cx).selected_chat.is_some() {
-            return self.goal_command_available(cx);
+            return self.chat_goal_provider(cx);
         }
-        self.pickers.read(cx).resolved(cx).harness == Some(HarnessId::Codex)
+        self.pickers
+            .read(cx)
+            .resolved(cx)
+            .harness
+            .and_then(GoalProvider::of)
+    }
+
+    /// `/goal` is offered on existing Codex and Claude Code chats.
+    pub(super) fn goal_command_available(&self, cx: &App) -> bool {
+        self.chat_goal_provider(cx).is_some()
+    }
+
+    /// Goal mode needs Codex or Claude Code: the chat's provider, or the
+    /// new-chat picker's.
+    pub(super) fn goal_mode_available(&self, cx: &App) -> bool {
+        self.editing_queued.is_none() && self.goal_provider(cx).is_some()
     }
 
     pub(super) fn goal_mode_on(&self, cx: &App) -> bool {
@@ -226,12 +408,11 @@ impl Composer {
         cx.notify();
     }
 
-    /// Codex's goal placeholder while goal mode is on.
+    /// The provider's goal placeholder while goal mode is on.
     pub(super) fn sync_goal_placeholder(&mut self, cx: &mut Context<Self>) {
-        let wanted = if self.goal_mode_on(cx) {
-            GOAL_PLACEHOLDER
-        } else {
-            MESSAGE_PLACEHOLDER
+        let wanted = match self.goal_provider(cx) {
+            Some(provider) if self.goal_mode_on(cx) => provider.placeholder(),
+            _ => MESSAGE_PLACEHOLDER,
         };
         if self.input.read(cx).placeholder.as_ref() != wanted {
             self.input
@@ -316,6 +497,10 @@ impl Composer {
         let Some(goal) = self.current_goal(cx) else {
             return;
         };
+        // Claude has no in-place goal edit (a new `/goal` replaces it).
+        if self.chat_goal_provider(cx) != Some(GoalProvider::Codex) {
+            return;
+        }
         let objective_text = goal.objective.clone();
         let budget_text = goal
             .token_budget
@@ -541,6 +726,7 @@ impl Composer {
             enabled,
             spinning,
             primary,
+            disabled_reason,
             action,
         } = control;
         let owner = self.state.read(cx).selected_chat.clone();
@@ -619,7 +805,7 @@ impl Composer {
                     .aria_description(if spinning {
                         "In progress."
                     } else {
-                        BUSY_REASON
+                        disabled_reason.unwrap_or(BUSY_REASON)
                     })
             })
             .when(icon_only, |button| {
@@ -658,6 +844,7 @@ impl Composer {
         if !self.goal_mode_available(cx) {
             return None;
         }
+        let provider = self.goal_provider(cx)?;
         let theme = Theme::of(cx);
         let on = self.goal_mode_on(cx);
         let accent = theme.accent;
@@ -684,7 +871,7 @@ impl Composer {
                     gpui::Toggled::False
                 })
                 .aria_description(if on {
-                    "On: Send starts a goal Codex keeps working on until it is done."
+                    provider.mode_on_description()
                 } else {
                     "Off: Send posts an ordinary message."
                 })
@@ -726,24 +913,40 @@ impl Composer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let selected = {
             let state = self.state.read(cx);
-            state
-                .selected_chat_row()
-                .filter(|chat| {
-                    chat.config
-                        .as_ref()
-                        .is_some_and(|config| config.harness == HarnessId::Codex)
-                })
-                .map(|chat| {
-                    let working = matches!(
-                        state.indicator_for(&chat.id, chrono::Utc::now()),
-                        crate::state::Indicator::Working
-                    );
-                    (chat.id.clone(), state.context_control.goal.clone(), working)
-                })
+            state.selected_chat_row().and_then(|chat| {
+                let provider = chat
+                    .config
+                    .as_ref()
+                    .and_then(|config| GoalProvider::of(config.harness))?;
+                let working = matches!(
+                    state.indicator_for(&chat.id, chrono::Utc::now()),
+                    crate::state::Indicator::Working
+                );
+                // Claude's own schedules that it still reports live.
+                let schedules: Vec<NativeSchedule> = if provider == GoalProvider::Claude {
+                    state
+                        .context_control
+                        .native_schedules
+                        .iter()
+                        .filter(|schedule| schedule.is_live(now_ms))
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                Some((
+                    chat.id.clone(),
+                    provider,
+                    state.context_control.goal.clone(),
+                    working,
+                    schedules,
+                ))
+            })
         };
-        let Some((chat_id, readback, working)) = selected else {
+        let Some((chat_id, provider, readback, working, schedules)) = selected else {
             self.drive_goal_timer(false, cx);
             return None;
         };
@@ -772,11 +975,10 @@ impl Composer {
             .as_ref()
             .filter(|pending| pending.chat_id == chat_id)
             .map(|pending| pending.kind);
-        if goal.is_none() && error.is_none() && pending.is_none() {
+        if goal.is_none() && error.is_none() && pending.is_none() && schedules.is_empty() {
             self.drive_goal_timer(false, cx);
             return None;
         }
-        let now_ms = chrono::Utc::now().timestamp_millis();
         let live = goal
             .as_ref()
             .is_some_and(|goal| goal.status == GoalStatus::Active && working);
@@ -810,6 +1012,19 @@ impl Composer {
                 format!("{timer} worked")
             }
         });
+        // Claude's checker runs after each turn; count its verdicts.
+        let checks = goal
+            .as_ref()
+            .and_then(|goal| goal.evaluation.as_ref())
+            .map(|evaluation| evaluation.checks)
+            .filter(|checks| *checks > 0)
+            .map(|checks| {
+                if checks == 1 {
+                    "1 check".to_owned()
+                } else {
+                    format!("{checks} checks")
+                }
+            });
         let summary = div()
             .id("goal-summary")
             .role(Role::Status)
@@ -818,6 +1033,7 @@ impl Composer {
                     Some(title.to_owned()),
                     objective_preview.clone(),
                     timer_label,
+                    checks.clone(),
                 ]
                 .into_iter()
                 .flatten()
@@ -871,26 +1087,48 @@ impl Composer {
                         .child(div().text_color(theme.readable_faint(0.8)).child("·"))
                         .child(timer),
                 )
+            })
+            .when_some(checks, |el, checks| {
+                el.child(
+                    div()
+                        .id("goal-checks")
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.readable_muted(0.75))
+                        .child(div().text_color(theme.readable_faint(0.8)).child("·"))
+                        .child(checks),
+                )
             });
+        let claude = provider == GoalProvider::Claude;
         let mut controls: Vec<AnyElement> = Vec::new();
         if let Some(goal) = goal.as_ref() {
-            controls.push(self.goal_control(
-                GoalControl {
-                    id: "goal-edit",
-                    label: "Edit goal".into(),
-                    text: None,
-                    glyph: crate::icons::PEN,
-                    enabled: !busy && !editing,
-                    spinning: false,
-                    primary: false,
-                    action: GoalAction::Edit,
-                },
-                &theme,
-                cx,
-            ));
+            // Claude has no in-place edit: a new `/goal` replaces the goal
+            // and starts work at once, so it is a send, not an edit.
+            if !claude {
+                controls.push(self.goal_control(
+                    GoalControl {
+                        id: "goal-edit",
+                        label: "Edit goal".into(),
+                        text: None,
+                        glyph: crate::icons::PEN,
+                        enabled: !busy && !editing,
+                        spinning: false,
+                        primary: false,
+                        disabled_reason: None,
+                        action: GoalAction::Edit,
+                    },
+                    &theme,
+                    cx,
+                ));
+            }
             // Pause keeps the running turn (Codex semantics); Resume is not
             // offered for a reached budget: raise it with Edit instead.
+            // Claude goals cannot be paused at all.
             let toggle = match goal.status {
+                _ if claude => None,
                 GoalStatus::Active => Some(("Pause goal", crate::icons::PAUSE, GoalStatus::Paused)),
                 GoalStatus::Paused | GoalStatus::Blocked | GoalStatus::UsageLimited => {
                     Some(("Resume goal", crate::icons::PLAY, GoalStatus::Active))
@@ -907,6 +1145,7 @@ impl Composer {
                         enabled: !busy,
                         spinning: pending == Some(PendingKind::Toggle),
                         primary: false,
+                        disabled_reason: None,
                         action: GoalAction::Operation(
                             GoalOperation::Set {
                                 objective: None,
@@ -920,15 +1159,22 @@ impl Composer {
                     cx,
                 ));
             }
+            // Claude clears a goal between turns (its own `/goal clear`).
+            let between_turns = claude && working;
             controls.push(self.goal_control(
                 GoalControl {
                     id: "goal-clear",
-                    label: "Clear goal".into(),
+                    label: if between_turns {
+                        CLAUDE_CLEAR_BETWEEN_TURNS.into()
+                    } else {
+                        "Clear goal".into()
+                    },
                     text: None,
                     glyph: crate::icons::TRASH_BIN_MINIMALISTIC,
-                    enabled: !busy,
+                    enabled: !busy && !between_turns,
                     spinning: pending == Some(PendingKind::Clear),
                     primary: false,
+                    disabled_reason: between_turns.then_some(CLAUDE_CLEAR_BETWEEN_TURNS),
                     action: GoalAction::Operation(GoalOperation::Clear, PendingKind::Clear),
                 },
                 &theme,
@@ -963,6 +1209,7 @@ impl Composer {
                     enabled: !busy,
                     spinning: false,
                     primary: false,
+                    disabled_reason: None,
                     action: GoalAction::Dismiss,
                 },
                 &theme,
@@ -993,6 +1240,43 @@ impl Composer {
             }
             _ => None,
         };
+        let show_header = goal.is_some() || pending.is_some() || error.is_some();
+        // Claude: the checker's latest reason, and that headless Claude
+        // checks again only after the next message.
+        let checker_line = goal
+            .as_ref()
+            .filter(|goal| claude && goal.status == GoalStatus::Active)
+            .and_then(|goal| {
+                let reason = goal
+                    .evaluation
+                    .as_ref()
+                    .and_then(|evaluation| evaluation.last_reason.clone())
+                    .map(|reason| format!("Last check: {reason}"));
+                let waiting = (!working).then_some("Claude checks again after your next message.");
+                let text = match (reason, waiting) {
+                    (Some(reason), Some(waiting)) => format!("{reason} \u{00b7} {waiting}"),
+                    (Some(reason), None) => reason,
+                    (None, Some(waiting)) => waiting.to_owned(),
+                    (None, None) => return None,
+                };
+                Some(
+                    div()
+                        .id("goal-checker")
+                        .role(Role::Status)
+                        .aria_label(text.clone())
+                        .mx(px(14.0))
+                        .mt(px(-6.0))
+                        .mb(px(8.0))
+                        .pl(px(21.0))
+                        .truncate()
+                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_color(theme.readable_muted(0.72))
+                        .child(text)
+                        .into_any_element(),
+                )
+            });
+        let schedules_section =
+            (!schedules.is_empty()).then(|| render_schedules(&schedules, show_header, &theme));
         let error = error.map(|error| {
             let refresh = self.goal_control(
                 GoalControl {
@@ -1003,6 +1287,7 @@ impl Composer {
                     enabled: !busy,
                     spinning: pending == Some(PendingKind::Refresh),
                     primary: false,
+                    disabled_reason: None,
                     action: GoalAction::Operation(GoalOperation::Get, PendingKind::Refresh),
                 },
                 &theme,
@@ -1033,7 +1318,11 @@ impl Composer {
         let tray = div()
             .id("goal-card")
             .role(Role::Group)
-            .aria_label("Goal")
+            .aria_label(if show_header {
+                "Goal"
+            } else {
+                "Claude schedules"
+            })
             .occlude()
             .rounded_t(px(CARD_RADIUS))
             .bg(crate::popover::surface_bg(&theme))
@@ -1045,9 +1334,11 @@ impl Composer {
             .flex()
             .flex_col()
             .text_color(theme.text)
-            .child(header)
+            .when(show_header, |el| el.child(header))
+            .children(checker_line)
             .children(body)
-            .children(error);
+            .children(error)
+            .children(schedules_section);
         Some(crate::frost::frosted(CARD_RADIUS, crate::frost::MENU_BLUR, tray).into_any_element())
     }
 
@@ -1097,6 +1388,7 @@ impl Composer {
                 enabled: !busy && dirty,
                 spinning: false,
                 primary: false,
+                disabled_reason: None,
                 action: GoalAction::Undo,
             },
             theme,
@@ -1111,6 +1403,7 @@ impl Composer {
                 enabled: !busy,
                 spinning: false,
                 primary: false,
+                disabled_reason: None,
                 action: GoalAction::Cancel,
             },
             theme,
@@ -1125,6 +1418,7 @@ impl Composer {
                 enabled: !busy,
                 spinning: pending == Some(PendingKind::Save),
                 primary: true,
+                disabled_reason: None,
                 action: GoalAction::Save,
             },
             theme,

@@ -7,6 +7,8 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::events::{self, NativeFrame, ResultEnvelope, TurnStamp};
+
 const MAX_INIT_OBSERVATIONS: usize = 128;
 const MAX_INIT_NAME_BYTES: usize = 256;
 
@@ -20,7 +22,10 @@ pub(crate) enum Frame {
     RateLimit(RateLimitFrame),
     Result(ResultFrame),
     ControlRequest(ControlRequestFrame),
-    /// control_response / control_cancel_request / anything unknown.
+    /// CC-02: every other frame type, classified (decoded lifecycle, known
+    /// progress, documented-but-unprojected, unknown) for evidence retention.
+    Native(NativeFrame),
+    /// control_response / control_cancel_request (transport-owned).
     Other,
 }
 
@@ -36,6 +41,9 @@ pub(crate) struct SystemFrame {
     pub cwd: String,
     #[serde(default)]
     pub session_id: String,
+    /// `init`/`status`: the native permission mode Claude actually runs.
+    #[serde(default, rename = "permissionMode")]
+    pub permission_mode: Option<String>,
     /// Read-only wire observation. This is not a configured inventory, health
     /// check, authorization, or proof of selected-session attachment.
     #[serde(skip)]
@@ -57,6 +65,50 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// CC-02 classification of this system frame (task/hook/compaction
+    /// lifecycle, init readback, progress, unprojected or unknown).
+    #[serde(skip)]
+    pub native: Option<Box<NativeFrame>>,
+    /// `init`: raw MCP rows and capability words, decoded only by `mcp.rs`.
+    #[serde(default)]
+    pub mcp_servers: Option<OpaqueJson>,
+    #[serde(default)]
+    pub capabilities: Option<OpaqueJson>,
+    /// Allowlisted `task_*` fields (type, usage, patch, summary…), read
+    /// leniently by `native_tasks`; nothing else is retained.
+    #[serde(flatten)]
+    pub native_task_fields: super::native_tasks::TaskFields,
+    /// `peer_message_hold` fields (state/lane/from/cause/outcome…).
+    #[serde(flatten)]
+    pub peer_hold: Box<super::peer::PeerHoldFields>,
+    /// Workflow/teammate task fields (tolerant raw values; see coordination).
+    /// Decoded from the raw frame in `parse_frame`, not flattened: serde's
+    /// flattened structs consume the keys they match, and `native_task_fields`
+    /// shares several of these.
+    #[serde(skip)]
+    pub task_fields: super::coordination::TaskFrameFields,
+    /// Hook lifecycle / `commands_changed` (decoded by `hooks.rs`).
+    #[serde(skip)]
+    pub extension: Option<Box<super::hooks::ExtensionFrame>>,
+}
+
+/// Raw provider JSON kept for one decoder (`mcp.rs`). MCP rows can carry
+/// credentials (auth blocks, URLs), so `Debug` never prints the value.
+#[derive(Default, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct OpaqueJson(Box<Value>);
+
+impl std::ops::Deref for OpaqueJson {
+    type Target = Value;
+    fn deref(&self) -> &Value {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for OpaqueJson {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<opaque>")
+    }
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -145,6 +197,9 @@ pub(crate) struct StreamEventFrame {
     pub parent_tool_use_id: Option<String>,
     #[serde(default)]
     pub event: StreamEventBody,
+    /// CC-02 turn identity (`user_message_uuid(s)`, origin, native uuid).
+    #[serde(skip)]
+    pub stamp: TurnStamp,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -175,6 +230,22 @@ pub(crate) struct MessageFrame {
     /// Terse assistant-level error code (`rate_limit`, `billing_error`, …).
     #[serde(default)]
     pub error: Option<String>,
+    /// CC-02 turn identity (`user_message_uuid(s)`, origin, native uuid).
+    #[serde(skip)]
+    pub stamp: TurnStamp,
+    /// User frames: the tool's full native Output object (or the MCP
+    /// `{content, _meta?, structuredContent?, resourceLinks?}` spread).
+    /// Projected by [`super::tool_results`].
+    #[serde(default)]
+    pub tool_use_result: Option<Value>,
+    /// User frames: `[{id, non_execution_kind?, user_feedback?, remedy?}]`.
+    #[serde(default)]
+    pub tool_result_meta: Option<Value>,
+    /// User-replay provenance (`--replay-user-messages`): human, peer, …
+    #[serde(default)]
+    pub origin: Option<Value>,
+    #[serde(default)]
+    pub uuid: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -229,6 +300,9 @@ pub(crate) struct RateLimitInfo {
     pub status: String,
     #[serde(rename = "rateLimitType", default)]
     pub rate_limit_type: Option<String>,
+    /// Epoch seconds when the limiting window resets (CC-06).
+    #[serde(rename = "resetsAt", default)]
+    pub resets_at: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -245,6 +319,32 @@ pub(crate) struct ResultFrame {
     pub usage: UsageBody,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// `--json-schema` runs: the validated value, distinct from `result`.
+    #[serde(default)]
+    pub structured_output: Option<Value>,
+    /// CC-02: the complete, per-field tolerant decode this frame came from.
+    #[serde(skip)]
+    pub envelope: Box<ResultEnvelope>,
+}
+
+impl ResultFrame {
+    /// A result frame always yields an outcome: fields of an unexpected type
+    /// are dropped (and named in the envelope), never fatal to the frame.
+    fn from_envelope(envelope: ResultEnvelope) -> Self {
+        Self {
+            model_usage: envelope.model_usage.clone(),
+            subtype: envelope.subtype.clone(),
+            result: envelope.result.clone(),
+            errors: envelope.errors.iter().cloned().map(Value::String).collect(),
+            usage: UsageBody {
+                input_tokens: envelope.usage.input_tokens,
+                output_tokens: envelope.usage.output_tokens,
+            },
+            session_id: envelope.session_id.clone(),
+            structured_output: envelope.structured_output.clone(),
+            envelope: Box::new(envelope),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -255,44 +355,64 @@ pub(crate) struct UsageBody {
     pub output_tokens: u64,
 }
 
-/// A CLI→client control request (`can_use_tool` is the one we act on).
+/// A CLI→client control request. The request body stays raw: the CC-03
+/// dispatcher (`controls.rs`) reads every subtype's own fields.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct ControlRequestFrame {
     #[serde(default)]
     pub request_id: String,
     #[serde(default)]
-    pub request: ControlRequestBody,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct ControlRequestBody {
-    #[serde(default)]
-    pub subtype: String,
-    #[serde(default)]
-    pub tool_name: String,
-    #[serde(default)]
-    pub input: Value,
+    pub request: Value,
 }
 
 /// Parse one stdout JSONL line. `Err` = not JSON; unknown types = `Other`.
 pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
     let value: Value = serde_json::from_str(line)?;
-    let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
-    let frame = match kind {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let frame = match kind.as_str() {
         "system" => {
-            let observation = (value.get("subtype").and_then(Value::as_str) == Some("init"))
-                .then(|| init_integration_observation(&value));
+            let subtype = value
+                .get("subtype")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let observation = (subtype == "init").then(|| init_integration_observation(&value));
+            let native = events::decode_system(&subtype, &value, line);
+            let extension = super::hooks::parse_extension_frame(&value);
+            let task_fields =
+                super::coordination::TaskFrameFields::deserialize(&value).unwrap_or_default();
             let mut system: SystemFrame = serde_json::from_value(value)?;
+            system.task_fields = task_fields;
             system.integration_observation = observation;
+            system.native = Some(Box::new(native));
+            system.extension = extension.map(Box::new);
             Frame::System(system)
         }
-        "stream_event" => Frame::StreamEvent(serde_json::from_value(value)?),
-        "assistant" => Frame::Assistant(serde_json::from_value(value)?),
-        "user" => Frame::User(serde_json::from_value(value)?),
+        "stream_event" => {
+            let stamp = TurnStamp::decode(&value);
+            let mut frame: StreamEventFrame = serde_json::from_value(value)?;
+            frame.stamp = stamp;
+            Frame::StreamEvent(frame)
+        }
+        "assistant" | "user" => {
+            let stamp = TurnStamp::decode(&value);
+            let mut frame: MessageFrame = serde_json::from_value(value)?;
+            frame.stamp = stamp;
+            if kind == "assistant" {
+                Frame::Assistant(frame)
+            } else {
+                Frame::User(frame)
+            }
+        }
         "rate_limit_event" => Frame::RateLimit(serde_json::from_value(value)?),
-        "result" => Frame::Result(serde_json::from_value(value)?),
+        "result" => Frame::Result(ResultFrame::from_envelope(ResultEnvelope::decode(&value))),
         "control_request" => Frame::ControlRequest(serde_json::from_value(value)?),
-        _ => Frame::Other,
+        "control_response" | "control_cancel_request" => Frame::Other,
+        other => Frame::Native(events::decode_top_level(other, &value, line)),
     };
     Ok(frame)
 }
@@ -300,50 +420,16 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
 /// A stdin user turn: `{"type":"user","message":{...},"parent_tool_use_id":null}`.
 /// Steering = another such line mid-run (consumed at a step boundary).
 pub(crate) fn user_message_line(text: &str) -> String {
-    json!({
+    let mut line = json!({
         "type": "user",
         "message": { "role": "user", "content": text },
         "parent_tool_use_id": null,
-    })
-    .to_string()
-}
-
-/// One inline image for a stdin user turn (Anthropic base64 image source).
-pub(crate) struct ImageBlock {
-    /// One of the API-supported media types (png/jpeg/gif/webp).
-    pub media_type: String,
-    /// Raw base64 (no data-URL prefix).
-    pub data: String,
-}
-
-/// A stdin user turn whose content is an array of blocks: the attached images
-/// first, then the text — the standard Anthropic image+text message shape
-/// (verified against the real CLI: `--input-format stream-json` accepts image
-/// content blocks in user frames). Empty `images` degrades to the plain line.
-pub(crate) fn user_message_line_with_images(text: &str, images: &[ImageBlock]) -> String {
-    if images.is_empty() {
-        return user_message_line(text);
+    });
+    // LUNA's own peer envelope declares the sender class (peer origin only).
+    if let Some(origin) = super::peer::host_declared_origin(text) {
+        line["origin"] = origin;
     }
-    let mut blocks: Vec<Value> = images
-        .iter()
-        .map(|img| {
-            json!({
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": img.media_type,
-                    "data": img.data,
-                },
-            })
-        })
-        .collect();
-    blocks.push(json!({ "type": "text", "text": text }));
-    json!({
-        "type": "user",
-        "message": { "role": "user", "content": blocks },
-        "parent_tool_use_id": null,
-    })
-    .to_string()
+    line.to_string()
 }
 
 /// Success reply to a CLI control request (`can_use_tool` allow/deny payloads).
@@ -355,21 +441,6 @@ pub(crate) fn control_response_line(request_id: &str, response: Value) -> String
             "request_id": request_id,
             "response": response,
         },
-    })
-    .to_string()
-}
-
-/// `can_use_tool` allow payload with the (possibly updated) tool input.
-pub(crate) fn allow_response(updated_input: Value) -> Value {
-    json!({ "behavior": "allow", "updatedInput": updated_input })
-}
-
-/// Client→CLI interrupt control request.
-pub(crate) fn interrupt_request_line(request_id: &str) -> String {
-    json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": { "subtype": "interrupt" },
     })
     .to_string()
 }
@@ -388,9 +459,10 @@ mod tests {
             }
             other => panic!("unexpected frame: {other:?}"),
         }
+        // CC-02: unknown types are classified for retention, not dropped.
         assert!(matches!(
             parse_frame(r#"{"type":"mystery_frame"}"#).expect("parses"),
-            Frame::Other
+            Frame::Native(_)
         ));
         assert!(parse_frame("not json").is_err());
     }
@@ -535,31 +607,5 @@ mod tests {
         assert_eq!(v["type"], "user");
         assert_eq!(v["message"]["content"], "hi");
         assert!(v["parent_tool_use_id"].is_null());
-    }
-
-    #[test]
-    fn user_line_with_images_is_blocks_then_text() {
-        let line = user_message_line_with_images(
-            "what is this?",
-            &[ImageBlock {
-                media_type: "image/png".into(),
-                data: "QUJD".into(),
-            }],
-        );
-        let v: Value = serde_json::from_str(&line).expect("json");
-        assert_eq!(v["type"], "user");
-        let content = v["message"]["content"].as_array().expect("array content");
-        assert_eq!(content.len(), 2);
-        assert_eq!(content[0]["type"], "image");
-        assert_eq!(content[0]["source"]["type"], "base64");
-        assert_eq!(content[0]["source"]["media_type"], "image/png");
-        assert_eq!(content[0]["source"]["data"], "QUJD");
-        assert_eq!(content[1]["type"], "text");
-        assert_eq!(content[1]["text"], "what is this?");
-        // No images ⇒ identical to the plain string line.
-        assert_eq!(
-            user_message_line_with_images("hi", &[]),
-            user_message_line("hi")
-        );
     }
 }

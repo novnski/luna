@@ -2150,6 +2150,9 @@ const FULL_OUTPUT_MAX_LINES: usize = 400;
 /// Readable fallback for typed MCP/dynamic content. Encoded media remains
 /// available in Copy; never dump base64 into a transcript or execute app UI.
 fn rich_output_display(text: &str) -> Option<String> {
+    if let Some(display) = luna_doc::native_display(text) {
+        return Some(display);
+    }
     let value: serde_json::Value = serde_json::from_str(text).ok()?;
     let payload = value.get("lunaToolOutput")?;
     let mut sections = vec![
@@ -6707,7 +6710,7 @@ impl Transcript {
                 let eligible = matches!(
                     (history_provider, history_role),
                     (
-                        Some(luna_proto::HarnessId::Codex),
+                        Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode),
                         MessageRole::User | MessageRole::Assistant
                     ) | (
                         Some(luna_proto::HarnessId::Opencode),
@@ -6744,8 +6747,10 @@ impl Transcript {
                 })
             });
             let edit = history_task_id.clone().and_then(|task_id| {
-                (history_provider == Some(luna_proto::HarnessId::Codex)
-                    && history_role == MessageRole::User)
+                (matches!(
+                    history_provider,
+                    Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode)
+                ) && history_role == MessageRole::User)
                     .then(|| {
                         let message_id = copy_entry_id.to_string();
                         let text = copy_text.clone().unwrap_or_default().to_string();
@@ -6772,8 +6777,10 @@ impl Transcript {
                     })
             });
             let rewind = history_task_id.clone().and_then(|task_id| {
-                (history_provider == Some(luna_proto::HarnessId::Codex)
-                    && history_role == MessageRole::User)
+                (matches!(
+                    history_provider,
+                    Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode)
+                ) && history_role == MessageRole::User)
                     .then(|| {
                         let message_id = copy_entry_id.to_string();
                         let text = copy_text.clone().unwrap_or_default().to_string();
@@ -8183,6 +8190,12 @@ pub fn fixture_detail_panel(detail: &ToolDetail, theme: &Theme, ui_scale: f32) -
         .into_any_element()
 }
 
+/// The production lazy-fetch detail builder, for the Claude tool-results fixture.
+#[cfg(feature = "appshots-fixture")]
+pub fn fixture_blob_detail(text: &str, is_diff: bool) -> Option<ToolDetail> {
+    blob_detail(text, is_diff)
+}
+
 #[cfg(feature = "appshots-fixture")]
 pub fn fixture_review_card<T: 'static>(theme: &Theme, cx: &Context<T>) -> AnyElement {
     let comment = crate::comments::ReviewComment::new(
@@ -8324,6 +8337,7 @@ fn child_inspection_lines(tool: &ToolItem) -> Vec<String> {
         if let Some(error) = &activity.error {
             lines.push(format!("Error: {error}"));
         }
+        lines.extend(crate::native_agents::inspection_lines(activity));
     }
     lines
 }
@@ -13725,6 +13739,19 @@ mod tests {
 impl Transcript {
     pub fn fixture_appshots_start(&mut self, cx: &mut Context<Self>) {
         self.list.scroll_to(gpui::ListOffset::default());
+        cx.notify();
+    }
+
+    /// Pin every collapsible tool group open, without the fold tween, so a
+    /// capture of a completed turn shows its chips.
+    pub fn fixture_open_tool_groups(&mut self, cx: &mut Context<Self>) {
+        for row in &self.rows {
+            if matches!(row.kind, RowKind::ToolGroup { .. }) {
+                let fold = self.folds.entry(row.id.clone()).or_default();
+                fold.open = Some(true);
+                fold.toggled_at = None;
+            }
+        }
         cx.notify();
     }
 }

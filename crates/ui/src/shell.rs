@@ -75,6 +75,7 @@ mod activity_center;
 mod agents;
 mod child_chats;
 mod command_palette;
+mod native_file_rewind;
 mod native_review;
 mod side_chats;
 mod spaces;
@@ -1196,6 +1197,10 @@ struct ConversationRewindDialog {
     review: serde_json::Value,
     origin: HistoryEngineOrigin,
     pending_rewind: Option<String>,
+    /// CC-10 provider-aware copy and Claude's native file checkpoints.
+    provider: Option<luna_proto::HarnessId>,
+    native_files: native_file_rewind::NativeFiles,
+    native_files_task: Option<Task<()>>,
 }
 
 struct HistoryRecoveryDialog {
@@ -5690,6 +5695,9 @@ impl Shell {
                     review,
                     origin,
                     pending_rewind,
+                    provider: Some(config.harness),
+                    native_files: Default::default(),
+                    native_files_task: None,
                 });
                 cx.notify();
             })
@@ -10063,7 +10071,9 @@ impl Shell {
                 .iter()
                 .find(|chat| chat.id == chat_id)
                 .and_then(|chat| chat.config.as_ref())
-                .is_some_and(|config| config.harness == HarnessId::Codex);
+                .is_some_and(|config| {
+                    matches!(config.harness, HarnessId::Codex | HarnessId::ClaudeCode)
+                });
             let child_parent_id = chat_id.clone();
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();
@@ -10582,16 +10592,15 @@ impl Shell {
                 }))
                 .child(popover::dialog_title(&theme, if pending { "Reconcile conversation rewind" } else { "Rewind this conversation" }))
                 .child(div().mt(px(8.0)).text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted)
-                    .child(if pending {
-                        "Read the saved provider history to finish or dismiss the unresolved rewind. Revert will not be sent again. Later LUNA rows stay visible until the retained prefix is verified."
-                    } else {
-                        "Remove this message and every later turn from this same Codex conversation. The provider's removed history cannot be restored by LUNA; an audit snapshot is kept. Your draft, files and external effects are kept."
-                    }))
+                    .child(native_file_rewind::rewind_copy(dialog.provider, pending)))
                 .when(!pending, |card| card.child(div().id("history-rewind-message-preview").mt(px(10.0)).max_h(px(100.0)).overflow_y_scroll()
                     .text_size(crate::typography::ui_rems(11.0)).child(SharedString::from(text))))
                 .child(div().mt(px(12.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
                     .child("Files: keep current files. To restore files, review a Git checkpoint separately in Changes. Unsaved files must be saved before restoring."))
-                .child(div().mt(px(16.0)).flex().justify_end().gap(px(8.0))
+                .when(!pending && dialog.provider == Some(luna_proto::HarnessId::ClaudeCode), |card| {
+                    card.child(native_file_rewind::section(&dialog.native_files, &theme, cx))
+                })
+                .child(div().mt(px(16.0)).flex().flex_wrap().justify_end().gap(px(8.0))
                     .child(popover::btn_ghost(&theme, "Cancel", "history-rewind-cancel")
                         .id("history-rewind-cancel").on_click(cx.listener(|this, _, _, cx| this.cancel_history_flow(cx))))
                     .when(!pending, |buttons| buttons.child(popover::btn_ghost(&theme, "Preview file checkpoints", "history-rewind-files")
@@ -19821,6 +19830,7 @@ impl Shell {
                 reset_credits: None,
                 detail: None,
             }],
+            live_sessions: Vec::new(),
         };
         self.usage_snapshot = Some(snapshot.clone());
         self.usage_environment_snapshots = vec![(environment_id.clone(), snapshot)];
@@ -19957,5 +19967,9 @@ impl Shell {
     pub fn fixture_appshots_transcript_start(&self, cx: &mut Context<Self>) {
         self.transcript
             .update(cx, |t, cx| t.fixture_appshots_start(cx));
+    }
+    pub fn fixture_open_tool_groups(&self, cx: &mut Context<Self>) {
+        self.transcript
+            .update(cx, |t, cx| t.fixture_open_tool_groups(cx));
     }
 }

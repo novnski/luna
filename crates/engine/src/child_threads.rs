@@ -661,7 +661,30 @@ impl EngineRpc {
             {
                 continue;
             }
-            if current.continue_parent {
+            // Provider-aware: a Claude parent receives Claude's own
+            // host-injected peer envelope, or nothing when Claude would hold
+            // it (see `claude_child_reports`).
+            let continuation = if current.continue_parent {
+                match crate::claude_child_reports::parent_continuation(&parent, chat, &text) {
+                    crate::claude_child_reports::ParentContinuation::Queue(text) => Some(text),
+                    crate::claude_child_reports::ParentContinuation::Skip(notice) => {
+                        if !self
+                            .append_child_notice(
+                                &parent.id,
+                                &format!("child-continuation-skipped:{}", outcome.id),
+                                &notice,
+                            )
+                            .await?
+                        {
+                            continue;
+                        }
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some(text) = continuation {
                 let mut command = legacy_task_command(
                     parent.id.clone(),
                     TaskCommandIntent::QueueMessage {

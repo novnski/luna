@@ -4,8 +4,15 @@
 //! Code over stream-json, Codex over app-server JSON-RPC, and OpenCode over
 //! its HTTP/SSE server protocol.
 
+mod command_scope;
 mod composer_input;
+pub use command_scope::CommandScope;
 pub use composer_input::validate_composer_inputs;
+pub mod native_history;
+pub use native_history::{
+    NativeFileRewindRequest, NativeFileRewindResult, NativeHistoryScope, NativeHistoryTurns,
+    NativeRewindOutcome, NativeRewindProgress, NativeRewindProgressReporter, NativeRewindRequest,
+};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -45,6 +52,18 @@ pub enum HarnessError {
     Io(#[from] std::io::Error),
 }
 
+/// What the provider wire proved about a native child stop request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeTaskStop {
+    /// The provider acknowledged the request. Not proof that the child
+    /// stopped: its own terminal lifecycle event settles it.
+    Requested,
+    /// Refused, locally (not a live child of that run) or by the provider.
+    Rejected(String),
+    /// Sent, but the provider's answer was not observed.
+    Unknown(String),
+}
+
 /// Progress boundary for a provider-native history fork. `MutationStarted`
 /// is emitted immediately before the native mutation request; `Acknowledged`
 /// is emitted as soon as that response yields a distinct provider session id,
@@ -57,6 +76,16 @@ pub enum ProviderForkProgress {
 
 pub type ProviderForkProgressReporter =
     dyn Fn(ProviderForkProgress) -> Result<(), HarnessError> + Send + Sync;
+
+/// The model/effort part of a run's configuration, for live reconfiguration
+/// of a warm provider session (CC-06). Everything else about a run (cwd,
+/// policy, account, runtime contract) is outside this selection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveRuntimeSelection {
+    pub model: Option<String>,
+    pub reasoning: Option<ReasoningLevel>,
+    pub model_options: serde_json::Map<String, serde_json::Value>,
+}
 
 /// A steer prompt pushed into a live run; delivered at the harness's steering boundary.
 pub struct SteerMessage {
@@ -75,6 +104,31 @@ pub struct SteerMessage {
     /// `turn/start`; Codex starts (or extends) the turn itself. Acceptance
     /// reports the `thread/goal/set` outcome.
     pub goal: Option<luna_proto::GoalStartRequest>,
+}
+
+/// A provider-native goal control outside a run (CC-14).
+#[derive(Debug, Clone)]
+pub struct NativeGoalControl {
+    /// The provider session that owns the goal.
+    pub session_id: String,
+    pub cwd: String,
+    pub action: NativeGoalAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGoalAction {
+    /// Read the provider's own goal record; never starts a process.
+    Read,
+    /// The provider's own clear (Claude: `/goal clear`, a local command).
+    Clear,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeGoalReadback {
+    /// `None`: no unfinished goal (cleared, achieved, judged impossible).
+    pub goal: Option<luna_proto::ThreadGoal>,
+    /// The provider's own reply text, when a command ran.
+    pub reply: Option<String>,
 }
 
 /// What the provider wire proved about an explicit in-turn steer request.
@@ -236,6 +290,48 @@ pub trait Harness: Send + Sync {
         })?;
         Ok(result)
     }
+    /// Stage a live model/effort change for the warm run that will next
+    /// receive the ordinary (follow-up) steer `message_id`. The adapter must
+    /// obtain native acknowledgment and readback before writing that prompt,
+    /// and must not write it under the old configuration if the change fails.
+    /// `false` (the default) means only a runtime restart can apply `to`.
+    fn stage_live_reconfiguration(
+        &self,
+        _message_id: &str,
+        _from: &LiveRuntimeSelection,
+        _to: &LiveRuntimeSelection,
+    ) -> bool {
+        false
+    }
+
+    /// Read the provider's own active-history turn identities (CC-10).
+    async fn native_history_turns(
+        &self,
+        _scope: NativeHistoryScope,
+    ) -> Result<NativeHistoryTurns, HarnessError> {
+        Err(HarnessError::Protocol(
+            "native history readback is not supported by this harness".into(),
+        ))
+    }
+    /// Truncate the same provider session before a turn (CC-10).
+    async fn rewind_native_conversation(
+        &self,
+        _request: NativeRewindRequest,
+        _progress: &NativeRewindProgressReporter,
+    ) -> Result<NativeRewindOutcome, HarnessError> {
+        Err(HarnessError::Protocol(
+            "same-session native rewind is not supported by this harness".into(),
+        ))
+    }
+    /// Preview or restore provider file checkpoints (CC-10).
+    async fn rewind_native_files(
+        &self,
+        _request: NativeFileRewindRequest,
+    ) -> Result<NativeFileRewindResult, HarnessError> {
+        Err(HarnessError::Protocol(
+            "native file checkpoints are not supported by this harness".into(),
+        ))
+    }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
     /// A provider-authored catalog suitable for replacing a saved snapshot.
     /// Adapters with bundled fallbacks override this so probe failures cannot
@@ -263,11 +359,75 @@ pub trait Harness: Send + Sync {
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
     }
+    /// Slash commands for the exact execution scope a run would use. Adapters
+    /// whose loaded configuration depends on workspace, policy or account
+    /// override this; the default ignores the scope.
+    async fn commands_in(&self, _scope: &CommandScope) -> Result<Vec<SlashCommand>, HarnessError> {
+        self.commands().await
+    }
+
+    /// Provider-native MCP control plane (status, enable/disable, MCP Apps
+    /// resource read). Never starts a model turn. Default: unsupported.
+    async fn mcp_control(
+        &self,
+        _request: mcp_control::McpControlRequest,
+    ) -> Result<mcp_control::McpControlReply, HarnessError> {
+        Err(HarnessError::Protocol(
+            "provider MCP control is not supported by this harness".into(),
+        ))
+    }
+    /// In-memory MCP report from a provider session's own start frame, keyed
+    /// by the exact native session id. Default: no session evidence.
+    fn session_mcp_observation(
+        &self,
+        _provider_session_id: &str,
+    ) -> Option<mcp_control::SessionMcpObservation> {
+        None
+    }
+
+    /// Effective native extension configuration (settings sources, output
+    /// style, hooks, commands and skills) for a launch in `cwd` under `mode`,
+    /// including the provider's own readback for that launch. Adapters reuse
+    /// a view until its settings files change; `refresh` forces a new one.
+    async fn native_extensions(
+        &self,
+        _cwd: Option<&std::path::Path>,
+        _mode: luna_proto::PermissionMode,
+        _refresh: bool,
+    ) -> Result<luna_proto::NativeExtensionsView, HarnessError> {
+        Err(HarnessError::Protocol(
+            "native extension inventory is unsupported by this harness".into(),
+        ))
+    }
     /// Run the harness's own native/session compaction operation. Adapters
     /// must opt in; the default is honest unsupported behavior.
     async fn compact_context(&self, _request: ContextCompactRequest) -> Result<(), HarnessError> {
         Err(HarnessError::Protocol(
             "context compaction is not supported by this harness".into(),
+        ))
+    }
+    /// Ask the provider to stop one native child (the spawn call
+    /// `spawn_tool_use_id`) of the live run bound to `native_session_id`.
+    /// Adapters must opt in; the default is honest unsupported behavior.
+    async fn stop_native_child(
+        &self,
+        _native_session_id: &str,
+        _spawn_tool_use_id: &str,
+    ) -> Result<NativeTaskStop, HarnessError> {
+        Err(HarnessError::Protocol(
+            "stopping a native child is not supported by this harness".into(),
+        ))
+    }
+
+    /// Read or clear a provider-native goal outside a run, with the
+    /// provider's own operation (Claude: its `/goal` command and session
+    /// record). Adapters must opt in; the default is honest unsupported.
+    async fn native_goal_control(
+        &self,
+        _request: NativeGoalControl,
+    ) -> Result<NativeGoalReadback, HarnessError> {
+        Err(HarnessError::RejectedBeforeAcceptance(
+            "this provider has no native goal control".into(),
         ))
     }
     /// Run an isolated title request. Drivers must opt in with title-specific
@@ -294,6 +454,7 @@ pub mod claude;
 pub mod codex;
 pub(crate) mod executable;
 pub(crate) mod jsonrpc;
+pub mod mcp_control;
 pub mod mock;
 pub mod opencode;
 pub mod process;

@@ -4,6 +4,7 @@
 use luna_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, ToolCall};
 use serde_json::Value;
 
+use super::native_tasks::NativeTasks;
 use super::wire::{ContentBlock, Frame, InitIntegrationObservation};
 
 const MAX_OBSERVED_SESSION_ID_BYTES: usize = 256;
@@ -42,6 +43,13 @@ fn assistant_error_text(code: &str) -> String {
     match code {
         "authentication_failed" => "Authentication failed — sign in to Claude again.".into(),
         "oauth_org_not_allowed" => "This organization isn't allowed to use Claude here.".into(),
+        "account_on_hold" => "Your Claude account is on hold — check your account status.".into(),
+        "verification_required" => {
+            "Claude needs you to verify your account — sign in again.".into()
+        }
+        "cloud_credential_error" => {
+            "Claude couldn't use the cloud provider credentials — check them and retry.".into()
+        }
         "billing_error" => "Billing error — check your Claude plan or payment method.".into(),
         "rate_limit" => "Claude usage limit reached — try again after the limit resets.".into(),
         "overloaded" => "Claude is overloaded right now — try again shortly.".into(),
@@ -215,24 +223,29 @@ pub(crate) struct Normalizer {
     saw_init: bool,
     init_integration_receipt: Option<SessionIntegrationReceipt>,
     last_model: Option<String>,
-    /// Background-agent ids (`task_started.task_id`) → the spawning Agent
-    /// tool_use id. `SendMessage` steers address the AGENT id; this map
-    /// re-keys them onto the spawn chip's feed (the wire never echoes the
-    /// steer on the child feed — live-verified 2.1.228).
-    agent_tasks: std::collections::HashMap<String, String>,
-    /// tool_use ids of Agent/Task spawn calls, recorded from their own
-    /// assistant frames (plus `task_started`'s agent-task pairing). Gates
+    /// Native agent/task ownership graph: spawn ids (root and nested),
+    /// agent id → spawn (`SendMessage` re-keying), task lifecycle. Gates
     /// `task_notification`: background SHELL tasks settle through the same
     /// subtype carrying their Bash call's id, and tagging that Done as
-    /// subagent traffic stamped a spawn ref onto an ordinary Run chip —
-    /// which then opened as an empty, never-created subagent doc (user
-    /// report 2026-08-20).
-    agent_spawn_tools: std::collections::HashSet<String>,
+    /// subagent traffic stamped a spawn ref onto an ordinary Run chip
+    /// (user report 2026-08-20).
+    tasks: NativeTasks,
+    /// Native tool names/inputs by owner scope, for result projection (CC-05).
+    tools: super::tool_results::ToolLedger,
     /// Rotates at each assistant-frame close and at each steer; SessionStarted
     /// carries the first value so folds can attribute deltas from the start.
     assistant_message_id: String,
     /// Last session id seen (init or result) — used for synthetic Dones.
     pub session_id: Option<String>,
+    /// CC-02: native turn identity, lifecycle evidence and frame retention
+    /// (see `super::turns`; driven by `normalize_native`).
+    pub(crate) native: super::turns::NativeTracker,
+    /// Cross-session peer arrivals and receive-side holds.
+    peer: super::peer::PeerState,
+    /// Native workflows/teammates/remote agents (never subagent spawns).
+    coordination: super::coordination::CoordinationTracker,
+    /// Native hook runs and command-list pushes (`hooks.rs`).
+    hooks: super::hooks::HookTracker,
 }
 
 impl Normalizer {
@@ -241,11 +254,20 @@ impl Normalizer {
             saw_init: false,
             init_integration_receipt: None,
             last_model: None,
-            agent_tasks: std::collections::HashMap::new(),
-            agent_spawn_tools: std::collections::HashSet::new(),
+            tasks: NativeTasks::default(),
+            tools: Default::default(),
             assistant_message_id: new_message_id(),
             session_id: None,
+            native: Default::default(),
+            peer: Default::default(),
+            coordination: Default::default(),
+            hooks: Default::default(),
         }
+    }
+
+    /// This run's live, addressable native children (`stop_task`).
+    pub fn stoppable(&self) -> super::native_stop::SharedStoppable {
+        self.tasks.stoppable()
     }
 
     /// Rotate the assistant message id for a steer boundary; returns
@@ -265,60 +287,31 @@ impl Normalizer {
     /// Normalize one stdout frame into 0+ unified events. `interrupted` folds
     /// a post-interrupt `result` into `Done { status: Interrupted }`.
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
+        // Hook chips held while the root turn was idle precede its activity.
+        let mut out = self.hooks.resume_before(&frame);
+        out.extend(self.normalize_frame(frame, interrupted));
+        out
+    }
+
+    fn normalize_frame(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
+        self.peer.observe(&frame);
         match frame {
-            Frame::System(f) => {
-                // A background subagent's completion arrives as an UNTAGGED
-                // `task_notification` carrying the spawning tool's id — the
-                // wire's only terminal signal for it (live-verified 2.1.228:
-                // no tagged frame follows; the subagent's stream just stops).
-                // Surface it as the subagent's tagged Done so the chip flips
-                // done/failed and the transcript freezes.
-                if f.subtype == "task_notification" {
-                    let Some(parent) = f.tool_use_id.as_deref().filter(|t| !t.is_empty()) else {
-                        return Vec::new();
-                    };
-                    // Only a KNOWN spawn settles as a subagent. Background
-                    // SHELL tasks (`Bash` with `run_in_background`) settle
-                    // through this same subtype carrying the Bash call's id —
-                    // tagging that Done would bind a subagent ref onto an
-                    // ordinary Run chip. A real spawn's tool_use frame always
-                    // precedes its notification on the wire, so the set is
-                    // populated by the time a genuine one arrives.
-                    if !self.agent_spawn_tools.contains(parent) {
-                        return Vec::new();
-                    }
-                    let status = match f.status.as_deref().unwrap_or("") {
-                        "completed" | "complete" | "succeeded" | "success" => DoneStatus::Completed,
-                        "failed" | "errored" | "error" => DoneStatus::Errored,
-                        "killed" | "cancelled" | "canceled" | "stopped" | "interrupted" => {
-                            DoneStatus::Interrupted
-                        }
-                        // Non-terminal notification shapes: nothing to close.
-                        _ => return Vec::new(),
-                    };
-                    return vec![tag(
-                        parent,
-                        AgentEvent::Done {
-                            status,
-                            result: None,
-                            error: None,
-                            session_id: None,
-                        },
-                    )];
+            Frame::System(f) if f.subtype == "peer_message_hold" => self.peer.hold_events(&f),
+            Frame::System(mut f) => {
+                // CC-12 hook lifecycle / commands_changed.
+                if let Some(extension) = f.extension.take() {
+                    return self.hooks.observe(*extension, self.saw_init);
                 }
-                // An AGENT task starting (subagent_type present — subagent-
-                // owned shell tasks carry the same subtype without it):
-                // record agentId → spawn id for SendMessage steer re-keying.
-                if f.subtype == "task_started"
-                    && f.subagent_type.is_some()
-                    && let (Some(task), Some(tool)) = (
-                        f.task_id.as_deref().filter(|t| !t.is_empty()),
-                        f.tool_use_id.as_deref().filter(|t| !t.is_empty()),
-                    )
-                {
-                    self.agent_tasks.insert(task.to_owned(), tool.to_owned());
-                    self.agent_spawn_tools.insert(tool.to_owned());
-                    return Vec::new();
+                // Native workflows/teammates/remote agents (CC-13) first: they
+                // are never subagent spawns.
+                if let Some(events) = self.coordination.observe(&f) {
+                    return events;
+                }
+                // Agent/shell/workflow task lifecycle (started, progress,
+                // updated, notification): attributed to its owning spawn or
+                // dropped, never a root event. See `native_tasks`.
+                if let Some(events) = self.tasks.system(&f) {
+                    return events;
                 }
                 if f.subtype != "init" || self.saw_init {
                     return Vec::new();
@@ -335,14 +328,16 @@ impl Normalizer {
                         observed,
                     });
                 }
-                vec![AgentEvent::SessionStarted {
+                let mut out = vec![AgentEvent::SessionStarted {
                     harness: HarnessId::ClaudeCode,
                     model: f.model,
                     tools: f.tools,
                     cwd: f.cwd,
                     session_id: f.session_id,
                     assistant_message_id: self.assistant_message_id.clone(),
-                }]
+                }];
+                out.extend(self.hooks.take_pending());
+                out
             }
 
             // Frames with `parent_tool_use_id` set belong to a SUBAGENT's
@@ -397,31 +392,17 @@ impl Normalizer {
 
             Frame::Assistant(f) => {
                 if let Some(parent) = &f.parent_tool_use_id {
-                    // Subagent content, attributed. The 2.1.x wire streams NO
-                    // tagged partial deltas (live-verified): a subagent's text
-                    // arrives only as full text blocks on its tagged
-                    // assistant frames — emit them, in block order with the
-                    // tool calls, or subagent transcripts are tool-chips-only.
-                    let mut out: Vec<AgentEvent> = f
-                        .message
-                        .blocks()
-                        .filter_map(|b: ContentBlock| match b.kind.as_str() {
-                            "text" if !b.text.is_empty() => Some(tag(
-                                parent,
-                                AgentEvent::TextDelta {
-                                    text: format!("{}\n\n", b.text.trim_end()),
-                                },
-                            )),
-                            "tool_use" => Some(tag(
-                                parent,
-                                AgentEvent::ToolCall {
-                                    id: b.id.clone(),
-                                    call: decode_tool_use(&b.name, &b.input),
-                                },
-                            )),
-                            _ => None,
-                        })
-                        .collect();
+                    // Subagent content, attributed, in block order: text,
+                    // thinking (`--forward-subagent-text`) and tool calls. The
+                    // 2.1.x wire streams NO tagged partial deltas
+                    // (live-verified), so these snapshots are the transcript.
+                    // A nested spawn here is registered with this child as
+                    // its owner (it never appears on the root feed).
+                    for b in f.message.blocks().filter(|b| b.kind == "tool_use") {
+                        self.tools
+                            .record(Some(parent.as_str()), &b.id, &b.name, &b.input);
+                    }
+                    let mut out = self.tasks.tagged_assistant(parent, &f.message);
                     if let Some(code) = &f.error {
                         out.push(tag(
                             parent,
@@ -433,11 +414,10 @@ impl Normalizer {
                     return out;
                 }
                 // Record spawn tool ids up front: `task_notification` keys on
-                // them, and only foreground spawns ever get a `task_started`.
-                for b in f.message.blocks() {
-                    if b.kind == "tool_use" && matches!(b.name.as_str(), "Agent" | "Task") {
-                        self.agent_spawn_tools.insert(b.id.clone());
-                    }
+                // them even when no `task_started` arrives.
+                self.tasks.root_calls(&f.message);
+                for b in f.message.blocks().filter(|b| b.kind == "tool_use") {
+                    self.tools.record(None, &b.id, &b.name, &b.input);
                 }
                 let mut out: Vec<AgentEvent> = f
                     .message
@@ -469,26 +449,7 @@ impl Normalizer {
                         // A SendMessage steer never echoes on the child feed
                         // (live-verified) — surface it from the parent's own
                         // call, re-keyed onto the spawn it addresses.
-                        let steer = (b.name == "SendMessage")
-                            .then(|| {
-                                let to = ["to", "recipient"]
-                                    .iter()
-                                    .find_map(|k| b.input.get(*k))
-                                    .and_then(Value::as_str)?;
-                                let spawn = self.agent_tasks.get(to)?;
-                                let text = ["message", "content"]
-                                    .iter()
-                                    .find_map(|k| b.input.get(*k))
-                                    .and_then(Value::as_str)
-                                    .filter(|m| !m.trim().is_empty())?;
-                                Some(tag(
-                                    spawn,
-                                    AgentEvent::UserMessage {
-                                        text: text.to_owned(),
-                                    },
-                                ))
-                            })
-                            .flatten();
+                        let steer = self.tasks.send_message_steer(&b.name, &b.input);
                         std::iter::once(call).chain(opening).chain(steer)
                     })
                     .collect();
@@ -531,24 +492,22 @@ impl Normalizer {
             }
 
             Frame::User(f) => {
+                if let Some(events) = self.peer.arrival_events(&f) {
+                    return events;
+                }
                 if let Some(parent) = &f.parent_tool_use_id {
                     // A subagent's tool results echo on the main channel too;
                     // they belong to its transcript, attributed like its calls.
-                    let mut out: Vec<AgentEvent> = f
-                        .message
-                        .blocks()
-                        .filter(|b: &ContentBlock| b.kind == "tool_result")
-                        .map(|b| {
-                            tag(
-                                parent,
-                                AgentEvent::ToolResult {
-                                    id: b.tool_use_id.clone(),
-                                    is_error: b.is_error.unwrap_or(false),
-                                    output: None,
-                                    diff: None,
-                                },
-                            )
-                        })
+                    let mut out: Vec<AgentEvent> = self
+                        .tools
+                        .results(
+                            Some(parent.as_str()),
+                            &f.message.content,
+                            f.tool_use_result.as_ref(),
+                            f.tool_result_meta.as_ref(),
+                        )
+                        .into_iter()
+                        .map(|event| tag(parent, event))
                         .collect();
                     // A tagged user frame's TEXT blocks are the parent
                     // steering its subagent (SendMessage-style follow-ups —
@@ -567,16 +526,12 @@ impl Normalizer {
                     );
                     return out;
                 }
-                f.message
-                    .blocks()
-                    .filter(|b: &ContentBlock| b.kind == "tool_result")
-                    .map(|b| AgentEvent::ToolResult {
-                        id: b.tool_use_id.clone(),
-                        is_error: b.is_error.unwrap_or(false),
-                        output: None,
-                        diff: None,
-                    })
-                    .collect()
+                self.tools.results(
+                    None,
+                    &f.message.content,
+                    f.tool_use_result.as_ref(),
+                    f.tool_result_meta.as_ref(),
+                )
             }
 
             // A claude.ai plan window was hit. A hard `rejected` blocks the
@@ -587,10 +542,15 @@ impl Normalizer {
                 }
                 let window =
                     rate_window_label(f.rate_limit_info.rate_limit_type.as_deref().unwrap_or(""));
+                let reset = super::accounting::reset_suffix(f.rate_limit_info.resets_at);
                 vec![AgentEvent::Error {
-                    message: format!(
-                        "Claude {window} limit reached — the turn was blocked. Try again after it resets."
-                    ),
+                    message: if reset.is_empty() {
+                        format!(
+                            "Claude {window} limit reached — the turn was blocked. Try again after it resets."
+                        )
+                    } else {
+                        format!("Claude {window} limit reached — the turn was blocked.{reset}")
+                    },
                 }]
             }
 
@@ -683,7 +643,13 @@ impl Normalizer {
                         session_id: f.session_id,
                     }
                 };
-                let mut out = Vec::new();
+                let mut out = self.hooks.turn_ended();
+                out.extend(
+                    f.structured_output
+                        .as_ref()
+                        .map(|value| self.tools.structured_output(value))
+                        .unwrap_or_default(),
+                );
                 if let Some(window) = window {
                     out.push(AgentEvent::ContextUsage {
                         tokens: None,
@@ -695,7 +661,7 @@ impl Normalizer {
             }
 
             // Control frames are handled by the run loop, not normalized.
-            Frame::ControlRequest(_) | Frame::Other => Vec::new(),
+            Frame::ControlRequest(_) | Frame::Native(_) | Frame::Other => Vec::new(),
         }
     }
 }

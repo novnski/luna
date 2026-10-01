@@ -682,7 +682,12 @@ async fn captured_live_background_subagent_frames_replay_correctly() {
                 e,
                 AgentEvent::Subagent { parent_tool_use_id, event }
                     if *parent_tool_use_id == spawn_id
-                        && !matches!(event.as_ref(), AgentEvent::UserMessage { .. })
+                        // Content only: the opening prompt and the spawn's
+                        // background flag ride with the spawn itself.
+                        && !matches!(
+                            event.as_ref(),
+                            AgentEvent::UserMessage { .. } | AgentEvent::ChildProgress { .. }
+                        )
             )
             .then_some(i)
         })
@@ -860,4 +865,1201 @@ async fn title_run_disables_tools_and_denies_unexpected_permissions() {
         )),
         "{events:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// cc01 transport/control (CLI 2.1.286 shapes). Failure cases:
+// $B/evidence/cc01-transport/failure-cases.md. Frames come from the installed
+// binary's SDK schema and initialization-only handshakes; no model turn.
+// ---------------------------------------------------------------------------
+
+fn compat_ledger() -> serde_json::Value {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude/compat-2.1.286.json");
+    serde_json::from_str(&std::fs::read_to_string(path).expect("ledger fixture")).expect("ledger")
+}
+
+fn explicit_steer(id: &str) -> (SteerMessage, oneshot::Receiver<SteerAcceptance>) {
+    let (acceptance_tx, acceptance_rx) = oneshot::channel();
+    (
+        SteerMessage {
+            goal: None,
+            input_items: Vec::new(),
+            attachments: Vec::new(),
+            prompt: "redirect please".into(),
+            message_id: Some(id.into()),
+            delivery: luna_harness::SteerDelivery::RequireActiveTurn,
+            acceptance: Some(acceptance_tx),
+        },
+        acceptance_rx,
+    )
+}
+
+/// Drive a run; once the CLI's init is normalized (so its capabilities are
+/// known), queue `steer`, and optionally interrupt `stop_after` later.
+async fn run_steering_after_start(
+    harness: &ClaudeHarness,
+    req: RunRequest,
+    controls: RunControls,
+    steer_tx: mpsc::Sender<SteerMessage>,
+    steer: SteerMessage,
+    stop: Option<(CancellationToken, Duration)>,
+) -> Vec<AgentEvent> {
+    let mut stream = harness.run(req, controls).await.expect("run starts");
+    let mut steer = Some(steer);
+    tokio::time::timeout(Duration::from_secs(15), async move {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            if matches!(event, AgentEvent::SessionStarted { .. })
+                && let Some(steer) = steer.take()
+            {
+                steer_tx.send(steer).await.expect("steer queued");
+                if let Some((token, after)) = stop.clone() {
+                    tokio::spawn(async move {
+                        tokio::time::sleep(after).await;
+                        token.cancel();
+                    });
+                }
+            }
+            events.push(event);
+        }
+        events
+    })
+    .await
+    .expect("run finished in time")
+}
+
+fn assert_completed(events: &[AgentEvent], result: &str) {
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            AgentEvent::Done { status: DoneStatus::Completed, result: Some(text), error: None, .. }
+                if text == result
+        )),
+        "expected Completed({result}): {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn cc01_every_unsupported_inbound_control_gets_one_explicit_error() {
+    let ledger = compat_ledger();
+    let refused: Vec<&str> = ledger["transport"]["inbound_requests"]
+        .as_array()
+        .expect("inbound_requests")
+        .iter()
+        .filter(|row| row["luna"] == "unsupported_error")
+        .map(|row| row["subtype"].as_str().expect("subtype"))
+        .collect();
+    // cc03 answers `elicitation` and leaves undeclared dialogs to the CLI
+    // deadline; every other unsupported subtype is still refused once.
+    assert!(
+        !refused.contains(&"elicitation")
+            && !refused.contains(&"request_user_dialog")
+            && refused.contains(&"hook_callback")
+            && refused.contains(&"luna_future_subtype"),
+        "{refused:?}"
+    );
+    let prompt = format!("scenario:cc01-unknown-controls {}", refused.join(" "));
+    let (controls, _steer, _token) = controls("Allow once");
+    let events = run_to_end(&harness(), request(&prompt), controls).await;
+    // The fake ends Completed only if every subtype got exactly one error
+    // reply with its id and reason, and the duplicate id, the id-less request,
+    // the stray response, the unknown withdrawal and the heartbeat got none.
+    assert_completed(&events, "controls-ok");
+}
+
+#[tokio::test]
+async fn cc01_withdrawn_approval_is_never_answered_late() {
+    let root = tempfile::tempdir().unwrap();
+    let surfaced = root.path().join("surfaced");
+    let asked = Arc::new(Mutex::new(0usize));
+    let (steer_tx, steer_rx) = mpsc::channel(8);
+    let token = CancellationToken::new();
+    let counter = Arc::clone(&asked);
+    let controls = RunControls {
+        // Surfacing drops a marker; the fake then withdraws the prompt, and
+        // "Allow once" arrives later still: it must never reach the CLI.
+        request_input: Box::new(move |questions: Vec<UserInputQuestion>| {
+            *counter.lock().unwrap() += 1;
+            std::fs::write(&surfaced, b"1").unwrap();
+            let (tx, rx) = oneshot::channel();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let _ = tx.send(
+                    questions
+                        .iter()
+                        .map(|q| UserInputAnswer {
+                            question_id: q.id.clone(),
+                            labels: vec!["Allow once".into()],
+                        })
+                        .collect(),
+                );
+            });
+            rx
+        }),
+        steering: steer_rx,
+        interrupt: token.clone(),
+        invoke_luna_tool: None,
+    };
+    let mut req = request("scenario:cc01-cancel-approval");
+    req.cwd = root.path().to_str().unwrap().into();
+    let events = run_to_end(&harness(), req, controls).await;
+    drop(steer_tx);
+    assert_completed(&events, "cancel-ok");
+    assert_eq!(*asked.lock().unwrap(), 1, "the approval was surfaced once");
+}
+
+#[tokio::test]
+async fn cc01_explicit_steer_settles_only_on_its_exact_lifecycle_receipt() {
+    let (controls, steer_tx, _token) = controls("A");
+    let (steer, acceptance) = explicit_steer("queued-steer");
+    let events = run_steering_after_start(
+        &harness(),
+        request("scenario:cc01-lifecycle-steer"),
+        controls,
+        steer_tx,
+        steer,
+        None,
+    )
+    .await;
+    assert_eq!(
+        acceptance.await.expect("acceptance"),
+        SteerAcceptance::Accepted
+    );
+    let steered: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(at, event)| matches!(event, AgentEvent::Steered { .. }).then_some(at))
+        .collect();
+    assert_eq!(
+        steered.len(),
+        1,
+        "one exact receipt, duplicates and foreign uuids ignored: {events:?}"
+    );
+    let AgentEvent::Steered {
+        user_message_id,
+        assistant_message_id,
+        next_assistant_message_id,
+    } = &events[steered[0]]
+    else {
+        unreachable!()
+    };
+    assert_eq!(user_message_id.as_deref(), Some("queued-steer"));
+    assert!(assistant_message_id.is_some() && next_assistant_message_id.is_some());
+    assert_ne!(assistant_message_id, next_assistant_message_id);
+    let position = |text: &str| {
+        events
+            .iter()
+            .position(|e| matches!(e, AgentEvent::TextDelta { text: t } if t == text))
+            .unwrap_or_else(|| panic!("missing delta {text}: {events:?}"))
+    };
+    assert!(position("first") < steered[0] && steered[0] < position("steered"));
+    assert_completed(&events, "lifecycle-ok");
+}
+
+#[tokio::test]
+async fn cc01_refused_steer_is_rejected_not_accepted() {
+    let (controls, steer_tx, _token) = controls("A");
+    let (steer, acceptance) = explicit_steer("refused-steer");
+    let events = run_steering_after_start(
+        &harness(),
+        request("scenario:cc01-lifecycle-refused"),
+        controls,
+        steer_tx,
+        steer,
+        None,
+    )
+    .await;
+    assert!(
+        matches!(acceptance.await.expect("acceptance"), SteerAcceptance::Rejected(reason) if reason.contains("refused")),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Steered { .. })),
+        "{events:?}"
+    );
+    assert_completed(&events, "refused-ok");
+}
+
+#[tokio::test]
+async fn cc01_silent_lifecycle_falls_back_to_the_write_acknowledgement() {
+    let (controls, steer_tx, _token) = controls("A");
+    let (steer, acceptance) = explicit_steer("silent-steer");
+    let started = std::time::Instant::now();
+    let run = tokio::spawn(async move {
+        run_steering_after_start(
+            &harness(),
+            request("scenario:cc01-lifecycle-silent"),
+            controls,
+            steer_tx,
+            steer,
+            None,
+        )
+        .await
+    });
+    assert_eq!(
+        acceptance.await.expect("acceptance"),
+        SteerAcceptance::Accepted
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(1500),
+        "acceptance waited for a receipt before falling back"
+    );
+    let events = run.await.unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Steered { .. })),
+        "{events:?}"
+    );
+    assert_completed(&events, "silent-ok");
+}
+
+#[tokio::test]
+async fn cc01_stop_rejects_an_unreceipted_steer_the_cli_cancelled() {
+    let harness = ClaudeHarness::new()
+        .with_executable(fixture_path())
+        .with_graces(Duration::from_secs(5), Duration::from_secs(2));
+    let (controls, steer_tx, token) = controls("A");
+    let (steer, acceptance) = explicit_steer("stopped-steer");
+    let events = run_steering_after_start(
+        &harness,
+        request("scenario:cc01-stop-cancels-queued"),
+        controls,
+        steer_tx,
+        steer,
+        Some((token, Duration::from_millis(300))),
+    )
+    .await;
+    assert!(
+        matches!(acceptance.await.expect("acceptance"), SteerAcceptance::Rejected(reason) if reason.contains("stopped")),
+        "the interrupt receipt's cancelled list must reject the queued steer: {events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+}
+
+#[tokio::test]
+async fn cc01_stop_sends_a_unique_cancel_queued_interrupt_and_drains_before_signals() {
+    let root = tempfile::tempdir().unwrap();
+    let harness = ClaudeHarness::new()
+        .with_executable(fixture_path())
+        .with_graces(Duration::from_secs(5), Duration::from_secs(2));
+    let (controls, _steer, token) = controls("A");
+    let mut req = request("scenario:cc01-interrupt-receipt");
+    req.cwd = root.path().to_str().unwrap().into();
+    let mut stream = harness.run(req, controls).await.expect("run starts");
+    let events = tokio::time::timeout(Duration::from_secs(10), async move {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            if matches!(&event, AgentEvent::TextDelta { text } if text == "working") {
+                token.cancel();
+            }
+            events.push(event);
+        }
+        events
+    })
+    .await
+    .expect("stop completed in time");
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                error: None,
+                ..
+            })
+        ),
+        "{events:?}"
+    );
+    let request: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.path().join("interrupt-request.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(request["type"], "control_request");
+    assert_eq!(request["request"]["subtype"], "interrupt");
+    assert_eq!(request["request"]["cancel_queued"], true);
+    assert_eq!(request["request_id"], "luna-interrupt-1");
+    assert!(
+        root.path().join("drained-marker").exists(),
+        "stdin was closed after the interrupted result"
+    );
+    assert!(
+        !root.path().join("sigterm-marker").exists(),
+        "the CLI exited on its own before any signal"
+    );
+}
+
+#[tokio::test]
+async fn cc01_auth_and_limit_variants_end_with_readable_errors() {
+    let (controls, _steer, _token) = controls("A");
+    let events = run_to_end(&harness(), request("scenario:cc01-auth-variants"), controls).await;
+    assert!(
+        events.contains(&AgentEvent::Error {
+            message: "Claude needs you to verify your account — sign in again.".into()
+        }),
+        "{events:?}"
+    );
+    assert!(
+        matches!(
+            events.last(),
+            Some(AgentEvent::Done { status: DoneStatus::Errored, error: Some(error), .. })
+                if error == "The run ended with an error."
+        ),
+        "an unknown future result subtype still ends the turn visibly: {events:?}"
+    );
+}
+
+// ── CC-02: native turn identity (E24) and event/storage decoding ─────────
+// Frame shapes follow the SDK schema embedded in CLI 2.1.286; scenarios live
+// in `fixtures/fake-claude.sh` (`scenario:e24-*`, `scenario:cc02-lifecycle`).
+// Failure cases: `$B/evidence/cc02-events/failure-cases.md`.
+
+fn evidence<'a>(events: &'a [AgentEvent], kind: &str) -> Vec<&'a serde_json::Value> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ProviderEvidence {
+                provider,
+                kind: found,
+                payload,
+                ..
+            } if found == kind => {
+                assert_eq!(*provider, HarnessId::ClaudeCode);
+                Some(payload)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn text_at(events: &[AgentEvent], text: &str) -> usize {
+    events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::TextDelta { text: found } if found == text))
+        .unwrap_or_else(|| panic!("text {text} missing: {events:?}"))
+}
+
+fn done_positions(events: &[AgentEvent]) -> Vec<usize> {
+    events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| matches!(e, AgentEvent::Done { .. }).then_some(i))
+        .collect()
+}
+
+fn steer_positions(events: &[AgentEvent]) -> Vec<(usize, Option<String>)> {
+    events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            AgentEvent::Steered {
+                user_message_id, ..
+            } => Some((i, user_message_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Run `prompt`; after the first `Done`, send each follow-up as an ordinary
+/// warm send (`AllowFollowUpTurn`) — the shape the engine's warm route uses.
+async fn run_with_follow_ups(prompt: &str, follow_ups: &[(&str, Option<&str>)]) -> Vec<AgentEvent> {
+    let (controls, steer, _token) = controls("A");
+    let mut stream = harness()
+        .run(request(prompt), controls)
+        .await
+        .expect("run starts");
+    let mut pending: Vec<SteerMessage> = follow_ups
+        .iter()
+        .map(|(text, id)| SteerMessage {
+            goal: None,
+            input_items: Vec::new(),
+            attachments: Vec::new(),
+            prompt: (*text).into(),
+            message_id: id.map(Into::into),
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: None,
+        })
+        .collect();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            let done = matches!(event, AgentEvent::Done { .. });
+            events.push(event);
+            if done {
+                for message in pending.drain(..) {
+                    steer.send(message).await.expect("follow-up queued");
+                }
+            }
+        }
+        events
+    })
+    .await
+    .expect("run finished in time")
+}
+
+fn result_records(events: &[AgentEvent]) -> Vec<&serde_json::Value> {
+    evidence(events, "result")
+}
+
+/// E24 / B1, B3, B7, B9, B10: a resumed session reports a leftover background
+/// task (origin only) and a peer turn (foreign echo) BEFORE it runs the human
+/// prompt. Neither foreign result may complete the human turn; usage still
+/// flows; the human turn's first stamped frame opens a fresh segment; a
+/// replayed and a historical result change nothing.
+#[tokio::test]
+async fn e24_foreign_results_never_complete_the_pending_human_turn() {
+    let (controls, _steer, _token) = controls("A");
+    let events = run_to_end(&harness(), request("scenario:e24-resume"), controls).await;
+
+    let dones = done_positions(&events);
+    assert_eq!(dones.len(), 1, "only the human result settles: {events:?}");
+    assert!(matches!(
+        &events[dones[0]],
+        AgentEvent::Done { status: DoneStatus::Completed, session_id: Some(id), .. } if id == "sess-e24"
+    ));
+    for (input, output) in [(3, 4), (2, 2), (5, 6)] {
+        assert!(
+            events.contains(&AgentEvent::Usage {
+                input_tokens: input,
+                output_tokens: output
+            }),
+            "usage {input}/{output} must still flow: {events:?}"
+        );
+    }
+
+    let records = result_records(&events);
+    let owners: Vec<(&str, bool)> = records
+        .iter()
+        .map(|r| {
+            (
+                r["owner"].as_str().unwrap(),
+                r["withheld"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        owners,
+        [
+            ("foreign", true),
+            ("foreign", true),
+            ("own", false),
+            ("duplicate", true),
+            ("duplicate", true)
+        ],
+        "{records:#?}"
+    );
+    assert_eq!(records[0]["stamp"]["origin"]["kind"], "task-notification");
+    assert_eq!(records[1]["stamp"]["origin"]["kind"], "peer");
+    let own = records[2];
+    let initial_uuid = own["stamp"]["userMessageUuid"].as_str().unwrap().to_owned();
+    assert_eq!(own["consumed"][0]["kind"], "initial");
+    assert_eq!(own["consumed"][0]["nativeUuid"], initial_uuid.as_str());
+    assert!(uuid::Uuid::parse_str(&initial_uuid).is_ok());
+
+    let steers = steer_positions(&events);
+    assert_eq!(
+        steers.len(),
+        1,
+        "one boundary for the human turn: {events:?}"
+    );
+    let (steer_at, correlation) = &steers[0];
+    assert_eq!(correlation.as_deref(), Some(initial_uuid.as_str()));
+    assert!(text_at(&events, "FOREIGN-WAKE") < *steer_at);
+    assert!(text_at(&events, "PEER-TURN") < *steer_at);
+    assert!(*steer_at < text_at(&events, "HUMAN-ANSWER"));
+    assert!(text_at(&events, "HUMAN-ANSWER") < dones[0]);
+
+    let init = evidence(&events, "system/init");
+    assert_eq!(init.len(), 1, "{events:?}");
+    assert_eq!(init[0]["claudeCodeVersion"], "2.1.286");
+    assert_eq!(init[0]["ledger"]["echoCapable"], true);
+    // The human result's evidence precedes its Done in the stream.
+    let own_at = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::ProviderEvidence { native_id: Some(id), .. } if id == "res-human"))
+        .unwrap();
+    assert!(own_at < dones[0]);
+}
+
+/// E24 / B2: a warm follow-up written while Claude starts a wake turn waits in
+/// the CLI queue. The wake result completes nothing; only the follow-up's own
+/// echoed result settles it (its receipt names the LUNA message id).
+#[tokio::test]
+async fn e24_follow_up_queued_behind_a_wake_turn_settles_only_its_own_receipt() {
+    let events =
+        run_with_follow_ups("scenario:e24-followup", &[("again", Some("luna-msg-2"))]).await;
+
+    let dones = done_positions(&events);
+    assert_eq!(dones.len(), 2, "first answer + follow-up only: {events:?}");
+    // The ordinary boundary stays at the stdin write (legacy timing).
+    let steers = steer_positions(&events);
+    assert_eq!(steers.len(), 1, "{events:?}");
+    let (steer_at, correlation) = &steers[0];
+    assert_eq!(correlation.as_deref(), None);
+    assert!(dones[0] < *steer_at && *steer_at < text_at(&events, "WAKE-TURN"));
+    // The wake result completes nothing: the next Done follows the answer.
+    assert!(text_at(&events, "SECOND-ANSWER") < dones[1]);
+
+    let records = result_records(&events);
+    assert_eq!(records.len(), 3, "{records:#?}");
+    assert_eq!(records[1]["owner"], "foreign");
+    assert_eq!(records[1]["withheld"], true);
+    assert_eq!(records[1]["queuedTurnCount"], 1);
+    assert_eq!(records[2]["owner"], "own");
+    assert_eq!(records[2]["consumed"][0]["lunaId"], "luna-msg-2");
+    assert_eq!(records[2]["consumed"][0]["kind"], "followUp");
+}
+
+/// E24 / B4: without echo capability the legacy contract stays: the warm
+/// follow-up's boundary is the stdin write and every root result settles.
+#[tokio::test]
+async fn e24_older_runtime_keeps_legacy_completion() {
+    let events = run_with_follow_ups("scenario:e24-legacy", &[("again", Some("luna-msg-2"))]).await;
+
+    assert_eq!(done_positions(&events).len(), 3, "{events:?}");
+    let steers = steer_positions(&events);
+    assert_eq!(steers.len(), 1, "{events:?}");
+    assert_eq!(steers[0].1, None, "legacy boundary keeps FIFO correlation");
+    assert!(
+        steers[0].0 < text_at(&events, "WAKE-TURN"),
+        "boundary at write"
+    );
+    let records = result_records(&events);
+    assert_eq!(records[1]["owner"], "foreign");
+    assert_eq!(records[1]["withheld"], false);
+    assert_eq!(records[1]["ledger"]["echoCapable"], false);
+}
+
+/// E24 / B6: the CLI folds the queued follow-up into its own wake turn. The
+/// result echoes it, so it is OWN and settles — no wedged turn.
+#[tokio::test]
+async fn e24_follow_up_folded_into_a_wake_turn_settles_without_waiting() {
+    let events = run_with_follow_ups("scenario:e24-fold", &[("again", Some("luna-msg-2"))]).await;
+
+    let dones = done_positions(&events);
+    assert_eq!(dones.len(), 2, "{events:?}");
+    assert!(text_at(&events, "FOLDED-ANSWER") < dones[1]);
+    let records = result_records(&events);
+    assert_eq!(records[1]["owner"], "own");
+    assert_eq!(records[1]["stamp"]["origin"]["kind"], "task-notification");
+}
+
+/// E24 / B5: two follow-ups merged into one turn: one result consumes both,
+/// in send order.
+#[tokio::test]
+async fn e24_batched_follow_ups_settle_together() {
+    let events = run_with_follow_ups(
+        "scenario:e24-batch",
+        &[("two", Some("luna-2")), ("three", Some("luna-3"))],
+    )
+    .await;
+
+    assert_eq!(done_positions(&events).len(), 2, "{events:?}");
+    assert_eq!(
+        steer_positions(&events).len(),
+        2,
+        "one boundary per write: {events:?}"
+    );
+    let records = result_records(&events);
+    let consumed: Vec<_> = records[1]["consumed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["lunaId"].as_str().unwrap())
+        .collect();
+    assert_eq!(consumed, ["luna-2", "luna-3"]);
+}
+
+/// CC-02 A–E: task/hook/compaction/reset/lifecycle decoding, bounded and
+/// redacted unknown retention with exact counts, invalid frames, tool-result
+/// bodies, and a tolerant result that still settles the turn.
+#[tokio::test]
+async fn cc02_lifecycle_unknown_and_tool_bodies_are_decoded_and_retained() {
+    let (controls, _steer, _token) = controls("A");
+    let events = run_to_end(&harness(), request("scenario:cc02-lifecycle"), controls).await;
+    let serialized = serde_json::to_string(&events).unwrap();
+    assert!(!serialized.contains("SECRET-SENTINEL"), "secrets leaked");
+
+    // Tasks (C1, C2).
+    let started = evidence(&events, "system/task_started");
+    assert_eq!(started[0]["family"], "task");
+    assert_eq!(started[0]["phase"], "started");
+    assert_eq!(started[0]["subagentType"], "general-purpose");
+    assert_eq!(started[0]["promptBytes"], 11);
+    assert_eq!(
+        evidence(&events, "system/task_progress")[0]["usage"]["totalTokens"],
+        120
+    );
+    let updated = evidence(&events, "system/task_updated");
+    assert_eq!(updated[0]["status"], "killed");
+    assert_eq!(updated[0]["error"], "stopped by user");
+    assert_eq!(
+        evidence(&events, "system/background_tasks_changed")[0]["tasks"][0]["taskId"],
+        "agent-1"
+    );
+    assert_eq!(
+        evidence(&events, "system/task_notification")[0]["status"],
+        "stopped"
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_spawn"
+                && matches!(event.as_ref(), AgentEvent::Done { status: DoneStatus::Interrupted, .. })
+    )));
+
+    // Hooks (C3): bounded output.
+    assert_eq!(
+        evidence(&events, "system/hook_started")[0]["hookEvent"],
+        "PreToolUse"
+    );
+    assert_eq!(
+        evidence(&events, "system/hook_progress")[0]["stdout"],
+        "checking"
+    );
+    let response = evidence(&events, "system/hook_response")[0];
+    assert_eq!(response["outcome"], "success");
+    assert_eq!(response["exitCode"], 0);
+    let stdout = response["stdout"].as_str().unwrap();
+    assert!(
+        stdout.contains("[truncated") && stdout.len() < 4300,
+        "{}",
+        stdout.len()
+    );
+
+    // Compaction and reset (C4, C5).
+    let status = evidence(&events, "system/status");
+    assert_eq!(status[0]["phase"], "started");
+    assert_eq!(status[1]["phase"], "finished");
+    assert_eq!(status[1]["result"], "failed");
+    assert_eq!(status[1]["error"], "summary too long");
+    let boundary = evidence(&events, "system/compact_boundary")[0];
+    assert_eq!(boundary["family"], "compaction");
+    assert_eq!(boundary["trigger"], "manual");
+    assert_eq!(boundary["preTokens"], 959489);
+    assert_eq!(boundary["postTokens"], 10107);
+    let reset = evidence(&events, "conversation_reset")[0];
+    assert_eq!(reset["family"], "conversationReset");
+    assert_eq!(
+        reset["newConversationId"],
+        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    );
+    assert_eq!(reset["trigger"], "clear");
+    // `command_lifecycle` is transport-owned (cc01 consumes it before
+    // normalization and forwards receipts to the turn ledger); it must never
+    // surface as an unknown frame.
+    assert!(evidence(&events, "unknown:command_lifecycle").is_empty());
+    assert!(evidence(&events, "command_lifecycle").is_empty());
+
+    // Unprojected, unknown, redaction, bounds, flood caps (D1–D6).
+    assert_eq!(
+        evidence(&events, "native:system/permission_denied").len(),
+        1
+    );
+    assert_eq!(evidence(&events, "native:prompt_suggestion").len(), 1);
+    let widget = evidence(&events, "unknown:system/future_widget")[0];
+    assert_eq!(widget["sample"]["api_key"], "[redacted]");
+    assert_eq!(widget["sample"]["authorization"], "[redacted]");
+    assert_eq!(widget["sample"]["input_tokens"], 5);
+    assert_eq!(widget["sample"]["note"], "kept");
+    assert_eq!(widget["sha256"].as_str().unwrap().len(), 64);
+    let big = evidence(&events, "unknown:future_frame")[0];
+    assert_eq!(big["truncated"], true);
+    assert!(big["bytes"].as_u64().unwrap() > 20_000);
+    assert!(big["sample"]["blob"].as_str().unwrap().len() < 700);
+    assert_eq!(
+        evidence(&events, "unknown:future_flood").len(),
+        8,
+        "per-kind cap"
+    );
+    assert_eq!(evidence(&events, "invalid:non_json").len(), 1);
+    assert_eq!(evidence(&events, "invalid:assistant").len(), 1);
+    assert!(evidence(&events, "system/thinking_tokens").is_empty());
+    assert!(evidence(&events, "system/session_state_changed").is_empty());
+
+    // Tool-result bodies (E1–E3), root and subagent.
+    let output = |id: &str| {
+        events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::ToolResult {
+                    id: found, output, ..
+                } if found == id => Some(output.clone()),
+                AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                    AgentEvent::ToolResult {
+                        id: found, output, ..
+                    } if found == id => Some(output.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("tool result {id} missing"))
+    };
+    // Content checks tolerate CC-05's richer `lunaToolOutput` envelope, which
+    // supersedes this plain-text projection at integration; received-empty
+    // versus unavailable stays exact.
+    let has = |id: &str, needle: &str| output(id).is_some_and(|text| text.contains(needle));
+    assert!(has("t-str", "hi"), "{:?}", output("t-str"));
+    assert!(
+        has("t-arr", "line one") && has("t-arr", "image/png"),
+        "{:?}",
+        output("t-arr")
+    );
+    assert!(
+        output("t-empty").is_some(),
+        "received-but-empty is not unavailable"
+    );
+    assert_eq!(output("t-none"), None, "absent content stays unavailable");
+    assert!(
+        has("sub-t", "(Bash completed with no output)"),
+        "{:?}",
+        output("sub-t")
+    );
+
+    // Tolerant result (A1–A4): malformed fields, success + is_error (529).
+    let record = result_records(&events)[0];
+    let invalid: Vec<_> = record["invalidFields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(invalid, ["errors", "usage"]);
+    assert_eq!(record["owner"], "unattributed");
+    assert_eq!(record["totalCostUsd"], 0.0123);
+    assert_eq!(record["localCommand"], "compact");
+    assert_eq!(record["permissionDenials"], 1);
+    assert_eq!(record["apiErrorStatus"], 529);
+    let counts = &record["frameCounts"];
+    assert_eq!(counts["unknown:future_flood"], 12, "{counts}");
+    assert_eq!(counts["system/thinking_tokens"], 2, "{counts}");
+    assert_eq!(counts["system/session_state_changed"], 1, "{counts}");
+    assert!(events.contains(&AgentEvent::Error {
+        message: "Claude API is overloaded (529). Try again shortly.".into()
+    }));
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Done {
+            status: DoneStatus::Completed,
+            result: None,
+            error: None,
+            session_id: Some("sess-life".into()),
+        })
+    );
+}
+
+/// E25 (CC-08): a 2.1.286-shaped native agent graph through the whole driver
+/// path (argv opt-in → wire → normalizer → run loop). Root spawn A runs in
+/// the foreground; A spawns B (seen only in A's snapshot, no `task_started`)
+/// and background E (steered by A's `SendMessage`), and launches a background
+/// shell job; two background root children settle after the root's eager
+/// result. Failure cases: `$B/evidence/cc08-native-agents/failure-cases.md`.
+#[tokio::test]
+async fn native_nested_agents_keep_ownership_model_usage_and_completion() {
+    let (controls, _steer, _token) = controls("A");
+    // The fake CLI exits without output unless `--forward-subagent-text` is
+    // on the argv (F1), so any event at all proves the opt-in.
+    let events = run_to_end(&harness(), request("scenario:native-nested"), controls).await;
+    assert!(!events.is_empty(), "opt-in missing from argv");
+
+    let tagged = |spawn: &str| -> Vec<AgentEvent> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Subagent {
+                    parent_tool_use_id,
+                    event,
+                } if parent_tool_use_id == spawn => Some(event.as_ref().clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let progress = |model: Option<&str>,
+                    total_tokens: Option<u64>,
+                    tool_uses: Option<u64>,
+                    duration_ms: Option<u64>,
+                    last_tool: Option<&str>,
+                    background: Option<bool>| AgentEvent::ChildProgress {
+        model: model.map(str::to_owned),
+        total_tokens,
+        tool_uses,
+        duration_ms,
+        last_tool: last_tool.map(str::to_owned),
+        summary: None,
+        background,
+    };
+    let done = |status: DoneStatus, result: Option<&str>, error: Option<&str>| AgentEvent::Done {
+        status,
+        result: result.map(str::to_owned),
+        error: error.map(str::to_owned),
+        session_id: None,
+    };
+    let call = |events: &[AgentEvent], id: &str| {
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolCall { id: got, .. } if got == id))
+    };
+
+    // Root feed: only the root's own text, two root Dones (eager + wake), no
+    // child content, task row, hook or unknown notification (F9/F17/F18).
+    let root_text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        root_text,
+        "Delegating. Two watchers launched.Background agents finished."
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::Done { .. }))
+            .count(),
+        2,
+        "{events:?}"
+    );
+    for spawn in ["toolu_ghost", "toolu_wf", "agent-a", "ghost", "wf-1"] {
+        assert!(tagged(spawn).is_empty(), "{spawn} attached: {events:?}");
+    }
+    // CC-02 provider evidence is host-journal retention and CC-13 native task
+    // snapshots feed the Agents surface; neither is transcript content, so
+    // leaks are judged on the events a transcript can show.
+    let visible: Vec<&AgentEvent> = events
+        .iter()
+        .filter(|e| {
+            !matches!(
+                e,
+                AgentEvent::ProviderEvidence { .. } | AgentEvent::NativeTaskChanged { .. }
+            )
+        })
+        .collect();
+    let debug = format!("{visible:?}");
+    for leaked in [
+        "ghost finished",
+        "spec workflow done",
+        "late duplicate",
+        "again",
+    ] {
+        assert!(!debug.contains(leaked), "{leaked} leaked: {debug}");
+    }
+
+    // A (foreground root child): forwarded thinking and text (F2; redacted
+    // thinking never becomes text), its reported model once (F13), one
+    // progress row despite two ticks (F12), its nested calls and the
+    // background job's completion attributed to it (F7), then usage + Done.
+    let a = tagged("toolu_A");
+    assert_eq!(
+        a.first(),
+        Some(&AgentEvent::UserMessage {
+            text: "Map the parser module and delegate the lexer.".into()
+        })
+    );
+    assert!(a.contains(&AgentEvent::ReasoningDelta {
+        text: "The lexer is separable; delegate it.\n\n".into()
+    }));
+    assert!(a.contains(&AgentEvent::TextDelta {
+        text: "Splitting the work.\n\n".into()
+    }));
+    assert!(!format!("{a:?}").contains("cmVkYWN0ZWQ"));
+    assert_eq!(
+        a.iter()
+            .filter(|e| matches!(e, AgentEvent::ChildProgress { model: Some(_), .. }))
+            .collect::<Vec<_>>(),
+        [&progress(
+            Some("claude-haiku-4-5-20251001"),
+            None,
+            None,
+            None,
+            None,
+            None
+        )]
+    );
+    assert_eq!(
+        a.iter()
+            .filter(|e| matches!(
+                e,
+                AgentEvent::ChildProgress {
+                    last_tool: Some(_),
+                    ..
+                }
+            ))
+            .collect::<Vec<_>>(),
+        [&progress(
+            None,
+            Some(1200),
+            Some(1),
+            Some(4000),
+            Some("Agent"),
+            None
+        )],
+        "flood guard: the second tick changes no material field"
+    );
+    for nested in ["toolu_B", "toolu_E", "toolu_A_bg", "toolu_A_send"] {
+        assert!(call(&a, nested), "{nested} not in A's transcript: {a:?}");
+    }
+    assert!(a.iter().any(|e| matches!(e,
+        AgentEvent::ToolResult { id, is_error: false, output: Some(output), .. }
+            if id == "toolu_A_bg"
+                && output.starts_with("Background job completed: Background command \"Run tests\" completed (exit code 0)")
+                && output.contains("Output file: /tmp/claude/tasks/bash-a.output")
+    )), "{a:?}");
+    assert_eq!(
+        &a[a.len() - 2..],
+        [
+            progress(None, Some(2400), Some(3), Some(9000), None, None),
+            done(DoneStatus::Completed, Some("Parser mapped"), None),
+        ]
+    );
+
+    // B: nested, seen only in A's snapshot, no task_started (F3): opening
+    // prompt (F4), its OWN model (F13), content, usage and one Done (F10:
+    // the late duplicate after the wake result is ignored).
+    let b = tagged("toolu_B");
+    assert_eq!(
+        b.first(),
+        Some(&AgentEvent::UserMessage {
+            text: "Summarize lexer.rs states.".into()
+        })
+    );
+    assert!(b.contains(&progress(
+        Some("claude-sonnet-5"),
+        None,
+        None,
+        None,
+        None,
+        None
+    )));
+    assert!(b.contains(&AgentEvent::TextDelta {
+        text: "Lexer has three states.\n\n".into()
+    }));
+    assert!(call(&b, "toolu_B_read"));
+    assert_eq!(
+        &b[b.len() - 2..],
+        [
+            progress(None, Some(800), Some(1), Some(2000), None, None),
+            done(DoneStatus::Completed, Some("Lexer has three states"), None),
+        ]
+    );
+
+    // E: nested background child, steered by A's SendMessage (F5).
+    let e = tagged("toolu_E");
+    assert_eq!(
+        e[..3],
+        [
+            AgentEvent::UserMessage {
+                text: "List the token kinds.".into()
+            },
+            progress(None, None, None, None, None, Some(true)),
+            AgentEvent::UserMessage {
+                text: "Include keywords too.".into()
+            },
+        ]
+    );
+    assert_eq!(
+        e.last(),
+        Some(&done(
+            DoneStatus::Completed,
+            Some("Listed token kinds"),
+            None
+        ))
+    );
+
+    // C/D: background root children settling after the root's eager result
+    // (F11) with observed cancellation and failure (F15). The summary that
+    // only repeats the description is not an outcome.
+    let c = tagged("toolu_C");
+    assert_eq!(
+        c.last(),
+        Some(&done(
+            DoneStatus::Interrupted,
+            None,
+            Some("Stopped: the Claude worker restarted")
+        ))
+    );
+    let d = tagged("toolu_D");
+    assert_eq!(
+        d.last(),
+        Some(&done(
+            DoneStatus::Errored,
+            None,
+            Some("Docs site unreachable")
+        ))
+    );
+    let eager = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::Done { .. }))
+        .unwrap();
+    let settled = |spawn: &str| {
+        events.iter().position(|e| matches!(e,
+            AgentEvent::Subagent { parent_tool_use_id, event }
+                if parent_tool_use_id == spawn && matches!(event.as_ref(), AgentEvent::Done { .. })
+        ))
+    };
+    assert!(settled("toolu_C").unwrap() > eager && settled("toolu_D").unwrap() > eager);
+
+    // Exactly one Done per spawn; no Done for a non-spawn.
+    let mut dones: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Subagent {
+                parent_tool_use_id,
+                event,
+            } if matches!(event.as_ref(), AgentEvent::Done { .. }) => {
+                Some(parent_tool_use_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    dones.sort_unstable();
+    assert_eq!(
+        dones,
+        ["toolu_A", "toolu_B", "toolu_C", "toolu_D", "toolu_E"]
+    );
+}
+
+/// CC-08 task cancellation: `stop_native_child` writes the 2.1.286
+/// `stop_task` control request only for a running native child of the live
+/// run; everything else is refused locally (the fake CLI fails on any other
+/// stdin line). An acknowledgement is only a request receipt (2.1.286 also
+/// acknowledges unknown task ids — init probe): the child settles from its
+/// own `task_updated`/`task_notification` (F15/F16).
+#[tokio::test]
+async fn native_child_stop_is_authority_checked_and_settles_from_task_events() {
+    use luna_harness::NativeTaskStop;
+
+    let harness = harness();
+    let (controls, steer, _token) = controls("A");
+    let mut stream = harness
+        .run(request("scenario:native-stop"), controls)
+        .await
+        .expect("run starts");
+    let mut events = Vec::new();
+    let child_text = |event: &AgentEvent| {
+        matches!(event, AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_S" && matches!(event.as_ref(), AgentEvent::TextDelta { .. }))
+    };
+    assert!(next_until(&mut stream, &mut events, child_text).await);
+    let session = events
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::SessionStarted { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .expect("session started");
+
+    // Refused locally: unknown spawn, another session.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_unknown")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    assert!(matches!(
+        harness
+            .stop_native_child("sess-other", "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    // The real stop: acknowledged, but the child is not settled by that.
+    assert_eq!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Requested
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Subagent { event, .. }
+        if matches!(event.as_ref(), AgentEvent::Done { .. })))
+    );
+    let child_done = |event: &AgentEvent| {
+        matches!(event, AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_S" && matches!(event.as_ref(), AgentEvent::Done { .. }))
+    };
+    assert!(next_until(&mut stream, &mut events, child_done).await);
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Subagent {
+            parent_tool_use_id: "toolu_S".into(),
+            event: Box::new(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                result: None,
+                error: None,
+                session_id: None,
+            }),
+        })
+    );
+    // Settled: a second stop is refused without reaching the CLI.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    // Close the mailbox (stdin EOF); the rest of the run plays out.
+    drop(steer);
+    assert!(!next_until(&mut stream, &mut events, |_| false).await);
+    let root: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Done { status, error, .. } => Some((*status, error.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        root,
+        [(DoneStatus::Completed, None), (DoneStatus::Completed, None)],
+        "a refused stop leaked to stdin, or the child's stop ended the root: {events:?}"
+    );
+    // The run is gone: nothing is addressable any more.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+}
+
+/// Consume `stream` into `events` until `stop` matches (true) or it ends.
+async fn next_until(
+    stream: &mut futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+    events: &mut Vec<AgentEvent>,
+    stop: impl Fn(&AgentEvent) -> bool,
+) -> bool {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            let found = stop(&event);
+            events.push(event);
+            if found {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("stream progressed in time")
 }

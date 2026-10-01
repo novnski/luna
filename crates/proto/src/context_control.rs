@@ -131,6 +131,9 @@ pub struct ContextControlState {
     /// "Sent as goal" / "Goal achieved" transcript marks.
     #[serde(default, skip_serializing_if = "crate::GoalMarks::is_empty")]
     pub goal_marks: crate::GoalMarks,
+    /// Claude-native scheduled prompts observed in the current binding.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub native_schedules: Vec<crate::NativeSchedule>,
 }
 
 impl Default for ContextControlState {
@@ -147,6 +150,7 @@ impl Default for ContextControlState {
             provider_summary: None,
             notice: None,
             goal_marks: Default::default(),
+            native_schedules: Vec::new(),
         }
     }
 }

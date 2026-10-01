@@ -126,6 +126,11 @@ impl LunaMcpEndpoint {
         &self.token
     }
 
+    /// Loopback URL of this endpoint (the Claude adapter's `--mcp-config`).
+    pub(crate) fn url(&self) -> &str {
+        &self.url
+    }
+
     /// Next MCP tool call, or pending forever when no endpoint is attached.
     pub(crate) async fn next_call(endpoint: &mut Option<Self>) -> Option<LunaMcpCall> {
         match endpoint {

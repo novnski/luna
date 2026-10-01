@@ -86,12 +86,18 @@ pub enum RuntimeDelivery {
     CodexInstructionsOnly,
     ClaudeInstructionsOnly,
     Unsupported,
+    /// The same per-process `luna` MCP endpoint, attached to every Claude CLI
+    /// spawn through an inline `--mcp-config` entry (fresh and resumed).
+    ClaudeMcpTools,
 }
 
 impl RuntimeDelivery {
     /// Whether engine-executed LUNA tools reach the provider on this path.
     pub fn attaches_luna_tools(self) -> bool {
-        matches!(self, Self::CodexMcpTools | Self::CodexDynamicTools)
+        matches!(
+            self,
+            Self::CodexMcpTools | Self::CodexDynamicTools | Self::ClaudeMcpTools
+        )
     }
 }
 
@@ -260,6 +266,10 @@ pub struct IntegrationInventoryItem {
     pub actions: IntegrationActionFacts,
     #[serde(default)]
     pub help_route: IntegrationHelpRoute,
+    /// Redacted provider-reported MCP details (CC-11). None for skills and for
+    /// sources that only read configuration files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<crate::IntegrationMcpDetails>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

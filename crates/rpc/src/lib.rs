@@ -89,6 +89,12 @@ pub mod methods {
     /// Messages typed while the agent was busy, held on the chat doc so every
     /// device sees the same queue. `{ chatId }` → `{ items: QueuedMessage[] }`.
     pub const WATCH_QUEUE: &str = "WatchQueue";
+    /// Provider-native workflows/teammates observed for a chat (read-only).
+    /// `{ chatId }` → stream of `NativeTaskLedger`.
+    pub const WATCH_NATIVE_TASKS: &str = "WatchNativeTasks";
+    /// Claude Code's own session supervisor (`claude agents --json`), read-only.
+    /// `{}` → `ClaudeExternalSessionsView`. IPC-only, engine-device local.
+    pub const LIST_CLAUDE_EXTERNAL_SESSIONS: &str = "ListClaudeExternalSessions";
     /// Append to the queue. `{ chatId, text, attachments?, holdForTurnEnd? }` → `{ id }`.
     pub const QUEUE_MESSAGE: &str = "QueueMessage";
     /// Retype a queued message; empty text deletes it.
@@ -158,6 +164,14 @@ pub mod methods {
     pub const SET_INSTRUCTION_SETTINGS: &str = "SetInstructionSettings";
     /// Read-only provider-owned skill/MCP configuration inventory.
     pub const GET_INTEGRATION_INVENTORY: &str = "GetIntegrationInventory";
+    /// Owner-local: ask the provider (Claude) to save its own per-project MCP
+    /// server enable/disable preference, with a fresh provider readback.
+    pub const SET_PROVIDER_MCP_SERVER_ENABLED: &str = "SetProviderMcpServerEnabled";
+    /// Owner-local: read one declared MCP Apps `ui://` resource as inert facts.
+    pub const READ_PROVIDER_MCP_APP_RESOURCE: &str = "ReadProviderMcpAppResource";
+    /// Effective native settings sources, output style, hooks, commands and
+    /// skills for the launch a chat/project would use (local device only).
+    pub const GET_NATIVE_EXTENSIONS: &str = "GetNativeExtensions";
     /// Provider-owned SKILL.md library on the engine's local device.
     pub const GET_SKILL_DOCUMENT: &str = "GetSkillDocument";
     pub const SAVE_SKILL_DOCUMENT: &str = "SaveSkillDocument";
@@ -181,6 +195,10 @@ pub mod methods {
     pub const GET_HISTORY_CAPABILITY: &str = "GetHistoryCapability";
     /// Read durable pre-edit recovery snapshots available for one task.
     pub const LIST_HISTORY_RECOVERIES: &str = "ListHistoryRecoveries";
+    /// CC-10 dry-run a provider-native file checkpoint restore (Claude).
+    pub const PREVIEW_NATIVE_FILE_REWIND: &str = "PreviewNativeFileRewind";
+    /// CC-10 restore provider-checkpointed files after a matching preview.
+    pub const APPLY_NATIVE_FILE_REWIND: &str = "ApplyNativeFileRewind";
     /// Explicit supported-provider refresh for one task binding.
     pub const REFRESH_TASK_BINDING: &str = "RefreshTaskBinding";
     /// Read-only provider-native import preview. No task or provider state is mutated.
@@ -346,6 +364,8 @@ pub mod methods {
         UNLOAD_SIDE_CHAT,
         WATCH_DOC_MESSAGES,
         WATCH_QUEUE,
+        WATCH_NATIVE_TASKS,
+        LIST_CLAUDE_EXTERNAL_SESSIONS,
         QUEUE_MESSAGE,
         UPDATE_QUEUED_MESSAGE,
         BEGIN_QUEUED_MESSAGE_EDIT,
@@ -374,6 +394,9 @@ pub mod methods {
         GET_INSTRUCTION_SETTINGS,
         SET_INSTRUCTION_SETTINGS,
         GET_INTEGRATION_INVENTORY,
+        SET_PROVIDER_MCP_SERVER_ENABLED,
+        READ_PROVIDER_MCP_APP_RESOURCE,
+        GET_NATIVE_EXTENSIONS,
         GET_SKILL_DOCUMENT,
         SAVE_SKILL_DOCUMENT,
         INSTALL_SKILL,
@@ -388,6 +411,8 @@ pub mod methods {
         MUTATE_ATTENTION,
         GET_HISTORY_CAPABILITY,
         LIST_HISTORY_RECOVERIES,
+        PREVIEW_NATIVE_FILE_REWIND,
+        APPLY_NATIVE_FILE_REWIND,
         REFRESH_TASK_BINDING,
         PREVIEW_PROVIDER_TASK_IMPORT,
         ADOPT_PROVIDER_TASK,

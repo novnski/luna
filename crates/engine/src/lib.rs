@@ -120,6 +120,11 @@ pub mod backup;
 pub mod backup_control;
 pub mod change_requests;
 pub mod chat2_host;
+mod claude_child_reports;
+mod claude_mcp;
+mod claude_ongoing;
+mod claude_peers;
+mod command_scope;
 pub mod context_controls;
 pub mod credentials;
 pub mod cross_task_tools;
@@ -136,13 +141,16 @@ mod composer_catalog;
 #[allow(dead_code)]
 pub(crate) mod integration_actions;
 pub mod integration_settings;
+pub mod live_usage;
 pub mod local_import;
 #[cfg(target_os = "macos")]
 mod macos_keychain;
 mod model_cache;
+mod native_tasks;
 pub mod permissions;
 pub mod profile;
 pub mod project_commands;
+mod provider_inputs;
 mod provider_updates;
 pub mod recovery;
 pub mod registry;

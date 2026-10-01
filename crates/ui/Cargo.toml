@@ -42,7 +42,23 @@ name = "codex-prompts-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "claude-prompts-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "queue-image-steer-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "mcp-inventory-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "goal-card-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "claude-coordination-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
@@ -50,7 +66,27 @@ name = "child-chats-pane-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "claude-history-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "native-agents-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "claude-review-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "claude-extensions-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "appearance-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "claude-tool-results-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
@@ -59,6 +95,10 @@ required-features = ["appshots-fixture"]
 
 [[example]]
 name = "usage-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "live-usage-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
@@ -91,6 +131,10 @@ required-features = ["appshots-fixture"]
 
 [[example]]
 name = "activity-attention-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "child-activity-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
