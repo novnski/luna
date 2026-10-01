@@ -40,7 +40,7 @@
 mod approvals;
 pub(crate) mod catalog;
 pub(crate) mod composer_catalog;
-mod elicitation;
+pub(crate) mod elicitation;
 mod goals;
 pub mod native;
 mod normalize;

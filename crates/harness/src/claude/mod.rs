@@ -31,6 +31,7 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod controls;
 mod discovery;
 mod events;
 mod normalize;
@@ -62,7 +63,7 @@ use crate::{
 use catalog::{apply_ultrathink, models_from_initialize, static_models, to_effort};
 use normalize::Normalizer;
 use profile::{ClaudeLaunchProfile, ToolSelection};
-use wire::{ControlRequestFrame, Frame, allow_response, control_response_line};
+use wire::Frame;
 
 /// Locate the device's installed Claude Code CLI: our own PATH, then the
 /// login-shell PATH snapshot (the user's shell init shapes PATH in ways a
@@ -731,7 +732,16 @@ async fn run_session(session: Session) {
         interrupt,
         ..
     } = controls;
-    let request_input = Arc::new(request_input);
+    // CC-03: the single owner of CLI→host control requests.
+    let requests = controls::Controls::new(
+        title_only,
+        permission_mode,
+        permission_policy,
+        Arc::new(request_input),
+        stdin_tx.clone(),
+    );
+    // Stop, or LUNA failing closed on a weaker native permission mode.
+    let stop = interrupt.child_token();
 
     // Claude's root user echo carries no correlation id. Explicit steering is
     // single-flight and a successful stdin write remains unconfirmed; text
@@ -751,6 +761,10 @@ async fn run_session(session: Session) {
                 Ok(Some(line)) => {
                     let line = line.trim();
                     if line.is_empty() {
+                        continue;
+                    }
+                    if let Some(id) = controls::cancelled_request_id(line) {
+                        requests.cancel(&id);
                         continue;
                     }
                     if let transport::Intercept::Consumed(effects) = transport.intercept(line) {
@@ -791,27 +805,24 @@ async fn run_session(session: Session) {
                         }
                     };
                     if let Frame::ControlRequest(req) = frame {
-                        if transport.admit_inbound(&req.request_id) != transport::Admission::Fresh {
-                            continue;
-                        }
-                        let request_id = req.request_id.clone();
-                        let waiter = if title_only && req.request.subtype == "can_use_tool" {
-                            let line = control_response_line(&req.request_id, serde_json::json!({
-                                "behavior": "deny", "message": "Tools are disabled for title generation"
-                            }));
-                            let _ = stdin_tx.send(StdinMsg::line(line));
-                            None
-                        } else {
-                            handle_control_request(
-                                req,
-                                permission_mode,
-                                &permission_policy,
-                                &request_input,
-                                &stdin_tx,
-                            )
-                        };
-                        transport.track_inbound(&request_id, waiter);
+                        requests.on_request(&req.request_id, &req.request);
                         continue;
+                    }
+                    if let Frame::System(system) = &frame
+                        && let Some(verdict) = requests.observe_system(
+                            &system.subtype,
+                            &system.session_id,
+                            &system.cwd,
+                            system.permission_mode.as_deref(),
+                        )
+                    {
+                        let error = AgentEvent::Error { message: verdict.message };
+                        if event_tx.send(Ok(error)).await.is_err() {
+                            break 'main;
+                        }
+                        if verdict.fail_closed {
+                            stop.cancel();
+                        }
                     }
                     for ev in norm.normalize_native(frame, interrupted) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
@@ -952,9 +963,11 @@ async fn run_session(session: Session) {
                 transport.expire_due(std::time::Instant::now());
             },
 
-            _ = interrupt.cancelled(), if !interrupt_sent => {
+            _ = stop.cancelled(), if !interrupt_sent => {
                 interrupt_sent = true;
                 interrupted = true;
+                // Pending prompts are withdrawn, never answered after Stop.
+                requests.cancel_all();
                 let _ = stdin_tx.send(StdinMsg::line(transport.interrupt_line()));
                 // Escalate if the CLI doesn't wind down within the grace
                 // periods: SIGTERM (kills bash trees, runs SessionEnd hooks),
@@ -998,6 +1011,7 @@ async fn run_session(session: Session) {
         }
     }
 
+    requests.cancel_all();
     transport.finish();
     if done_after_interrupt {
         // Stop = interrupt, then end input and let the CLI exit on its own
@@ -1023,192 +1037,9 @@ type RequestInputFn = Box<
         + Sync,
 >;
 
-/// Serve one `can_use_tool` control request. Full accepts a stray request;
-/// Ask/Auto surface it as a typed approval and fail closed on timeout.
-/// `AskUserQuestion` remains content input rather than an approval and is
-/// intercepted to
-/// surface the questions through the engine's input bridge (which owns the
-/// `InputRequested`/`InputResolved` lifecycle), wait for the user's answers
-/// (in a subtask so the frame loop keeps flowing), and hand them back keyed
-/// by question text, as the tool expects.
-fn handle_control_request(
-    req: ControlRequestFrame,
-    permission_mode: luna_proto::PermissionMode,
-    permission_policy: &luna_proto::PermissionPolicy,
-    request_input: &Arc<RequestInputFn>,
-    stdin_tx: &mpsc::UnboundedSender<StdinMsg>,
-) -> Option<tokio::task::AbortHandle> {
-    if req.request.subtype != "can_use_tool" {
-        // Never leave the CLI waiting on a request LUNA cannot serve.
-        let line = transport::unsupported_reply(&req.request_id, &req.request.subtype);
-        let _ = stdin_tx.send(StdinMsg::line(line));
-        return None;
-    }
-    if req.request.tool_name != "AskUserQuestion" {
-        if permission_mode == luna_proto::PermissionMode::Full {
-            let line = control_response_line(&req.request_id, allow_response(req.request.input));
-            let _ = stdin_tx.send(StdinMsg::line(line));
-            return None;
-        }
-        let request_input = Arc::clone(request_input);
-        let stdin_tx = stdin_tx.clone();
-        let permission_policy = permission_policy.clone();
-        let waiter = tokio::spawn(async move {
-            let summary = format!("Claude requests the {} tool", req.request.tool_name);
-            let question = UserInputQuestion {
-                id: req.request_id.clone(),
-                header: "Approve tool".into(),
-                question: format!("{summary}. Target: {}.", permission_policy.machine_name),
-                options: vec!["Deny".into(), "Allow once".into(), "Cancel".into()],
-                multi_select: false,
-                mcp: None,
-                approval: Some(luna_proto::ApprovalRequest {
-                    provider_request_id: req.request_id.clone(),
-                    provider: HarnessId::ClaudeCode,
-                    turn_id: None,
-                    machine_name: permission_policy.machine_name.clone(),
-                    action_kind: if req.request.tool_name == "Bash" {
-                        luna_proto::ApprovalActionKind::Command
-                    } else {
-                        luna_proto::ApprovalActionKind::Tool
-                    },
-                    summary,
-                    requested_scope: permission_policy.scope,
-                    expires_at_ms: std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as i64
-                        + 120_000,
-                    supports_task_allowance: false,
-                    details: None,
-                }),
-                input: None,
-            };
-            let allowed = tokio::time::timeout(
-                std::time::Duration::from_secs(120),
-                (request_input)(vec![question.clone()]),
-            )
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default()
-            .iter()
-            .any(|answer| {
-                answer.question_id == question.id
-                    && answer.labels.iter().any(|label| label == "Allow once")
-            });
-            let response = if allowed {
-                allow_response(req.request.input)
-            } else {
-                serde_json::json!({
-                    "behavior": "deny",
-                    "message": "Denied by the LUNA permission policy"
-                })
-            };
-            let line = control_response_line(&req.request_id, response);
-            let _ = stdin_tx.send(StdinMsg::line(line));
-        });
-        return Some(waiter.abort_handle());
-    }
-    let request_input = Arc::clone(request_input);
-    let stdin_tx = stdin_tx.clone();
-    let waiter = tokio::spawn(async move {
-        let request_id = req.request_id;
-        let input = req.request.input;
-        let questions = parse_questions(&input);
-        // The engine's input bridge is the SOLE emitter of
-        // `InputRequested`/`InputResolved`: it mints the request id, parks the
-        // resolver for `respond_input`, and surfaces both events. Emitting our
-        // own copy here (keyed by Claude's control-request id) folded a SECOND
-        // input part into the doc whose id no resolver knew — the QuestionPanel
-        // answered that unanswerable twin and the run never resumed.
-        //
-        // A dropped sender (caller went away) degrades to empty answers so the
-        // agent is unblocked rather than wedged.
-        let answers = (request_input)(questions.clone()).await.unwrap_or_default();
-        let updated = updated_input_with_answers(&input, &questions, &answers);
-        let line = control_response_line(&request_id, allow_response(updated));
-        let _ = stdin_tx.send(StdinMsg::line(line));
-    });
-    Some(waiter.abort_handle())
-}
-
-/// Parse Claude's `AskUserQuestion` tool input into [`UserInputQuestion`]s
-/// (tolerant of `header`/`title`, `question`/`prompt`, string or object
-/// options — option descriptions are dropped, the wire type carries labels).
-fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
-    let raw = input.get("questions").and_then(Value::as_array);
-    raw.map(|a| a.as_slice())
-        .unwrap_or_default()
-        .iter()
-        .map(|q| {
-            let field =
-                |keys: [&str; 2]| keys.iter().find_map(|k| q.get(*k).and_then(Value::as_str));
-            UserInputQuestion {
-                id: uuid::Uuid::new_v4().to_string(),
-                header: field(["header", "title"]).unwrap_or("Question").into(),
-                question: field(["question", "prompt"]).unwrap_or("").into(),
-                multi_select: ["multiSelect", "multi_select"]
-                    .iter()
-                    .find_map(|k| q.get(*k).and_then(Value::as_bool))
-                    .unwrap_or(false),
-                options: q
-                    .get("options")
-                    .and_then(Value::as_array)
-                    .map(|a| a.as_slice())
-                    .unwrap_or_default()
-                    .iter()
-                    .map(|op| match op {
-                        Value::String(s) => s.clone(),
-                        other => other
-                            .get("label")
-                            .or_else(|| other.get("value"))
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .into(),
-                    })
-                    .collect(),
-                mcp: None,
-                approval: None,
-                input: None,
-            }
-        })
-        .collect()
-}
-
-/// Merge the user's answers back into the tool input, keyed by question text
-/// (single-select ⇒ a string, multi-select ⇒ an array), as the tool expects.
-fn updated_input_with_answers(
-    input: &Value,
-    questions: &[UserInputQuestion],
-    answers: &[UserInputAnswer],
-) -> Value {
-    let mut updated = match input {
-        Value::Object(map) => map.clone(),
-        _ => serde_json::Map::new(),
-    };
-    let mut by_question = serde_json::Map::new();
-    for q in questions {
-        let labels: Vec<String> = answers
-            .iter()
-            .find(|a| a.question_id == q.id)
-            .map(|a| a.labels.clone())
-            .unwrap_or_default();
-        let value = if q.multi_select {
-            Value::Array(labels.into_iter().map(Value::String).collect())
-        } else {
-            Value::String(labels.into_iter().next().unwrap_or_default())
-        };
-        by_question.insert(q.question.clone(), value);
-    }
-    updated.insert("answers".into(), Value::Object(by_question));
-    Value::Object(updated)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn permission_modes_map_to_exact_cli_arguments() {
@@ -1229,43 +1060,5 @@ mod tests {
                 "--dangerously-skip-permissions"
             ]
         );
-    }
-
-    #[test]
-    fn parses_questions_tolerantly() {
-        let input = json!({
-            "questions": [
-                {
-                    "header": "Choice",
-                    "question": "Pick one",
-                    "options": ["A", {"label": "B", "description": "second"}],
-                    "multiSelect": false
-                },
-                { "title": "Alt", "prompt": "Pick many", "multi_select": true }
-            ]
-        });
-        let qs = parse_questions(&input);
-        assert_eq!(qs.len(), 2);
-        assert_eq!(qs[0].header, "Choice");
-        assert_eq!(qs[0].options, vec!["A".to_string(), "B".to_string()]);
-        assert!(!qs[0].multi_select);
-        assert_eq!(qs[1].header, "Alt");
-        assert_eq!(qs[1].question, "Pick many");
-        assert!(qs[1].multi_select);
-    }
-
-    #[test]
-    fn answers_key_by_question_text() {
-        let input =
-            json!({"questions": [{"header": "H", "question": "Pick one", "options": ["A", "B"]}]});
-        let qs = parse_questions(&input);
-        let answers = vec![UserInputAnswer {
-            question_id: qs[0].id.clone(),
-            labels: vec!["B".into()],
-        }];
-        let updated = updated_input_with_answers(&input, &qs, &answers);
-        assert_eq!(updated["answers"]["Pick one"], json!("B"));
-        // Original input is preserved alongside the answers.
-        assert!(updated["questions"].is_array());
     }
 }

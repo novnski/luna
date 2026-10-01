@@ -15,11 +15,9 @@
 //!   decoded as a receipt (`interrupt_receipt_v1`: `still_queued`; with
 //!   `cancel_queued:true`, `cancelled`). An old CLI's empty success is only an
 //!   acknowledgement, and no response at all stays unconfirmed.
-//! - **Inbound control requests.** One terminal reply per request id. A
-//!   subtype LUNA does not implement gets an explicit `error` reply (the same
-//!   wording the CLI and SDK use) instead of leaving the CLI waiting. A
-//!   `control_cancel_request` withdraws an in-flight request: its waiter is
-//!   aborted so no late answer is written.
+//! - **Inbound control requests** (one terminal reply per id, explicit errors
+//!   for unsupported subtypes, `control_cancel_request` withdrawal) are owned
+//!   by the CC-03 dispatcher in `controls.rs`.
 //! - **Input receipts.** Every stdin user line carries a fresh v4 `uuid`.
 //!   Under `msg_lifecycle_v1` the CLI reports that uuid's fate on
 //!   `command_lifecycle` frames (`queued` → `started` → exactly one of
@@ -138,17 +136,6 @@ pub(crate) enum InterruptReceipt {
     Refused { message: String },
 }
 
-/// How an inbound control request id was admitted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Admission {
-    /// First delivery: dispatch it and give it exactly one reply.
-    Fresh,
-    /// Already in flight or answered: never reply twice.
-    Duplicate,
-    /// No usable request id: there is nothing a reply could correlate to.
-    Malformed,
-}
-
 /// Result of offering one stdout line to the transport.
 pub(crate) enum Intercept {
     /// A conversation frame: hand it to `wire::parse_frame`.
@@ -172,12 +159,6 @@ enum Outbound {
     Interrupt,
 }
 
-enum Inbound {
-    InFlight(Option<tokio::task::AbortHandle>),
-    Answered,
-    Withdrawn,
-}
-
 struct TrackedInput {
     kind: InputKind,
     luna_message_id: Option<String>,
@@ -192,7 +173,6 @@ pub(crate) struct ControlChannel {
     next_request: u64,
     snapshot: ProtocolSnapshot,
     outbound: HashMap<String, Outbound>,
-    inbound: HashMap<String, Inbound>,
     inputs: HashMap<String, TrackedInput>,
     input_order: Vec<String>,
     interrupt: Option<InterruptReceipt>,
@@ -217,7 +197,6 @@ fn bounded(text: &str) -> &str {
 fn maybe_transport(line: &str) -> bool {
     [
         "\"control_response\"",
-        "\"control_cancel_request\"",
         "\"command_lifecycle\"",
         "\"keep_alive\"",
         "\"init\"",
@@ -261,13 +240,6 @@ impl ControlChannel {
             "control_response" => {
                 self.on_control_response(value.get("response").unwrap_or(&Value::Null))
             }
-            "control_cancel_request" => match value.get("request_id").and_then(Value::as_str) {
-                Some(id) => self.withdraw(id),
-                None => tracing::debug!(
-                    target: "luna_harness::claude::transport",
-                    "control_cancel_request without a request_id (ignored)"
-                ),
-            },
             "command_lifecycle" => {
                 let uuid = value.get("command_uuid").and_then(Value::as_str);
                 let state = value.get("state").and_then(Value::as_str);
@@ -336,78 +308,6 @@ impl ControlChannel {
             capabilities = ?self.snapshot.capabilities,
             "claude protocol snapshot"
         );
-    }
-
-    // ---- inbound requests (CLI → LUNA) ---------------------------------
-
-    /// Admit one inbound `control_request` id before dispatching it.
-    pub(crate) fn admit_inbound(&mut self, request_id: &str) -> Admission {
-        if request_id.is_empty() {
-            tracing::warn!(
-                target: "luna_harness::claude::transport",
-                "control_request without a request_id (dropped)"
-            );
-            return Admission::Malformed;
-        }
-        if self.inbound.contains_key(request_id) {
-            tracing::debug!(
-                target: "luna_harness::claude::transport",
-                request_id = bounded(request_id),
-                "duplicate control_request delivery (not answered twice)"
-            );
-            return Admission::Duplicate;
-        }
-        self.prune_inbound();
-        self.inbound
-            .insert(request_id.to_owned(), Inbound::InFlight(None));
-        Admission::Fresh
-    }
-
-    /// Record how a freshly admitted request is being answered: a spawned
-    /// waiter (withdrawable) or `None` when the reply was already written.
-    pub(crate) fn track_inbound(
-        &mut self,
-        request_id: &str,
-        waiter: Option<tokio::task::AbortHandle>,
-    ) {
-        let state = match waiter {
-            Some(handle) => Inbound::InFlight(Some(handle)),
-            None => Inbound::Answered,
-        };
-        self.inbound.insert(request_id.to_owned(), state);
-    }
-
-    fn withdraw(&mut self, request_id: &str) {
-        let Some(state) = self.inbound.get_mut(request_id) else {
-            tracing::debug!(
-                target: "luna_harness::claude::transport",
-                request_id = bounded(request_id),
-                "control_cancel_request for an unknown id (ignored)"
-            );
-            return;
-        };
-        if let Inbound::InFlight(waiter) = state {
-            if let Some(handle) = waiter.take() {
-                handle.abort();
-            }
-            *state = Inbound::Withdrawn;
-            tracing::info!(
-                target: "luna_harness::claude::transport",
-                request_id = bounded(request_id),
-                "Claude withdrew a pending control request; no late reply will be sent"
-            );
-        }
-    }
-
-    fn prune_inbound(&mut self) {
-        if self.inbound.len() < MAX_TRACKED {
-            return;
-        }
-        self.inbound.retain(|_, state| match state {
-            Inbound::InFlight(Some(handle)) => !handle.is_finished(),
-            Inbound::InFlight(None) => true,
-            Inbound::Answered | Inbound::Withdrawn => false,
-        });
     }
 
     // ---- outbound requests (LUNA → CLI) --------------------------------
@@ -707,30 +607,6 @@ fn lifecycle_word(state: LifecycleState) -> &'static str {
         LifecycleState::Discarded => "discarded",
         LifecycleState::Refused => "refused",
     }
-}
-
-/// The explicit reply for an inbound control request subtype LUNA does not
-/// implement. Same wording as the CLI's and SDK's own unsupported replies.
-pub(crate) fn unsupported_reply(request_id: &str, subtype: &str) -> String {
-    let subtype = if subtype.is_empty() {
-        "<missing>"
-    } else {
-        bounded(subtype)
-    };
-    tracing::info!(
-        target: "luna_harness::claude::transport",
-        subtype,
-        "answering an unsupported Claude control request with an error"
-    );
-    json!({
-        "type": "control_response",
-        "response": {
-            "subtype": "error",
-            "request_id": request_id,
-            "error": format!("Unsupported control request subtype: {subtype}"),
-        },
-    })
-    .to_string()
 }
 
 /// After an interrupted run's terminal frame, stdin is closed so the CLI can
