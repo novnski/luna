@@ -3628,6 +3628,16 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
+        if request.goal.is_some() && let Some(h) = lock(&self.inner.runs).get(chat_id) {
+            let now = RuntimeConfig::from_request(harness_id, &request);
+            eprintln!("GOALDEBUG rev {} vs {} steerable {}", h.workspace_repair_revision, workspace_repair_revision, h.steerable);
+            for (key, value) in &h.runtime_config.model_options {
+                if now.model_options.get(key) != Some(value) { eprintln!("GOALDEBUG option {key} differs: {value} vs {:?}", now.model_options.get(key)); }
+            }
+            for key in now.model_options.keys() { if !h.runtime_config.model_options.contains_key(key) { eprintln!("GOALDEBUG new option {key}"); } }
+            let mut a = h.runtime_config.clone(); a.model_options.clear(); let mut b = now.clone(); b.model_options.clear();
+            if a != b { eprintln!("GOALDEBUG config {a:?} vs {b:?}"); }
+        }
         let goal_runtime = request.goal.is_some()
             && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
                 h.workspace_repair_revision == workspace_repair_revision
