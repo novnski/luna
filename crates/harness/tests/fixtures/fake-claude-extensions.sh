@@ -84,6 +84,21 @@ case "$first" in
   emit '{"type":"system","subtype":"hook_response","hook_id":"hk-end","hook_name":"SessionEnd","hook_event":"SessionEnd","output":"","stdout":"","stderr":"","exit_code":0,"outcome":"success","uuid":"u15","session_id":"sess-hooks"}'
   ;;
 
+*scenario:idle-hooks*)
+  # Hooks between a root result and the wake turn (background work, idle
+  # notification) must not reopen the finished turn.
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Agent"],"cwd":"/synthetic","session_id":"sess-idle"}'
+  emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"started"}}}'
+  emit '{"type":"result","subtype":"success","result":"started","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-idle"}'
+  emit '{"type":"system","subtype":"hook_started","hook_id":"hk-idle-notify","hook_name":"Notification","hook_event":"Notification","uuid":"i1","session_id":"sess-idle"}'
+  emit '{"type":"system","subtype":"hook_response","hook_id":"hk-idle-notify","hook_name":"Notification","hook_event":"Notification","output":"","stdout":"","stderr":"","exit_code":0,"outcome":"success","uuid":"i2","session_id":"sess-idle"}'
+  emit '{"type":"system","subtype":"hook_started","hook_id":"hk-bg","hook_name":"PreToolUse:Bash","hook_event":"PreToolUse","uuid":"i3","session_id":"sess-idle"}'
+  emit '{"type":"system","subtype":"hook_response","hook_id":"hk-bg","hook_name":"PreToolUse:Bash","hook_event":"PreToolUse","output":"","stdout":"","stderr":"","exit_code":0,"outcome":"success","uuid":"i4","session_id":"sess-idle"}'
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Agent"],"cwd":"/synthetic","session_id":"sess-idle"}'
+  emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"woke"}}}'
+  emit '{"type":"result","subtype":"success","result":"woke","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-idle"}'
+  ;;
+
 *scenario:preinit-result*)
   # A run that fails before system:init still shows its SessionStart hook.
   emit '{"type":"system","subtype":"hook_started","hook_id":"hk-early","hook_name":"SessionStart:startup","hook_event":"SessionStart","uuid":"e1","session_id":"sess-early"}'

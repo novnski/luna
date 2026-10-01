@@ -268,6 +268,13 @@ impl Normalizer {
     /// Normalize one stdout frame into 0+ unified events. `interrupted` folds
     /// a post-interrupt `result` into `Done { status: Interrupted }`.
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
+        // Hook chips held while the root turn was idle precede its activity.
+        let mut out = self.hooks.resume_before(&frame);
+        out.extend(self.normalize_frame(frame, interrupted));
+        out
+    }
+
+    fn normalize_frame(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
             Frame::System(mut f) => {
                 if let Some(extension) = f.extension.take() {
@@ -691,7 +698,7 @@ impl Normalizer {
                         session_id: f.session_id,
                     }
                 };
-                let mut out = self.hooks.take_pending();
+                let mut out = self.hooks.turn_ended();
                 if let Some(window) = window {
                     out.push(AgentEvent::ContextUsage {
                         tokens: None,

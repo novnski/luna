@@ -341,6 +341,40 @@ async fn hook_lifecycle_becomes_root_hook_chips_with_truthful_outcomes() {
 }
 
 #[tokio::test]
+async fn hooks_after_a_root_result_wait_for_the_next_root_activity() {
+    let world = world();
+    let events = run_all(
+        &world.harness(),
+        request("scenario:idle-hooks", &world.project, PermissionMode::Full),
+    )
+    .await;
+    let dones: Vec<usize> = events
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| matches!(e, AgentEvent::Done { .. }))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(dones.len(), 2, "{events:#?}");
+    let held = position(
+        &events,
+        |e| matches!(e, AgentEvent::ToolCall { id, .. } if id == "hook:hk-bg"),
+    );
+    let woke = position(
+        &events,
+        |e| matches!(e, AgentEvent::TextDelta { text } if text == "woke"),
+    );
+    assert!(
+        dones[0] < held && held < woke && woke < dones[1],
+        "{events:#?}"
+    );
+    assert!(
+        !events.iter().any(|e| matches!(e,
+            AgentEvent::ToolCall { id, .. } | AgentEvent::ToolResult { id, .. } if id == "hook:hk-idle-notify")),
+        "idle Notification hooks are not transcript chips: {events:#?}"
+    );
+}
+
+#[tokio::test]
 async fn hook_seen_before_a_preinit_failure_still_precedes_done() {
     let world = world();
     let events = run_all(

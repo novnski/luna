@@ -121,13 +121,18 @@ struct HookState {
     terminal: bool,
 }
 
-/// Per-run hook bookkeeping. Events seen before `system:init` are held back:
-/// `SessionStarted` resets the transcript fold, so a `SessionStart` hook chip
-/// emitted ahead of it would be wiped.
+/// Per-run hook bookkeeping. Events are held back while the root turn is not
+/// running: before `system:init` (`SessionStarted` resets the transcript fold,
+/// so a `SessionStart` chip emitted ahead of it would be wiped) and after a
+/// root result (an untagged chip there would start a phantom self-continued
+/// turn). Held chips flush when the root turn shows activity again, or ahead
+/// of the next result. Idle-time `Notification` hooks are logged only.
 #[derive(Default)]
 pub(crate) struct HookTracker {
     hooks: HashMap<String, HookState>,
     pending: Vec<AgentEvent>,
+    /// A root result arrived and no root activity has followed it yet.
+    idle: bool,
 }
 
 impl HookTracker {
@@ -138,19 +143,20 @@ impl HookTracker {
             }
             ExtensionFrame::Hook(frame) => frame,
         };
-        // SessionEnd runs while the CLI shuts down, after the final result:
-        // a chip there would reopen a finished turn. Log it only.
-        if frame.hook_event == "SessionEnd" {
+        // SessionEnd runs while the CLI shuts down, after the final result,
+        // and an idle Notification fires between turns: a chip there would
+        // reopen a finished turn. Log them only.
+        if frame.hook_event == "SessionEnd" || (self.idle && frame.hook_event == "Notification") {
             tracing::debug!(
                 target: "luna_harness::claude",
                 hook = %frame.hook_name,
                 outcome = ?frame.outcome,
-                "SessionEnd hook observed after the run ended"
+                "hook observed while no root turn was running"
             );
             return Vec::new();
         }
         let events = self.events_for(frame);
-        if initialized {
+        if initialized && !self.idle {
             events
         } else {
             self.pending.extend(events);
@@ -158,9 +164,34 @@ impl HookTracker {
         }
     }
 
-    /// Held-back events, in arrival order (flushed after `SessionStarted`, or
-    /// ahead of a result that arrived without an init).
+    /// Held-back events, in arrival order, flushed right after
+    /// `SessionStarted`.
     pub fn take_pending(&mut self) -> Vec<AgentEvent> {
+        self.idle = false;
+        std::mem::take(&mut self.pending)
+    }
+
+    /// A root result: flush held events ahead of its `Done`, then hold
+    /// until the root turn shows activity again.
+    pub fn turn_ended(&mut self) -> Vec<AgentEvent> {
+        self.idle = true;
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Held events to emit before `frame` when it is root-turn activity (a
+    /// root stream/message frame or a re-init) after a root result.
+    pub fn resume_before(&mut self, frame: &super::wire::Frame) -> Vec<AgentEvent> {
+        use super::wire::Frame;
+        let root_activity = match frame {
+            Frame::StreamEvent(f) => f.parent_tool_use_id.is_none(),
+            Frame::Assistant(f) | Frame::User(f) => f.parent_tool_use_id.is_none(),
+            Frame::System(f) => f.subtype == "init",
+            _ => false,
+        };
+        if !self.idle || !root_activity {
+            return Vec::new();
+        }
+        self.idle = false;
         std::mem::take(&mut self.pending)
     }
 
