@@ -278,7 +278,7 @@ impl Normalizer {
         match frame {
             Frame::System(mut f) => {
                 if let Some(extension) = f.extension.take() {
-                    return self.hooks.observe(extension, self.saw_init);
+                    return self.hooks.observe(*extension, self.saw_init);
                 }
                 // A background subagent's completion arrives as an UNTAGGED
                 // `task_notification` carrying the spawning tool's id — the

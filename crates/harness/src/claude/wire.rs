@@ -59,7 +59,7 @@ pub(crate) struct SystemFrame {
     pub subagent_type: Option<String>,
     /// Hook lifecycle / `commands_changed` (decoded by `hooks.rs`).
     #[serde(skip)]
-    pub extension: Option<super::hooks::ExtensionFrame>,
+    pub extension: Option<Box<super::hooks::ExtensionFrame>>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -288,7 +288,7 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
             let extension = super::hooks::parse_extension_frame(&value);
             let mut system: SystemFrame = serde_json::from_value(value)?;
             system.integration_observation = observation;
-            system.extension = extension;
+            system.extension = extension.map(Box::new);
             Frame::System(system)
         }
         "stream_event" => Frame::StreamEvent(serde_json::from_value(value)?),

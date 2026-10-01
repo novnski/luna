@@ -505,10 +505,12 @@ fn walk(root: &Path, accept: &dyn Fn(&Path) -> bool) -> Vec<(PathBuf, PathBuf)> 
             let path = entry.path();
             if kind.is_dir() {
                 visit(root, &path, depth + 1, accept, out);
-            } else if (kind.is_file() || kind.is_symlink()) && path.is_file() && accept(&path) {
-                if let Ok(relative) = path.strip_prefix(root) {
-                    out.push((relative.to_path_buf(), path.clone()));
-                }
+            } else if (kind.is_file() || kind.is_symlink())
+                && path.is_file()
+                && accept(&path)
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                out.push((relative.to_path_buf(), path.clone()));
             }
         }
     }
