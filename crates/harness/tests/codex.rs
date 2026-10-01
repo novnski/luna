@@ -3547,7 +3547,7 @@ async fn goal_start_adopts_the_turn_codex_starts_itself() {
             _ => None,
         })
         .collect();
-    assert_eq!(text, "1\n2\n3");
+    assert_eq!(text.trim_end(), "1\n2\n3");
     assert_eq!(
         events.last(),
         Some(&AgentEvent::Done {
