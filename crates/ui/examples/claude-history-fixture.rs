@@ -264,15 +264,27 @@ fn main() -> anyhow::Result<()> {
         true,
     )?;
     runtime.block_on(async {
-        core.workspace.create_chat(
-            TASK,
-            Some(PROJECT),
-            Some(&device),
-            Some(config()),
-            Some(workspace.to_string_lossy().into_owned()),
-        )?;
-        core.workspace.rename_chat(TASK, "Claude notes edits")?;
         let client = luna_rpc::memory_client(core.rpc_service());
+        // The task command path registers the task identity that history
+        // operations require (a bare workspace row would not).
+        let created: luna_proto::CommandReceipt = client
+            .call_as(
+                methods::EXECUTE_TASK_COMMAND,
+                serde_json::json!({
+                    "commandId": "cc10-ui-create", "actorId": "fixture", "clientId": "fixture",
+                    "clientSessionId": "fixture", "taskId": TASK,
+                    "intent": {
+                        "kind": "createChat", "spaceId": PROJECT, "deviceId": device,
+                        "cwd": workspace.to_string_lossy(), "config": config(),
+                    },
+                }),
+            )
+            .await?;
+        anyhow::ensure!(
+            created.status == CommandReceiptStatus::Applied,
+            "create task: {created:?}"
+        );
+        core.workspace.rename_chat(TASK, "Claude notes edits")?;
         send(&core, &client, &workspace, "u1", "edit:notes.txt=beta").await?;
         send(&core, &client, &workspace, "u2", "edit:notes.txt=gamma").await?;
         anyhow::Ok(())
