@@ -315,6 +315,29 @@ impl CodexNativeClient {
         &self,
         thread_id: &str,
     ) -> Result<Option<CodexThreadObservation>, HarnessError> {
+        self.observe_thread_archive_state(thread_id, true).await
+    }
+
+    /// Reconciliation of a LUNA task that is not archived only needs to know
+    /// whether the provider thread is archived: an unarchived or unlisted
+    /// thread cannot conflict with it. Skipping the unarchived `thread/list`
+    /// search avoids the slowest native read (it scans every session in the
+    /// home) and leaves `archived` as `None` (not proven) instead of
+    /// `Some(false)`. Archived tasks still prove both states.
+    pub async fn observe_thread_for_task(
+        &self,
+        thread_id: &str,
+        task_archived: bool,
+    ) -> Result<Option<CodexThreadObservation>, HarnessError> {
+        self.observe_thread_archive_state(thread_id, task_archived)
+            .await
+    }
+
+    async fn observe_thread_archive_state(
+        &self,
+        thread_id: &str,
+        prove_unarchived: bool,
+    ) -> Result<Option<CodexThreadObservation>, HarnessError> {
         let value = match self
             .call(
                 "thread/read",
@@ -334,9 +357,10 @@ impl CodexNativeClient {
             .await?
         {
             Some(true)
-        } else if self
-            .listed_with_archived(&id, name.as_deref(), false)
-            .await?
+        } else if prove_unarchived
+            && self
+                .listed_with_archived(&id, name.as_deref(), false)
+                .await?
         {
             Some(false)
         } else {

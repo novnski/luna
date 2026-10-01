@@ -1246,9 +1246,16 @@ impl TaskIdentityService {
             )?;
             return Ok(self.view(task_id).expect("task survives reconciliation"));
         }
+        // Only an archived task needs proof that its provider thread is
+        // unarchived; skipping that full-session search keeps cold resume
+        // (always required after a same-chat rewind) well inside the timeout.
+        let chat = self.inner.workspace.chat(task_id)?;
+        let task_archived = chat.as_ref().is_some_and(|chat| chat.archived);
         let observed = match tokio::time::timeout(
             PROVIDER_TIMEOUT,
-            self.inner.codex.observe_thread(&binding.provider_task_id),
+            self.inner
+                .codex
+                .observe_thread_for_task(&binding.provider_task_id, task_archived),
         )
         .await
         {
@@ -1282,7 +1289,8 @@ impl TaskIdentityService {
                     &binding.binding_id,
                     ReconciliationRecord {
                         state: ReconciliationState::Stale,
-                        reason: "provider read timed out".into(),
+                        reason: "provider read timed out; nothing reached the provider, resending retries the read"
+                            .into(),
                         observed_at_ms: now_ms(),
                         provider: binding.reconciliation.provider.clone(),
                     },
@@ -1291,7 +1299,6 @@ impl TaskIdentityService {
             }
         };
         let provider = provider_observation(observed);
-        let chat = self.inner.workspace.chat(task_id)?;
         let mut state = ReconciliationState::Current;
         let mut reason = "provider, task, and environment observations agree".to_string();
         if provider.ephemeral {
