@@ -596,7 +596,7 @@ impl CodexNativeClient {
     /// includeTurns:true` is deprecated (`thread_processor.rs:40`).
     async fn thread_turns(&self, thread_id: &str) -> Result<Vec<Value>, HarnessError> {
         let mut connection = self.connect(None).await?;
-        let turns = page_turns(&connection.client, thread_id, false, 100, |_| true).await;
+        let turns = page_turns(&connection.client, thread_id, false, 100, 100, |_| true).await;
         connection.close().await;
         turns
     }
@@ -889,10 +889,10 @@ pub(super) async fn page_turns(
     client: &RpcClient,
     thread_id: &str,
     descending: bool,
+    page_size: usize,
     max_pages: usize,
     mut keep_paging: impl FnMut(&[Value]) -> bool,
 ) -> Result<Vec<Value>, HarnessError> {
-    const PAGE: usize = 100;
     const MAX_BYTES: usize = 32 * 1024 * 1024;
     let mut turns = Vec::new();
     let mut cursor: Option<String> = None;
@@ -903,7 +903,7 @@ pub(super) async fn page_turns(
             .request(
                 "thread/turns/list",
                 json!({
-                    "threadId": thread_id, "cursor": cursor, "limit": PAGE,
+                    "threadId": thread_id, "cursor": cursor, "limit": page_size,
                     "sortDirection": if descending { "desc" } else { "asc" },
                     "itemsView": "full"
                 }),
@@ -913,7 +913,7 @@ pub(super) async fn page_turns(
             .get("data")
             .and_then(Value::as_array)
             .ok_or_else(|| HarnessError::Protocol("Codex turn page has no data".into()))?;
-        if data.len() > PAGE {
+        if data.len() > page_size {
             return Err(HarnessError::Protocol(
                 "Codex turn page exceeded requested size".into(),
             ));

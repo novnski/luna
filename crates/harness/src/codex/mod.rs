@@ -1207,7 +1207,7 @@ async fn reconcile_native_steers(
     let mut found = HashSet::new();
     let read = tokio::time::timeout(
         Duration::from_secs(2),
-        native::page_turns(client, thread_id, true, 5, |page| {
+        native::page_turns(client, thread_id, true, 10, 5, |page| {
             for item in page
                 .iter()
                 .filter_map(|turn| turn.get("items").and_then(Value::as_array))
@@ -1556,7 +1556,7 @@ async fn run_session(session: Session) {
             // An older app-server that ignores excludeTurns still hydrates.
             children.restore(&thread["thread"]);
         } else if resumed && !title_only && !thread_id.is_empty() {
-            match native::page_turns(&client, &thread_id, false, 100, |_| true).await {
+            match native::page_turns(&client, &thread_id, false, 100, 100, |_| true).await {
                 Ok(turns) => children.restore_turns(&turns),
                 // Fail open: unbound child traffic still waits for its spawn.
                 Err(error) => tracing::warn!(
