@@ -3093,6 +3093,11 @@ impl EngineRpc {
             let reserved_create = matches!(&command.intent, TaskCommandIntent::CreateChat { side_parent_id: Some(parent), .. }
                 if self.side_chats.as_ref().is_some_and(|service| service.reserved_for(&command.task_id, parent)));
             if !owned_delete && !reserved_create {
+                if send_fence.is_some() {
+                    return Err(RpcError::Failed(
+                        "Side chats accept messages only from their own panel, not from another task's LUNA tools".into(),
+                    ));
+                }
                 self.side_chat_command_allowed(&command.task_id, &command.intent)
                     .map_err(RpcError::Failed)?;
                 self.side_chats

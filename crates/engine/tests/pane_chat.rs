@@ -1060,6 +1060,40 @@ async fn queue_with(client: &RpcClient, chat: &str, params: Value) -> Result<Val
         .map_err(|error| error.to_string())
 }
 
+/// Failure context for one chat: queue rows, transcript and session status.
+fn chat_diag(core: &EngineCore, recorder: &Recorder, chat: &str) -> String {
+    let mut out = format!(
+        "status {:?}; in flight {}\n",
+        core.sessions.session_status(chat).map(|s| s.status),
+        core.sessions.turn_in_flight(chat)
+    );
+    if let Ok(handle) = core.doc_host.open(chat) {
+        for row in handle.doc().read_queue().unwrap_or_default() {
+            out.push_str(&format!(
+                "  queue {} {:?} hold={:?} gate={:?}\n",
+                row.id, row.status, row.hold_reason, row.delivery_gate
+            ));
+        }
+        for entry in handle.doc().read_entries().unwrap_or_default() {
+            out.push_str(&format!("  entry {:?} {} {:?}\n", entry.role, entry.id, entry.parts));
+        }
+    }
+    out.push_str(&run_summary(recorder));
+    out
+}
+
+async fn until_diag(what: &str, mut ready: impl FnMut() -> bool, diag: impl Fn() -> String) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !ready() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}\n{}",
+            diag()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 fn queued_ids(core: &EngineCore, chat: &str) -> Vec<String> {
     core.doc_host
         .open(chat)
@@ -1165,9 +1199,11 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     )
     .await
     .unwrap();
-    until("side ordinary run", || {
-        core.sessions.turn_in_flight(&side) && !runs_for(&recorder, &side).is_empty()
-    })
+    until_diag(
+        "side ordinary run",
+        || core.sessions.turn_in_flight(&side) && !runs_for(&recorder, &side).is_empty(),
+        || chat_diag(&core, &recorder, &side),
+    )
     .await;
     let run = runs_for(&recorder, &side)[0].clone();
     assert!(run.prompt.contains("HOLD side work"), "{}", run.prompt);
