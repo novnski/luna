@@ -470,6 +470,7 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
             serde_json::json!({
                 "kind": "forkTask", "newTaskId": forked_task, "boundary": "afterCompletedTurn",
                 "messageId": a1.id, "review": review(&core, &read, &task, Some(&a1.id)),
+                "sourceLink": format!("luna://open/chat/{task}?workspace=fixture"),
             }),
         ),
     )
