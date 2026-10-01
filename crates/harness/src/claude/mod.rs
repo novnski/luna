@@ -31,7 +31,12 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod findings;
+mod goal_control;
+mod goals;
 mod normalize;
+mod ongoing;
+mod schedules;
 mod wire;
 
 use std::path::PathBuf;
@@ -93,6 +98,8 @@ pub struct ClaudeHarness {
     /// Command discovery cache: only a successful probe is cached, so a
     /// broken CLI retries on the next picker open (ACP-harness parity).
     commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    /// Explicit Claude config dir (tests); `None` inherits the child's own.
+    config_dir: Option<PathBuf>,
 }
 
 impl Default for ClaudeHarness {
@@ -102,6 +109,7 @@ impl Default for ClaudeHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             commands: tokio::sync::OnceCell::new(),
+            config_dir: None,
         }
     }
 }
@@ -122,6 +130,18 @@ impl ClaudeHarness {
         self.interrupt_grace = interrupt_grace;
         self.kill_grace = kill_grace;
         self
+    }
+
+    /// Pin the Claude config dir (`CLAUDE_CONFIG_DIR`) for launched CLIs and
+    /// for reading their session records. Production inherits the user's.
+    pub fn with_config_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.config_dir = Some(dir.into());
+        self
+    }
+
+    /// Where Claude persists this harness's session records.
+    fn goal_config_dir(&self) -> Option<PathBuf> {
+        self.config_dir.clone().or_else(goals::default_config_dir)
     }
 
     fn resolve_executable(&self) -> Result<PathBuf, HarnessError> {
@@ -167,6 +187,12 @@ impl ClaudeHarness {
             "--permission-prompt-tool",
             "stdio",
         ]);
+        // CC-15: LUNA renders Claude's typed review findings, so `/code-review`
+        // reports through `ReportFindings` (Claude's host opt-in).
+        cmd.env("CLAUDE_CODE_REPORT_FINDINGS", "1");
+        if let Some(dir) = &self.config_dir {
+            cmd.env("CLAUDE_CONFIG_DIR", dir);
+        }
         // The 1M context window is selected via a model-id suffix
         // (`sonnet[1m]`), exactly how the CLI itself does it; fast mode and
         // always-on thinking are settings overrides.
@@ -464,6 +490,14 @@ impl Harness for ClaudeHarness {
         self.run_with_mode(request, controls, false).await
     }
 
+    /// CC-14: Claude's own goal record and `/goal clear` (see `goal_control`).
+    async fn native_goal_control(
+        &self,
+        request: crate::NativeGoalControl,
+    ) -> Result<crate::NativeGoalReadback, HarnessError> {
+        goal_control::run(self, request).await
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
@@ -564,10 +598,16 @@ impl ClaudeHarness {
         // also ride the prompt text, so a skipped/unreadable file degrades to
         // the old-app behavior (the agent opens the path with its Read tool).
         let images = load_image_blocks(&request.attachments).await;
-        let first = wire::user_message_line_with_images(
+        let mut first = wire::user_message_line_with_images(
             &apply_ultrathink(request.reasoning, &request.prompt),
             &images,
         );
+        // CC-14: a goal start is Claude's own `/goal <condition>` line.
+        let mut ongoing = ongoing::Ongoing::new(!title_only, self.goal_config_dir(), &request.cwd);
+        if let Some(goal) = request.goal.as_ref().filter(|_| !title_only) {
+            ongoing.goal_requested(&goal.objective);
+            first = wire::user_message_line(&goals::set_line(&goal.objective));
+        }
         let _ = stdin_tx.send(StdinMsg::line(first));
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
@@ -588,6 +628,7 @@ impl ClaudeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            ongoing,
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -737,6 +778,8 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    /// CC-14/15 observers: native goals, findings and schedules.
+    ongoing: ongoing::Ongoing,
 }
 
 /// The per-run event loop: one task multiplexing stdout frames, the steering
@@ -755,6 +798,7 @@ async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        mut ongoing,
     } = session;
     let RunControls {
         request_input,
@@ -783,6 +827,17 @@ async fn run_session(session: Session) {
                     let line = line.trim();
                     if line.is_empty() {
                         continue;
+                    }
+                    // CC-14/15: native goals, findings and schedules read the
+                    // raw frame first. They only add events.
+                    let (mut extra, work) = ongoing.observe(line);
+                    for item in work {
+                        extra.extend(ongoing.resolve(item).await);
+                    }
+                    for ev in extra {
+                        if event_tx.send(Ok(ev)).await.is_err() {
+                            break 'main;
+                        }
                     }
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
@@ -839,7 +894,12 @@ async fn run_session(session: Session) {
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
                     let prompt = apply_ultrathink(reasoning, &msg.prompt);
-                    let line = wire::user_message_line(&prompt);
+                    let mut line = wire::user_message_line(&prompt);
+                    // CC-14: a warm goal start is Claude's own `/goal` line.
+                    if let Some(goal) = &msg.goal {
+                        ongoing.goal_requested(&goal.objective);
+                        line = wire::user_message_line(&goals::set_line(&goal.objective));
+                    }
                     if msg.delivery == crate::SteerDelivery::RequireActiveTurn {
                         if explicit_steer_unconfirmed {
                             if let Some(tx) = msg.acceptance {
@@ -900,6 +960,17 @@ async fn run_session(session: Session) {
                         }
                     } else {
                         let accepted = stdin_tx.send(StdinMsg::line(line)).is_ok();
+                        // A goal's acceptance is the stdin hand-off; Claude's
+                        // own verdict on it arrives as frames.
+                        if let Some(tx) = msg.acceptance {
+                            let _ = tx.send(if accepted {
+                                crate::SteerAcceptance::Accepted
+                            } else {
+                                crate::SteerAcceptance::Rejected(
+                                    "Claude input channel closed before dispatch".into(),
+                                )
+                            });
+                        }
                         if !accepted {
                             continue 'main;
                         }

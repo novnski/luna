@@ -925,6 +925,13 @@ pub enum AgentEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         turn_id: Option<String>,
     },
+    /// Claude-native scheduled prompts in this session (replace semantics).
+    /// Observation only: LUNA never schedules or fires them itself.
+    #[serde(rename_all = "camelCase")]
+    NativeSchedules {
+        session_id: String,
+        schedules: Vec<crate::NativeSchedule>,
+    },
     /// Internal supported-provider notification that asks the engine to
     /// refresh task metadata. It is consumed before journal/doc publication.
     #[serde(rename_all = "camelCase")]

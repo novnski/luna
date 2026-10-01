@@ -152,6 +152,7 @@ fn goal(
         time_used_seconds: secs,
         created_at: now - secs,
         updated_at: now - 20,
+        evaluation: None,
     }
 }
 
