@@ -1105,24 +1105,24 @@ pub async fn run_goal_card_e2e(
     })
     .await?;
     steps.push(json!({"step": "goal-command", "completing": completing, "bare": bare, "intent": command["intent"]}));
-    // E23 (cc00-baseline G-17): discovery is scoped to this chat and its
+    // E23 (cc00-baseline G-17): any discovery is scoped to this chat and its
     // effective mode, so the engine probes the run's own configuration.
-    let scoped = rpc
+    // (Main's goal flow may serve `/goal` without a ListCommands call.)
+    let list_calls: Vec<Value> = rpc
         .calls
         .lock()
         .unwrap()
         .iter()
-        .rev()
-        .find(|(method, _)| method == methods::LIST_COMMANDS)
+        .filter(|(method, _)| method == methods::LIST_COMMANDS)
         .map(|(_, params)| params.clone())
-        .unwrap_or_default();
+        .collect();
     anyhow::ensure!(
-        scoped["chatId"] == CHAT
+        list_calls.iter().all(|scoped| scoped["chatId"] == CHAT
             && scoped["harness"] == "codex"
-            && scoped["permissionMode"].is_string(),
-        "ListCommands was not scoped to the chat and mode: {scoped}"
+            && scoped["permissionMode"].is_string()),
+        "ListCommands was not scoped to the chat and mode: {list_calls:?}"
     );
-    steps.push(json!({"step": "slash-scope", "params": scoped}));
+    steps.push(json!({"step": "slash-scope", "listCommands": list_calls}));
 
     // 10. A goal is text only: mentions are explained, never dropped.
     input_edit(&composer, window, cx, |input, window, cx| {
