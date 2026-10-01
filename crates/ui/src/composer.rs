@@ -4636,7 +4636,11 @@ struct PendingDraftOwnerStage {
     target_seen: bool,
 }
 
+#[cfg(feature = "appshots-fixture")]
+mod codex_prompts_e2e;
 mod goals;
+#[cfg(feature = "appshots-fixture")]
+pub use codex_prompts_e2e::run_codex_prompts_e2e;
 
 pub struct Composer {
     goal_ui: goals::GoalUi,

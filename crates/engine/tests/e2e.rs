@@ -1551,6 +1551,7 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
                     options: vec!["Deny".into(), "Allow once".into(), "Cancel turn".into()],
                     multi_select: false,
                     mcp: None,
+                    input: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-approval".into(),
                         provider: HarnessId::Mock,
