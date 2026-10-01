@@ -496,7 +496,8 @@ async fn invalid_inputs_reject_before_any_process_or_stdin_line() {
 
     // Changed after admission: the adapter judges the bytes it would send.
     let changed = write(dir, "changing.png", &png());
-    luna_harness::claude::validate_inputs(&[changed.clone()], &[]).expect("valid at admission");
+    luna_harness::claude::validate_inputs(std::slice::from_ref(&changed), &[])
+        .expect("valid at admission");
     std::fs::write(&changed, b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>").unwrap();
     let cwd = peer_dir();
     let (controls, _steer) = controls();
