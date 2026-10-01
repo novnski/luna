@@ -2382,6 +2382,7 @@ async fn run_session(session: Session) {
                     },
                 )
                 .await
+                    || !steering_open
                 {
                     break 'main;
                 }
@@ -2573,7 +2574,11 @@ async fn run_session(session: Session) {
                     // once nothing is in flight — mirrors codex.ts's steer loop
                     // `finish()` on a null take.
                     steering_open = false;
-                    if router.active.is_none() && queued_steers.is_empty() {
+                    // A goal start is still waiting for the turn Codex starts.
+                    if router.active.is_none()
+                        && queued_steers.is_empty()
+                        && goal_turn_deadline.is_none()
+                    {
                         break 'main;
                     }
                 }
