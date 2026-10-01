@@ -3646,6 +3646,7 @@ impl Transcript {
     }
 
     /// Pin/clearance state for headless fixtures.
+    #[cfg(feature = "appshots-fixture")]
     pub(crate) fn scroll_readback(&self) -> serde_json::Value {
         serde_json::json!({
             "pinned": self.pinned,
