@@ -296,6 +296,8 @@ fn stdin_texts(fixture: &Fixture) -> Vec<String> {
                 .as_str()
                 .map(str::to_owned)
         })
+        // LUNA's isolated title run also launches the CLI; it is not the task.
+        .filter(|text| !text.starts_with("You generate session titles."))
         .collect()
 }
 
