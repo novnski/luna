@@ -921,6 +921,25 @@ pub enum AgentEvent {
     ProviderTaskChanged {
         change: String,
     },
+    /// Host-only native provider evidence: decoded lifecycle frames an
+    /// adapter does not project yet (tasks, hooks, compaction, resets),
+    /// per-result identity records, and bounded, redacted samples of unknown
+    /// or invalid frames. Journaled for inspection only: never a transcript
+    /// part, turn boundary, resume/liveness signal, or crash-recovery
+    /// activity.
+    #[serde(rename_all = "camelCase")]
+    ProviderEvidence {
+        provider: HarnessId,
+        /// `result`, `system/<subtype>`, `conversation_reset`,
+        /// `native:<kind>`, `unknown:<kind>` or `invalid:<kind>`.
+        kind: String,
+        /// The native frame uuid, when the provider supplied one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        native_id: Option<String>,
+        /// Bounded, redacted payload.
+        #[serde(default)]
+        payload: serde_json::Value,
+    },
     Error {
         message: String,
     },

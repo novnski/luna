@@ -7,6 +7,8 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use super::events::{self, NativeFrame, ResultEnvelope, TurnStamp};
+
 const MAX_INIT_OBSERVATIONS: usize = 128;
 const MAX_INIT_NAME_BYTES: usize = 256;
 
@@ -20,7 +22,10 @@ pub(crate) enum Frame {
     RateLimit(RateLimitFrame),
     Result(ResultFrame),
     ControlRequest(ControlRequestFrame),
-    /// control_response / control_cancel_request / anything unknown.
+    /// CC-02: every other frame type, classified (decoded lifecycle, known
+    /// progress, documented-but-unprojected, unknown) for evidence retention.
+    Native(NativeFrame),
+    /// control_response / control_cancel_request (transport-owned).
     Other,
 }
 
@@ -57,6 +62,10 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// CC-02 classification of this system frame (task/hook/compaction
+    /// lifecycle, init readback, progress, unprojected or unknown).
+    #[serde(skip)]
+    pub native: Option<Box<NativeFrame>>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -145,6 +154,9 @@ pub(crate) struct StreamEventFrame {
     pub parent_tool_use_id: Option<String>,
     #[serde(default)]
     pub event: StreamEventBody,
+    /// CC-02 turn identity (`user_message_uuid(s)`, origin, native uuid).
+    #[serde(skip)]
+    pub stamp: TurnStamp,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -175,6 +187,9 @@ pub(crate) struct MessageFrame {
     /// Terse assistant-level error code (`rate_limit`, `billing_error`, …).
     #[serde(default)]
     pub error: Option<String>,
+    /// CC-02 turn identity (`user_message_uuid(s)`, origin, native uuid).
+    #[serde(skip)]
+    pub stamp: TurnStamp,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -215,6 +230,9 @@ pub(crate) struct ContentBlock {
     pub tool_use_id: String,
     #[serde(default)]
     pub is_error: Option<bool>,
+    /// `tool_result` body: a string or an array of content blocks.
+    #[serde(default)]
+    pub content: Value,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -245,6 +263,28 @@ pub(crate) struct ResultFrame {
     pub usage: UsageBody,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// CC-02: the complete, per-field tolerant decode this frame came from.
+    #[serde(skip)]
+    pub envelope: Box<ResultEnvelope>,
+}
+
+impl ResultFrame {
+    /// A result frame always yields an outcome: fields of an unexpected type
+    /// are dropped (and named in the envelope), never fatal to the frame.
+    fn from_envelope(envelope: ResultEnvelope) -> Self {
+        Self {
+            model_usage: envelope.model_usage.clone(),
+            subtype: envelope.subtype.clone(),
+            result: envelope.result.clone(),
+            errors: envelope.errors.iter().cloned().map(Value::String).collect(),
+            usage: UsageBody {
+                input_tokens: envelope.usage.input_tokens,
+                output_tokens: envelope.usage.output_tokens,
+            },
+            session_id: envelope.session_id.clone(),
+            envelope: Box::new(envelope),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -277,22 +317,46 @@ pub(crate) struct ControlRequestBody {
 /// Parse one stdout JSONL line. `Err` = not JSON; unknown types = `Other`.
 pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
     let value: Value = serde_json::from_str(line)?;
-    let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
-    let frame = match kind {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    let frame = match kind.as_str() {
         "system" => {
-            let observation = (value.get("subtype").and_then(Value::as_str) == Some("init"))
-                .then(|| init_integration_observation(&value));
+            let subtype = value
+                .get("subtype")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_owned();
+            let observation = (subtype == "init").then(|| init_integration_observation(&value));
+            let native = events::decode_system(&subtype, &value, line);
             let mut system: SystemFrame = serde_json::from_value(value)?;
             system.integration_observation = observation;
+            system.native = Some(Box::new(native));
             Frame::System(system)
         }
-        "stream_event" => Frame::StreamEvent(serde_json::from_value(value)?),
-        "assistant" => Frame::Assistant(serde_json::from_value(value)?),
-        "user" => Frame::User(serde_json::from_value(value)?),
+        "stream_event" => {
+            let stamp = TurnStamp::decode(&value);
+            let mut frame: StreamEventFrame = serde_json::from_value(value)?;
+            frame.stamp = stamp;
+            Frame::StreamEvent(frame)
+        }
+        "assistant" | "user" => {
+            let stamp = TurnStamp::decode(&value);
+            let mut frame: MessageFrame = serde_json::from_value(value)?;
+            frame.stamp = stamp;
+            if kind == "assistant" {
+                Frame::Assistant(frame)
+            } else {
+                Frame::User(frame)
+            }
+        }
         "rate_limit_event" => Frame::RateLimit(serde_json::from_value(value)?),
-        "result" => Frame::Result(serde_json::from_value(value)?),
+        "result" => Frame::Result(ResultFrame::from_envelope(ResultEnvelope::decode(&value))),
         "control_request" => Frame::ControlRequest(serde_json::from_value(value)?),
-        _ => Frame::Other,
+        "control_response" | "control_cancel_request" => Frame::Other,
+        other => Frame::Native(events::decode_top_level(other, &value, line)),
     };
     Ok(frame)
 }
@@ -378,9 +442,10 @@ mod tests {
             }
             other => panic!("unexpected frame: {other:?}"),
         }
+        // CC-02: unknown types are classified for retention, not dropped.
         assert!(matches!(
             parse_frame(r#"{"type":"mystery_frame"}"#).expect("parses"),
-            Frame::Other
+            Frame::Native(_)
         ));
         assert!(parse_frame("not json").is_err());
     }

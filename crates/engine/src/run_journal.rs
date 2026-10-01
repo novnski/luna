@@ -531,7 +531,11 @@ impl RunJournal {
             if !include(chat_id) {
                 continue;
             }
-            let last = read_lines(&path)?.into_iter().next_back();
+            // Provider evidence is never run activity: a parked session that
+            // journaled evidence after its Done did not die mid-stream.
+            let last = read_lines(&path)?
+                .into_iter()
+                .rfind(|(_, event)| !matches!(event, AgentEvent::ProviderEvidence { .. }));
             match last {
                 Some((_, AgentEvent::Done { .. })) | None => {}
                 Some(_) => stale.push(chat_id.to_string()),

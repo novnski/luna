@@ -98,6 +98,17 @@ impl LifecycleState {
     fn is_terminal(self) -> bool {
         self >= Self::Completed
     }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Started => "started",
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::Discarded => "discarded",
+            Self::Refused => "refused",
+        }
+    }
 }
 
 /// Which LUNA path wrote a stdin user line.
@@ -151,6 +162,9 @@ pub(crate) enum Intercept {
 pub(crate) struct Effects {
     /// LUNA message ids of explicit steers the CLI drained into a turn.
     pub incorporated: Vec<String>,
+    /// Every accepted (known uuid, in-order) lifecycle transition, for the
+    /// CC-02 turn ledger.
+    pub lifecycle: Vec<(String, LifecycleState)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -593,6 +607,7 @@ impl ControlChannel {
             return;
         }
         input.state = Some(state);
+        effects.lifecycle.push((uuid.to_owned(), state));
         match state {
             LifecycleState::Queued | LifecycleState::Started | LifecycleState::Completed => {
                 if let Some((tx, _)) = input.acceptance.take() {

@@ -7156,6 +7156,16 @@ async fn drive_run(
             event
         };
 
+        // Native provider evidence is host-journal retention only: never a
+        // transcript part, turn boundary, resume or liveness signal, so it
+        // bypasses the subagent router and the parked gate entirely.
+        if matches!(&event, AgentEvent::ProviderEvidence { .. }) {
+            if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                tracing::warn!(chat = %chat_id, %error, "provider evidence journal append failed");
+            }
+            continue;
+        }
+
         // ── subagent routing ───────────────────────────────────────────
         // Tagged events NEVER fold into the parent transcript: they stream
         // into the subagent's own doc, and the parent keeps only the spawn

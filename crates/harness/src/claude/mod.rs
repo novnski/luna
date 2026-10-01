@@ -32,9 +32,11 @@
 
 pub mod catalog;
 mod discovery;
+mod events;
 mod normalize;
 pub mod profile;
 mod transport;
+mod turns;
 mod wire;
 
 use std::path::PathBuf;
@@ -524,11 +526,19 @@ impl ClaudeHarness {
                 .find(|pair| pair[0] == "--permission-mode")
                 .map(|pair| pair[1]),
         );
-        let (first, _) = transport.stamp_user_line(first, transport::InputKind::Initial, None);
+        // One uuid per send: the transport mints it (lifecycle receipts) and
+        // the CC-02 turn ledger correlates results against the same uuid.
+        let mut norm = Normalizer::new();
+        let (first, initial_uuid) =
+            transport.stamp_user_line(first, transport::InputKind::Initial, None);
+        norm.native
+            .ledger
+            .register_native(turns::SendKind::Initial, None, initial_uuid);
         let _ = stdin_tx.send(StdinMsg::line(first));
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
+            norm,
             title_only,
             child,
             stdout_lines: BufReader::new(stdout).lines(),
@@ -678,6 +688,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Std
 }
 
 struct Session {
+    norm: Normalizer,
     title_only: bool,
     child: Child,
     stdout_lines: tokio::io::Lines<BufReader<crate::process::ChildStdout>>,
@@ -699,6 +710,7 @@ struct Session {
 /// mailbox, the interrupt token, and consumer liveness.
 async fn run_session(session: Session) {
     let Session {
+        mut norm,
         title_only,
         mut child,
         mut stdout_lines,
@@ -721,7 +733,6 @@ async fn run_session(session: Session) {
     } = controls;
     let request_input = Arc::new(request_input);
 
-    let mut norm = Normalizer::new();
     // Claude's root user echo carries no correlation id. Explicit steering is
     // single-flight and a successful stdin write remains unconfirmed; text
     // equality alone must never settle a durable queue row.
@@ -756,12 +767,26 @@ async fn run_session(session: Session) {
                                 break 'main;
                             }
                         }
+                        // CC-02: the same receipts drive the turn ledger
+                        // (deferred follow-up boundaries, withheld foreign Done).
+                        for (uuid, state) in effects.lifecycle {
+                            for ev in norm.native_input_lifecycle(&uuid, state.as_str()) {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
+                        }
                         continue;
                     }
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
                         Err(e) => {
-                            tracing::debug!(target: "luna_harness::claude", "unparseable frame (skipped): {e}");
+                            tracing::debug!(target: "luna_harness::claude", "unparseable frame (retained as evidence): {e}");
+                            for ev in norm.native.invalid_line(line, &e) {
+                                if event_tx.send(Ok(ev)).await.is_err() {
+                                    break 'main;
+                                }
+                            }
                             continue;
                         }
                     };
@@ -788,7 +813,7 @@ async fn run_session(session: Session) {
                         transport.track_inbound(&request_id, waiter);
                         continue;
                     }
-                    for ev in norm.normalize(frame, interrupted) {
+                    for ev in norm.normalize_native(frame, interrupted) {
                         let is_done = matches!(ev, AgentEvent::Done { .. });
                         if is_done {
                             // Stream-json result frames are the authoritative
@@ -835,6 +860,11 @@ async fn run_session(session: Session) {
                             }
                             continue 'main;
                         }
+                        norm.native.ledger.register_native(
+                            turns::SendKind::Steer,
+                            msg.message_id.clone(),
+                            uuid.clone(),
+                        );
                         let (written_tx, written_rx) = tokio::sync::oneshot::channel();
                         if stdin_tx.send(StdinMsg::Line {
                             line,
@@ -882,8 +912,19 @@ async fn run_session(session: Session) {
                             }
                         }
                     } else {
+                        norm.native.ledger.register_native(
+                            turns::SendKind::FollowUp,
+                            msg.message_id.clone(),
+                            uuid,
+                        );
                         let accepted = stdin_tx.send(StdinMsg::line(line)).is_ok();
                         if !accepted {
+                            continue 'main;
+                        }
+                        // CC-02: an echo-capable CLI may queue this send
+                        // behind a turn it started itself; its `Steered`
+                        // waits for the native start of THIS send.
+                        if norm.native.ledger.defers_follow_up_boundary() {
                             continue 'main;
                         }
                         // Ordinary warm routing retains its historical local
