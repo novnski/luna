@@ -1085,6 +1085,99 @@ pub enum RowKind {
     ErrorChip {
         message: SharedString,
     },
+    /// Codex's turn footer for a goal the model completed in this turn
+    /// ("Goal achieved in 36s"), from the durable goal marks.
+    GoalAchieved {
+        label: SharedString,
+    },
+}
+
+/// Version bit for a user row that carries the "Sent as goal" badge: the mark
+/// can land after the message itself, and the diff must repaint the row.
+const GOAL_SENT_VERSION_BIT: u64 = 1 << 62;
+
+/// "Goal achieved in 1m 32s" from Codex's own goal accounting.
+pub fn goal_achieved_label(seconds: i64) -> String {
+    format!("Goal achieved in {}", format_elapsed(seconds))
+}
+
+/// Apply the durable goal marks to one entry's rows: a "Sent as goal" badge on
+/// the goal's user message and an achievement footer under the turn whose
+/// model completed the goal. Marks never touch the cached rows themselves.
+fn apply_goal_marks(
+    entry: &SessionMessageEntry,
+    marks: &luna_proto::GoalMarks,
+    mut rows: Vec<Row>,
+) -> Vec<Row> {
+    if marks.is_sent(&entry.id) {
+        for row in &mut rows {
+            if let RowKind::User { badges, .. } = &mut row.kind {
+                let mut marked = badges.as_ref().clone();
+                marked.insert(
+                    0,
+                    crate::badges::MessageBadge {
+                        icon: crate::icons::TARGET,
+                        label: "Sent as goal".into(),
+                        details: Vec::new(),
+                    },
+                );
+                *badges = Arc::new(marked);
+                row.version ^= GOAL_SENT_VERSION_BIT;
+            }
+        }
+    }
+    if entry.role == MessageRole::Assistant
+        && entry.status != Some(MessageStatus::Streaming)
+        && let Some(mark) = marks.achieved(&entry.id)
+    {
+        let label = goal_achieved_label(mark.time_used_seconds);
+        rows.push(Row {
+            id: format!("{}#goal-achieved", entry.id).into(),
+            version: mark.time_used_seconds.unsigned_abs(),
+            turn_start: false,
+            kind: RowKind::GoalAchieved {
+                label: label.into(),
+            },
+            role: entry.role,
+            entry_id: entry.id.clone().into(),
+            timestamp: None,
+            copy_text: None,
+        });
+    }
+    rows
+}
+
+fn goal_marks_fingerprint(marks: &luna_proto::GoalMarks) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    marks.sent.hash(&mut hasher);
+    for mark in &marks.achieved {
+        mark.entry_id.hash(&mut hasher);
+        mark.time_used_seconds.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn goal_achieved_row(label: SharedString, theme: &Theme) -> AnyElement {
+    div()
+        .id("transcript-goal-achieved")
+        .role(gpui::Role::Status)
+        .aria_label(label.clone())
+        .pt(px(2.0))
+        .pb(px(6.0))
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .text_size(crate::typography::ui_rems(12.0))
+        .text_color(theme.readable_muted(0.82))
+        .child(
+            crate::icons::icon(crate::icons::TARGET)
+                .size(px(13.0))
+                .text_color(theme.readable_tone(theme.success, 0.9)),
+        )
+        .child(label)
+        .into_any_element()
 }
 
 fn generated_image_devices(owner: &str, fallback: &[String]) -> Vec<String> {
@@ -2841,7 +2934,9 @@ pub struct Transcript {
     state: Entity<AppState>,
     list: ListState,
     rows: Vec<Row>,
-    last_source: Option<(Option<String>, TranscriptReplayState, u64)>,
+    last_source: Option<(Option<String>, TranscriptReplayState, u64, u64)>,
+    /// The selected chat's goal transcript marks (`contextControl.goalMarks`).
+    goal_marks: luna_proto::GoalMarks,
     chat_id: Option<String>,
     /// The shell may retain this already-laid-out view briefly for its exit.
     /// Cleared as soon as the exit is invisible; never used for another chat.
@@ -3187,6 +3282,7 @@ impl Transcript {
             list,
             rows: Vec::new(),
             last_source: None,
+            goal_marks: Default::default(),
             // Pre-set so `sync` never sees an attach edge — an override
             // instance must not reset (or re-pin) on selection changes.
             chat_id: doc_override.clone(),
@@ -4325,15 +4421,21 @@ impl Transcript {
             }
         };
 
+        let goal_marks = match &self.doc_override {
+            Some(_) => luna_proto::GoalMarks::default(),
+            None => self.state.read(cx).context_control.goal_marks.clone(),
+        };
         let source = (
             selected.clone(),
             replay,
             self.state.read(cx).transcript_revision,
+            goal_marks_fingerprint(&goal_marks),
         );
         if self.last_source.as_ref() == Some(&source) {
             return;
         }
         self.last_source = Some(source);
+        self.goal_marks = goal_marks;
 
         let attached = selected != self.chat_id;
         // Arm the replay baseline before classifying tool arrivals. Selection
@@ -4452,11 +4554,13 @@ impl Transcript {
                         }
                     }
                 }
-                new_rows.extend(self.rows_for(entry, false));
+                let rows = self.rows_for(entry, false);
+                new_rows.extend(apply_goal_marks(entry, &self.goal_marks, rows));
             }
             if self.doc_override.is_none() {
                 for echo in state.pending_echoes() {
-                    new_rows.extend(self.rows_for(echo, true));
+                    let rows = self.rows_for(echo, true);
+                    new_rows.extend(apply_goal_marks(echo, &self.goal_marks, rows));
                 }
             }
             (
@@ -6423,6 +6527,7 @@ impl Transcript {
                 viewed,
             } => self.render_generated_image(&row.id, owner, path, name, mime_type, *viewed, cx),
             RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
+            RowKind::GoalAchieved { label } => goal_achieved_row(label.clone(), &theme),
         };
 
         // Hover-revealed metadata strip: a RESERVED 32px lane under the

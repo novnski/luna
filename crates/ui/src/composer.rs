@@ -9527,10 +9527,15 @@ impl Composer {
         follow_up_behavior: Option<luna_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
-        // `/goal [objective]` is an explicit goal change, never a message.
-        if self.try_goal_command(&text, cx) {
-            return;
-        }
+        // Goal mode or `/goal <objective>` starts a Codex goal: the engine
+        // runs Codex's own goal start on a loaded runtime, so work begins
+        // immediately. A goal is never queued behind the current turn.
+        let (text, as_goal) = match self.goal_send(&text, cx) {
+            goals::GoalSend::Message => (text, false),
+            goals::GoalSend::Consumed => return,
+            goals::GoalSend::Goal(objective) => (objective, true),
+        };
+        let follow_up_behavior = follow_up_behavior.filter(|_| !as_goal);
         if self.defer_native_send(&text, follow_up_behavior, cx) {
             return;
         }
@@ -10226,7 +10231,10 @@ impl Composer {
                 let command = SessionCommandPayload::Run {
                     request: RunRequest {
                         review: None,
-                        goal: None,
+                        goal: as_goal.then(|| luna_proto::GoalStartRequest {
+                            objective: content.clone(),
+                            token_budget: None,
+                        }),
                         input_items: submitted_input_items.clone(),
                         prompt: content.clone(),
                         harness: resolved.harness,
@@ -10451,6 +10459,9 @@ impl Composer {
                         message.into()
                     });
                     composer.failure_key = Some(restore_key.clone());
+                    if as_goal && !has_newer_draft {
+                        composer.restore_goal_mode(&restore_key);
+                    }
                     if !has_newer_draft {
                         let selections = composer.input_items.entry(restore_key.clone()).or_default();
                         for selection in &submitted_input_items {
@@ -12106,6 +12117,7 @@ impl Render for Composer {
         // The chat's goal rides on top of the stack (BB's goal card): a tray
         // tucked behind the queue tray or the composer, present only while a
         // goal exists or is being created.
+        self.sync_goal_placeholder(cx);
         let container = container.when_some(self.render_goal_card(window, cx), |el, card| {
             el.child(motion::fade_quick(
                 "composer-goal",
@@ -12405,13 +12417,20 @@ impl Render for Composer {
         let (model_side, model_opacity, model_drift) = model_handoff(self.model_handoff_position);
         let model_offset = (model_side - compact_target) * model_travel + model_drift;
         let measured_model_bounds = self.model_bounds.clone();
+        // Codex's Goal switch sits beside the access chip and travels with it.
+        let goal_mode_chip = self.render_goal_mode_chip(cx);
         let model_picker = div()
             .min_w_0()
             .max_w(px(surface_width * 0.45))
             .relative()
             .left(px(model_offset))
             .opacity(model_opacity)
-            .child(self.pickers.clone())
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.0))
+            .child(div().min_w_0().child(self.pickers.clone()))
+            .children(goal_mode_chip)
             .child(
                 gpui::canvas(
                     move |bounds, _, _| measured_model_bounds.set(Some(bounds)),
