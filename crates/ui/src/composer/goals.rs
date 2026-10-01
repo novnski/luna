@@ -259,6 +259,12 @@ impl Composer {
         if objective.is_empty() {
             return GoalSend::Consumed;
         }
+        if self.goal_ui.pending.is_some() {
+            self.failure = Some("Wait for the current goal change to finish.".into());
+            self.failure_key = Some(self.current_key.clone());
+            cx.notify();
+            return GoalSend::Consumed;
+        }
         let staged = self.staged().len()
             + self.staged_appshots().len()
             + self.input_items.get(&self.current_key).map_or(0, Vec::len)
@@ -671,7 +677,7 @@ impl Composer {
             gpui_base::Button::new("goal-mode")
                 .role(Role::Switch)
                 .accessibility_id("goal-mode")
-                .accessibility_label("Goal")
+                .accessibility_label("Goal mode")
                 .aria_toggled(if on {
                     gpui::Toggled::True
                 } else {

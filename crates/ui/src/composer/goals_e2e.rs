@@ -1,14 +1,19 @@
-//! Headless GPUI E2E for the goal card (`goal-card-fixture`).
+//! Headless GPUI E2E for Codex goals in the composer (`goal-card-fixture`).
 //!
-//! Scenarios come from `evidence/goal-ui/failure-cases.md`, written before the
-//! redesign. The production composer, goal card, `/goal` command, slash popup,
-//! key bindings and AccessKit tree run in a hidden window. A synthetic engine
-//! answers the task-command path in memory and holds every goal change until
-//! the fixture releases it, so pending states are real. Readback is seeded the
-//! way durable task state reaches the UI. No LUNA app, provider, account or
-//! user data is involved: this proves presentation and dispatch, not Codex.
+//! Scenarios come from `evidence/goal-parity/failure-cases.md`, written before
+//! the parity work. The production composer (Goal switch, goal-mode Send,
+//! `/goal`, the goal bar and its editor), the production transcript ("Sent as
+//! goal", "Goal achieved in …"), key bindings and the AccessKit tree run in a
+//! hidden window. A synthetic engine answers the task-command path in memory
+//! and holds every command until the fixture releases it, so pending states
+//! are real. Engine progress (the goal message, the goal turn, Codex's goal
+//! snapshots and the transcript marks) is seeded the way durable task state
+//! reaches the UI. No LUNA app, provider, account or user data is involved:
+//! this proves presentation and dispatch; the Codex protocol is proven by the
+//! harness and engine suites.
 use super::*;
 use gpui::{AnyWindowHandle, AsyncApp, KeyUpEvent, Keystroke, PlatformInput};
+use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 use luna_proto::{GoalReadback, TaskCommandRead, TaskCommandSnapshot};
 use luna_rpc::{RpcReply, RpcService};
 use serde_json::{Value, json};
@@ -17,14 +22,15 @@ use std::sync::{Arc, Mutex};
 
 const CHAT: &str = "goal-fixture-chat";
 const CLAUDE_CHAT: &str = "goal-fixture-claude";
-const CREATED: &str = "Get the goal card through design review";
-const LONG_OBJECTIVE: &str = "Redesign the goal controls as a compact card stacked on the composer. \
-Keep every safety guard: pending changes disable the controls, edits stay bound to their chat, \
-and usage comes from provider readback.";
+/// The user's report, verbatim.
+const OBJECTIVE: &str = "yo what is this";
+const EDITED: &str = "yo what is this — count to 99, one number per line";
+const LONG_OBJECTIVE: &str = "Make the goal bar match Codex: pursue the objective with a live timer, \
+keep Clear, Pause and Edit reachable from the keyboard, and show Goal achieved when Codex reports it.";
 
 struct FixtureEngine {
     calls: Mutex<Vec<(String, Value)>>,
-    /// One permit releases one held goal change.
+    /// One permit releases one held task command.
     gate: tokio::sync::Semaphore,
 }
 
@@ -63,7 +69,7 @@ impl RpcService for FixtureEngine {
                 RpcReply::value(&CommandReceipt {
                     command_id: params["commandId"].as_str().unwrap_or_default().into(),
                     task_id: CHAT.into(),
-                    intent: "goal".into(),
+                    intent: params["intent"]["kind"].as_str().unwrap_or("goal").into(),
                     payload_hash: "fixture".into(),
                     status: CommandReceiptStatus::Applied,
                     snapshot: snapshot(),
@@ -83,6 +89,9 @@ impl RpcService for FixtureEngine {
             methods::SAVE_COMPOSER_DRAFT => RpcReply::value(&ComposerDraftSaveOutcome::Saved),
             methods::GET_COMPOSER_DRAFT => {
                 Ok(RpcReply::Value(json!({"draft": null, "submissions": []})))
+            }
+            methods::BEGIN_DRAFT_SUBMISSION | methods::SETTLE_DRAFT_SUBMISSION => {
+                Ok(RpcReply::Value(json!({})))
             }
             methods::LIST_COMMANDS => RpcReply::value(&vec![
                 SlashCommand {
@@ -121,7 +130,7 @@ fn chat(id: &str, harness: &str, title: &str) -> anyhow::Result<luna_proto::Chat
         "archived": false,
         "cwd": "/tmp/goal-card-fixture",
         "branch": "main",
-        "config": {"harness": harness, "model": "fixture-model", "sandbox": "workspace-write"},
+        "config": {"harness": harness, "model": "gpt-6.1-sol", "sandbox": "workspace-write"},
         "createdAt": "2026-10-01T08:00:00Z",
     }))?)
 }
@@ -133,6 +142,7 @@ fn goal(
     budget: Option<i64>,
     secs: i64,
 ) -> ThreadGoal {
+    let now = chrono::Utc::now().timestamp();
     ThreadGoal {
         thread_id: "fixture-thread".into(),
         objective: objective.into(),
@@ -140,9 +150,71 @@ fn goal(
         token_budget: budget,
         tokens_used: used,
         time_used_seconds: secs,
-        created_at: 1,
-        updated_at: 2,
+        created_at: now - secs,
+        updated_at: now - 20,
     }
+}
+
+fn entry(id: &str, role: MessageRole, text: &str, streaming: bool) -> SessionMessageEntry {
+    SessionMessageEntry {
+        id: id.into(),
+        role,
+        parts: vec![MessagePart::Text {
+            id: format!("{id}-text"),
+            text: text.into(),
+        }],
+        created_at: chrono::Utc::now().timestamp_millis(),
+        device_id: "local".into(),
+        status: Some(if streaming {
+            MessageStatus::Streaming
+        } else {
+            MessageStatus::Complete
+        }),
+        continuation_of: None,
+    }
+}
+
+/// Durable engine state as it reaches the UI: transcript, Codex's goal
+/// snapshot (observed `checked_ago_ms` ago), goal marks and the session.
+#[allow(clippy::too_many_arguments)]
+fn engine_state(
+    state: &Entity<AppState>,
+    window: AnyWindowHandle,
+    cx: &mut AsyncApp,
+    transcript: Vec<SessionMessageEntry>,
+    goal: Option<ThreadGoal>,
+    checked_ago_ms: i64,
+    marks: luna_proto::GoalMarks,
+    working: bool,
+) -> anyhow::Result<()> {
+    let state = state.clone();
+    act(window, cx, move |_, cx| {
+        state.update(cx, |state, cx| {
+            state.apply_transcript(transcript);
+            state.context_control.goal = Some(GoalReadback {
+                thread_id: "fixture-thread".into(),
+                binding_generation: 1,
+                goal,
+                checked_at_ms: chrono::Utc::now().timestamp_millis() - checked_ago_ms,
+                continuation_ready: true,
+            });
+            state.context_control.goal_marks = marks;
+            state.sessions = vec![luna_proto::Session {
+                last_completed_turn: None,
+                chat_id: CHAT.into(),
+                device_id: "local".into(),
+                status: if working {
+                    luna_proto::SessionStatus::Working
+                } else {
+                    luna_proto::SessionStatus::Idle
+                },
+                started_at: None,
+                updated_at: chrono::Utc::now(),
+                recovery: None,
+            }];
+            cx.notify();
+        })
+    })
 }
 
 fn act(
@@ -151,28 +223,6 @@ fn act(
     f: impl FnOnce(&mut Window, &mut App),
 ) -> anyhow::Result<()> {
     window.update(cx, |_, window, cx| f(window, cx))
-}
-
-fn readback(
-    state: &Entity<AppState>,
-    window: AnyWindowHandle,
-    cx: &mut AsyncApp,
-    goal: Option<ThreadGoal>,
-    continuation_ready: bool,
-) -> anyhow::Result<()> {
-    let state = state.clone();
-    act(window, cx, move |_, cx| {
-        state.update(cx, |state, cx| {
-            state.context_control.goal = Some(GoalReadback {
-                thread_id: "fixture-thread".into(),
-                binding_generation: 1,
-                goal,
-                checked_at_ms: chrono::Utc::now().timestamp_millis() - 120_000,
-                continuation_ready,
-            });
-            cx.notify();
-        })
-    })
 }
 
 fn composer_do(
@@ -310,64 +360,6 @@ fn a11y_tree(window: AnyWindowHandle, cx: &mut AsyncApp) -> anyhow::Result<Value
     Ok(serde_json::from_str(&json)?)
 }
 
-const GOAL_BUTTONS: &[&str] = &[
-    "Clear goal",
-    "Edit goal",
-    "Pause goal",
-    "Resume goal",
-    "Mark goal complete",
-    "Refresh goal status",
-    "Cancel goal edit",
-    "Save goal",
-    "Set goal",
-    "Dismiss goal message",
-];
-
-fn has_action(aria: &Value, action: &str) -> bool {
-    aria["on_action"]
-        .as_array()
-        .is_some_and(|actions| actions.iter().any(|value| value == action))
-}
-
-/// Every goal node AccessKit exposes, keyed by label.
-fn goal_nodes(tree: &Value) -> Vec<Value> {
-    let mut nodes: Vec<Value> = tree["nodes"]
-        .as_object()
-        .into_iter()
-        .flatten()
-        .map(|(_, node)| &node["aria"])
-        .filter(|aria| {
-            aria["label"].as_str().is_some_and(|label| {
-                label == "Goal" || label.starts_with("Goal, ") || GOAL_BUTTONS.contains(&label)
-            })
-        })
-        .map(|aria| {
-            json!({
-                "label": aria["label"],
-                "role": aria["role"],
-                "click": has_action(aria, "Click"),
-                "focus": has_action(aria, "Focus"),
-                "expanded": aria["expanded"],
-                "description": aria["description"],
-            })
-        })
-        .collect();
-    nodes.sort_by(|a, b| a["label"].as_str().cmp(&b["label"].as_str()));
-    nodes
-}
-
-fn node<'a>(nodes: &'a [Value], label: &str) -> Option<&'a Value> {
-    nodes.iter().find(|node| node["label"] == label)
-}
-
-fn toggle(nodes: &[Value]) -> Option<&Value> {
-    nodes.iter().find(|node| {
-        node["label"]
-            .as_str()
-            .is_some_and(|label| label.starts_with("Goal, "))
-    })
-}
-
 fn focused_label(tree: &Value) -> Option<String> {
     let id = tree["gpui_focus"].as_str()?;
     tree["nodes"][id]["aria"]["label"]
@@ -410,29 +402,137 @@ fn reverse_tab_walk(
     anyhow::bail!("keyboard traversal never reached the goal control: {walk:?}")
 }
 
+const GOAL_BUTTONS: &[&str] = &[
+    "Clear goal",
+    "Edit goal",
+    "Pause goal",
+    "Resume goal",
+    "Refresh goal status",
+    "Undo goal edits",
+    "Close goal editor",
+    "Save goal",
+    "Dismiss goal message",
+];
+
+fn has_action(aria: &Value, action: &str) -> bool {
+    aria["on_action"]
+        .as_array()
+        .is_some_and(|actions| actions.iter().any(|value| value == action))
+}
+
+/// Every goal node AccessKit exposes (bar, controls, Goal switch, transcript
+/// marks), sorted by label.
+fn goal_nodes(tree: &Value) -> Vec<Value> {
+    let mut nodes: Vec<Value> = tree["nodes"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(_, node)| &node["aria"])
+        .filter(|aria| {
+            aria["label"].as_str().is_some_and(|label| {
+                label == "Goal"
+                    || label == "Goal mode"
+                    || label == "Edit goal"
+                    || label.starts_with("Pursuing goal")
+                    || label.starts_with("Goal ")
+                    || GOAL_BUTTONS.contains(&label)
+            })
+        })
+        .map(|aria| {
+            json!({
+                "label": aria["label"],
+                "role": aria["role"],
+                "click": has_action(aria, "Click"),
+                "focus": has_action(aria, "Focus"),
+                "toggled": aria["toggled"],
+                "description": aria["description"],
+            })
+        })
+        .collect();
+    nodes.sort_by(|a, b| a["label"].as_str().cmp(&b["label"].as_str()));
+    nodes
+}
+
+fn node<'a>(nodes: &'a [Value], label: &str) -> Option<&'a Value> {
+    nodes.iter().find(|node| node["label"] == label)
+}
+
+fn node_starting<'a>(nodes: &'a [Value], prefix: &str) -> Option<&'a Value> {
+    nodes.iter().find(|node| {
+        node["label"]
+            .as_str()
+            .is_some_and(|label| label.starts_with(prefix))
+    })
+}
+
+/// The bar exists only while an unfinished goal (or its change) is shown.
+fn bar_nodes(nodes: &[Value]) -> Vec<&Value> {
+    nodes
+        .iter()
+        .filter(|node| node["label"] != "Goal mode" && node["role"] != "Status")
+        .collect()
+}
+
+fn input_placeholder(tree: &Value) -> Option<String> {
+    tree["nodes"]
+        .as_object()?
+        .values()
+        .map(|node| &node["aria"])
+        .find(|aria| aria["role"] == "MultilineTextInput" && aria["placeholder"].is_string())
+        .and_then(|aria| aria["placeholder"].as_str().map(str::to_owned))
+}
+
+/// Tab forward from the composer input (the Goal switch sits after it).
+fn tab_walk(
+    composer: &Entity<Composer>,
+    window: AnyWindowHandle,
+    cx: &mut AsyncApp,
+    until: impl Fn(&str) -> bool,
+) -> anyhow::Result<Vec<String>> {
+    focus_input(composer, window, cx)?;
+    let mut walk = Vec::new();
+    for _ in 0..24 {
+        act(window, cx, |window, cx| window.focus_next(cx))?;
+        let tree = a11y_tree(window, cx)?;
+        let label = focused_label(&tree).unwrap_or_else(|| "<unlabelled>".into());
+        let stop = until(&label);
+        walk.push(label);
+        if stop {
+            return Ok(walk);
+        }
+    }
+    anyhow::bail!("keyboard traversal never reached the control: {walk:?}")
+}
+
 fn card(composer: &Entity<Composer>, cx: &mut AsyncApp) -> Value {
     cx.update(|cx| {
         let this = composer.read(cx);
         json!({
             "input": this.input.read(cx).text(),
+            "placeholder": this.input.read(cx).placeholder.to_string(),
+            "goalMode": this.goal_mode_on(cx),
             "pending": this.goal_ui.pending.as_ref().map(|pending| format!("{:?}", pending.kind)),
             "editor": this.goal_ui.editor.as_ref().map(|editor| json!({
                 "chat": editor.chat_id,
-                "creating": editor.creating,
                 "objective": editor.objective.read(cx).text(),
                 "budget": editor.budget.read(cx).text(),
             })),
             "error": this.goal_ui.error.as_ref().map(|(_, error)| error.clone()),
-            "expanded": this.goal_ui.expanded.iter().cloned().collect::<Vec<_>>(),
+            "failure": this.failure.as_ref().map(|failure| failure.to_string()),
             "slashOpen": this.slash.token.is_some(),
             "slashCommands": this.slash_commands(cx).iter().map(|command| command.name.clone()).collect::<Vec<_>>(),
-            "slashFiltered": this.slash.filtered.len(),
         })
     })
 }
 
-/// Drive every goal-card scenario; returns the JSON evidence document and
-/// writes the PNG captures into `output`.
+fn sent(executes: &[Value], index: usize) -> anyhow::Result<&Value> {
+    executes
+        .get(index)
+        .ok_or_else(|| anyhow::anyhow!("command {index} was not dispatched: {executes:?}"))
+}
+
+/// Drive every goal scenario; returns the JSON evidence document and writes
+/// the PNG captures into `output`.
 pub async fn run_goal_card_e2e(
     composer: Entity<Composer>,
     state: Entity<AppState>,
@@ -444,7 +544,7 @@ pub async fn run_goal_card_e2e(
     let mut shots: Vec<String> = Vec::new();
 
     // Synthetic engine and chats. The Codex chat owns the goal; the Claude
-    // chat proves the card and `/goal` stay Codex-only.
+    // chat proves goal UI stays Codex-only.
     let rpc = Arc::new(FixtureEngine {
         calls: Mutex::new(Vec::new()),
         gate: tokio::sync::Semaphore::new(0),
@@ -463,7 +563,7 @@ pub async fn run_goal_card_e2e(
         "memory://goal-card-fixture".into(),
     );
     let chats = vec![
-        chat(CHAT, "codex", "Goal card fixture")?,
+        chat(CHAT, "codex", "Goal parity fixture")?,
         chat(CLAUDE_CHAT, "claude-code", "Claude fixture")?,
     ];
     {
@@ -481,383 +581,294 @@ pub async fn run_goal_card_e2e(
             }
         })?;
     }
-    readback(&state, window, cx, None, false)?;
+    engine_state(
+        &state,
+        window,
+        cx,
+        Vec::new(),
+        None,
+        0,
+        Default::default(),
+        false,
+    )?;
 
-    // 1. No goal: nothing renders below or around the composer.
+    // 1. No goal: no bar; the Goal switch sits beside the access chip, off.
     shots.push(shot(window, cx, output, "01-no-goal.png").await?);
     let tree = a11y_tree(window, cx)?;
     let nodes = goal_nodes(&tree);
-    anyhow::ensure!(nodes.is_empty(), "no-goal state exposes goal UI: {nodes:?}");
+    anyhow::ensure!(
+        bar_nodes(&nodes).is_empty()
+            && node(&nodes, "Goal mode").is_some_and(|node| node["role"] == "Switch"
+                && node["toggled"] == "False"
+                && node["click"] == true
+                && node["focus"] == true),
+        "no-goal state wrong: {nodes:?}"
+    );
     steps.push(json!({"step": "no-goal", "goalNodes": nodes, "card": card(&composer, cx)}));
 
-    // 2. `/goal` alone opens the inline create editor and clears the draft.
+    // 2. Goal mode from the keyboard: Tab to the switch, Space. Codex's
+    // placeholder replaces "Do anything…".
+    let walk = tab_walk(&composer, window, cx, |label| label == "Goal mode")?;
+    key_press(window, cx, "space")?;
+    let tree = a11y_tree(window, cx)?;
+    let nodes = goal_nodes(&tree);
+    let on = card(&composer, cx);
+    anyhow::ensure!(
+        on["goalMode"] == true
+            && on["placeholder"] == GOAL_PLACEHOLDER
+            && input_placeholder(&tree).as_deref() == Some(GOAL_PLACEHOLDER)
+            && node(&nodes, "Goal mode").is_some_and(|node| node["toggled"] == "True"),
+        "Space on the Goal switch did not enter goal mode: {on} {nodes:?}"
+    );
+    shots.push(shot(window, cx, output, "02-goal-mode.png").await?);
+    steps.push(json!({"step": "goal-mode-on", "tabWalk": walk, "goalNodes": nodes, "card": on}));
+
+    // 3. Send in goal mode: ONE session run carrying the goal start (never a
+    // queued message, never a goal-only control), then goal mode resets.
     focus_input(&composer, window, cx)?;
     input_edit(&composer, window, cx, |input, window, cx| {
-        input.replace_text_in_range(None, "/goal", window, cx)
+        input.replace_text_in_range(None, OBJECTIVE, window, cx)
     })?;
-    // The first Enter accepts the open `/goal` completion, the second sends.
-    let completing = card(&composer, cx);
     key_press(window, cx, "enter")?;
-    let completed = card(&composer, cx);
-    key_press(window, cx, "enter")?;
-    let opened = card(&composer, cx);
-    steps.push(
-        json!({"step": "goal-command-typed", "completing": completing, "completed": completed}),
-    );
+    wait_for(cx, "the goal send", |_| rpc.executes().len() == 1).await?;
+    let executes = rpc.executes();
+    let run = sent(&executes, 0)?;
+    let request = &run["intent"]["command"]["request"];
+    let message_id = run["commandId"].as_str().unwrap_or_default().to_owned();
     anyhow::ensure!(
-        opened["editor"]["creating"] == true && opened["input"] == "",
-        "/goal did not open the create editor: {opened}"
+        run["intent"]["kind"] == "session"
+            && run["intent"]["command"]["kind"] == "run"
+            && run["taskId"] == CHAT
+            && request["goal"]["objective"] == OBJECTIVE
+            && request["prompt"] == OBJECTIVE
+            && request["goal"].get("tokenBudget").is_none()
+            && !message_id.is_empty(),
+        "goal-mode Send did not dispatch a goal start: {run}"
     );
-    let objective_input = cx.update(|cx| {
+    rpc.gate.add_permits(1);
+    wait_for(cx, "the goal send to settle", |cx| {
+        cx.update(|cx| !composer.read(cx).sending)
+    })
+    .await?;
+    let after = card(&composer, cx);
+    anyhow::ensure!(
+        after["goalMode"] == false
+            && after["placeholder"] == "Do anything…"
+            && after["input"] == "",
+        "goal mode or draft did not reset after the goal was handed off: {after}"
+    );
+    steps.push(json!({"step": "goal-sent", "intent": run["intent"], "card": after}));
+
+    // 4. Codex starts working at once: the goal message is "Sent as goal",
+    // the agent streams, and the bar pursues the goal with a live timer.
+    let assistant = "goal-fixture-turn";
+    let mut marks = luna_proto::GoalMarks::default();
+    marks.mark_sent(&message_id);
+    let working_transcript = vec![
+        entry(&message_id, MessageRole::User, OBJECTIVE, false),
+        entry(
+            assistant,
+            MessageRole::Assistant,
+            "Looking at the workspace to see what this is…",
+            true,
+        ),
+    ];
+    engine_state(
+        &state,
+        window,
+        cx,
+        working_transcript.clone(),
+        Some(goal(GoalStatus::Active, OBJECTIVE, 1_820, None, 0)),
+        3_000,
+        marks.clone(),
+        true,
+    )?;
+    shots.push(shot(window, cx, output, "03-pursuing-goal.png").await?);
+    let tree = a11y_tree(window, cx)?;
+    let nodes = goal_nodes(&tree);
+    let summary = node_starting(&nodes, "Pursuing goal, ")
+        .and_then(|node| node["label"].as_str())
+        .map(str::to_owned)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        summary.starts_with(&format!("Pursuing goal, {OBJECTIVE}, "))
+            && summary.ends_with("so far")
+            && ["Edit goal", "Pause goal", "Clear goal"]
+                .iter()
+                .all(|label| {
+                    node(&nodes, label)
+                        .is_some_and(|node| node["click"] == true && node["focus"] == true)
+                })
+            && node(&nodes, "Goal").is_some_and(|node| node["role"] == "Group"),
+        "pursuing bar semantics wrong: {nodes:?}"
+    );
+    // The timer is live: it advances while Codex works.
+    pause(cx, 1_300).await;
+    let tree = a11y_tree(window, cx)?;
+    let later = node_starting(&goal_nodes(&tree), "Pursuing goal, ")
+        .and_then(|node| node["label"].as_str())
+        .map(str::to_owned)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        later != summary,
+        "the goal timer did not advance: {summary} → {later}"
+    );
+    let walk = reverse_tab_walk(&composer, window, cx, |label| label == "Edit goal")?;
+    anyhow::ensure!(
+        walk.iter().any(|label| label == "Clear goal")
+            && walk.iter().any(|label| label == "Pause goal"),
+        "bar controls are not keyboard reachable: {walk:?}"
+    );
+    steps.push(json!({"step": "pursuing", "summary": summary, "summaryAfter": later, "reverseTabWalk": walk, "goalNodes": nodes}));
+
+    // 5. Edit (Enter on the focused Edit control): Codex's Edit goal surface,
+    // prefilled; Undo restores, Save sends one objective change.
+    key_press(window, cx, "enter")?;
+    let editing = card(&composer, cx);
+    anyhow::ensure!(
+        editing["editor"]["objective"] == OBJECTIVE && editing["editor"]["budget"] == "",
+        "edit editor not prefilled: {editing}"
+    );
+    let inputs = cx.update(|cx| {
         composer
             .read(cx)
             .goal_ui
             .editor
             .as_ref()
-            .map(|editor| (editor.objective.clone(), editor.budget.clone()))
+            .map(|editor| editor.objective.clone())
     });
-    let Some((objective_input, budget_input)) = objective_input else {
-        anyhow::bail!("create editor has no inputs");
+    let Some(objective_input) = inputs else {
+        anyhow::bail!("goal editor has no objective input");
     };
     draw(window, cx)?;
-    type_into(
-        objective_input.clone(),
-        window,
-        cx,
-        "Keep the goal card polished",
-    )?;
-    shots.push(shot(window, cx, output, "08-create-editor.png").await?);
+    type_into(objective_input.clone(), window, cx, " — and more")?;
     let tree = a11y_tree(window, cx)?;
-    let editor_nodes = goal_nodes(&tree);
-    let editor_focus = focused_label(&tree);
+    let nodes = goal_nodes(&tree);
     anyhow::ensure!(
-        node(&editor_nodes, "Set goal").is_some_and(|node| node["click"] == true)
-            && node(&editor_nodes, "Cancel goal edit").is_some(),
-        "create editor controls missing: {editor_nodes:?}"
+        node(&nodes, "Undo goal edits").is_some_and(|node| node["click"] == true)
+            && node(&nodes, "Save goal").is_some_and(|node| node["click"] == true),
+        "editor controls missing: {nodes:?}"
     );
-    steps.push(json!({"step": "create-editor", "goalNodes": editor_nodes, "focused": editor_focus, "card": card(&composer, cx)}));
-
-    // An invalid budget never dispatches and explains itself in the card.
-    type_into(budget_input.clone(), window, cx, "0")?;
-    let budget_focus = budget_input.clone();
+    shots.push(shot(window, cx, output, "04-edit-goal.png").await?);
+    composer_do(&composer, window, cx, |this, cx| this.undo_goal_editor(cx))?;
+    let undone = card(&composer, cx);
+    anyhow::ensure!(
+        undone["editor"]["objective"] == OBJECTIVE,
+        "Undo did not restore Codex's objective: {undone}"
+    );
+    let edited = EDITED.trim_start_matches(OBJECTIVE).to_owned();
+    type_into(objective_input.clone(), window, cx, &edited)?;
+    let focus = objective_input.clone();
     act(window, cx, move |window, cx| {
-        let focus = budget_focus.read(cx).focus_handle.clone();
+        let focus = focus.read(cx).focus_handle.clone();
         window.focus(&focus, cx);
     })?;
     key_press(window, cx, "enter")?;
-    pause(cx, 50).await;
-    let invalid = card(&composer, cx);
+    wait_for(cx, "the held edit", |_| rpc.executes().len() == 2).await?;
+    let executes = rpc.executes();
+    let edit = sent(&executes, 1)?;
+    let operation = &edit["intent"]["operation"];
     anyhow::ensure!(
-        rpc.executes().is_empty()
-            && invalid["error"]
-                .as_str()
-                .is_some_and(|error| error.contains("positive token budget")),
-        "invalid budget dispatched or was silent: {invalid}"
-    );
-    shots.push(shot(window, cx, output, "09-create-invalid-budget.png").await?);
-    steps.push(
-        json!({"step": "create-invalid-budget", "card": invalid, "executes": rpc.executes().len()}),
-    );
-
-    // Escape cancels; with no goal the card disappears again.
-    key_press(window, cx, "escape")?;
-    let cancelled = card(&composer, cx);
-    let tree = a11y_tree(window, cx)?;
-    anyhow::ensure!(
-        cancelled["editor"].is_null() && goal_nodes(&tree).is_empty(),
-        "Escape did not dismiss the create editor: {cancelled}"
-    );
-    steps.push(json!({"step": "create-cancelled", "card": cancelled}));
-
-    // 3. The slash popup offers LUNA's `/goal` first on a Codex chat.
-    input_edit(&composer, window, cx, |input, window, cx| {
-        input.replace_text_in_range(None, "/", window, cx)
-    })?;
-    wait_for(cx, "slash commands", |cx| {
-        cx.update(|cx| {
-            let this = composer.read(cx);
-            !this.slash.loading && this.slash.token.is_some()
-        })
-    })
-    .await?;
-    let popup = card(&composer, cx);
-    anyhow::ensure!(
-        popup["slashOpen"] == true
-            && popup["slashCommands"][0] == GOAL_COMMAND
-            && popup["slashFiltered"].as_u64().unwrap_or_default() >= 1,
-        "/goal missing from the Codex slash popup: {popup}"
-    );
-    shots.push(shot(window, cx, output, "07-create-slash-popup.png").await?);
-    steps.push(json!({"step": "slash-popup", "card": popup}));
-    input_edit(&composer, window, cx, |_, _, cx| {
-        cx.emit(ComposerInputEvent::MentionAccept)
-    })?;
-    let accepted = cx.update(|cx| composer.read(cx).input.read(cx).text().to_owned());
-    anyhow::ensure!(
-        accepted.trim_end() == "/goal",
-        "accepting /goal produced {accepted:?}"
-    );
-    let objective = if accepted.ends_with(' ') {
-        CREATED.to_owned()
-    } else {
-        format!(" {CREATED}")
-    };
-    input_edit(&composer, window, cx, move |input, window, cx| {
-        let end = input.text().encode_utf16().count();
-        input.replace_text_in_range(Some(end..end), &objective, window, cx)
-    })?;
-    let command = format!("/goal {CREATED}");
-    focus_input(&composer, window, cx)?;
-    key_press(window, cx, "enter")?;
-    wait_for(cx, "the held create command", |_| rpc.executes().len() == 1).await?;
-    let created = rpc.executes()[0].clone();
-    let operation = &created["intent"]["operation"];
-    anyhow::ensure!(
-        created["intent"]["kind"] == "goal"
-            && created["taskId"] == CHAT
+        edit["intent"]["kind"] == "goal"
             && operation["action"] == "set"
-            && operation["objective"] == CREATED
-            && operation["status"] == "active"
+            && operation["objective"] == EDITED
+            && operation["status"].is_null()
             && operation["tokenBudget"]["mode"] == "unlimited",
-        "/goal did not dispatch one goal set: {created}"
+        "Save did not send one objective change: {edit}"
     );
-    let pending = card(&composer, cx);
-    anyhow::ensure!(
-        pending["pending"] == "Save" && pending["input"] == command.as_str(),
-        "create pending state wrong (text must stay until applied): {pending}"
-    );
-    shots.push(shot(window, cx, output, "10-create-pending.png").await?);
-    // A second Enter while pending must not dispatch again.
-    key_press(window, cx, "enter")?;
-    pause(cx, 120).await;
-    anyhow::ensure!(
-        rpc.executes().len() == 1,
-        "second Enter dispatched another goal change"
-    );
-    steps.push(json!({"step": "create-pending", "card": pending, "intent": created["intent"], "executesAfterSecondEnter": rpc.executes().len()}));
     rpc.gate.add_permits(1);
-    wait_for(cx, "create applied", |cx| {
+    wait_for(cx, "edit applied", |cx| {
         cx.update(|cx| composer.read(cx).goal_ui.pending.is_none())
     })
     .await?;
-    let applied = card(&composer, cx);
-    anyhow::ensure!(
-        applied["input"] == "" && applied["error"].is_null(),
-        "applied /goal left the command text or an error: {applied}"
-    );
-    let sent_messages = rpc
-        .calls
-        .lock()
-        .unwrap()
-        .iter()
-        .filter(|(method, params)| {
-            method == methods::EXECUTE_TASK_COMMAND && params["intent"]["kind"] != "goal"
-        })
-        .count();
-    anyhow::ensure!(sent_messages == 0, "/goal was also sent as a message");
-    readback(
-        &state,
-        window,
-        cx,
-        Some(goal(GoalStatus::Active, CREATED, 0, None, 4)),
-        true,
-    )?;
-    shots.push(shot(window, cx, output, "11-create-applied.png").await?);
-    steps.push(json!({"step": "create-applied", "card": applied}));
-
-    // 4. Active, collapsed: header only, no chip, Clear reachable.
-    readback(
-        &state,
-        window,
-        cx,
-        Some(goal(GoalStatus::Active, LONG_OBJECTIVE, 12_345, None, 252)),
-        false,
-    )?;
-    shots.push(shot(window, cx, output, "02-active-collapsed.png").await?);
-    let tree = a11y_tree(window, cx)?;
-    let nodes = goal_nodes(&tree);
-    anyhow::ensure!(
-        node(&nodes, "Goal").is_some_and(|node| node["role"] == "Group")
-            && toggle(&nodes)
-                .is_some_and(|node| node["expanded"] == false && node["click"] == true)
-            && node(&nodes, "Clear goal")
-                .is_some_and(|node| node["click"] == true && node["focus"] == true),
-        "collapsed card semantics wrong: {nodes:?}"
-    );
-    let walk_to_toggle =
-        reverse_tab_walk(&composer, window, cx, |label| label.starts_with("Goal, "))?;
-    anyhow::ensure!(
-        walk_to_toggle.iter().any(|label| label == "Clear goal"),
-        "Clear goal is not keyboard reachable: {walk_to_toggle:?}"
-    );
-    steps.push(
-        json!({"step": "active-collapsed", "goalNodes": nodes, "reverseTabWalk": walk_to_toggle}),
-    );
-
-    // 5. Expand from the keyboard (Enter on the focused toggle), with budget.
-    key_press(window, cx, "enter")?;
-    readback(
-        &state,
-        window,
-        cx,
-        Some(goal(
-            GoalStatus::Active,
-            LONG_OBJECTIVE,
-            18_240,
-            Some(50_000),
-            754,
-        )),
-        false,
-    )?;
-    shots.push(shot(window, cx, output, "03-active-expanded-budget.png").await?);
-    let tree = a11y_tree(window, cx)?;
-    let nodes = goal_nodes(&tree);
-    anyhow::ensure!(
-        toggle(&nodes).is_some_and(|node| node["expanded"] == true)
-            && [
-                "Edit goal",
-                "Pause goal",
-                "Mark goal complete",
-                "Refresh goal status",
-                "Clear goal"
-            ]
-            .iter()
-            .all(|label| node(&nodes, label)
-                .is_some_and(|node| node["click"] == true && node["focus"] == true)),
-        "expanded card semantics wrong: {nodes:?}"
-    );
-    let walk_expanded =
-        reverse_tab_walk(&composer, window, cx, |label| label.starts_with("Goal, "))?;
-    steps.push(json!({"step": "active-expanded-budget", "goalNodes": nodes, "reverseTabWalk": walk_expanded}));
-
-    // 6. Edit from the keyboard: the editor replaces the body, prefilled.
-    reverse_tab_walk(&composer, window, cx, |label| label == "Edit goal")?;
-    key_press(window, cx, "enter")?;
-    let editing = card(&composer, cx);
-    anyhow::ensure!(
-        editing["editor"]["creating"] == false
-            && editing["editor"]["objective"] == LONG_OBJECTIVE
-            && editing["editor"]["budget"] == "50000",
-        "edit editor not prefilled: {editing}"
-    );
-    shots.push(shot(window, cx, output, "12-edit-editor.png").await?);
-    steps.push(json!({"step": "edit-editor", "card": editing}));
-    key_press(window, cx, "escape")?;
     anyhow::ensure!(
         card(&composer, cx)["editor"].is_null(),
-        "Escape did not close the edit editor"
+        "applied edit left the editor open"
     );
+    steps.push(json!({"step": "edit", "intent": edit["intent"], "undone": undone}));
 
-    // 7. Paused: chip in the collapsed header; Resume in the body.
-    composer_do(&composer, window, cx, |this, cx| {
-        this.toggle_goal_expanded(cx)
-    })?;
-    readback(
+    // 6. Pause (Codex keeps the running turn; no continuation after it), then
+    // Resume (Codex starts a turn when idle) from the keyboard.
+    engine_state(
         &state,
         window,
         cx,
-        Some(goal(
-            GoalStatus::Paused,
-            LONG_OBJECTIVE,
-            18_240,
-            Some(50_000),
-            754,
-        )),
+        working_transcript.clone(),
+        Some(goal(GoalStatus::Active, EDITED, 9_400, None, 21)),
+        1_000,
+        marks.clone(),
+        true,
+    )?;
+    reverse_tab_walk(&composer, window, cx, |label| label == "Pause goal")?;
+    key_press(window, cx, "space")?;
+    wait_for(cx, "the held pause", |_| rpc.executes().len() == 3).await?;
+    let executes = rpc.executes();
+    let pause_intent = sent(&executes, 2)?["intent"].clone();
+    anyhow::ensure!(
+        pause_intent["operation"]["action"] == "set"
+            && pause_intent["operation"]["status"] == "paused"
+            && pause_intent["operation"]["objective"].is_null(),
+        "Pause sent the wrong change: {pause_intent}"
+    );
+    rpc.gate.add_permits(1);
+    wait_for(cx, "pause applied", |cx| {
+        cx.update(|cx| composer.read(cx).goal_ui.pending.is_none())
+    })
+    .await?;
+    engine_state(
+        &state,
+        window,
+        cx,
+        working_transcript.clone(),
+        Some(goal(GoalStatus::Paused, EDITED, 9_400, None, 65)),
+        1_000,
+        marks.clone(),
         false,
     )?;
-    shots.push(shot(window, cx, output, "04-paused-collapsed.png").await?);
-    composer_do(&composer, window, cx, |this, cx| {
-        this.toggle_goal_expanded(cx)
-    })?;
-    shots.push(shot(window, cx, output, "04b-paused-expanded.png").await?);
+    shots.push(shot(window, cx, output, "05-paused.png").await?);
     let tree = a11y_tree(window, cx)?;
     let nodes = goal_nodes(&tree);
     anyhow::ensure!(
-        toggle(&nodes).is_some_and(|node| node["label"] == "Goal, paused")
-            && node(&nodes, "Resume goal").is_some()
+        node_starting(&nodes, "Goal paused, ").is_some()
+            && node(&nodes, "Resume goal").is_some_and(|node| node["click"] == true)
             && node(&nodes, "Pause goal").is_none(),
-        "paused semantics wrong: {nodes:?}"
+        "paused bar semantics wrong: {nodes:?}"
     );
-    steps.push(json!({"step": "paused", "goalNodes": nodes}));
+    reverse_tab_walk(&composer, window, cx, |label| label == "Resume goal")?;
+    key_press(window, cx, "enter")?;
+    wait_for(cx, "the held resume", |_| rpc.executes().len() == 4).await?;
+    let executes = rpc.executes();
+    let resume_intent = sent(&executes, 3)?["intent"].clone();
+    anyhow::ensure!(
+        resume_intent["operation"]["status"] == "active",
+        "Resume sent the wrong change: {resume_intent}"
+    );
+    rpc.gate.add_permits(1);
+    wait_for(cx, "resume applied", |cx| {
+        cx.update(|cx| composer.read(cx).goal_ui.pending.is_none())
+    })
+    .await?;
+    steps.push(json!({"step": "pause-resume", "pause": pause_intent, "resume": resume_intent, "pausedNodes": nodes}));
 
-    // 8. Budget reached (provider status), expanded with a full meter.
-    readback(
+    // 7. Clear from the keyboard, held: every goal control is disabled, and
+    // neither the keyboard nor a goal send may start a second change.
+    engine_state(
         &state,
         window,
         cx,
-        Some(goal(
-            GoalStatus::BudgetLimited,
-            LONG_OBJECTIVE,
-            50_112,
-            Some(50_000),
-            1_984,
-        )),
-        false,
-    )?;
-    shots.push(shot(window, cx, output, "05-budget-reached.png").await?);
-    let tree = a11y_tree(window, cx)?;
-    steps.push(json!({"step": "budget-reached", "goalNodes": goal_nodes(&tree)}));
-
-    // 9. Complete, collapsed.
-    composer_do(&composer, window, cx, |this, cx| {
-        this.toggle_goal_expanded(cx)
-    })?;
-    readback(
-        &state,
-        window,
-        cx,
-        Some(goal(GoalStatus::Complete, CREATED, 64_008, None, 4_210)),
-        false,
-    )?;
-    shots.push(shot(window, cx, output, "05b-complete-collapsed.png").await?);
-
-    // 10. Stacked with the queue tray: goal above, queue below, composer last.
-    let queued: luna_doc::QueuedMessage = serde_json::from_value(json!({
-        "id": "goal-fixture-queued",
-        "text": "Also tighten the spacing in the header row",
-        "issuedBy": "local",
-        "issuedAt": 7,
-    }))?;
-    readback(
-        &state,
-        window,
-        cx,
-        Some(goal(
-            GoalStatus::Active,
-            LONG_OBJECTIVE,
-            18_240,
-            Some(50_000),
-            754,
-        )),
+        working_transcript.clone(),
+        Some(goal(GoalStatus::Active, EDITED, 9_400, None, 65)),
+        1_000,
+        marks.clone(),
         true,
     )?;
-    {
-        let state = state.clone();
-        act(window, cx, move |_, cx| {
-            state.update(cx, |state, cx| {
-                state.queue = vec![queued];
-                cx.notify();
-            })
-        })?;
-    }
-    shots.push(shot(window, cx, output, "13-goal-with-queue.png").await?);
-    {
-        let state = state.clone();
-        act(window, cx, move |_, cx| {
-            state.update(cx, |state, cx| {
-                state.queue.clear();
-                cx.notify();
-            })
-        })?;
-    }
-
-    // 11. Pending clear from the keyboard: spinner on X, every control off.
     reverse_tab_walk(&composer, window, cx, |label| label == "Clear goal")?;
     key_press(window, cx, "space")?;
-    wait_for(cx, "the held clear command", |_| rpc.executes().len() == 2).await?;
-    let clear = rpc.executes()[1].clone();
+    wait_for(cx, "the held clear", |_| rpc.executes().len() == 5).await?;
+    let executes = rpc.executes();
+    let clear = sent(&executes, 4)?["intent"].clone();
     anyhow::ensure!(
-        clear["intent"]["kind"] == "goal" && clear["intent"]["operation"]["action"] == "clear",
+        clear["kind"] == "goal" && clear["operation"]["action"] == "clear",
         "Clear dispatched the wrong intent: {clear}"
     );
     shots.push(shot(window, cx, output, "06-pending-clear.png").await?);
@@ -871,42 +882,159 @@ pub async fn run_goal_card_e2e(
         disabled && node(&nodes, "Clear goal").is_some(),
         "controls stayed active while a goal change was pending: {nodes:?}"
     );
-    // Neither the keyboard nor `/goal` may start a second change now.
-    key_press(window, cx, "enter")?;
     input_edit(&composer, window, cx, |input, window, cx| {
         input.replace_text_in_range(None, "/goal Another objective", window, cx)
     })?;
     focus_input(&composer, window, cx)?;
     key_press(window, cx, "enter")?;
     pause(cx, 120).await;
+    let blocked = card(&composer, cx);
     anyhow::ensure!(
-        rpc.executes().len() == 2,
-        "a goal change started while another was pending"
+        rpc.executes().len() == 5
+            && blocked["failure"]
+                .as_str()
+                .is_some_and(|failure| failure.contains("current goal change")),
+        "a goal send started while a goal change was pending: {blocked}"
     );
-    steps.push(json!({"step": "pending-clear", "goalNodes": nodes, "intent": clear["intent"], "card": card(&composer, cx)}));
     rpc.gate.add_permits(1);
     wait_for(cx, "clear applied", |cx| {
         cx.update(|cx| composer.read(cx).goal_ui.pending.is_none())
     })
     .await?;
     input_edit(&composer, window, cx, |input, _, cx| input.set_text("", cx))?;
-    readback(&state, window, cx, None, false)?;
-    let tree = a11y_tree(window, cx)?;
-    anyhow::ensure!(
-        goal_nodes(&tree).is_empty(),
-        "cleared goal still renders: {:?}",
-        goal_nodes(&tree)
-    );
-    steps.push(json!({"step": "cleared", "card": card(&composer, cx)}));
-
-    // 12. Light theme.
-    act(window, cx, |_, cx| {
-        crate::appearance::set_mode(crate::appearance::AppearanceMode::Light, cx)
-    })?;
-    readback(
+    engine_state(
         &state,
         window,
         cx,
+        working_transcript.clone(),
+        None,
+        0,
+        marks.clone(),
+        false,
+    )?;
+    let tree = a11y_tree(window, cx)?;
+    anyhow::ensure!(
+        bar_nodes(&goal_nodes(&tree)).is_empty(),
+        "cleared goal still renders: {:?}",
+        goal_nodes(&tree)
+    );
+    steps.push(json!({"step": "pending-clear", "intent": clear, "goalNodes": nodes, "blockedSend": blocked}));
+
+    // 8. Codex completes the goal: the bar goes away and the turn reads
+    // "Goal achieved in 36s".
+    let mut done = marks.clone();
+    done.mark_achieved(assistant, 36);
+    let achieved_transcript = vec![
+        entry(&message_id, MessageRole::User, OBJECTIVE, false),
+        entry(
+            assistant,
+            MessageRole::Assistant,
+            "Counted from 1 to 99, one number per line.\n\nReached 99. Goal complete in 36 seconds.",
+            false,
+        ),
+    ];
+    engine_state(
+        &state,
+        window,
+        cx,
+        achieved_transcript,
+        Some(goal(GoalStatus::Complete, EDITED, 21_440, None, 36)),
+        0,
+        done,
+        false,
+    )?;
+    shots.push(shot(window, cx, output, "07-goal-achieved.png").await?);
+    let tree = a11y_tree(window, cx)?;
+    let nodes = goal_nodes(&tree);
+    anyhow::ensure!(
+        bar_nodes(&nodes).is_empty()
+            && node(&nodes, "Goal achieved in 36s").is_some_and(|node| node["role"] == "Status"),
+        "achieved goal semantics wrong: {nodes:?}"
+    );
+    steps.push(json!({"step": "achieved", "goalNodes": nodes}));
+
+    // 9. `/goal` alone turns goal mode on (Codex's command); `/goal <text>`
+    // sends a goal start directly.
+    focus_input(&composer, window, cx)?;
+    input_edit(&composer, window, cx, |input, window, cx| {
+        input.replace_text_in_range(None, "/goal", window, cx)
+    })?;
+    let completing = card(&composer, cx);
+    // The first Enter accepts the open `/goal` completion, the second sends.
+    key_press(window, cx, "enter")?;
+    key_press(window, cx, "enter")?;
+    pause(cx, 80).await;
+    let bare = card(&composer, cx);
+    anyhow::ensure!(
+        bare["goalMode"] == true && bare["input"] == "" && rpc.executes().len() == 5,
+        "bare /goal did not switch goal mode on without dispatch: {bare}"
+    );
+    composer_do(&composer, window, cx, |this, cx| {
+        this.set_goal_mode(false, cx)
+    })?;
+    input_edit(&composer, window, cx, |input, window, cx| {
+        input.replace_text_in_range(None, "/goal Ship the release notes", window, cx)
+    })?;
+    focus_input(&composer, window, cx)?;
+    key_press(window, cx, "enter")?;
+    wait_for(cx, "the /goal send", |_| rpc.executes().len() == 6).await?;
+    let executes = rpc.executes();
+    let command = sent(&executes, 5)?;
+    anyhow::ensure!(
+        command["intent"]["command"]["request"]["goal"]["objective"] == "Ship the release notes"
+            && command["intent"]["command"]["request"]["prompt"] == "Ship the release notes",
+        "/goal <text> did not start a goal: {command}"
+    );
+    rpc.gate.add_permits(1);
+    wait_for(cx, "the /goal send to settle", |cx| {
+        cx.update(|cx| !composer.read(cx).sending)
+    })
+    .await?;
+    steps.push(json!({"step": "goal-command", "completing": completing, "bare": bare, "intent": command["intent"]}));
+
+    // 10. A goal is text only: mentions are explained, never dropped.
+    composer_do(&composer, window, cx, |this, cx| {
+        this.input_items.insert(
+            this.current_key.clone(),
+            vec![luna_proto::ComposerInput::Mention {
+                name: "README".into(),
+                path: "/tmp/goal-card-fixture/README.md".into(),
+            }],
+        );
+        this.set_goal_mode(true, cx);
+    })?;
+    input_edit(&composer, window, cx, |input, window, cx| {
+        input.replace_text_in_range(None, "Summarize the readme", window, cx)
+    })?;
+    focus_input(&composer, window, cx)?;
+    key_press(window, cx, "enter")?;
+    pause(cx, 120).await;
+    let text_only = card(&composer, cx);
+    anyhow::ensure!(
+        rpc.executes().len() == 6
+            && text_only["failure"]
+                .as_str()
+                .is_some_and(|failure| failure.contains("text only"))
+            && text_only["input"] == "Summarize the readme",
+        "a goal with a mention was dispatched or silent: {text_only}"
+    );
+    composer_do(&composer, window, cx, |this, cx| {
+        this.input_items.clear();
+        this.set_goal_mode(false, cx);
+        this.failure = None;
+    })?;
+    input_edit(&composer, window, cx, |input, _, cx| input.set_text("", cx))?;
+    steps.push(json!({"step": "text-only", "card": text_only}));
+
+    // 11. Light theme: a long objective pursued, and the Goal switch on.
+    act(window, cx, |_, cx| {
+        crate::appearance::set_mode(crate::appearance::AppearanceMode::Light, cx)
+    })?;
+    engine_state(
+        &state,
+        window,
+        cx,
+        working_transcript.clone(),
         Some(goal(
             GoalStatus::Active,
             LONG_OBJECTIVE,
@@ -914,32 +1042,22 @@ pub async fn run_goal_card_e2e(
             Some(50_000),
             754,
         )),
-        false,
+        2_000,
+        marks.clone(),
+        true,
     )?;
     composer_do(&composer, window, cx, |this, cx| {
-        this.goal_ui.expanded.insert(CHAT.into());
-        cx.notify();
+        this.set_goal_mode(true, cx)
     })?;
-    shots.push(shot(window, cx, output, "14-light-expanded.png").await?);
+    shots.push(shot(window, cx, output, "08-light-pursuing.png").await?);
     composer_do(&composer, window, cx, |this, cx| {
-        this.toggle_goal_expanded(cx)
+        this.set_goal_mode(false, cx)
     })?;
-    readback(
-        &state,
-        window,
-        cx,
-        Some(goal(
-            GoalStatus::Paused,
-            LONG_OBJECTIVE,
-            18_240,
-            Some(50_000),
-            754,
-        )),
-        false,
-    )?;
-    shots.push(shot(window, cx, output, "15-light-paused-collapsed.png").await?);
+    act(window, cx, |_, cx| {
+        crate::appearance::set_mode(crate::appearance::AppearanceMode::Dark, cx)
+    })?;
 
-    // 13. A Claude chat never shows the card or offers `/goal`, even with a
+    // 12. A Claude chat never shows the bar or the Goal switch, even with a
     // goal readback in state.
     {
         let state = state.clone();
@@ -950,33 +1068,24 @@ pub async fn run_goal_card_e2e(
             })
         })?;
     }
-    readback(
-        &state,
-        window,
-        cx,
-        Some(goal(GoalStatus::Active, LONG_OBJECTIVE, 1, None, 1)),
-        false,
-    )?;
     let tree = a11y_tree(window, cx)?;
-    let claude = card(&composer, cx);
-    let claude_goal = cx.update(|cx| composer.read(cx).goal_command_available(cx));
+    let claude_available = cx.update(|cx| composer.read(cx).goal_mode_available(cx));
+    let claude_nodes = goal_nodes(&tree);
     anyhow::ensure!(
-        goal_nodes(&tree).is_empty() && !claude_goal,
-        "Claude chat exposes goal UI: {claude}"
+        bar_nodes(&claude_nodes).is_empty()
+            && node(&claude_nodes, "Goal mode").is_none()
+            && !claude_available,
+        "Claude chat exposes goal UI: {claude_nodes:?}"
     );
-    steps.push(json!({"step": "claude-chat", "goalCommandAvailable": claude_goal, "goalNodes": goal_nodes(&tree)}));
+    steps.push(json!({"step": "claude-chat", "goalModeAvailable": claude_available, "goalNodes": claude_nodes}));
 
     let calls: Vec<Value> = rpc
         .calls
         .lock()
         .unwrap()
         .iter()
-        .map(|(method, params)| {
-            json!({
-                "method": method,
-                "intent": params.get("intent"),
-            })
-        })
+        .filter(|(method, _)| method == methods::EXECUTE_TASK_COMMAND)
+        .map(|(method, params)| json!({"method": method, "intent": params.get("intent")}))
         .collect();
     Ok(json!({
         "fixture": "goal-card",
