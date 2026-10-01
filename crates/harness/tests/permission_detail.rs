@@ -54,7 +54,7 @@ async fn permission_detail_wire_choices_and_scope() {
             home.path().to_string_lossy().to_string().into(),
         );
         model_options.insert(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION.into(), serde_json::json!({
-            "version":1, "contentHash":"permission-fixture", "environment":{}, "localEndpoints":[], "instructions":[], "tools":[], "omittedTools":[], "delivery":"codexDynamicTools",
+            "version":1, "contentHash":"permission-fixture", "environment":{}, "localEndpoints":[], "instructions":[], "tools":[], "omittedTools":[], "delivery":"codexMcpTools",
             "context":{"appVersion":"test", "protocolVersion":1, "threadId":"luna-fixture-task", "environmentId":"fixture-env", "machineId":"fixture-machine", "machineName":"fixture-machine", "workspaceRoot":"/tmp", "harness":"codex", "executionRoute":"local", "grantedScopes":[]}
         }));
         let request = RunRequest {

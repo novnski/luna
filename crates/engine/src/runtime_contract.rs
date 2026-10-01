@@ -145,7 +145,7 @@ fn assemble(
     cross_task_omissions: &[OmittedRuntimeTool],
 ) -> Result<LunaAgentRuntimeContract, EngineError> {
     let instructions_supported = delivery != RuntimeDelivery::Unsupported;
-    let tools_supported = delivery == RuntimeDelivery::CodexDynamicTools;
+    let tools_supported = delivery.attaches_luna_tools();
     let tool = status_tool();
     let mut instructions = Vec::new();
     if instructions_supported {
@@ -160,7 +160,12 @@ fn assemble(
                 name: "luna_status guidance".into(),
                 source: RuntimeInstructionSource::Tool,
                 provenance: "engine tool registry luna_status@1".into(),
-                text: "Use luna_status when you need this task's current LUNA identity or granted scopes.".into(),
+                text: if delivery == RuntimeDelivery::CodexMcpTools {
+                    "LUNA tools are served by the `luna` MCP server attached to this session. Use its luna_status tool when you need this task's current LUNA identity or granted scopes."
+                } else {
+                    "Use luna_status when you need this task's current LUNA identity or granted scopes."
+                }
+                .into(),
             });
         }
         let mut user = user.to_vec();
@@ -218,7 +223,7 @@ fn assemble(
             RuntimeDelivery::CodexInstructionsOnly => "Existing Codex session has no verified dynamic-tool registration; start a new provider session to attach tools.",
             RuntimeDelivery::ClaudeInstructionsOnly => "Claude MCP tool transport is not yet verified by this LUNA adapter.",
             RuntimeDelivery::Unsupported => "This provider has no verified LUNA instruction/tool delivery path.",
-            RuntimeDelivery::CodexDynamicTools => unreachable!(),
+            RuntimeDelivery::CodexDynamicTools | RuntimeDelivery::CodexMcpTools => unreachable!(),
         }.into(),
     }).into_iter().collect::<Vec<_>>();
     if tools_supported {
@@ -227,7 +232,7 @@ fn assemble(
     } else {
         omitted_tools.extend(cross_task_tools.iter().map(|tool| OmittedRuntimeTool {
             name: tool.name.clone(),
-            reason: "this provider session has no verified dynamic cross-task tools".into(),
+            reason: "this provider session has no verified LUNA cross-task tool delivery".into(),
         }));
         omitted_tools.extend_from_slice(cross_task_omissions);
     }
@@ -271,6 +276,22 @@ pub fn compile(input: CompileInput) -> Result<CompiledRuntime, EngineError> {
             restart_required: false,
             must_reconstruct: false,
             requires_safe_boundary: false,
+        });
+    }
+    if candidate_delivery == RuntimeDelivery::CodexMcpTools {
+        // MCP tools are attached to every provider process, so a resumed
+        // thread (new, pre-L23, or one with frozen dynamic tools) gets the
+        // current catalog. Only changed instructions/context still need the
+        // active turn to settle first.
+        let changed = input
+            .acknowledged_contract
+            .as_ref()
+            .is_some_and(|prior| prior.contract_hash != candidate.content_hash);
+        return Ok(CompiledRuntime {
+            contract: candidate,
+            restart_required: changed,
+            must_reconstruct: false,
+            requires_safe_boundary: changed,
         });
     }
     let legacy_delivery = if candidate_delivery == RuntimeDelivery::CodexDynamicTools {
@@ -433,7 +454,7 @@ mod tests {
         CompileInput {
             context: context(harness),
             provider_delivery: match harness {
-                HarnessId::Codex => RuntimeDelivery::CodexDynamicTools,
+                HarnessId::Codex => RuntimeDelivery::CodexMcpTools,
                 HarnessId::ClaudeCode => RuntimeDelivery::ClaudeInstructionsOnly,
                 _ => RuntimeDelivery::Unsupported,
             },
@@ -456,17 +477,21 @@ mod tests {
                 .iter()
                 .any(|section| section.source == RuntimeInstructionSource::Tool)
         );
+        // A resumed pre-L23 thread has no acknowledged contract. MCP delivery
+        // still attaches the tools and their guidance on its next spawn.
         let mut legacy = input(HarnessId::Codex);
         legacy.resume = true;
-        let legacy = compile(legacy).unwrap().contract;
-        assert!(legacy.tools.is_empty());
+        let legacy = compile(legacy).unwrap();
+        assert!(!legacy.must_reconstruct && !legacy.restart_required);
+        assert_eq!(legacy.contract.tools, fresh.tools);
         assert!(
-            !legacy
+            legacy
+                .contract
                 .instructions
                 .iter()
-                .any(|section| section.source == RuntimeInstructionSource::Tool)
+                .any(|section| section.source == RuntimeInstructionSource::Tool
+                    && section.text.contains("`luna` MCP server"))
         );
-        assert_eq!(legacy.omitted_tools[0].name, "luna_status");
         for harness in [
             HarnessId::ClaudeCode,
             HarnessId::Cursor,
@@ -633,21 +658,28 @@ mod tests {
         resume.context.provider_profile_id = Some("another-profile".into());
         assert!(compile(resume.clone()).unwrap().requires_safe_boundary);
 
+        // A changed tool set no longer forces a fresh provider binding: the
+        // per-process MCP endpoint serves the current catalog on resume.
+        resume.context.provider_profile_id = Some("synthetic-profile".into());
         resume
             .acknowledged_contract
             .as_mut()
             .unwrap()
             .attached_tools[0]
             .version = 2;
-        assert!(compile(resume).unwrap().must_reconstruct);
+        let retooled = compile(resume.clone()).unwrap();
+        assert!(!retooled.must_reconstruct && !retooled.requires_safe_boundary);
+        assert_eq!(retooled.contract.tools, fresh.tools);
 
-        let mut legacy = input(HarnessId::Codex);
-        legacy.resume = true;
-        let legacy_contract = compile(legacy.clone()).unwrap().contract;
-        legacy.acknowledged_contract = Some(legacy_contract.diagnostics("legacy-session"));
-        let retained = compile(legacy).unwrap();
-        assert!(!retained.must_reconstruct);
-        assert!(retained.restart_required);
-        assert_eq!(retained.contract.content_hash, legacy_contract.content_hash);
+        // A thread whose tools were frozen by legacy dynamicTools resumes with
+        // the MCP contract after its active turn settles.
+        let acknowledged = resume.acknowledged_contract.as_mut().unwrap();
+        acknowledged.delivery = RuntimeDelivery::CodexDynamicTools;
+        acknowledged.contract_hash = "legacy-dynamic-tools-hash".into();
+        let migrated = compile(resume).unwrap();
+        assert!(!migrated.must_reconstruct);
+        assert!(migrated.requires_safe_boundary && migrated.restart_required);
+        assert_eq!(migrated.contract.delivery, RuntimeDelivery::CodexMcpTools);
+        assert_eq!(migrated.contract.tools, fresh.tools);
     }
 }

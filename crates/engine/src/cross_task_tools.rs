@@ -638,8 +638,8 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
         let mut attached = Vec::new();
         let mut omitted = Vec::new();
         for (name, scope, supported, idempotency, deadline_ms) in candidates {
-            let reason = if authority.delivery != RuntimeDelivery::CodexDynamicTools {
-                Some("the provider has no verified dynamic tool delivery")
+            let reason = if !authority.delivery.attaches_luna_tools() {
+                Some("the provider has no verified LUNA tool delivery")
             } else if !authority.granted_scopes.contains(scope) {
                 Some("required LUNA scope is missing")
             } else if matches!(name, "send_message_to_thread" | "create_thread")
@@ -917,7 +917,7 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
         scope: &str,
         supported: bool,
     ) -> Result<(), CrossTaskError> {
-        if authority.delivery != RuntimeDelivery::CodexDynamicTools || !supported {
+        if !authority.delivery.attaches_luna_tools() || !supported {
             return Err(CrossTaskError::Unavailable);
         }
         if !authority.granted_scopes.contains(scope) {
@@ -1153,7 +1153,7 @@ mod tests {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into(), "threads.send".into()]),
             explicit_user_request: true,
-            delivery: RuntimeDelivery::CodexDynamicTools,
+            delivery: RuntimeDelivery::CodexMcpTools,
         }
     }
 
@@ -1597,7 +1597,7 @@ mod tests {
         let (attached, omitted) = tools.catalog(&authority);
         assert!(attached.is_empty());
         assert!(omitted.iter().any(|tool| tool.name == "fork_thread"));
-        authority.delivery = RuntimeDelivery::CodexDynamicTools;
+        authority.delivery = RuntimeDelivery::CodexMcpTools;
         let (attached, _) = tools.catalog(&authority);
         assert_eq!(attached.len(), 3);
         authority.explicit_user_request = false;
@@ -1701,7 +1701,7 @@ mod tests {
         };
         let contract = crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
             context,
-            provider_delivery: RuntimeDelivery::CodexDynamicTools,
+            provider_delivery: RuntimeDelivery::CodexMcpTools,
             user_instructions: Vec::new(),
             workspace_instructions: Vec::new(),
             resume: false,

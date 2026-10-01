@@ -42,6 +42,7 @@ pub(crate) mod catalog;
 pub(crate) mod composer_catalog;
 mod elicitation;
 mod goals;
+mod luna_mcp;
 pub mod native;
 mod normalize;
 mod subagents;
@@ -67,10 +68,7 @@ use luna_proto::{
 
 use crate::jsonrpc::{Incoming, RpcClient, RpcRequestFailure};
 use crate::process::{Child, Command, Stdio};
-use crate::{
-    Harness, HarnessError, LunaToolInvocation, LunaToolInvocationContext,
-    ProviderForkProgressReporter, RunControls, SteerAcceptance,
-};
+use crate::{Harness, HarnessError, ProviderForkProgressReporter, RunControls, SteerAcceptance};
 use catalog::{REASONING_LEVELS, sandbox_mode, sandbox_policy_value, to_effort};
 use normalize::{
     ChildRoute, ContextCompactionStream, Phase, ReasoningStream, delta_text, item_id, item_turn_id,
@@ -670,7 +668,7 @@ fn parse_skill_commands(result: &Value) -> Vec<SlashCommand> {
 #[async_trait]
 impl Harness for CodexHarness {
     fn luna_runtime_delivery(&self) -> luna_proto::RuntimeDelivery {
-        luna_proto::RuntimeDelivery::CodexDynamicTools
+        luna_proto::RuntimeDelivery::CodexMcpTools
     }
     fn id(&self) -> HarnessId {
         HarnessId::Codex
@@ -852,14 +850,22 @@ impl CodexHarness {
                 serde_json::from_value(value.clone()).map_err(|error| {
                     HarnessError::Protocol(format!("invalid LUNA runtime contract: {error}"))
                 })?;
+            // Legacy `codexDynamicTools` is fail-closed: this adapter serves
+            // LUNA tools only over its MCP endpoint, never as dynamicTools.
             if contract.context.harness != HarnessId::Codex
                 || !matches!(
                     contract.delivery,
-                    luna_proto::RuntimeDelivery::CodexDynamicTools
+                    luna_proto::RuntimeDelivery::CodexMcpTools
                         | luna_proto::RuntimeDelivery::CodexInstructionsOnly
                 )
-                || (contract.delivery == luna_proto::RuntimeDelivery::CodexInstructionsOnly
-                    && !contract.tools.is_empty())
+            {
+                return Err(HarnessError::Protocol(format!(
+                    "Codex cannot deliver a LUNA runtime contract for {:?} via {:?}",
+                    contract.context.harness, contract.delivery
+                )));
+            }
+            if (contract.delivery == luna_proto::RuntimeDelivery::CodexInstructionsOnly
+                && !contract.tools.is_empty())
                 || (!contract.tools.is_empty() && controls.invoke_luna_tool.is_none())
             {
                 return Err(HarnessError::Protocol(
@@ -875,6 +881,7 @@ impl CodexHarness {
             request.sandbox = luna_proto::SandboxLevel::ReadOnly;
         }
         let mut cmd = Command::new(&exe);
+        let mut luna_endpoint = None;
         if let Some(contract) = request
             .model_options
             .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
@@ -882,6 +889,15 @@ impl CodexHarness {
                 serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
             })
         {
+            // Bound before the spawn so Codex finds it at MCP startup, on a
+            // fresh thread and on every resume alike.
+            if !title_only
+                && contract.delivery == luna_proto::RuntimeDelivery::CodexMcpTools
+                && !contract.tools.is_empty()
+                && controls.invoke_luna_tool.is_some()
+            {
+                luna_endpoint = Some(luna_mcp::LunaMcpEndpoint::bind(&contract.tools).await?);
+            }
             for (name, value) in contract.environment {
                 if matches!(
                     name.as_str(),
@@ -903,6 +919,12 @@ impl CodexHarness {
             apply_file_auth_override(&mut cmd);
         }
         cmd.arg("app-server");
+        if let Some(endpoint) = &luna_endpoint {
+            for arg in endpoint.codex_args() {
+                cmd.arg(arg);
+            }
+            cmd.env(luna_mcp::TOKEN_ENV, endpoint.token());
+        }
         let catalog_home = request
             .model_options
             .remove(LUNA_CODEX_HOME_OPTION)
@@ -969,6 +991,7 @@ impl CodexHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            luna_endpoint,
         }));
 
         if validate_selections {
@@ -1000,6 +1023,9 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    /// This process's `luna` MCP endpoint; dropped (and its token retired)
+    /// when the session ends.
+    luna_endpoint: Option<luna_mcp::LunaMcpEndpoint>,
 }
 
 /// Turn-routing state (port of codex.ts's activeTurnId/completedTurnIds): the
@@ -1367,6 +1393,7 @@ async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        mut luna_endpoint,
     } = session;
     let RunControls {
         request_input,
@@ -1435,34 +1462,15 @@ async fn run_session(session: Session) {
         } else {
             // Ordinary LUNA work must materialize as a provider-native thread.
             p.insert("ephemeral".into(), false.into());
-            if let Some(contract) = runtime_contract.as_ref() {
-                if !contract.instructions.is_empty() {
-                    p.insert(
-                        "developerInstructions".into(),
-                        render_luna_instructions(contract).into(),
-                    );
-                }
-                if contract.delivery == luna_proto::RuntimeDelivery::CodexDynamicTools
-                    && invoke_luna_tool.is_some()
-                {
-                    p.insert(
-                        "dynamicTools".into(),
-                        Value::Array(
-                            contract
-                                .tools
-                                .iter()
-                                .map(|tool| {
-                                    json!({
-                                        "type": "function",
-                                        "name": tool.name,
-                                        "description": tool.description,
-                                        "inputSchema": tool.input_schema,
-                                    })
-                                })
-                                .collect(),
-                        ),
-                    );
-                }
+            // LUNA tools are not frozen into the thread as dynamicTools: the
+            // process-scoped `luna` MCP endpoint serves them.
+            if let Some(contract) = runtime_contract.as_ref()
+                && !contract.instructions.is_empty()
+            {
+                p.insert(
+                    "developerInstructions".into(),
+                    render_luna_instructions(contract).into(),
+                );
             }
         }
         p.insert("cwd".into(), Value::String(request.cwd.clone()));
@@ -1834,6 +1842,10 @@ async fn run_session(session: Session) {
     let mut router = TurnRouter::default();
     let mut review_turn = ReviewTurn::default();
     let mut luna_call_ids = LunaCallIds::default();
+    // Dropped (and so cancelled) when this session returns: a LUNA tool call
+    // still parked on its local approval is abandoned with the session.
+    let luna_calls_closed = CancellationToken::new();
+    let _luna_calls_closed_guard = luna_calls_closed.clone().drop_guard();
     let initial_client_id = request
         .model_options
         .get(LUNA_CLIENT_USER_MESSAGE_ID_OPTION)
@@ -2378,6 +2390,7 @@ async fn run_session(session: Session) {
                             computer_use_turn_cancel: &computer_use_turn_cancel,
                             pending_approvals: &mut pending_approvals,
                             subagent,
+                            luna_calls_closed: &luna_calls_closed,
                         },
                     );
                 }
@@ -2647,6 +2660,22 @@ async fn run_session(session: Session) {
                 }
             },
 
+            Some(call) = luna_mcp::LunaMcpEndpoint::next_call(&mut luna_endpoint) => {
+                luna_mcp::dispatch(
+                    luna_mcp::LunaToolRequest::from_mcp(&call.name, &call.arguments, &call.meta),
+                    luna_mcp::LunaToolScope {
+                        thread_id: &thread_id,
+                        active_turn_id: router.active_id(),
+                        runtime_contract: runtime_contract.as_ref(),
+                        invoke_luna_tool: invoke_luna_tool.as_ref(),
+                        call_ids: &mut luna_call_ids,
+                        interrupt: &interrupt,
+                        closed: &luna_calls_closed,
+                    },
+                    luna_mcp::LunaToolReply::Mcp(call.reply),
+                );
+            }
+
             _ = event_tx.closed() => break 'main,
         }
     }
@@ -2853,6 +2882,8 @@ struct ServerRequestContext<'a> {
     pending_approvals: &'a mut approvals::PendingApprovals,
     /// Set when the request names a native sub-agent's thread and live turn.
     subagent: Option<approvals::SubagentRequest>,
+    /// Cancelled when this session ends: abandons in-flight LUNA tool calls.
+    luna_calls_closed: &'a CancellationToken,
 }
 
 /// Serve one server→client request. Approval requests round-trip through the
@@ -2894,6 +2925,7 @@ fn handle_server_request(
         computer_use_turn_cancel,
         pending_approvals: _,
         subagent: _,
+        luna_calls_closed,
     } = context;
     if method == "mcpServer/elicitation/request" {
         let matching_context = !interrupt.is_cancelled()
@@ -2975,56 +3007,24 @@ fn handle_server_request(
         return;
     }
     if method == "item/tool/call" {
-        let call_id = params.get("callId").and_then(Value::as_str).unwrap_or("");
-        let matching_context = active_turn_id.is_some()
-            && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
-            && params.get("turnId").and_then(Value::as_str) == active_turn_id
-            && params.get("namespace").is_none_or(Value::is_null)
-            && !interrupt.is_cancelled();
-        let name = params.get("tool").and_then(Value::as_str).unwrap_or("");
-        let attached = runtime_contract
-            .is_some_and(|contract| contract.tools.iter().any(|tool| tool.name == name));
-        let Some(executor) = invoke_luna_tool.filter(|_| matching_context && attached) else {
-            client.respond(&id, json!({
-                "success": false,
-                "contentItems": [{"type":"inputText","text":"LUNA tool is not attached to this task or turn"}]
-            }));
-            return;
-        };
-        let Some(turn_id) = active_turn_id.filter(|turn_id| call_ids.claim(turn_id, call_id))
-        else {
-            client.respond(&id, json!({
-                "success": false,
-                "contentItems": [{"type":"inputText","text":"LUNA tool call ID is missing, repeated, or over limit"}]
-            }));
-            return;
-        };
-        let client = client.clone();
-        let executor = Arc::clone(executor);
-        let interrupt = interrupt.clone();
-        let invocation = LunaToolInvocation {
-            name: name.to_owned(),
-            arguments: params.get("arguments").cloned().unwrap_or(Value::Null),
-            context: LunaToolInvocationContext::new(thread_id, turn_id, call_id),
-        };
-        tokio::spawn(async move {
-            let outcome = tokio::select! {
-                biased;
-                _ = interrupt.cancelled() => Err(HarnessError::Protocol("LUNA tool call cancelled".into())),
-                result = executor(invocation) => result,
-            };
-            let (success, text) = match outcome {
-                Ok(value) => (true, value.to_string()),
-                Err(error) => (false, error.to_string()),
-            };
-            client.respond(
-                &id,
-                json!({
-                    "success": success,
-                    "contentItems": [{"type":"inputText","text":text}]
-                }),
-            );
-        });
+        // Legacy: threads started before MCP delivery keep their frozen
+        // dynamicTools. Same fence and executor as the `luna` MCP endpoint.
+        luna_mcp::dispatch(
+            luna_mcp::LunaToolRequest::from_dynamic(params),
+            luna_mcp::LunaToolScope {
+                thread_id,
+                active_turn_id,
+                runtime_contract,
+                invoke_luna_tool,
+                call_ids,
+                interrupt,
+                closed: luna_calls_closed,
+            },
+            luna_mcp::LunaToolReply::Dynamic {
+                client: client.clone(),
+                id,
+            },
+        );
         return;
     }
     // A tool's user-input request (EXPERIMENTAL, codex 0.146.x) is a CONTENT
