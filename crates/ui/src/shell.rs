@@ -7807,8 +7807,8 @@ impl Shell {
         pinned: bool,
         activity_row: bool,
         can_settle: bool,
-        // Non-archived child chats folded into this row; they are listed in
-        // its right-pane Child chats surface, reached through the count chip.
+        // Non-archived direct child chats. They are listed in this chat's
+        // right-pane Child chats surface, reached through the count chip.
         child_chats: usize,
         // This row's jump combo while the hint overlay is up. It takes the
         // corner outright — above hover and above the status word — so all
