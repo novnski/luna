@@ -953,18 +953,21 @@ async fn cc01_every_unsupported_inbound_control_gets_one_explicit_error() {
 
 #[tokio::test]
 async fn cc01_withdrawn_approval_is_never_answered_late() {
+    let root = tempfile::tempdir().unwrap();
+    let surfaced = root.path().join("surfaced");
     let asked = Arc::new(Mutex::new(0usize));
     let (steer_tx, steer_rx) = mpsc::channel(8);
     let token = CancellationToken::new();
     let counter = Arc::clone(&asked);
     let controls = RunControls {
-        // The fake withdraws the surfaced prompt after ~300 ms; "Allow once"
-        // arrives after that and must never reach the CLI.
+        // Surfacing drops a marker; the fake then withdraws the prompt, and
+        // "Allow once" arrives later still: it must never reach the CLI.
         request_input: Box::new(move |questions: Vec<UserInputQuestion>| {
             *counter.lock().unwrap() += 1;
+            std::fs::write(&surfaced, b"1").unwrap();
             let (tx, rx) = oneshot::channel();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(700)).await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
                 let _ = tx.send(
                     questions
                         .iter()
@@ -981,12 +984,9 @@ async fn cc01_withdrawn_approval_is_never_answered_late() {
         interrupt: token.clone(),
         invoke_luna_tool: None,
     };
-    let events = run_to_end(
-        &harness(),
-        request("scenario:cc01-cancel-approval"),
-        controls,
-    )
-    .await;
+    let mut req = request("scenario:cc01-cancel-approval");
+    req.cwd = root.path().to_str().unwrap().into();
+    let events = run_to_end(&harness(), req, controls).await;
     drop(steer_tx);
     assert_completed(&events, "cancel-ok");
     assert_eq!(*asked.lock().unwrap(), 1, "the approval was surfaced once");
