@@ -349,6 +349,13 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     let workspace_dir = tempfile::tempdir().unwrap();
     let workspace = workspace_dir.path().canonicalize().unwrap();
     std::fs::write(workspace.join("notes.txt"), "alpha\n").unwrap();
+    // The engine's model cache builds its own `ClaudeHarness::new()` outside
+    // the registry. Pin every Claude launch in this single-test binary to the
+    // fake and its synthetic config so nothing reaches a real CLI or config.
+    unsafe {
+        std::env::set_var("CLAUDE_CODE_EXECUTABLE", fake());
+        std::env::set_var("CLAUDE_CONFIG_DIR", claude_home(&workspace));
+    }
     let core = assemble(root.path(), &workspace);
     let client = luna_rpc::memory_client(core.rpc_service());
     client

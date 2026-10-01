@@ -217,6 +217,12 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&workspace)?;
     let workspace = workspace.canonicalize()?;
     std::fs::write(workspace.join("notes.txt"), "alpha\n")?;
+    // The engine's model cache builds its own `ClaudeHarness::new()` outside
+    // the registry; pin every Claude launch to the fake and its config.
+    unsafe {
+        std::env::set_var("CLAUDE_CODE_EXECUTABLE", fake());
+        std::env::set_var("CLAUDE_CONFIG_DIR", workspace.join(".fake-claude-config"));
+    }
     let identity = root.path().join("claude.json");
     std::fs::write(
         &identity,
