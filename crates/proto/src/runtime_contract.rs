@@ -38,6 +38,82 @@ pub struct RuntimeContext {
     pub reasoning: Option<ReasoningLevel>,
     pub execution_route: String,
     pub granted_scopes: Vec<String>,
+    /// Explicit chat identity (main / side / child) and what this chat can
+    /// actually do. Absent in contracts compiled before roles existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<RuntimeChatIdentity>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeChatRole {
+    /// An ordinary top-level conversation.
+    Main,
+    /// A temporary side conversation forked from a parent conversation.
+    Side,
+    /// A persistent child chat created by a parent chat or the user.
+    Child,
+}
+
+/// How the conversation's starting context was formed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeContextOrigin {
+    /// A new conversation (main chats and children: only the brief is copied).
+    Fresh,
+    /// The provider natively forked the parent's conversation history.
+    NativeFork,
+    /// A bounded text snapshot of the parent was supplied with the first turn.
+    ContextSnapshot,
+}
+
+/// Whose checkout this chat works in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RuntimeCheckoutOwnership {
+    /// The chat's own project checkout (main chats).
+    Own,
+    /// The parent's checkout, shared with it (side chats; children on `current`).
+    SharedWithParent,
+    /// An explicit existing directory chosen at child creation.
+    ExistingPath,
+    /// A worktree and branch provisioned for this chat alone.
+    OwnWorktree,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeChatCapabilities {
+    pub context_origin: RuntimeContextOrigin,
+    pub checkout: RuntimeCheckoutOwnership,
+    /// `create_thread` is attached to this session.
+    pub create_child_threads: bool,
+    /// `send_message_to_thread` is attached to this session.
+    pub message_other_threads: bool,
+    /// Completed turns are reported to the parent (children only).
+    pub reports_to_parent: bool,
+    /// Side chats are temporary; main chats and children persist.
+    pub persistent: bool,
+    /// Access granted at creation (children), absent when it simply follows
+    /// the chat's own permission control.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub granted_access: Option<crate::PermissionMode>,
+    /// The user explicitly granted access above the parent's ceiling.
+    #[serde(default)]
+    pub access_granted_by_user: bool,
+    /// Access follows (and is capped by) the parent's permissions.
+    #[serde(default)]
+    pub access_capped_by_parent: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeChatIdentity {
+    pub role: RuntimeChatRole,
+    /// The side chat's parent conversation or the child's creating parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<String>,
+    pub capabilities: RuntimeChatCapabilities,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

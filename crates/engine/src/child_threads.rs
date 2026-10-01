@@ -181,6 +181,7 @@ impl EngineRpc {
             command: receipt,
             initial_message_id: child.initial_message_id.clone(),
             startup_state: self.child_startup_state(&child_id, &child),
+            provisioning: child.provisioning.clone(),
         })
     }
 
@@ -233,6 +234,7 @@ impl EngineRpc {
             command: receipt,
             initial_message_id: child.initial_message_id.clone(),
             startup_state: self.child_startup_state(&child_id, &child),
+            provisioning: child.provisioning.clone(),
         })
     }
 
@@ -356,6 +358,7 @@ impl EngineRpc {
             continue_parent: request.continue_parent,
             outcomes: Vec::new(),
             outcome_floor_ms: None,
+            provisioning: None,
         };
         let row = Chat {
             child_thread: Some(child),

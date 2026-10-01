@@ -453,6 +453,7 @@ mod tests {
             reasoning: None,
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
+            chat: None,
         }
     }
 
