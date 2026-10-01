@@ -314,7 +314,7 @@ pub(super) fn render_pane_header<V: 'static>(
             )
             .child(div().flex_none().text_color(theme.readable_muted(0.4)).child("·"))
         })
-        .child(div().min_w_0().flex_shrink().child(parent))
+        .child(div().min_w_0().child(parent))
         .when_some(chrome.meta.clone(), |el, meta| {
             el.child(
                 div()
