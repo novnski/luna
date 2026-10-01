@@ -1027,6 +1027,15 @@ async fn claude_side_chat_forks_inherits_and_runs_independently() {
 // Side chats on the ordinary composer path (task commands and per-chat RPCs)
 // ---------------------------------------------------------------------------
 
+/// A valid 1×1 PNG: native image admission sniffs the real format.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x64, 0x60, 0xF8, 0x5F,
+    0x0F, 0x00, 0x02, 0x87, 0x01, 0x80, 0xEB, 0x47, 0xBA, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
 /// An ordinary task command, fenced on the task's current snapshot the way the
 /// composer's `task_commands::execute` does.
 async fn command(client: &RpcClient, task: &str, id: &str, intent: Value) -> Result<Value, String> {
@@ -1183,7 +1192,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .call(
             luna_rpc::methods::UPLOAD_CHUNK,
             json!({"uploadId":"att-side","seq":0,
-                "data": base64::engine::general_purpose::STANDARD.encode(b"png-bytes")}),
+                "data": base64::engine::general_purpose::STANDARD.encode(PNG_1X1)}),
         )
         .await
         .unwrap();
