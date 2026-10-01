@@ -176,6 +176,14 @@ impl SideChats {
         Ok(())
     }
 
+    /// Created or open (not unloaded, expired, recovered or deleted): its row
+    /// is published to clients as a spaceless side-chat row.
+    pub(crate) fn is_live(&self, id: &str) -> bool {
+        self.meta(id).is_ok_and(|meta| {
+            matches!(meta.state.as_str(), "preparing" | "active") && now() < meta.expires_at_ms
+        })
+    }
+
     /// Keep the owning view's lease alive without reading a history page.
     pub async fn renew(&self, id: &str, token: &str) -> Result<SideChatMeta> {
         let _gate = self.0.gate.lock().await;
@@ -240,6 +248,8 @@ impl SideChats {
                 .map_or(ceiling, |requested| std::cmp::min(requested, ceiling)),
         );
         request.sandbox = sandbox;
+        // The forked provider session lives in the account frozen at creation.
+        request.provider_account_id = meta.config.provider_account_id.clone();
         let first: bool = lock(&self.0.db).query_row(
             "SELECT COUNT(*)=0 FROM side_chat_sends WHERE chat_id=?1",
             [id],
@@ -798,9 +808,12 @@ impl SideChats {
         // on the side chat's row; the creation-time ceiling still applies.
         if let Some(config) = self.0.workspace.chat(id)?.and_then(|chat| chat.config)
             && config.harness == meta.config.harness
-            && config.provider_account_id == meta.config.provider_account_id
         {
+            // The provider account stays the one frozen at creation: the
+            // forked provider session lives in that account's home.
+            let account = meta.config.provider_account_id.clone();
             meta.config = config;
+            meta.config.provider_account_id = account;
         }
         let (cwd, context): (String, String) = lock(&self.0.db).query_row(
             "SELECT cwd,context FROM side_chats WHERE id=?1",

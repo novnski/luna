@@ -10587,16 +10587,37 @@ impl RpcService for EngineRpc {
                     watch_stream(self.workspace.watch_chats())
                         .map(move |mut value| {
                             if let Some(items) = value.as_array_mut() {
-                                items.retain(|chat| {
-                                    chat.get("spaceId").and_then(|id| id.as_str()).is_some()
-                                        && !chat.get("id").and_then(|id| id.as_str()).is_some_and(
-                                            |id| {
-                                                workspace.is_side_chat(id)
-                                                    || side_chats
-                                                        .as_ref()
-                                                        .is_some_and(|service| service.contains(id))
-                                            },
-                                        )
+                                items.retain_mut(|chat| {
+                                    let Some(id) = chat
+                                        .get("id")
+                                        .and_then(|id| id.as_str())
+                                        .map(str::to_owned)
+                                    else {
+                                        return false;
+                                    };
+                                    let side = workspace.is_side_chat(&id)
+                                        || side_chats
+                                            .as_ref()
+                                            .is_some_and(|service| service.contains(&id));
+                                    if !side {
+                                        return chat
+                                            .get("spaceId")
+                                            .and_then(|id| id.as_str())
+                                            .is_some();
+                                    }
+                                    // A live side chat is published spaceless (never a
+                                    // sidebar task) with its parent, so its own pane can
+                                    // bind the full composer to the row.
+                                    let live = side_chats
+                                        .as_ref()
+                                        .is_some_and(|service| service.is_live(&id));
+                                    if let (true, Some(object)) = (live, chat.as_object_mut()) {
+                                        object.remove("spaceId");
+                                        if let Some(parent) = workspace.side_chat_parent(&id) {
+                                            object.insert("sideChatParentId".into(), parent.into());
+                                        }
+                                    }
+                                    live
                                 });
                             }
                             value

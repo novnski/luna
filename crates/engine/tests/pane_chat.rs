@@ -1197,6 +1197,62 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .harness_session_id
         .unwrap();
 
+    // pane-ui gate: the capability is advertised and the live side chat is
+    // published in WatchChats without spaceId (never a sidebar task).
+    let info: Value = client
+        .call(luna_rpc::methods::ENGINE_INFO, json!({}))
+        .await
+        .unwrap();
+    assert!(
+        info["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "side-chat-task-commands-v1"),
+        "{info}"
+    );
+    let mut chats = client
+        .subscribe(luna_rpc::methods::WATCH_CHATS, json!({}))
+        .await
+        .unwrap();
+    let rows = tokio::time::timeout(Duration::from_secs(5), chats.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let side_published = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == side.as_str())
+        .cloned()
+        .expect("live side chat row published");
+    assert!(side_published.get("spaceId").is_none(), "{side_published}");
+    assert_eq!(side_published["sideChatParentId"], parent.as_str());
+    assert_eq!(side_published["config"]["model"], "parent-model");
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == parent.as_str() && row["spaceId"].is_string())
+    );
+    drop(chats);
+    // The per-chat reads the full composer binds accept the side id.
+    for method in [
+        luna_rpc::methods::WATCH_DOC_MESSAGES,
+        luna_rpc::methods::WATCH_QUEUE,
+        luna_rpc::methods::WATCH_NATIVE_TASKS,
+    ] {
+        let stream = client.subscribe_checked(method, json!({"chatId": side})).await;
+        assert!(stream.is_ok(), "{method}: {:?}", stream.err());
+    }
+    client
+        .call(
+            luna_rpc::methods::GET_COMPOSER_DRAFT,
+            json!({"taskId": side}),
+        )
+        .await
+        .unwrap();
+
     // G3: an attachment through the ordinary upload + QueueMessage path.
     client
         .call(
@@ -1475,6 +1531,10 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .unwrap_err();
     assert!(error.contains("read-only"), "{error}");
     assert!(!queued_ids(&core, &side).contains(&"side-late".to_string()));
+    let stream = client
+        .subscribe_checked(luna_rpc::methods::WATCH_DOC_MESSAGES, json!({"chatId": side}))
+        .await;
+    assert!(stream.is_err(), "an unloaded side chat is not a live chat");
     parent_untouched(&core, &recorder, "after unload");
     evidence(
         &format!("side-ordinary-{}-summary.json", provider_name(id)),
