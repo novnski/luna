@@ -678,7 +678,12 @@ async fn captured_live_background_subagent_frames_replay_correctly() {
                 e,
                 AgentEvent::Subagent { parent_tool_use_id, event }
                     if *parent_tool_use_id == spawn_id
-                        && !matches!(event.as_ref(), AgentEvent::UserMessage { .. })
+                        // Content only: the opening prompt and the spawn's
+                        // background flag ride with the spawn itself.
+                        && !matches!(
+                            event.as_ref(),
+                            AgentEvent::UserMessage { .. } | AgentEvent::ChildProgress { .. }
+                        )
             )
             .then_some(i)
         })

@@ -17,6 +17,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use luna_proto::{AgentEvent, DoneStatus};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use super::native_stop::{self, SharedStoppable};
@@ -46,8 +47,67 @@ fn is_spawn_tool(name: &str) -> bool {
     matches!(name, "Agent" | "Task")
 }
 
-fn text_field(map: &Map<String, Value>, key: &str) -> Option<String> {
-    map.get(key)
+/// The `task_*` fields of a `system` frame, ALLOWLISTED: nothing else of a
+/// system frame (an `init` carries MCP auth/URLs) is retained. Kept as raw
+/// JSON so a mistyped field never fails the whole frame.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct TaskFields {
+    #[serde(default)]
+    description: Option<Value>,
+    #[serde(default)]
+    summary: Option<Value>,
+    #[serde(default)]
+    usage: Option<Value>,
+    #[serde(default)]
+    last_tool_name: Option<Value>,
+    #[serde(default)]
+    patch: Option<Value>,
+    #[serde(default)]
+    task_type: Option<Value>,
+    #[serde(default)]
+    is_backgrounded: Option<Value>,
+    #[serde(default)]
+    skip_transcript: Option<Value>,
+    #[serde(default)]
+    ambient: Option<Value>,
+    #[serde(default)]
+    reason: Option<Value>,
+    #[serde(default)]
+    output_file: Option<Value>,
+}
+
+/// Field lookup shared by [`TaskFields`] and a `task_updated` patch object.
+trait Fields {
+    fn field(&self, key: &str) -> Option<&Value>;
+}
+
+impl Fields for TaskFields {
+    fn field(&self, key: &str) -> Option<&Value> {
+        match key {
+            "description" => self.description.as_ref(),
+            "summary" => self.summary.as_ref(),
+            "usage" => self.usage.as_ref(),
+            "last_tool_name" => self.last_tool_name.as_ref(),
+            "patch" => self.patch.as_ref(),
+            "task_type" => self.task_type.as_ref(),
+            "is_backgrounded" => self.is_backgrounded.as_ref(),
+            "skip_transcript" => self.skip_transcript.as_ref(),
+            "ambient" => self.ambient.as_ref(),
+            "reason" => self.reason.as_ref(),
+            "output_file" => self.output_file.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+impl Fields for Map<String, Value> {
+    fn field(&self, key: &str) -> Option<&Value> {
+        self.get(key)
+    }
+}
+
+fn text_field(map: &impl Fields, key: &str) -> Option<String> {
+    map.field(key)
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -67,8 +127,8 @@ struct TaskUsage {
 }
 
 impl TaskUsage {
-    fn read(map: &Map<String, Value>) -> Option<Self> {
-        let usage = map.get("usage")?.as_object()?;
+    fn read(map: &impl Fields) -> Option<Self> {
+        let usage = map.field("usage")?.as_object()?;
         let n = |key: &str| usage.get(key).and_then(Value::as_u64);
         let usage = Self {
             total_tokens: n("total_tokens"),
@@ -362,10 +422,10 @@ impl NativeTasks {
             return Vec::new();
         };
         let rest = &frame.native_task_fields;
-        let task_type = rest.get("task_type").and_then(Value::as_str);
-        let hidden = rest.get("skip_transcript").and_then(Value::as_bool) == Some(true)
-            || rest.get("ambient").and_then(Value::as_bool) == Some(true);
-        let backgrounded = rest.get("is_backgrounded").and_then(Value::as_bool);
+        let task_type = rest.field("task_type").and_then(Value::as_str);
+        let hidden = rest.field("skip_transcript").and_then(Value::as_bool) == Some(true)
+            || rest.field("ambient").and_then(Value::as_bool) == Some(true);
+        let backgrounded = rest.field("is_backgrounded").and_then(Value::as_bool);
         let tool = id_field(frame.tool_use_id.as_deref());
         // An AGENT task: `subagent_type` (2.1.228+) or `local_agent`.
         // Subagent-owned shell tasks share the subtype without either.
@@ -484,7 +544,7 @@ impl NativeTasks {
         };
         let Some(patch) = frame
             .native_task_fields
-            .get("patch")
+            .field("patch")
             .and_then(Value::as_object)
         else {
             return Vec::new();
