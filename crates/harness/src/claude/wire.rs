@@ -57,6 +57,11 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// `init`: raw MCP rows and capability words, decoded only by `mcp.rs`.
+    #[serde(default)]
+    pub mcp_servers: Option<Value>,
+    #[serde(default)]
+    pub capabilities: Option<Value>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown

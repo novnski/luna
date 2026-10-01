@@ -447,6 +447,7 @@ mod tests {
             help_route: IntegrationHelpRoute::SkillSource {
                 scope: IntegrationSkillScope::Global,
             },
+            mcp: None,
         };
         let mut same_name_other_source = item.clone();
         same_name_other_source.identity = Some(OTHER_ID.into());
@@ -809,6 +810,7 @@ mod tests {
                 help_route: IntegrationHelpRoute::SkillSource {
                     scope: IntegrationSkillScope::Global,
                 },
+                mcp: None,
             }
         }
     }

@@ -243,6 +243,7 @@ pub fn skill_inventory(provider: HarnessId, roots: &SkillRoots) -> IntegrationIn
                 owner: IntegrationOwner::ProviderNative,
                 actions: unsupported_actions(),
                 help_route: IntegrationHelpRoute::SkillSource { scope },
+                mcp: None,
             });
         }
     }
@@ -443,6 +444,7 @@ pub fn codex_inventory(
                 owner,
                 actions: unsupported_actions(),
                 help_route: help_route.clone(),
+                mcp: None,
             });
         }
     }
@@ -478,6 +480,7 @@ pub fn codex_inventory(
                             owner: IntegrationOwner::ProviderNative,
                             actions: unsupported_actions(),
                             help_route: IntegrationHelpRoute::ProviderMcpConfig,
+                            mcp: None,
                         });
                     }
                 }
@@ -584,6 +587,7 @@ pub fn apply_codex_skill_catalog(
             owner: IntegrationOwner::ProviderNative,
             actions: unsupported_actions(),
             help_route: IntegrationHelpRoute::Unknown,
+            mcp: None,
         });
     }
     view.items.sort_by(|a, b| {
@@ -640,6 +644,7 @@ pub fn apply_codex_mcp_config(
             owner: IntegrationOwner::ProviderNative,
             actions: unsupported_actions(),
             help_route: IntegrationHelpRoute::ProviderMcpConfig,
+            mcp: None,
         });
     }
     view.items.sort_by(|a, b| {

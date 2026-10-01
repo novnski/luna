@@ -31,6 +31,7 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod mcp;
 mod normalize;
 mod wire;
 
@@ -93,6 +94,8 @@ pub struct ClaudeHarness {
     /// Command discovery cache: only a successful probe is cached, so a
     /// broken CLI retries on the next picker open (ACP-harness parity).
     commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    /// MCP reports from each run's own `system:init` (CC-11), in memory only.
+    mcp_sessions: Arc<mcp::SessionMcpRegistry>,
 }
 
 impl Default for ClaudeHarness {
@@ -102,6 +105,7 @@ impl Default for ClaudeHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             commands: tokio::sync::OnceCell::new(),
+            mcp_sessions: Arc::default(),
         }
     }
 }
@@ -464,6 +468,20 @@ impl Harness for ClaudeHarness {
         self.run_with_mode(request, controls, false).await
     }
 
+    async fn mcp_control(
+        &self,
+        request: crate::mcp_control::McpControlRequest,
+    ) -> Result<crate::mcp_control::McpControlReply, HarnessError> {
+        mcp::control(self.resolve_executable()?, self.kill_grace, request).await
+    }
+
+    fn session_mcp_observation(
+        &self,
+        provider_session_id: &str,
+    ) -> Option<crate::mcp_control::SessionMcpObservation> {
+        self.mcp_sessions.get(provider_session_id)
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
@@ -588,6 +606,7 @@ impl ClaudeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            mcp_sessions: (!title_only).then(|| self.mcp_sessions.clone()),
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -737,6 +756,7 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    mcp_sessions: Option<Arc<mcp::SessionMcpRegistry>>,
 }
 
 /// The per-run event loop: one task multiplexing stdout frames, the steering
@@ -755,6 +775,7 @@ async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        mcp_sessions,
     } = session;
     let RunControls {
         request_input,
@@ -791,6 +812,9 @@ async fn run_session(session: Session) {
                             continue;
                         }
                     };
+                    if let (Frame::System(system), Some(registry)) = (&frame, &mcp_sessions) {
+                        registry.observe(system);
+                    }
                     if let Frame::ControlRequest(req) = frame {
                         if title_only {
                             let line = control_response_line(&req.request_id, serde_json::json!({

@@ -258,6 +258,24 @@ pub trait Harness: Send + Sync {
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
     }
+    /// Provider-native MCP control plane (status, enable/disable, MCP Apps
+    /// resource read). Never starts a model turn. Default: unsupported.
+    async fn mcp_control(
+        &self,
+        _request: mcp_control::McpControlRequest,
+    ) -> Result<mcp_control::McpControlReply, HarnessError> {
+        Err(HarnessError::Protocol(
+            "provider MCP control is not supported by this harness".into(),
+        ))
+    }
+    /// In-memory MCP report from a provider session's own start frame, keyed
+    /// by the exact native session id. Default: no session evidence.
+    fn session_mcp_observation(
+        &self,
+        _provider_session_id: &str,
+    ) -> Option<mcp_control::SessionMcpObservation> {
+        None
+    }
     /// Run the harness's own native/session compaction operation. Adapters
     /// must opt in; the default is honest unsupported behavior.
     async fn compact_context(&self, _request: ContextCompactRequest) -> Result<(), HarnessError> {
@@ -289,6 +307,7 @@ pub mod claude;
 pub mod codex;
 pub(crate) mod executable;
 pub(crate) mod jsonrpc;
+pub mod mcp_control;
 pub mod mock;
 pub mod opencode;
 pub mod process;

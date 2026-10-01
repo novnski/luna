@@ -158,6 +158,11 @@ pub mod methods {
     pub const SET_INSTRUCTION_SETTINGS: &str = "SetInstructionSettings";
     /// Read-only provider-owned skill/MCP configuration inventory.
     pub const GET_INTEGRATION_INVENTORY: &str = "GetIntegrationInventory";
+    /// Owner-local: ask the provider (Claude) to save its own per-project MCP
+    /// server enable/disable preference, with a fresh provider readback.
+    pub const SET_PROVIDER_MCP_SERVER_ENABLED: &str = "SetProviderMcpServerEnabled";
+    /// Owner-local: read one declared MCP Apps `ui://` resource as inert facts.
+    pub const READ_PROVIDER_MCP_APP_RESOURCE: &str = "ReadProviderMcpAppResource";
     /// Provider-owned SKILL.md library on the engine's local device.
     pub const GET_SKILL_DOCUMENT: &str = "GetSkillDocument";
     pub const SAVE_SKILL_DOCUMENT: &str = "SaveSkillDocument";
@@ -374,6 +379,8 @@ pub mod methods {
         GET_INSTRUCTION_SETTINGS,
         SET_INSTRUCTION_SETTINGS,
         GET_INTEGRATION_INVENTORY,
+        SET_PROVIDER_MCP_SERVER_ENABLED,
+        READ_PROVIDER_MCP_APP_RESOURCE,
         GET_SKILL_DOCUMENT,
         SAVE_SKILL_DOCUMENT,
         INSTALL_SKILL,

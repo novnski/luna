@@ -144,6 +144,9 @@ struct IntegrationInventoryParams {
     provider: HarnessId,
     #[serde(default)]
     project_id: Option<String>,
+    /// Selected chat whose own provider session report may mark attachment.
+    #[serde(default)]
+    task_id: Option<String>,
     #[serde(default)]
     target_device_id: Option<String>,
     #[serde(default)]
@@ -1273,6 +1276,28 @@ impl Drop for EngineRpc {
 }
 
 impl EngineRpc {
+    /// The selected task's current native Claude session id, only when that
+    /// task belongs to the selected project (never mix project evidence).
+    fn claude_session_for_inventory(
+        &self,
+        task_id: Option<&str>,
+        project_id: Option<&str>,
+    ) -> Option<String> {
+        let chat = self.workspace.chat(task_id?).ok().flatten()?;
+        if chat.space_id.as_deref() != project_id
+            || chat.config.as_ref()?.harness != HarnessId::ClaudeCode
+        {
+            return None;
+        }
+        self.task_identity
+            .view(&chat.id)
+            .and_then(|view| view.current_binding)
+            .filter(|binding| binding.provider_id == HarnessId::ClaudeCode)
+            .map(|binding| binding.provider_task_id)
+            .or(chat.harness_session_id)
+            .filter(|id| !id.is_empty())
+    }
+
     fn skill_roots(
         &self,
         project_id: Option<&str>,
@@ -9184,10 +9209,50 @@ impl RpcService for EngineRpc {
                         crate::integration_settings::mark_codex_mcp_config_unavailable(&mut view);
                     }
                     view
+                } else if p.provider == HarnessId::ClaudeCode {
+                    let mut view = crate::integration_settings::skill_inventory(p.provider, &roots);
+                    let harness = self
+                        .registry
+                        .resolve(HarnessId::ClaudeCode)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    let session = self
+                        .claude_session_for_inventory(p.task_id.as_deref(), p.project_id.as_deref())
+                        .and_then(|id| harness.session_mcp_observation(&id));
+                    crate::claude_mcp::augment_inventory(
+                        &mut view,
+                        harness.as_ref(),
+                        project_root,
+                        session,
+                        p.probe_provider,
+                    )
+                    .await;
+                    view
                 } else {
                     crate::integration_settings::skill_inventory(p.provider, &roots)
                 };
                 RpcReply::value(&view)
+            }
+            methods::SET_PROVIDER_MCP_SERVER_ENABLED | methods::READ_PROVIDER_MCP_APP_RESOURCE => {
+                let p: crate::claude_mcp::ProviderMcpServerParams = parse_params(params)?;
+                require_local_integration_target(
+                    p.target_device_id.as_deref(),
+                    &self.engine_info.device_id,
+                )?;
+                let roots = self.skill_roots(p.project_id.as_deref())?;
+                let harness = self
+                    .registry
+                    .resolve(HarnessId::ClaudeCode)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let value = crate::claude_mcp::dispatch(
+                    method,
+                    p,
+                    harness.as_ref(),
+                    &self.engine_info.device_id,
+                    roots.project_root.as_deref(),
+                )
+                .await
+                .map_err(RpcError::Failed)?;
+                RpcReply::value(&value)
             }
             methods::GET_SKILL_DOCUMENT => {
                 let p: SkillDocumentParams = parse_params(params)?;
