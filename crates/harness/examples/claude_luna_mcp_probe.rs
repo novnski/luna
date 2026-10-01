@@ -150,6 +150,7 @@ async fn main() {
     );
     let request = RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: "init-only probe; this line is withheld from the CLI".into(),
         harness: None,

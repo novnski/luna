@@ -93,6 +93,7 @@ fn request(cwd: &std::path::Path) -> RunRequest {
     );
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: "scenario:luna-fence".into(),
         harness: None,

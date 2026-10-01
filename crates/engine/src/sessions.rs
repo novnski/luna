@@ -506,13 +506,16 @@ fn schedule_approval_expiry(
     else {
         return;
     };
-    // A request with native choices, or a Codex request that waits without a
-    // provider deadline (v2 sends none), is retired as soon as the adapter
-    // closes it (`serverRequest/resolved`, Stop or the end of its turn).
+    // A request with native choices, a Codex request that waits without a
+    // provider deadline (v2 sends none), or a no-expiry LUNA tool card from
+    // any provider (Codex or Claude), is retired as soon as its waiter closes
+    // (`serverRequest/resolved`, an abandoned call, Stop or the turn's end).
     let native_choices = questions.iter().any(|question| {
         question.approval.as_ref().is_some_and(|approval| {
             approval.details.is_some()
-                || (approval.provider == HarnessId::Codex && approval.expires().is_none())
+                || (approval.expires().is_none()
+                    && (approval.provider == HarnessId::Codex
+                        || approval.action_kind == luna_proto::ApprovalActionKind::LunaCrossTask))
         })
     });
     tokio::spawn(async move {

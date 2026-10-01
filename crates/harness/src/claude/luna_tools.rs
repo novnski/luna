@@ -88,6 +88,16 @@ pub(crate) struct ClaudeLunaBridge {
     turn: Option<Turn>,
     call_ids: LunaCallIds,
     parked: Vec<Parked>,
+    /// Cancelled when the bridge (and so the session loop) is dropped: a call
+    /// still parked on its LUNA approval is abandoned with the session, and
+    /// the engine's shared resolver watch retires the card.
+    closed: CancellationToken,
+}
+
+impl Drop for ClaudeLunaBridge {
+    fn drop(&mut self) {
+        self.closed.cancel();
+    }
 }
 
 impl ClaudeLunaBridge {
@@ -115,6 +125,7 @@ impl ClaudeLunaBridge {
                 turn: None,
                 call_ids: LunaCallIds::default(),
                 parked: Vec::new(),
+                closed: CancellationToken::new(),
             },
         ))
     }
@@ -286,6 +297,7 @@ impl ClaudeLunaBridge {
                 invoke_luna_tool: Some(&self.executor),
                 call_ids: &mut self.call_ids,
                 interrupt: &self.interrupt,
+                closed: &self.closed,
             },
             LunaToolReply::Mcp(reply),
         );

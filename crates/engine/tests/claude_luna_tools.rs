@@ -56,6 +56,7 @@ fn fake() -> std::path::PathBuf {
 fn run_request(prompt: &str, cwd: &Path) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
