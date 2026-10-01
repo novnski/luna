@@ -7657,7 +7657,7 @@ async fn drive_run(
                 )
             {
                 crate::claude_ongoing::persist_run_goal(
-                    host,
+                    &host,
                     &chat_id,
                     &entry_id,
                     &binding,
@@ -7683,7 +7683,7 @@ async fn drive_run(
                 )
                 .is_some()
             {
-                crate::claude_ongoing::persist_schedules(host, &chat_id, schedules);
+                crate::claude_ongoing::persist_schedules(&host, &chat_id, schedules);
             }
             continue;
         }
