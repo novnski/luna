@@ -490,12 +490,15 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
         })
     })
     .await;
-    assert!(has_text(
-        &core,
-        &parent,
-        MessageRole::Assistant,
-        "has not reached the model"
-    ));
+    until("visible hold error", || {
+        has_text(
+            &core,
+            &parent,
+            MessageRole::Assistant,
+            "has not reached the model",
+        )
+    })
+    .await;
     assert_eq!(
         lines_with(&fake_log(&project), &format!("luna-child:{held_child}")).len(),
         1
