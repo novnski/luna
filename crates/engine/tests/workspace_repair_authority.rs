@@ -163,6 +163,7 @@ async fn create(core: &EngineCore, root: &Path, task: &str) {
 fn request(root: &Path, prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: Some(HarnessId::Mock),

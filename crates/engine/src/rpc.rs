@@ -4159,6 +4159,7 @@ impl EngineRpc {
                 crate::EngineError::Other("task execution settings are unavailable".into())
             })?;
         request.review = None;
+        request.goal = None;
         request.prompt = prompt.to_string();
         request.harness = Some(config.harness);
         request.provider_account_id = config.provider_account_id.clone();

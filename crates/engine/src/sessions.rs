@@ -3129,6 +3129,78 @@ impl SessionsEngine {
         .await
     }
 
+    fn mark_goal_sent(&self, chat_id: &str, user_id: &str) {
+        let Some(host) = self.inner.doc_host() else {
+            return;
+        };
+        let id = user_id.to_owned();
+        if let Err(error) =
+            host.persist_goal_mark(chat_id, &new_id(), move |marks| marks.mark_sent(&id))
+        {
+            tracing::warn!(chat = %chat_id, %error, "goal sent mark persistence failed");
+        }
+    }
+
+    /// Warm "send as goal": the loaded Codex runtime runs Codex's clear+set on
+    /// its own connection and starts (or extends) the turn itself; its
+    /// `turn/started` arrives as an autonomous turn. `Ok(false)` means the
+    /// mailbox is gone and the caller replaces the runtime. A correlated
+    /// rejection removes the echo; an unknown outcome is never retried.
+    async fn start_goal_on_live_runtime(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        steer_tx: &mpsc::Sender<SteerMessage>,
+        user_id: &str,
+        request: &RunRequest,
+        goal: luna_proto::GoalStartRequest,
+    ) -> Result<bool, EngineError> {
+        let handle = self.doc_handle(chat_id)?;
+        // The message precedes the turn Codex starts within milliseconds.
+        handle.write_user_message(user_id, &request.prompt, now_ms())?;
+        let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
+        let message = SteerMessage {
+            prompt: request.prompt.clone(),
+            attachments: Vec::new(),
+            input_items: Vec::new(),
+            message_id: Some(user_id.to_owned()),
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: Some(acceptance_tx),
+            goal: Some(goal),
+        };
+        if steer_tx.try_send(message).is_err() {
+            handle
+                .doc()
+                .remove_rejected_user_message(user_id, &request.prompt)?;
+            return Ok(false);
+        }
+        self.mark_goal_sent(chat_id, user_id);
+        let acceptance =
+            tokio::time::timeout(std::time::Duration::from_secs(15), acceptance_rx).await;
+        match acceptance {
+            Ok(Ok(SteerAcceptance::Accepted)) => {
+                self.inner.note_message(chat_id, &request.prompt);
+                if self.is_live(chat_id, run_id) {
+                    tracing::debug!(chat = %chat_id, "goal started on the loaded Codex runtime");
+                }
+                Ok(true)
+            }
+            Ok(Ok(SteerAcceptance::Rejected(message))) => {
+                handle
+                    .doc()
+                    .remove_rejected_user_message(user_id, &request.prompt)?;
+                Err(EngineError::Other(format!("Codex rejected the goal: {message}")))
+            }
+            Ok(Ok(SteerAcceptance::Unknown(message))) => Err(EngineError::Other(format!(
+                "Codex goal start is unconfirmed and was not retried: {message}. Refresh the goal before changing it."
+            ))),
+            Ok(Err(_)) | Err(_) => Err(EngineError::Other(
+                "Codex goal start is unconfirmed and was not retried. Refresh the goal before changing it."
+                    .into(),
+            )),
+        }
+    }
+
     fn dispatch_with_context<'a>(
         &'a self,
         chat_id: &'a str,
@@ -3174,6 +3246,24 @@ impl SessionsEngine {
             return Err(EngineError::Other(
                 "Side chat recovery never replays a send".into(),
             ));
+        }
+        if let Some(goal) = request.goal.as_ref() {
+            if harness_id != HarnessId::Codex {
+                return Err(EngineError::Other("Goals require a Codex task".into()));
+            }
+            goal.validate()
+                .map_err(|error| EngineError::Other(error.into()))?;
+            if request.review.is_some()
+                || !request.attachments.is_empty()
+                || !request.input_items.is_empty()
+            {
+                return Err(EngineError::Other(
+                    "A goal is text only. Remove attachments, mentions and comments, then send it again."
+                        .into(),
+                ));
+            }
+            // The transcript message is exactly the objective Codex received.
+            request.prompt = goal.objective.clone();
         }
         if let Some(review) = request.review.as_ref() {
             if harness_id != HarnessId::Codex {
@@ -3278,6 +3368,12 @@ impl SessionsEngine {
         if request.review.is_some() && context_control.pending_handoff.is_some() {
             return Err(EngineError::Other("Send the pending context handoff in an ordinary turn before starting a native review".into()));
         }
+        if request.goal.is_some() && context_control.pending_handoff.is_some() {
+            return Err(EngineError::Other(
+                "Send the pending context handoff in an ordinary turn before starting a goal"
+                    .into(),
+            ));
+        }
         if let Some(handoff) = context_control.pending_handoff.as_ref()
             && !request
                 .prompt
@@ -3293,7 +3389,10 @@ impl SessionsEngine {
                 handoff.text, request.prompt
             );
         }
-        let frozen_request = request.clone();
+        // Recovery and replays never re-run a goal start (an uncertain
+        // provider mutation); they continue the provider session instead.
+        let mut frozen_request = request.clone();
+        frozen_request.goal = None;
         if let Some(recovery) = recovery.as_ref() {
             let Some(claimed) = self.inner.recovery.latest(chat_id)? else {
                 return Err(EngineError::Other(
@@ -3524,7 +3623,18 @@ impl SessionsEngine {
         self.note_turn_start(chat_id, &request.cwd);
         if let Some((run_id, steerable, same_runtime, steer_tx, ledger)) = routed {
             let user_id = message_id.clone().unwrap_or_else(new_id);
-            let accepted = if steerable && same_runtime {
+            if let Some(goal) = request.goal.clone()
+                && steerable
+                && same_runtime
+                && self
+                    .start_goal_on_live_runtime(
+                        chat_id, &run_id, &steer_tx, &user_id, &request, goal,
+                    )
+                    .await?
+            {
+                return Ok(run_id);
+            }
+            let accepted = if steerable && same_runtime && request.goal.is_none() {
                 // Warm dispatch uses the same mailbox as explicit steering.
                 // Register acceptance before a fast boundary can retire it.
                 let mut pending = lock(&ledger);
@@ -3535,6 +3645,7 @@ impl SessionsEngine {
                     message_id: Some(user_id.clone()),
                     delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                     acceptance: None,
+                    goal: None,
                 };
                 if steer_tx.try_send(message).is_ok() {
                     pending.push_back(RoutedSteer {
@@ -3607,6 +3718,9 @@ impl SessionsEngine {
         let handle = self.doc_handle(chat_id)?;
         let user_id = message_id.unwrap_or_else(new_id);
         handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+        if request.goal.is_some() {
+            self.mark_goal_sent(chat_id, &user_id);
+        }
 
         // Engine-owned resume (luna sessions.ts:736 — every dispatch read the
         // chat's stored harness session): callers always send `resume: None`;
@@ -3701,7 +3815,9 @@ impl SessionsEngine {
                 );
             }
         }
-        lock(&self.inner.last_requests).insert(chat_id.to_string(), request.clone());
+        let mut remembered = request.clone();
+        remembered.goal = None;
+        lock(&self.inner.last_requests).insert(chat_id.to_string(), remembered);
 
         let run_id = new_id();
         let (steer_tx, steer_rx) = mpsc::channel::<SteerMessage>(32);
@@ -4004,6 +4120,7 @@ impl SessionsEngine {
             message_id: Some(user_id.clone()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(acceptance_tx),
+            goal: None,
         };
         {
             // Serialize mailbox acceptance with confirmation and Done-time
@@ -4955,6 +5072,7 @@ impl SessionsEngine {
                 );
             }
             request.review = None;
+            request.goal = None;
             request.prompt = "Continue from the preserved provider session. Do not repeat completed tool or external effects; first inspect the current state and resume only unfinished work.".into();
             request.attachments.clear();
             request.input_items.clear();
@@ -7399,12 +7517,36 @@ async fn drive_run(
         }
         // Goal status is provider control state, including updates while warm
         // and parked. It never synthesizes a user message or a terminal turn.
-        if let AgentEvent::GoalChanged { thread_id, goal } = &event {
+        if let AgentEvent::GoalChanged {
+            thread_id,
+            goal,
+            turn_id,
+        } = &event
+        {
             if harness_id == HarnessId::Codex
                 && let (Some(binding), Some(host)) =
                     (inner.current_codex_binding_key(&chat_id), inner.doc_host())
                 && binding.provider_thread_id == *thread_id
             {
+                // "Goal achieved" belongs to the provider turn whose own
+                // update completed the goal (the model's `update_goal`), never
+                // to a client control or a resume snapshot (turnId null).
+                let achieved = goal.as_ref().filter(|goal| {
+                    goal.status == luna_proto::GoalStatus::Complete
+                        && turn_id.is_some()
+                        && provider_checkpoint_id.as_deref() == turn_id.as_deref()
+                });
+                let previously_complete = host.context_control(&chat_id).ok().and_then(|state| {
+                    state
+                        .goal
+                        .and_then(|readback| readback.goal)
+                        .filter(|previous| {
+                            achieved.is_some_and(|goal| {
+                                previous.created_at == goal.created_at
+                                    && previous.status == luna_proto::GoalStatus::Complete
+                            })
+                        })
+                });
                 let readback = luna_proto::GoalReadback {
                     thread_id: thread_id.clone(),
                     binding_generation: binding.generation,
@@ -7414,6 +7556,14 @@ async fn drive_run(
                 };
                 if let Err(error) = host.persist_goal_readback(&chat_id, &new_id(), &readback) {
                     tracing::warn!(chat = %chat_id, %error, "goal snapshot persistence failed");
+                }
+                if let Some(goal) = achieved
+                    && previously_complete.is_none()
+                    && let Err(error) = host.persist_goal_mark(&chat_id, &new_id(), |marks| {
+                        marks.mark_achieved(&entry_id, goal.time_used_seconds)
+                    })
+                {
+                    tracing::warn!(chat = %chat_id, %error, "goal achieved mark persistence failed");
                 }
             }
             continue;
@@ -8489,6 +8639,7 @@ async fn drive_run(
                     break;
                 };
                 request.review = None;
+                request.goal = None;
                 request.prompt = steer.prompt.clone();
                 request.resume = None;
                 request.attachments = steer.attachments.clone();
@@ -13778,6 +13929,7 @@ mod tests {
     fn request() -> RunRequest {
         RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: "first".into(),
             harness: None,

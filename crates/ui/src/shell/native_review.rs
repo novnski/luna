@@ -262,6 +262,7 @@ impl Shell {
                     review: Some(NativeReviewRequest {
                         target: target.clone(),
                     }),
+                    goal: None,
                     prompt: target.label(),
                     harness: Some(HarnessId::Codex),
                     provider_account_id: config.provider_account_id,

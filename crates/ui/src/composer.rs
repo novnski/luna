@@ -10226,6 +10226,7 @@ impl Composer {
                 let command = SessionCommandPayload::Run {
                     request: RunRequest {
                         review: None,
+                        goal: None,
                         input_items: submitted_input_items.clone(),
                         prompt: content.clone(),
                         harness: resolved.harness,

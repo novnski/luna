@@ -318,6 +318,7 @@ fn fixture_registry_with_history(
 fn run_request(root: &Path, prompt: &str, permission_mode: PermissionMode) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: Some(HarnessId::Codex),

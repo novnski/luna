@@ -799,6 +799,7 @@ impl Harness for CodexHarness {
         let codex_home = request.model_options.remove(LUNA_CODEX_HOME_OPTION);
         let codex_file_auth = request.model_options.remove(LUNA_CODEX_FILE_AUTH_OPTION);
         request.review = None;
+        request.goal = None;
         request.resume = None;
         request.worktree = None;
         request.attachments.clear();
@@ -1243,6 +1244,15 @@ async fn send(tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>, ev: AgentEven
 }
 
 /// `turn/start` and return the new turn id from the response.
+/// How long a goal start waits for Codex's own `turn/started` (probes: 7–34 ms).
+fn goal_turn_start_timeout() -> Duration {
+    std::env::var("LUNA_CODEX_GOAL_TURN_START_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .map(Duration::from_millis)
+        .unwrap_or(Duration::from_secs(30))
+}
+
 async fn start_turn(client: &RpcClient, params: Value) -> Result<String, HarnessError> {
     let started = client.request("turn/start", params).await?;
     Ok(started["turn"]["id"].as_str().unwrap_or("").to_owned())
@@ -1421,16 +1431,26 @@ async fn run_session(session: Session) {
         if let Some(tier) = &service_tier {
             p.insert("serviceTier".into(), Value::String(tier.clone()));
         }
-        if request.review.is_some()
+        if (request.review.is_some() || request.goal.is_some())
             && let Some(effort) = effort
         {
-            // review/start has no per-turn effort field; freeze the selected
-            // reasoning setting into thread/start or thread/resume instead.
+            // review/start has no per-turn effort field, and a goal turn is
+            // started by Codex itself; freeze the selected reasoning setting
+            // into thread/start or thread/resume instead.
             p.entry("config".to_string())
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
                 .expect("thread config is an object")
                 .insert("model_reasoning_effort".into(), effort.into());
+        }
+        if request.goal.is_some() {
+            // Same reason as `summary: auto` on turn/start: without it the
+            // server-started goal turn thinks in silence.
+            p.entry("config".to_string())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("thread config is an object")
+                .insert("model_reasoning_summary".into(), "auto".into());
         }
         p
     };
@@ -1474,6 +1494,15 @@ async fn run_session(session: Session) {
             .get(LUNA_STRICT_RESUME_OPTION)
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        if !title_only
+            && request.goal.is_some()
+            && let Some(resume) = &request.resume
+            && let Err(error) = goals::clear_before_load(&client, resume).await
+        {
+            // An unmaterialized or foreign id has nothing to clear. If a stale
+            // goal really remained, the set below still replaces it.
+            tracing::debug!(target: "luna_harness::codex", %error, "goal clear before resume failed");
+        }
         let thread = if let Some(resume) = &request.resume {
             let mut p = start_params.clone();
             // Dynamic tools are retained in the provider's original thread
@@ -1503,6 +1532,11 @@ async fn run_session(session: Session) {
         if request.review.is_some() && thread_id.is_empty() {
             return Err(HarnessError::Protocol(
                 "Codex returned no thread identity for native review".into(),
+            ));
+        }
+        if request.goal.is_some() && thread_id.is_empty() {
+            return Err(HarnessError::Protocol(
+                "Codex returned no thread identity for the goal".into(),
             ));
         }
         // Native thread/start and thread/resume report this policy beside `thread`.
@@ -1604,6 +1638,7 @@ async fn run_session(session: Session) {
             AgentEvent::GoalChanged {
                 thread_id: thread_id.clone(),
                 goal,
+                turn_id: None,
             },
         )
         .await;
@@ -1728,9 +1763,24 @@ async fn run_session(session: Session) {
     let mut review_turn = ReviewTurn::default();
     let mut luna_call_ids = LunaCallIds::default();
     let initial_turn = async {
-        match request.review.as_ref() {
-            Some(review) => start_review(&client, &thread_id, review).await,
-            None => start_turn(&client, turn_params(initial_input)).await,
+        match (request.review.as_ref(), request.goal.as_ref()) {
+            (Some(review), _) => start_review(&client, &thread_id, review).await.map(Some),
+            // Codex starts the goal turn itself; its `turn/started` is adopted
+            // by the main loop (bounded by `goal_turn_deadline`).
+            (None, Some(goal)) => goals::start(&client, &thread_id, goal)
+                .await
+                .map(|_| None)
+                .map_err(|failure| match failure {
+                    RpcRequestFailure::Rejected(message) => {
+                        HarnessError::Protocol(format!("Codex rejected the goal: {message}"))
+                    }
+                    RpcRequestFailure::Unknown(message) => HarnessError::Protocol(format!(
+                        "Codex goal start is unconfirmed and was not retried: {message}"
+                    )),
+                }),
+            (None, None) => start_turn(&client, turn_params(initial_input))
+                .await
+                .map(Some),
         }
     };
     let Some(started) = liveness.wait(initial_turn).await else {
@@ -1749,8 +1799,12 @@ async fn run_session(session: Session) {
         shutdown_child(&mut child, kill_grace).await;
         return;
     };
+    let mut goal_turn_deadline = None;
     match started {
-        Ok(id) => {
+        Ok(None) => {
+            goal_turn_deadline = Some(tokio::time::Instant::now() + goal_turn_start_timeout());
+        }
+        Ok(Some(id)) => {
             if request.review.is_some() {
                 review_turn.start(id.clone());
             }
@@ -1851,7 +1905,8 @@ async fn run_session(session: Session) {
                                 Err(error) => { tracing::warn!(%error, "invalid goal notification"); continue; }
                             }
                         };
-                        if !send(&event_tx, AgentEvent::GoalChanged { thread_id: thread_id.clone(), goal }).await { break 'main; }
+                        let turn_id = params.get("turnId").and_then(Value::as_str).filter(|id| !id.is_empty()).map(str::to_owned);
+                        if !send(&event_tx, AgentEvent::GoalChanged { thread_id: thread_id.clone(), goal, turn_id }).await { break 'main; }
                     }
                     "serverRequest/resolved" => {
                         if params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str())
@@ -1870,6 +1925,7 @@ async fn run_session(session: Session) {
                         if router.active_id() != Some(id.as_str()) {
                             continue;
                         }
+                        goal_turn_deadline = None;
                         if previous.as_deref() != Some(id.as_str()) {
                             done_current = false;
                             if !send(&event_tx, AgentEvent::ProviderTurnStarted { thread_id: thread_id.clone(), turn_id: id.clone() }).await { break 'main; }
@@ -2305,7 +2361,73 @@ async fn run_session(session: Session) {
                 Some(Incoming::Eof) | None => break 'main,
             },
 
+            // A goal start whose turn Codex never began (for example Plan mode
+            // refuses automatic input): settle instead of Working forever. The
+            // goal itself stays as Codex reports it.
+            _ = async {
+                match goal_turn_deadline {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending().await,
+                }
+            }, if goal_turn_deadline.is_some() && router.active.is_none() && !done_current => {
+                goal_turn_deadline = None;
+                done_current = true;
+                if !send(
+                    &event_tx,
+                    AgentEvent::Done {
+                        status: DoneStatus::Errored,
+                        result: None,
+                        error: Some("Codex saved the goal but did not start working on it. Press Resume on the goal or send a message to continue.".into()),
+                        session_id: Some(thread_id.clone()),
+                    },
+                )
+                .await
+                {
+                    break 'main;
+                }
+            },
+
             steer = steering.recv(), if steering_open && !interrupted => match steer {
+                Some(msg) if msg.goal.is_some() => {
+                    // Warm "send as goal": Codex's clear+set on this loaded
+                    // connection. An idle thread starts the goal turn itself
+                    // (adopted by `turn/started` above); a running turn becomes
+                    // goal-active. Never a turn/start or turn/steer fallback.
+                    let goal = msg.goal.expect("guarded");
+                    let reply = liveness
+                        .wait(async {
+                            tokio::time::timeout(
+                                Duration::from_secs(10),
+                                goals::start(&client, &thread_id, &goal),
+                            )
+                            .await
+                            .unwrap_or_else(|_| {
+                                Err(RpcRequestFailure::Unknown(
+                                    "Codex goal start acknowledgement timed out".into(),
+                                ))
+                            })
+                        })
+                        .await;
+                    let outcome = match reply {
+                        None => SteerAcceptance::Unknown(
+                            "Codex session stopped before the goal reply arrived".into(),
+                        ),
+                        Some(Ok(_)) => SteerAcceptance::Accepted,
+                        Some(Err(RpcRequestFailure::Rejected(message))) => {
+                            SteerAcceptance::Rejected(message)
+                        }
+                        Some(Err(RpcRequestFailure::Unknown(message))) => {
+                            SteerAcceptance::Unknown(message)
+                        }
+                    };
+                    let stopped = reply.is_none();
+                    if let Some(tx) = msg.acceptance {
+                        let _ = tx.send(outcome);
+                    }
+                    if stopped {
+                        break 'main;
+                    }
+                }
                 Some(msg) => {
                     let Some(validation) = liveness.wait(composer_catalog::validate_inputs(&client, std::path::Path::new(&request.cwd), &thread_id, &msg.input_items)).await else { break 'main; };
                     if let Err(error) = validation {

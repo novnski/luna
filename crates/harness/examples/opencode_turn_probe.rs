@@ -24,6 +24,7 @@ async fn main() {
     let (_steer_tx, steering) = mpsc::channel(8);
     let request = RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt,
         harness: None,

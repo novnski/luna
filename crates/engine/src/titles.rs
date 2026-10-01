@@ -87,6 +87,7 @@ impl TitleGenerator {
         );
         let request = RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt,
             harness: Some(harness_id),
@@ -281,6 +282,7 @@ impl TitleGenerator {
         for attempt in 0..=RETRY_DELAYS_MS.len() {
             let request = RunRequest {
                 review: None,
+                goal: None,
                 input_items: Vec::new(),
                 prompt: title_prompt.clone(),
                 harness: Some(harness_id),
@@ -454,6 +456,7 @@ mod tests {
         };
         let request = RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: "Title only".into(),
             harness: None,

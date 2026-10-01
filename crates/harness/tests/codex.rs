@@ -46,6 +46,7 @@ fn native_client() -> CodexNativeClient {
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
@@ -1160,6 +1161,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1209,6 +1211,7 @@ async fn explicit_steer_native_record_emits_one_correlated_boundary() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1244,6 +1247,7 @@ async fn explicit_steer_ignores_stale_and_duplicate_echoes() {
                 message_id: Some(message_id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(acceptance),
+                goal: None,
             })
             .await
             .expect("steer queued");
@@ -1291,6 +1295,7 @@ async fn explicit_steer_uncorrelated_ack_stays_unknown_without_replay() {
                 message_id: Some("uncorrelated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(accepted_tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -1327,6 +1332,7 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1362,6 +1368,7 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1404,6 +1411,7 @@ async fn explicit_steer_ack_only_remains_pending_without_boundary() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1440,6 +1448,7 @@ async fn rejected_steer_falls_back_to_a_follow_up_turn() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1891,6 +1900,7 @@ async fn next_turn_response_owns_approval_before_started_notification() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .unwrap();
@@ -2569,6 +2579,7 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
                 message_id: None,
                 delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                 acceptance: None,
+                goal: None,
             }).await.unwrap();
         }
         if turn == 2 {
@@ -2757,6 +2768,7 @@ async fn live_real_app_server_tool_and_steer() {
                     message_id: Some("luna-audit-live-steer".into()),
                     delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                     acceptance: Some(tx),
+                    goal: None,
                 }).await.unwrap();
                 acceptance = Some(rx);
                 sent = true;
@@ -3166,6 +3178,7 @@ async fn native_steering_reconciles_lost_ack_and_terminal_readback() {
                 message_id: Some("native-correlated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -3212,6 +3225,7 @@ async fn native_steering_records_multiple_ids_once_in_order() {
                 message_id: Some(id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(tx),
+                goal: None,
             })
             .await
             .unwrap();

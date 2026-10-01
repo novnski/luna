@@ -1,7 +1,15 @@
 //! Controls share the running app-server connection. A cold metadata client
 //! may persist/read a goal, but cannot start the loaded runtime's continuation.
-use crate::{HarnessError, jsonrpc::RpcClient};
-use luna_proto::{GoalBudget, GoalOperation, ThreadGoal};
+//!
+//! "Send as goal" therefore always runs on a LOADED thread: Codex's
+//! `thread/goal/set {status: active}` calls `start_turn_if_idle` itself
+//! (probes p1/p3 in `evidence/goal-parity/probes`), and the goal turn carries
+//! the objective as hidden goal context, never as a user item.
+use crate::{
+    HarnessError,
+    jsonrpc::{RpcClient, RpcRequestFailure},
+};
+use luna_proto::{GoalBudget, GoalOperation, GoalStartRequest, ThreadGoal};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -130,4 +138,50 @@ pub(super) async fn execute(
         }
         _ => decode(thread, &reply),
     }
+}
+
+/// Codex's own replace-and-start sequence (TUI `ReplaceExisting`, Python SDK
+/// `start_goal_operation`): clear any previous goal, then set the new one
+/// active. A loaded idle thread starts the goal turn by itself; a running turn
+/// becomes goal-active and Codex continues after it. A failure after dispatch
+/// keeps its Unknown classification and is never retried.
+pub(super) async fn start(
+    client: &RpcClient,
+    thread: &str,
+    goal: &GoalStartRequest,
+) -> Result<Option<ThreadGoal>, RpcRequestFailure> {
+    goal.validate()
+        .map_err(|error| RpcRequestFailure::Rejected(error.into()))?;
+    let cleared = client
+        .request_classified("thread/goal/clear", json!({"threadId": thread}))
+        .await?;
+    if !cleared.get("cleared").is_some_and(Value::is_boolean) {
+        return Err(RpcRequestFailure::Unknown(
+            "Codex goal clear reply omitted cleared".into(),
+        ));
+    }
+    let mut params = json!({
+        "threadId": thread,
+        "objective": goal.objective,
+        "status": "active",
+    });
+    if let Some(budget) = &goal.token_budget {
+        params["tokenBudget"] = match budget {
+            GoalBudget::Unlimited => Value::Null,
+            GoalBudget::Limited { tokens } => (*tokens).into(),
+        };
+    }
+    let reply = client.request_classified("thread/goal/set", params).await?;
+    decode(thread, &reply).map_err(|error| RpcRequestFailure::Unknown(error.to_string()))
+}
+
+/// Before `thread/resume` the thread is not loaded in this app-server, so a
+/// clear cannot interrupt anything. Clearing first prevents resume from
+/// auto-starting the PREVIOUS goal's continuation (probe p4).
+pub(super) async fn clear_before_load(client: &RpcClient, thread: &str) -> Result<(), String> {
+    client
+        .request_classified("thread/goal/clear", json!({"threadId": thread}))
+        .await
+        .map(|_| ())
+        .map_err(|failure| failure.message().to_owned())
 }
