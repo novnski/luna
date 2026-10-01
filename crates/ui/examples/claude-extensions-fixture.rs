@@ -253,7 +253,22 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&ui_data)?;
     std::fs::create_dir_all(&project)?;
     seed(&config_dir, &managed_dir, &project)?;
+    // Synthetic provider-native identity (no credentials): the engine only
+    // dispatches Claude for a detectable native account.
+    write(
+        &root.path().join("claude.json"),
+        &json!({"oauthAccount": {"accountUuid": "cc12-fixture-synthetic-account"}}).to_string(),
+    )?;
+    let engine_log = std::fs::File::create(output.join("engine.log"))?;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::new(
+            "warn,luna_engine=info,luna_harness=debug",
+        ))
+        .with_ansi(false)
+        .with_writer(Mutex::new(engine_log))
+        .try_init();
     let fake_log = config_dir.join("fake-log.txt");
+    let fake_log_copy = output.join("fake-cli-log.txt");
     let runtime = tokio::runtime::Runtime::new()?;
     let registry = HarnessRegistry::new();
     registry.register(Arc::new(
@@ -562,7 +577,9 @@ fn main() -> anyhow::Result<()> {
                     Err(error) => {
                         eprintln!("Claude extensions fixture failed: {error:#}");
                         let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
-                        *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                        let _ = std::fs::copy(&fake_log, &fake_log_copy);
+                        // AppKit termination from inside `run` exits 0; fail explicitly.
+                        std::process::exit(1);
                     }
                 }
                 let _ = shell.update(cx, |_, window, _| window.remove_window());
