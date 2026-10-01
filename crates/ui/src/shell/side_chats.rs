@@ -37,6 +37,8 @@ enum PanelAction {
     /// Leave the open side chat: unload a writable one (it becomes read-only
     /// history), or just return to the list from a read-only page.
     Back,
+    /// Stop only the side chat's current turn; the lease stays writable.
+    Stop,
 }
 
 pub(super) enum SideChatEvent {
@@ -327,6 +329,18 @@ impl SideChatPanel {
                     json!({"id":page.meta.id,"lease":self.lease,"messageId":uuid::Uuid::new_v4().to_string(),"text":self.input.read(cx).text()}),
                 )
             }
+            PanelAction::Stop => {
+                let Some(page) = self.page.as_ref().filter(|page| page.working) else {
+                    return;
+                };
+                if self.lease.is_none() {
+                    return;
+                }
+                (
+                    methods::STOP_SIDE_CHAT,
+                    json!({"id":page.meta.id,"lease":self.lease}),
+                )
+            }
             PanelAction::Unload => {
                 let Some(page) = &self.page else {
                     return;
@@ -365,6 +379,7 @@ impl SideChatPanel {
             methods::CREATE_SIDE_CHAT => Some("Creating side chat…"),
             methods::SEND_SIDE_CHAT => Some("Sending…"),
             methods::UNLOAD_SIDE_CHAT => Some("Stopping work and saving…"),
+            methods::STOP_SIDE_CHAT => Some("Stopping the side chat's turn…"),
             methods::LIST_SIDE_CHATS if self.history.is_none() => Some("Loading saved side chats…"),
             _ => None,
         };
@@ -464,6 +479,10 @@ impl SideChatPanel {
                         }
                         methods::LIST_SIDE_CHATS => {
                             panel.history = Some(serde_json::from_value(value)?)
+                        }
+                        methods::STOP_SIDE_CHAT => {
+                            panel.before = None;
+                            panel.action(PanelAction::Refresh, cx);
                         }
                         "LunaSideLocalApproval"
                         | methods::ANSWER_SIDE_CHAT
@@ -807,6 +826,27 @@ impl SideChatPanel {
                 )
                 .child(div().min_w_0().truncate().child(label))
         };
+        let stop = working.then(|| {
+            div()
+                .id("side-stop")
+                .role(gpui::Role::Button)
+                .aria_label("Stop the side chat's current turn")
+                .tab_index(0)
+                .size(px(28.0))
+                .flex_none()
+                .rounded_full()
+                .bg(theme.text)
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(self.busy, |el| el.opacity(0.35))
+                .when(!self.busy, |el| {
+                    el.cursor_pointer()
+                        .hover(|style| style.opacity(0.85))
+                        .on_click(cx.listener(|panel, _, _, cx| panel.action(PanelAction::Stop, cx)))
+                })
+                .child(div().size(px(11.0)).rounded(px(3.0)).bg(theme.bg))
+        });
         let send = div()
             .id("side-send")
             .role(gpui::Role::Button)
@@ -873,7 +913,10 @@ impl SideChatPanel {
                                 .child(status),
                         )
                     })
-                    .child(send),
+                    .map(|el| match stop {
+                        Some(stop) => el.child(stop),
+                        None => el.child(send),
+                    }),
             );
         div()
             .id("side-composer")
