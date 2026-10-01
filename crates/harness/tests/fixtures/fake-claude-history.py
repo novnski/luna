@@ -154,6 +154,15 @@ def text_of(entry):
     return "\n".join(block.get("text", "") for block in content or [] if block.get("type") == "text")
 
 
+def stream_text(text):
+    """Root text reaches LUNA only as partial deltas (`--include-partial-messages`)."""
+    for event in ({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                  {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+                  {"type": "content_block_stop", "index": 0}):
+        emit({"type": "stream_event", "event": event, "parent_tool_use_id": None,
+              "session_id": SESSION, "uuid": str(uuidlib.uuid4())})
+
+
 def response(request_id, payload):
     emit({"type": "control_response",
           "response": {"subtype": "success", "request_id": request_id, "response": payload}})
@@ -359,6 +368,7 @@ def run_turn(frame, folded=None):
                       durationMs=5, isMeta=False))
     LEAF = duration_uuid
     append(PATH, {"type": "last-prompt", "lastPrompt": prompt, "leafUuid": LEAF, "sessionId": SESSION})
+    stream_text(reply)
     assistant_frame = {"type": "assistant", "message": message, "parent_tool_use_id": None,
                        "session_id": SESSION, "uuid": assistant_uuid}
     if client:
@@ -388,6 +398,7 @@ def run_turn(frame, folded=None):
         append(PATH, dict(base("assistant"), parentUuid=wake_uuid, uuid=wake_reply,
                           message=dict(message, id="msg_wake", content=[{"type": "text", "text": "noted"}])))
         LEAF = wake_reply
+        stream_text("noted")
         emit({"type": "assistant", "message": dict(message, content=[{"type": "text", "text": "noted"}]),
               "parent_tool_use_id": None, "session_id": SESSION, "uuid": wake_reply})
         emit({"type": "result", "subtype": "success", "is_error": False, "result": "noted",
