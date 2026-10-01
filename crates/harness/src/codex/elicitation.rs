@@ -101,7 +101,7 @@ pub(super) fn tool_approval(params: &Value) -> Option<ToolApproval> {
 
 /// `turn_id` is the request's turn, or the active turn the adapter bound a
 /// null `turnId` to (the protocol field is nullable, `v2/mcp.rs:422-428`).
-pub(super) fn questions(
+pub(crate) fn questions(
     params: &Value,
     request_id: &Value,
     turn_id: &str,

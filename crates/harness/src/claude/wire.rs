@@ -36,6 +36,9 @@ pub(crate) struct SystemFrame {
     pub cwd: String,
     #[serde(default)]
     pub session_id: String,
+    /// `init`/`status`: the native permission mode Claude actually runs.
+    #[serde(default, rename = "permissionMode")]
+    pub permission_mode: Option<String>,
     /// Read-only wire observation. This is not a configured inventory, health
     /// check, authorization, or proof of selected-session attachment.
     #[serde(skip)]
@@ -255,23 +258,14 @@ pub(crate) struct UsageBody {
     pub output_tokens: u64,
 }
 
-/// A CLI→client control request (`can_use_tool` is the one we act on).
+/// A CLI→client control request. The request body stays raw: the CC-03
+/// dispatcher (`controls.rs`) reads every subtype's own fields.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct ControlRequestFrame {
     #[serde(default)]
     pub request_id: String,
     #[serde(default)]
-    pub request: ControlRequestBody,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub(crate) struct ControlRequestBody {
-    #[serde(default)]
-    pub subtype: String,
-    #[serde(default)]
-    pub tool_name: String,
-    #[serde(default)]
-    pub input: Value,
+    pub request: Value,
 }
 
 /// Parse one stdout JSONL line. `Err` = not JSON; unknown types = `Other`.
@@ -357,11 +351,6 @@ pub(crate) fn control_response_line(request_id: &str, response: Value) -> String
         },
     })
     .to_string()
-}
-
-/// `can_use_tool` allow payload with the (possibly updated) tool input.
-pub(crate) fn allow_response(updated_input: Value) -> Value {
-    json!({ "behavior": "allow", "updatedInput": updated_input })
 }
 
 /// Client→CLI interrupt control request.
