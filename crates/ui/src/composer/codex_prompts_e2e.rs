@@ -268,7 +268,10 @@ pub async fn run_codex_prompts_e2e(
     // 5. Pick "Blue", advance to the secret page and type: the input masks it.
     act(window, cx, |_, cx| {
         composer.update(cx, |composer, cx| {
-            composer.wizard_select(0, cx);
+            // Pick without the auto-advance timer (no engine to answer).
+            if let Some(wizard) = composer.wizard.as_mut() {
+                wizard.select(0);
+            }
             composer.wizard_advance(cx);
         })
     })?;
