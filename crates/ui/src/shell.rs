@@ -10598,7 +10598,7 @@ impl Shell {
                 .when(!pending && dialog.provider == Some(luna_proto::HarnessId::ClaudeCode), |card| {
                     card.child(native_file_rewind::section(&dialog.native_files, &theme, cx))
                 })
-                .child(div().mt(px(16.0)).flex().justify_end().gap(px(8.0))
+                .child(div().mt(px(16.0)).flex().flex_wrap().justify_end().gap(px(8.0))
                     .child(popover::btn_ghost(&theme, "Cancel", "history-rewind-cancel")
                         .id("history-rewind-cancel").on_click(cx.listener(|this, _, _, cx| this.cancel_history_flow(cx))))
                     .when(!pending, |buttons| buttons.child(popover::btn_ghost(&theme, "Preview file checkpoints", "history-rewind-files")

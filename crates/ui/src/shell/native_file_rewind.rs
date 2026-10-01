@@ -274,9 +274,30 @@ impl Shell {
                     }),
                 )
                 .await;
+            // The restore retires the parked Claude runtime, which advances
+            // the task revision. Re-read it so the reviewed conversation
+            // rewind stays available on the same binding.
+            let current = engine
+                .client()
+                .call_as::<luna_proto::TaskCommandRead>(
+                    methods::GET_TASK_COMMAND_SNAPSHOT,
+                    serde_json::json!({ "taskId": task_id }),
+                )
+                .await
+                .ok();
             this.update(cx, |shell, cx| {
                 if shell.history_flow_generation != generation {
                     return;
+                }
+                if let (Some(read), Some(dialog)) =
+                    (current, shell.conversation_rewind_dialog.as_mut())
+                    && read.snapshot.binding_generation
+                        == dialog.review["bindingGeneration"]
+                            .as_u64()
+                            .map(|g| g as u32)
+                {
+                    dialog.review["taskRevision"] = read.snapshot.task_revision.into();
+                    dialog.snapshot = read.snapshot;
                 }
                 let next = match applied {
                     Ok(view) if view.can_rewind => NativeFiles::Restored(view),
