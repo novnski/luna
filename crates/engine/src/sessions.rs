@@ -482,13 +482,14 @@ fn schedule_approval_expiry(
     else {
         return;
     };
-    // A request with native choices, or one that waits without a provider
-    // deadline (Codex v2), is retired as soon as its adapter closes it.
+    // A request with native choices, or a Codex request that waits without a
+    // provider deadline (v2 sends none), is retired as soon as the adapter
+    // closes it (`serverRequest/resolved`, Stop or the end of its turn).
     let native_choices = questions.iter().any(|question| {
-        question
-            .approval
-            .as_ref()
-            .is_some_and(|approval| approval.details.is_some() || approval.expires().is_none())
+        question.approval.as_ref().is_some_and(|approval| {
+            approval.details.is_some()
+                || (approval.provider == HarnessId::Codex && approval.expires().is_none())
+        })
     });
     tokio::spawn(async move {
         let delay_ms = expires_at_ms.saturating_sub(now_ms()).max(0) as u64;
