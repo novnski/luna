@@ -62,8 +62,7 @@ fn mcp_button(
         .disabled(!enabled)
         .tab_index(0)
         .tab_stop(enabled)
-        .mt(px(6.0))
-        .mr(px(6.0))
+        .flex_none()
         .px(px(10.0))
         .h(px(24.0))
         .flex()
@@ -227,7 +226,14 @@ impl HarnessesPage {
             facts.push(widgets::badge(theme, version.clone()).into_any_element());
         }
         facts.push(
-            widgets::badge(theme, format!("{} tools", details.tool_count)).into_any_element(),
+            widgets::badge(
+                theme,
+                match details.tool_count {
+                    1 => "1 tool".to_owned(),
+                    count => format!("{count} tools"),
+                },
+            )
+            .into_any_element(),
         );
         if let Some(session) = &details.session {
             facts.push(
@@ -259,6 +265,7 @@ impl HarnessesPage {
                     )),
             );
         }
+        let mut actions: Vec<AnyElement> = Vec::new();
         for tool in &details.app_tools {
             let Some(uri) = tool.ui_resource_uri.clone() else {
                 continue;
@@ -273,12 +280,12 @@ impl HarnessesPage {
                         format!("Inspect MCP App resource {uri} from {}", item.name).into();
                     let id: SharedString = format!("mcp-inspect-{identity}-{}", tool.name).into();
                     let (identity, server) = (identity.clone(), item.name.clone());
-                    block = block.child(
-                        mcp_button(theme, id, label, "Inspect app view", enabled).on_click(
-                            cx.listener(move |page, _, _, cx| {
+                    actions.push(
+                        mcp_button(theme, id, label, "Inspect app view", enabled)
+                            .on_click(cx.listener(move |page, _, _, cx| {
                                 page.mcp_inspect(identity.clone(), server.clone(), uri.clone(), cx)
-                            }),
-                        ),
+                            }))
+                            .into_any_element(),
                     );
                 }
                 ProviderMcpAppSupport::Unavailable { reason } => {
@@ -305,7 +312,7 @@ impl HarnessesPage {
                 format!("{verb} MCP server {} for this project in Claude", item.name).into();
             let id: SharedString = format!("mcp-toggle-{identity}").into();
             let (identity, server) = (identity.clone(), item.name.clone());
-            block = block.child(
+            actions.push(
                 mcp_button(
                     theme,
                     id,
@@ -319,7 +326,19 @@ impl HarnessesPage {
                 )
                 .on_click(cx.listener(move |page, _, _, cx| {
                     page.mcp_set_enabled(identity.clone(), server.clone(), target, cx)
-                })),
+                }))
+                .into_any_element(),
+            );
+        }
+        if !actions.is_empty() {
+            block = block.child(
+                div()
+                    .mt(px(6.0))
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(6.0))
+                    .children(actions),
             );
         }
         block.into_any_element()

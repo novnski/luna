@@ -26,6 +26,14 @@ use luna_proto::{
 };
 use sha2::{Digest, Sha256};
 
+/// Provider text without the adapter's internal error-category prefix.
+fn provider_message(error: luna_harness::HarnessError) -> String {
+    match error {
+        luna_harness::HarnessError::Protocol(message) => message,
+        other => other.to_string(),
+    }
+}
+
 const READBACK_TIMEOUT: Duration = Duration::from_secs(45);
 const ACTION_TIMEOUT: Duration = Duration::from_secs(45);
 /// One provider-owned MCP write at a time per engine.
@@ -339,9 +347,10 @@ pub(crate) async fn augment_inventory(
                     Ok(Ok(_)) => {
                         append_unavailable(view, "Claude returned an unexpected MCP readback.")
                     }
-                    Ok(Err(error)) => {
-                        append_unavailable(view, &format!("Claude MCP readback failed: {error}"))
-                    }
+                    Ok(Err(error)) => append_unavailable(
+                        view,
+                        &format!("Claude MCP readback failed: {}", provider_message(error)),
+                    ),
                     Err(_) => append_unavailable(view, "Claude MCP readback timed out."),
                 }
             }
@@ -405,7 +414,10 @@ pub(crate) async fn set_enabled(
             return Ok(receipt(
                 ProviderMcpActionOutcome::Rejected,
                 None,
-                format!("Claude could not start the change: {error}"),
+                format!(
+                    "Claude could not start the change: {}",
+                    provider_message(error)
+                ),
             ));
         }
         Err(_) => {
@@ -496,7 +508,7 @@ pub(crate) async fn read_app_resource(
             Ok(view)
         }
         Ok(Ok(_)) => Err("Claude returned an unexpected reply".into()),
-        Ok(Err(error)) => Err(error.to_string()),
+        Ok(Err(error)) => Err(provider_message(error)),
         Err(_) => Err("Claude did not return the MCP App resource in time.".into()),
     }
 }
