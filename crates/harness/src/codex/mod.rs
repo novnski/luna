@@ -1192,6 +1192,7 @@ async fn emit_recorded_steer(
 async fn reconcile_native_steers(
     client: &RpcClient,
     thread_id: &str,
+    legacy: bool,
     steers: &mut NativeSteers,
     assistant_message_id: &mut String,
     event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
@@ -1205,6 +1206,19 @@ async fn reconcile_native_steers(
     // every pending clientId is in hand, then record in history order.
     let wanted: HashSet<String> = steers.pending.keys().cloned().collect();
     let mut found = HashSet::new();
+    if legacy {
+        // A legacy thread replays its rollout per request: read it once.
+        let read = tokio::time::timeout(
+            Duration::from_secs(2),
+            native::read_legacy_turns(client, thread_id),
+        )
+        .await;
+        let Ok(Ok(turns)) = read else {
+            return true;
+        };
+        return record_native_steers(&turns, steers, assistant_message_id, event_tx, historical)
+            .await;
+    }
     let read = tokio::time::timeout(
         Duration::from_secs(2),
         native::page_turns(client, thread_id, true, 10, 5, |page| {
@@ -1227,7 +1241,18 @@ async fn reconcile_native_steers(
         return true;
     };
     turns.reverse();
-    for turn in &turns {
+    record_native_steers(&turns, steers, assistant_message_id, event_tx, historical).await
+}
+
+/// Record exact clientId matches in history (ascending) order.
+async fn record_native_steers(
+    turns: &[Value],
+    steers: &mut NativeSteers,
+    assistant_message_id: &mut String,
+    event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    historical: bool,
+) -> bool {
+    for turn in turns {
         let Some(turn_id) = turn.get("id").and_then(Value::as_str) else {
             continue;
         };
@@ -1246,6 +1271,15 @@ async fn reconcile_native_steers(
         }
     }
     true
+}
+
+/// `ThreadHistoryMode` from thread/start|resume (`v2/thread_data.rs:75-82`).
+/// Only an explicit "legacy" counts; newer threads are paginated.
+fn legacy_history(response: &Value) -> bool {
+    response
+        .pointer("/thread/historyMode")
+        .and_then(Value::as_str)
+        == Some("legacy")
 }
 
 async fn send(tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>, ev: AgentEvent) -> bool {
@@ -1556,7 +1590,12 @@ async fn run_session(session: Session) {
             // An older app-server that ignores excludeTurns still hydrates.
             children.restore(&thread["thread"]);
         } else if resumed && !title_only && !thread_id.is_empty() {
-            match native::page_turns(&client, &thread_id, false, 100, 100, |_| true).await {
+            let turns = if legacy_history(&thread) {
+                native::read_legacy_turns(&client, &thread_id).await
+            } else {
+                native::page_turns(&client, &thread_id, false, 100, 100, |_| true).await
+            };
+            match turns {
                 Ok(turns) => children.restore_turns(&turns),
                 // Fail open: unbound child traffic still waits for its spawn.
                 Err(error) => tracing::warn!(
@@ -1566,9 +1605,9 @@ async fn run_session(session: Session) {
                 ),
             }
         }
-        Ok::<_, HarnessError>((thread_id, children))
+        Ok::<_, HarnessError>((thread_id, children, legacy_history(&thread)))
     };
-    let (thread_id, mut children) = tokio::select! {
+    let (thread_id, mut children, legacy) = tokio::select! {
         res = setup => match res {
             Ok(thread_id) => thread_id,
             Err(e) => {
@@ -1744,6 +1783,7 @@ async fn run_session(session: Session) {
         if !reconcile_native_steers(
             &client,
             &thread_id,
+            legacy,
             &mut native_steers,
             &mut assistant_message_id,
             &event_tx,
@@ -2143,7 +2183,7 @@ async fn run_session(session: Session) {
                         {
                             break 'main;
                         }
-                        if !reconcile_native_steers(&client, &thread_id, &mut native_steers,
+                        if !reconcile_native_steers(&client, &thread_id, legacy, &mut native_steers,
                             &mut assistant_message_id, &event_tx, false).await { break 'main; }
                         router.note_completed(&id);
                         // Item ids never span turns; without this the set grew

@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use unicode_segmentation::UnicodeSegmentation;
 
 use luna_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
-use luna_engine::sessions::LunaApprovalOutcome;
+use luna_engine::sessions::{LunaApprovalOutcome, SecretInputOutcome};
 use luna_proto::{
     CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot,
     DraftBlob, DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState,
@@ -10810,6 +10810,57 @@ impl Composer {
         }));
     }
 
+    /// Answers to a question flagged secret (Codex `isSecret`) go straight
+    /// to the local engine's live resolver: never a durable session command,
+    /// the RPC transport or a log. A remote viewport cannot send them.
+    fn finish_secret_wizard(
+        &mut self,
+        engine: crate::state::EngineHandle,
+        chat_id: String,
+        wizard: Wizard,
+        answers: Vec<UserInputAnswer>,
+        cx: &mut Context<Self>,
+    ) {
+        let request_id = wizard.request_id.clone();
+        self.failure = None;
+        self.failure_key = None;
+        self.wizard = None;
+        self.answered_requests.insert(request_id.clone());
+        self.answer_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.action_task = Some(cx.spawn(async move |this, cx| {
+            let result = engine
+                .respond_secret_input(&chat_id, &request_id, answers)
+                .await;
+            this.update(cx, |composer, cx| {
+                let failure: Option<&str> = match result {
+                    Ok(SecretInputOutcome::Delivered) => None,
+                    Ok(SecretInputOutcome::Closed) => Some(
+                        "This request ended before your answer was sent; nothing was stored",
+                    ),
+                    Ok(SecretInputOutcome::NotSecret | SecretInputOutcome::Unavailable) => {
+                        composer.answered_requests.remove(&request_id);
+                        Some("This request is no longer pending")
+                    }
+                    Err(_) => {
+                        composer.answered_requests.remove(&request_id);
+                        if composer.current_key == chat_id {
+                            composer.wizard = Some(wizard.clone());
+                        }
+                        Some("Secret answers can only be sent from the LUNA window running this task")
+                    }
+                };
+                if let Some(message) = failure {
+                    composer.failure = Some(message.into());
+                    composer.failure_key = Some(chat_id.clone());
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
     fn wizard_skip(&mut self, cx: &mut Context<Self>) {
         if self.wizard.as_ref().is_some_and(|wizard| {
             wizard.source == QuestionSource::Async
@@ -10954,6 +11005,10 @@ impl Composer {
             self.answered_requests.insert(request_id);
             self.dispatch_async_submission(key, engine, cx);
             cx.notify();
+            return;
+        }
+        if wizard.questions.iter().any(UserInputQuestion::is_secret) {
+            self.finish_secret_wizard(engine, chat_id, wizard, answers, cx);
             return;
         }
         let luna_question = match luna_approval_question(&wizard.questions) {

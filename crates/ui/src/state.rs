@@ -32,8 +32,9 @@ use luna_doc::{SessionMessageEntry, TranscriptDesync, TranscriptFrame};
 #[cfg(feature = "appshots-fixture")]
 use luna_engine::SessionsEngine;
 use luna_engine::{
-    Engine, EngineConfig, EngineCore, EngineRuntime, InstanceLock, rpc::AuthRpc,
-    sessions::LunaApprovalOutcome,
+    Engine, EngineConfig, EngineCore, EngineRuntime, InstanceLock,
+    rpc::AuthRpc,
+    sessions::{LunaApprovalOutcome, SecretInputOutcome},
 };
 use luna_proto::{
     ApprovalDecision, AuthState, ChangeRequestSummary, Chat, ChatIndicator,
@@ -98,6 +99,13 @@ trait EngineBackend: Send + Sync {
         request_id: &str,
         decision: ApprovalDecision,
     ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError>;
+    /// In-memory secret answer (never a command, journal row or log).
+    async fn respond_secret_input(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        answers: Vec<luna_proto::UserInputAnswer>,
+    ) -> Result<SecretInputOutcome, LocalLunaApprovalError>;
     /// Graceful teardown (drains runs / flushes docs for the in-process engine).
     async fn shutdown(&self);
 }
@@ -136,6 +144,21 @@ impl EngineBackend for InProcessEngine {
             .map(|runtime| runtime.core().sessions.clone())
             .ok_or(LocalLunaApprovalError::EngineUnavailable)?;
         Ok(sessions.respond_luna_local_ui_approval(chat_id, request_id, decision))
+    }
+    async fn respond_secret_input(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        answers: Vec<luna_proto::UserInputAnswer>,
+    ) -> Result<SecretInputOutcome, LocalLunaApprovalError> {
+        let sessions = self
+            .runtime
+            .lock()
+            .await
+            .as_ref()
+            .map(|runtime| runtime.core().sessions.clone())
+            .ok_or(LocalLunaApprovalError::EngineUnavailable)?;
+        Ok(sessions.respond_secret_input(chat_id, request_id, answers))
     }
     async fn shutdown(&self) {
         self.boot_task.abort();
@@ -290,6 +313,18 @@ impl EngineBackend for SyntheticLocalEngine {
             .respond_luna_local_ui_approval(chat_id, request_id, decision))
     }
 
+    async fn respond_secret_input(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        answers: Vec<luna_proto::UserInputAnswer>,
+    ) -> Result<SecretInputOutcome, LocalLunaApprovalError> {
+        Ok(self
+            .core
+            .sessions
+            .respond_secret_input(chat_id, request_id, answers))
+    }
+
     async fn shutdown(&self) {
         self.core.shutdown().await;
     }
@@ -317,6 +352,17 @@ impl EngineBackend for FixtureLocalEngine {
             .respond_luna_local_ui_approval(chat_id, request_id, decision))
     }
 
+    async fn respond_secret_input(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        answers: Vec<luna_proto::UserInputAnswer>,
+    ) -> Result<SecretInputOutcome, LocalLunaApprovalError> {
+        Ok(self
+            .sessions
+            .respond_secret_input(chat_id, request_id, answers))
+    }
+
     async fn shutdown(&self) {
         // The fixture's main function owns and shuts down EngineCore.
     }
@@ -338,6 +384,15 @@ impl EngineBackend for RemoteEngine {
         _request_id: &str,
         _decision: ApprovalDecision,
     ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError> {
+        Err(LocalLunaApprovalError::LocalOnly)
+    }
+    async fn respond_secret_input(
+        &self,
+        _chat_id: &str,
+        _request_id: &str,
+        _answers: Vec<luna_proto::UserInputAnswer>,
+    ) -> Result<SecretInputOutcome, LocalLunaApprovalError> {
+        // A secret never crosses the shared RPC transport.
         Err(LocalLunaApprovalError::LocalOnly)
     }
     async fn shutdown(&self) {
@@ -710,6 +765,19 @@ impl EngineHandle {
     ) -> Result<LunaApprovalOutcome, LocalLunaApprovalError> {
         self.inner
             .respond_luna_local_ui_approval(chat_id, request_id, decision)
+            .await
+    }
+
+    /// Direct Rust-only path for answers to questions flagged secret. The
+    /// value never enters a session command, the RPC transport or a log.
+    pub async fn respond_secret_input(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        answers: Vec<luna_proto::UserInputAnswer>,
+    ) -> Result<SecretInputOutcome, LocalLunaApprovalError> {
+        self.inner
+            .respond_secret_input(chat_id, request_id, answers)
             .await
     }
 

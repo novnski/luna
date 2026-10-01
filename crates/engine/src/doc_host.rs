@@ -7459,6 +7459,22 @@ impl DocHost {
                         Some("no pending input request".into()),
                     ));
                 };
+                if questions.iter().any(UserInputQuestion::is_secret) {
+                    // A secret request whose resolver is gone ends cancelled:
+                    // its answer is never resumed into a new turn or stored.
+                    handle.doc.resolve_input(request_id)?;
+                    let answered = answers
+                        .iter()
+                        .any(|answer| answer.labels.iter().any(|label| !label.is_empty()));
+                    return Ok((
+                        if answered {
+                            SessionCommandStatus::Rejected
+                        } else {
+                            SessionCommandStatus::Applied
+                        },
+                        Some("secret request ended; the answer was not sent or replayed".into()),
+                    ));
+                }
                 if questions.iter().any(|question| {
                     question
                         .approval

@@ -256,5 +256,22 @@ elif scenario == 'request-input':
         fail(f'expected {expected!r}; received {got!r}')
     done()
 
+elif scenario in ('secret-input', 'secret-input-hold'):
+    # The sentinel is never in the prompt (prompts are durable transcript).
+    send({'id': 'secret-ask', 'method': 'item/tool/requestUserInput', 'params': {
+        'threadId': ROOT, 'turnId': ROOT_TURN, 'itemId': 'secret-item', 'isBlocking': True,
+        'autoResolutionMs': None,
+        'questions': [{'id': 'q-token', 'header': 'API token', 'question': 'Paste the deploy token',
+                       'isOther': True, 'isSecret': True, 'options': None}]}})
+    if scenario == 'secret-input-hold':
+        # LUNA restarts before answering: wait for stdin to close.
+        while True:
+            read()
+    got = responses({'secret-ask'})['secret-ask']
+    if got != {'answers': {'q-token': {'answers': ['LUNA-SECRET-SENTINEL-9f2c41']}}}:
+        # Never echo the received value into provider text.
+        fail('secret answer did not match the exact request')
+    done()
+
 else:
     fail(f'unknown scenario {scenario!r}')

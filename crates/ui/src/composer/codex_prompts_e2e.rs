@@ -268,7 +268,10 @@ pub async fn run_codex_prompts_e2e(
     // 5. Pick "Blue", advance to the secret page and type: the input masks it.
     act(window, cx, |_, cx| {
         composer.update(cx, |composer, cx| {
-            composer.wizard_select(0, cx);
+            // Pick without the auto-advance timer (no engine to answer).
+            if let Some(wizard) = composer.wizard.as_mut() {
+                wizard.select(0);
+            }
             composer.wizard_advance(cx);
         })
     })?;
@@ -289,5 +292,25 @@ pub async fn run_codex_prompts_e2e(
         "secret page: {readback}"
     );
     evidence.insert("requestInputSecret".into(), readback);
+
+    // 6. Answered: the transcript keeps only a masked placeholder.
+    let answered = adapter_questions(artifacts, "request-input")?;
+    seed(
+        &state,
+        cx,
+        session(SessionStatus::Working, 55),
+        entries(
+            "Thanks, deploying with the provided token.",
+            MessageStatus::Streaming,
+            vec![MessagePart::Input {
+                id: "ask-request-part".into(),
+                request_id: "ask-request".into(),
+                questions: answered.into_iter().rev().collect(),
+                resolved: true,
+            }],
+        ),
+        None,
+    )?;
+    capture(window, cx, &output.join("06-secret-answered.png")).await?;
     Ok(Value::Object(evidence))
 }
