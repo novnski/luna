@@ -196,22 +196,20 @@ pub(crate) async fn goal_operation(
             )),
         };
     };
-    if action == NativeGoalAction::Clear {
-        if sessions.turn_in_flight(task_id) {
-            return Ok(ClaudeGoalControl::Busy(
-                "Claude clears a goal between turns. Stop the current turn first, then clear the goal."
-                    .into(),
-            ));
-        }
-        if sessions.has_live_run(task_id) {
-            sessions.interrupt(task_id).await?;
-            if sessions.has_live_run(task_id) {
+    // Clear holds the dispatch gate with no runtime: one native writer.
+    let _exclusive = if action == NativeGoalAction::Clear {
+        match sessions.exclusive_idle_runtime(task_id).await? {
+            Some(guard) => Some(guard),
+            None => {
                 return Ok(ClaudeGoalControl::Busy(
-                    "Claude's session did not close in time; try clearing the goal again.".into(),
+                    "Claude clears a goal between turns. Stop the current turn first, then clear the goal."
+                        .into(),
                 ));
             }
         }
-    }
+    } else {
+        None
+    };
     let readback_goal = harness
         .native_goal_control(NativeGoalControl {
             session_id: binding.provider_task_id.clone(),

@@ -62,6 +62,12 @@ def read_line():
         sys.exit(9)
     if frame.get("type") == "control_response":
         return frame
+    if frame.get("type") == "control_request" and \
+            frame.get("request", {}).get("subtype") == "interrupt":
+        # An idle session acknowledges an interrupt (nothing to abort).
+        emit({"type": "control_response", "response": {
+            "subtype": "success", "request_id": frame.get("request_id", ""), "response": {}}})
+        return frame
     if frame.get("type") != "user":
         sys.exit(9)
     return frame
@@ -363,7 +369,7 @@ while True:
     frame = read_line()
     if frame is None:
         break
-    if frame.get("type") == "control_response":
+    if frame.get("type") in ("control_response", "control_request"):
         continue
     init()
     handle(frame)

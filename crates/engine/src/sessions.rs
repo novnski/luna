@@ -2584,6 +2584,29 @@ impl SessionsEngine {
             .clone()
     }
 
+    /// CC-14: hold the dispatch transition gate with no runtime for this
+    /// chat (a parked warm runtime is retired first, as permission changes
+    /// do), so a one-shot provider control is the only native writer.
+    /// `None` while a turn is running.
+    pub(crate) async fn exclusive_idle_runtime(
+        &self,
+        chat_id: &str,
+    ) -> Result<Option<OwnedMutexGuard<()>>, EngineError> {
+        let transition = self.transition_gate(chat_id).lock_owned().await;
+        if self.turn_in_flight(chat_id) {
+            return Ok(None);
+        }
+        if self.has_live_run(chat_id) {
+            self.interrupt(chat_id).await?;
+            if self.has_live_run(chat_id) {
+                return Err(EngineError::Other(
+                    "the parked provider runtime did not retire before the deadline".into(),
+                ));
+            }
+        }
+        Ok(Some(transition))
+    }
+
     pub(crate) fn prepare_workspace_repair_execution(
         &self,
         chat_id: &str,
