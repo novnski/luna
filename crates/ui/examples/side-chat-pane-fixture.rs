@@ -1,17 +1,18 @@
 //! Headless GPUI E2E for side chats in the right pane's shared chat layout.
 //!
 //! Drives the production `Shell` and `SideChatPanel` in a hidden window against
-//! an in-process `EngineCore` with a scripted Mock harness. Side chats keep the
-//! engine's leased side-chat RPCs (`CreateSideChat` / `SendSideChat` /
-//! `ReadSideChat` / `StopSideChat` / `UnloadSideChat`, contract §5); the pane
-//! renders them with the shared identity header, the main transcript and a
-//! composer-styled input that offers exactly what side chats support.
+//! an in-process `EngineCore` with a scripted Mock harness, attached through
+//! the production engine boundary (real `WatchChats`, sessions, transcripts).
+//! The engine advertises `side-chat-task-commands-v1` and publishes the live
+//! side chat spaceless in `WatchChats` (contract §5.1), so the pane shows the
+//! FULL main composer and live transcript bound to the side chat; the lease
+//! is kept by the `RenewSideChat` heartbeat (§5.2).
 //!
 //! Failure cases: `2026-10-02-pane-chat/evidence/pane-ui/failure-cases.md`.
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example side-chat-pane-fixture
 //! Run:   target/debug/examples/side-chat-pane-fixture ABSOLUTE_EVIDENCE_DIR
-//! Writes s01..s09 PNG captures, readback.json and side-chat-pane.pass.
+//! Writes f01..f12 PNG captures, readback.json and side-chat-pane.pass.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -33,6 +34,9 @@ const SIDE_QUESTION: &str = "Is the rollout order safe if the cache migration la
 const SIDE_ANSWER: &str =
     "Yes. The cache migration is additive, so landing it first only warms the new keys early.";
 const SIDE_REQUEST: &str = "side-fixture-approval";
+const SIDE_DRAFT: &str = "SIDE_DRAFT_KEEP: compare with the settings rename";
+const SIDE_PENDING: &str = "SIDE_NAV_PENDING: and the UI flag?";
+const SIDE_AFTER_IDLE: &str = "SIDE_AFTER_IDLE: still there?";
 
 fn config() -> ChatConfig {
     ChatConfig {
@@ -137,8 +141,20 @@ async fn settle(cx: &mut AsyncApp, ms: u64) {
         .await;
 }
 
-fn texts(value: &serde_json::Value) -> String {
-    value["texts"].to_string()
+fn live(value: &serde_json::Value) -> String {
+    value["liveTexts"].to_string()
+}
+
+fn ids(value: &serde_json::Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn wait_for(
@@ -310,8 +326,10 @@ fn main() -> anyhow::Result<()> {
                 state.auto_selected = true;
                 state.connection = state::ConnectionStatus::Ready;
                 state.workspace_scope = Some(luna_proto::WorkspaceScope::Development);
-                state.fixture_attachment_engine(handle);
                 state.select_chat(Some(PARENT.into()), cx);
+                // The production attachment boundary: real WatchChats (which
+                // publishes live side chats spaceless), sessions, transcripts.
+                state.fixture_attach_engine(handle, cx);
                 state
             });
             let window = cx
@@ -340,38 +358,85 @@ fn main() -> anyhow::Result<()> {
                         shell.fixture_open_side_chats(cx);
                     })?;
                     let list = wait_for(window, cx, 60, |r| r["historyCount"].is_number()).await?;
-                    capture(window, cx, output.join("s01-side-list.png"))?;
+                    capture(window, cx, output.join("f00-side-list.png"))?;
                     anyhow::ensure!(list["historyCount"] == 0 && list["pageId"].is_null(), "unexpected side chat list: {list}");
                     let parent_rows = list["parentTranscriptRows"].as_u64().unwrap_or(0);
                     record.insert("list".into(), list);
 
-                    // s02. Start one with the parent's recent context.
+                    // f01. Start one with the parent's recent context: with the
+                    // engine gate on, the full composer binds the side chat.
                     window.update(cx, |shell, _, cx| shell.fixture_side_chat("snapshot", "", cx))?;
-                    let created = wait_for(window, cx, 150, |r| r["writable"] == true && r["busy"] == false).await?;
-                    settle(cx, 400).await;
-                    capture(window, cx, output.join("s02-side-new-dark.png"))?;
-                    anyhow::ensure!(created["writable"] == true, "side chat not writable: {created}");
-                    anyhow::ensure!(created["contextMode"] == "contextSnapshot", "Mock has no native fork; expected a context snapshot: {created}");
-                    let side_id = created["pageId"].as_str().unwrap_or_default().to_string();
-                    record.insert("created".into(), created);
-
-                    // s03. Ask a question: the side chat answers, the parent is untouched.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("send", SIDE_QUESTION, cx))?;
-                    let replied = wait_for(window, cx, 200, |r| {
-                        texts(r).contains(SIDE_QUESTION) && texts(r).contains(SIDE_ANSWER) && r["working"] == false && r["busy"] == false
+                    let created = wait_for(window, cx, 200, |r| {
+                        r["firstClass"] == true && r["fullComposer"]["boundChat"] == r["pageId"] && r["busy"] == false
                     })
                     .await?;
                     settle(cx, 500).await;
-                    capture(window, cx, output.join("s03-side-reply-dark.png"))?;
-                    anyhow::ensure!(texts(&replied).contains(SIDE_ANSWER), "side chat never answered: {replied}");
-                    anyhow::ensure!(replied["input"] == "", "a sent question must clear the input: {replied}");
-                    anyhow::ensure!(replied["error"].is_null(), "side send failed: {replied}");
+                    capture(window, cx, output.join("f01-side-full-new-dark.png"))?;
+                    anyhow::ensure!(created["firstClass"] == true, "engine gate did not enable the full composer: {created}");
+                    let side_id = created["pageId"].as_str().unwrap_or_default().to_string();
+                    anyhow::ensure!(created["fullComposer"]["boundChat"] == side_id.as_str(), "full composer must bind the side chat: {created}");
+                    anyhow::ensure!(created["mainComposer"]["boundChat"] == PARENT, "main composer must stay on the parent: {created}");
+                    anyhow::ensure!(ids(&created["paneChats"]) == [side_id.clone()], "one live pane watch for the side chat: {created}");
+                    record.insert("created".into(), created);
+
+                    // f02. Send with the full composer: live transcript, parent untouched.
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("send_full", SIDE_QUESTION, cx))?;
+                    let replied = wait_for(window, cx, 250, |r| {
+                        live(r).contains(SIDE_QUESTION) && live(r).contains(SIDE_ANSWER) && r["fullComposer"]["sending"] == false
+                    })
+                    .await?;
+                    settle(cx, 600).await;
+                    capture(window, cx, output.join("f02-side-full-reply-dark.png"))?;
+                    anyhow::ensure!(live(&replied).contains(SIDE_ANSWER), "side chat never answered through the full composer: {replied}");
+                    anyhow::ensure!(replied["fullComposer"]["input"] == "" && replied["fullComposer"]["failure"].is_null(), "send did not settle cleanly: {replied}");
                     anyhow::ensure!(replied["parentTranscriptRows"].as_u64().unwrap_or(0) == parent_rows, "the side chat changed the parent transcript: {replied}");
-                    anyhow::ensure!(replied["mainComposer"]["boundChat"] == PARENT, "main composer must stay on the parent: {replied}");
                     record.insert("replied".into(), replied);
 
-                    // s04. An approval raised in the side chat renders in the
-                    // side composer's card chrome.
+                    // f03-f04. Draft across Back: Back parks the side chat (still
+                    // writable, lease renewed), reopening restores the draft.
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("type_full", SIDE_DRAFT, cx))?;
+                    settle(cx, 300).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("back", "", cx))?;
+                    let parked = wait_for(window, cx, 100, |r| r["pageId"].is_null() && r["historyCount"] == 1 && r["busy"] == false).await?;
+                    settle(cx, 300).await;
+                    capture(window, cx, output.join("f03-side-parked-list.png"))?;
+                    anyhow::ensure!(ids(&parked["parked"]) == [side_id.clone()], "Back must park the writable side chat: {parked}");
+                    anyhow::ensure!(ids(&parked["paneChats"]).is_empty(), "the parked chat must release its pane watches: {parked}");
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
+                    let restored = wait_for(window, cx, 150, |r| r["firstClass"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
+                    settle(cx, 500).await;
+                    capture(window, cx, output.join("f04-side-draft-restored.png"))?;
+                    anyhow::ensure!(restored["writable"] == true && restored["fullComposer"]["input"] == SIDE_DRAFT, "draft lost across Back: {restored}");
+                    record.insert("parked".into(), parked);
+                    record.insert("draftRestored".into(), restored);
+
+                    // f05. A send in flight across Back: exactly one prompt and one reply.
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_side_chat("send_full", SIDE_PENDING, cx);
+                        shell.fixture_side_chat("back", "", cx);
+                    })?;
+                    settle(cx, 50).await;
+                    let in_flight = readback(window, cx)?;
+                    anyhow::ensure!(in_flight["pageId"].is_null() && ids(&in_flight["parked"]) == [side_id.clone()], "Back during the send must park: {in_flight}");
+                    settle(cx, 3000).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
+                    let settled = wait_for(window, cx, 250, |r| live(r).contains(SIDE_PENDING) && live(r).matches(SIDE_ANSWER).count() >= 2).await?;
+                    settle(cx, 500).await;
+                    capture(window, cx, output.join("f05-side-send-across-back.png"))?;
+                    let texts: Vec<String> = settled["liveTexts"].as_array().into_iter().flatten().filter_map(|text| text.as_str().map(str::to_string)).collect();
+                    anyhow::ensure!(texts.iter().filter(|text| text.contains(SIDE_PENDING)).count() == 1, "the in-flight send must arrive exactly once: {settled}");
+                    anyhow::ensure!(texts.iter().filter(|text| text.contains(SIDE_ANSWER)).count() == 2, "expected one reply per question: {settled}");
+                    anyhow::ensure!(settled["fullComposer"]["input"] == "" && settled["fullComposer"]["failure"].is_null(), "the in-flight send did not settle cleanly: {settled}");
+                    record.insert("sendAcrossBack".into(), settled);
+
+                    // f06. Provider/account changes are refused truthfully.
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("pick_other_provider", "", cx))?;
+                    settle(cx, 300).await;
+                    let refused = readback(window, cx)?;
+                    anyhow::ensure!(refused["pickerRefusal"].as_str().is_some_and(|text| text.contains("keeps its parent's provider and account")), "provider switch must be refused with the engine's reason: {refused}");
+                    record.insert("providerRefused".into(), refused["pickerRefusal"].clone());
+
+                    // f07-f10. Approval card through the live watch; light/dark, narrow.
                     let device_id = device.clone();
                     let target = side_id.clone();
                     let docs_for_task = docs.clone();
@@ -382,42 +447,41 @@ fn main() -> anyhow::Result<()> {
                             anyhow::Ok(())
                         })
                         .await??;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("refresh", "", cx))?;
-                    let approval = wait_for(window, cx, 100, |r| r["question"] == SIDE_REQUEST).await?;
+                    let approval = wait_for(window, cx, 100, |r| r["fullComposer"]["wizard"] == SIDE_REQUEST).await?;
                     settle(cx, 400).await;
-                    capture(window, cx, output.join("s04-side-approval-dark.png"))?;
-                    anyhow::ensure!(approval["question"] == SIDE_REQUEST, "side approval card missing: {approval}");
+                    capture(window, cx, output.join("f07-side-full-approval-dark.png"))?;
+                    anyhow::ensure!(approval["fullComposer"]["wizard"] == SIDE_REQUEST, "approval card missing from the side chat's composer: {approval}");
+                    anyhow::ensure!(approval["mainComposer"]["wizard"].is_null(), "the parent composer must not show the side approval: {approval}");
                     record.insert("approval".into(), approval);
-
-                    // s05-s07. Light theme and a narrow pane.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("type", "Draft follow-up about the UI flag", cx))?;
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
                     settle(cx, 600).await;
-                    capture(window, cx, output.join("s05-side-approval-light.png"))?;
+                    capture(window, cx, output.join("f08-side-full-light.png"))?;
                     window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(360.0, cx))?;
                     settle(cx, 700).await;
-                    capture(window, cx, output.join("s06-side-light-narrow.png"))?;
+                    capture(window, cx, output.join("f09-side-full-light-narrow.png"))?;
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
                     settle(cx, 700).await;
-                    capture(window, cx, output.join("s07-side-dark-narrow.png"))?;
+                    capture(window, cx, output.join("f10-side-full-dark-narrow.png"))?;
                     window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(520.0, cx))?;
-                    settle(cx, 300).await;
 
-                    // s08. Back unloads: the side chat becomes saved, read-only history.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("back", "", cx))?;
-                    let back = wait_for(window, cx, 150, |r| r["pageId"].is_null() && r["historyCount"] == 1 && r["busy"] == false).await?;
-                    settle(cx, 300).await;
-                    capture(window, cx, output.join("s08-side-back-list.png"))?;
-                    anyhow::ensure!(back["pageId"].is_null() && back["historyCount"] == 1, "Back did not unload into history: {back}");
-                    record.insert("back".into(), back);
+                    // f11. Heartbeat: 35 s idle (> the 30 s lease) keeps it writable
+                    // and a later send still works.
+                    settle(cx, 35_000).await;
+                    let idle = readback(window, cx)?;
+                    anyhow::ensure!(idle["writable"] == true && idle["error"].is_null(), "the lease lapsed while the pane was open: {idle}");
+                    anyhow::ensure!(idle["lastRenewAgoMs"].as_u64().unwrap_or(u64::MAX) < 15_000, "no recent RenewSideChat heartbeat: {idle}");
+                    anyhow::ensure!(ids(&idle["watchedDocs"]) == [side_id.clone()], "the heartbeat must not reopen or drop the live watch: {idle}");
+                    record.insert("afterIdle".into(), idle);
 
-                    // s09. Reopening saved history is read-only, in the same layout.
+                    // f12. Unload from the header: read-only history.
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("unload", "", cx))?;
+                    let back = wait_for(window, cx, 150, |r| r["pageId"].is_null() && r["busy"] == false && r["historyStates"].to_string().contains("unloaded")).await?;
                     window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
                     let reopened = wait_for(window, cx, 100, |r| r["pageId"] == side_id.as_str() && r["busy"] == false).await?;
                     settle(cx, 400).await;
-                    capture(window, cx, output.join("s09-side-readonly.png"))?;
-                    anyhow::ensure!(reopened["writable"] == false, "saved side chat must be read-only: {reopened}");
-                    anyhow::ensure!(texts(&reopened).contains(SIDE_ANSWER), "saved history lost the reply: {reopened}");
+                    capture(window, cx, output.join("f12-side-unloaded-readonly.png"))?;
+                    anyhow::ensure!(reopened["writable"] == false && reopened["fullComposer"].is_null(), "an unloaded side chat must be read-only: {reopened}");
+                    record.insert("unloaded".into(), back);
                     record.insert("reopened".into(), reopened);
                     Ok(serde_json::Value::Object(record))
                 }
@@ -431,7 +495,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("side-chat-pane.pass"),
-                                "PASS: headless production Shell; side chat in the shared pane layout (identity header, parent link, main transcript, composer-styled input); context-snapshot creation, real side send answered by the Mock harness with the parent untouched; side approval card; light/dark and a 360 px pane; Back unloads to read-only history that reopens in the same layout\n",
+                                "PASS: headless production Shell on the production engine boundary; engine gate side-chat-task-commands-v1 + spaceless WatchChats row -> the FULL main composer and live transcript bound to the side chat; send answered with the parent untouched; draft and an in-flight send survive Back (parked, lease renewed); provider switch refused with the engine's reason; approval card in light/dark and a 360 px pane; 35 s idle kept writable by the RenewSideChat heartbeat without reopening the watch; Unload gives read-only history\n",
                             )
                         });
                         if let Err(error) = written {

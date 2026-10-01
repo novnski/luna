@@ -1600,6 +1600,38 @@ impl Shell {
                     Some(meta) => PanelAction::Open(meta.id.clone()),
                     None => return,
                 },
+                "type_full" | "send_full" => {
+                    let Some(composer) = panel
+                        .full_view
+                        .as_ref()
+                        .map(|(view, _)| view.read(cx).composer().clone())
+                    else {
+                        return;
+                    };
+                    let input = composer.read(cx).input.clone();
+                    input.update(cx, |input, cx| {
+                        input.set_text(text, cx);
+                        if action == "send_full" {
+                            cx.emit(crate::composer::ComposerInputEvent::Submitted);
+                        }
+                    });
+                    return;
+                }
+                "pick_other_provider" => {
+                    let Some(composer) = panel
+                        .full_view
+                        .as_ref()
+                        .map(|(view, _)| view.read(cx).composer().clone())
+                    else {
+                        return;
+                    };
+                    let pickers = composer.read(cx).pickers().clone();
+                    pickers.update(cx, |pickers, cx| {
+                        pickers.fixture_pick_harness(HarnessId::Codex, cx)
+                    });
+                    return;
+                }
+                "unload" => PanelAction::Unload,
                 "type" | "send" => {
                     let input = panel.input.clone();
                     input.update(cx, |input, cx| input.set_text(text, cx));
@@ -1639,6 +1671,8 @@ impl Shell {
             "mainComposer": self.composer.read(cx).readback(cx),
             "firstClass": page.is_some_and(|page| side_chat_first_class(self.state.read(cx), &page.meta.id)),
             "parked": panel.parked.keys().cloned().collect::<Vec<_>>(),
+            "lastRenewAgoMs": panel.last_renew.elapsed().as_millis() as u64,
+            "pickerRefusal": panel.full_view.as_ref().and_then(|(view, _)| view.read(cx).composer().read(cx).pickers().read(cx).fixture_refusals()),
             "liveTexts": page.map(|page| self.state.read(cx).sub_transcript(&page.meta.id).iter().flat_map(|entry| entry.parts.iter()).filter_map(|part| match part {
                 luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
                 _ => None,

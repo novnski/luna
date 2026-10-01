@@ -1042,6 +1042,19 @@ impl Pickers {
         }
     }
 
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_pick_harness(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        self.pick_harness(harness, cx);
+    }
+
+    /// The provider/account refusal currently shown, if any.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_refusals(&self) -> Option<String> {
+        self.context_error
+            .clone()
+            .or_else(|| self.account_error.clone())
+    }
+
     /// The loaded model catalog for `harness`, if any (the child creation
     /// dialog offers the parent's provider's models from it).
     pub(crate) fn loaded_models(&self, harness: HarnessId) -> Option<Vec<Model>> {
