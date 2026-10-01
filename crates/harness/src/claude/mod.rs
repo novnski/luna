@@ -40,6 +40,8 @@ mod history;
 mod input;
 mod live_session;
 mod mcp;
+mod native_stop;
+mod native_tasks;
 mod normalize;
 pub mod profile;
 mod runtime_controls;
@@ -123,6 +125,8 @@ pub struct ClaudeHarness {
     staged: runtime_controls::SharedStaged,
     /// MCP reports from each run's own `system:init` (CC-11), in memory only.
     mcp_sessions: Arc<mcp::SessionMcpRegistry>,
+    /// Live runs addressable by `stop_native_child` (CC-08).
+    live_children: native_stop::LiveChildren,
 }
 
 impl Default for ClaudeHarness {
@@ -135,6 +139,7 @@ impl Default for ClaudeHarness {
             discovery: discovery::DiscoveryCache::default(),
             staged: Default::default(),
             mcp_sessions: Arc::default(),
+            live_children: native_stop::LiveChildren::default(),
         }
     }
 }
@@ -493,6 +498,17 @@ impl Harness for ClaudeHarness {
         history::rewind_files(&self.resolve_executable()?, request).await
     }
 
+    async fn stop_native_child(
+        &self,
+        native_session_id: &str,
+        spawn_tool_use_id: &str,
+    ) -> Result<crate::NativeTaskStop, HarnessError> {
+        Ok(self
+            .live_children
+            .stop(native_session_id, spawn_tool_use_id)
+            .await)
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
@@ -568,6 +584,8 @@ impl ClaudeHarness {
                 "--setting-sources",
                 "",
             ]);
+        } else {
+            cmd.args(native_tasks::RUN_ARGS);
         }
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
@@ -661,6 +679,7 @@ impl ClaudeHarness {
             },
             mcp_sessions: (!title_only).then(|| self.mcp_sessions.clone()),
             identities,
+            live_children: self.live_children.clone(),
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -740,6 +759,7 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    live_children: native_stop::LiveChildren,
     /// CC-10 client uuids and per-turn provider checkpoints.
     identities: history::TurnIdentities,
     mcp_sessions: Option<Arc<mcp::SessionMcpRegistry>>,
@@ -774,6 +794,7 @@ async fn run_session(session: Session) {
         cc06,
         mcp_sessions,
         mut identities,
+        live_children,
     } = session;
     let RunControls {
         request_input,
@@ -795,6 +816,10 @@ async fn run_session(session: Session) {
     let mut live = live_session::LiveSession::start(cc06, title_only, &stdin_tx);
     let mut released: std::collections::VecDeque<crate::SteerMessage> =
         std::collections::VecDeque::new();
+    // Native children of this run become addressable by `stop_task` once
+    // its session id is known (CC-08).
+    let stoppable = norm.stoppable();
+    let mut live_registration: Option<native_stop::Registration> = None;
     // Claude's root user echo carries no correlation id. Explicit steering is
     // single-flight and a successful stdin write remains unconfirmed; text
     // equality alone must never settle a durable queue row.
@@ -814,6 +839,9 @@ async fn run_session(session: Session) {
                 Ok(Some(line)) => {
                     let line = line.trim();
                     if line.is_empty() {
+                        continue;
+                    }
+                    if native_stop::resolve_control_response(&stoppable, line) {
                         continue;
                     }
                     if let Some(id) = controls::cancelled_request_id(line) {
@@ -933,6 +961,16 @@ async fn run_session(session: Session) {
                                 break 'main;
                             }
                         }
+                    }
+                    if live_registration.is_none()
+                        && !title_only
+                        && let Some(session_id) = norm.session_id.as_deref()
+                    {
+                        live_registration = Some(live_children.register(
+                            session_id,
+                            stdin_tx.clone(),
+                            stoppable.clone(),
+                        ));
                     }
                 }
                 Ok(None) => break 'main, // stdout EOF: the CLI exited
@@ -1153,6 +1191,9 @@ async fn run_session(session: Session) {
         }
     }
 
+    if let Some(registration) = &live_registration {
+        live_children.deregister(registration);
+    }
     requests.cancel_all();
     transport.finish();
     if done_after_interrupt {

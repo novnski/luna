@@ -66,6 +66,10 @@ name = "claude-history-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "native-agents-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "appearance-fixture"
 required-features = ["appshots-fixture"]
 

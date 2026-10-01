@@ -74,6 +74,10 @@ pub(crate) struct SystemFrame {
     pub mcp_servers: Option<Box<Value>>,
     #[serde(default)]
     pub capabilities: Option<Box<Value>>,
+    /// Allowlisted `task_*` fields (type, usage, patch, summary…), read
+    /// leniently by `native_tasks`; nothing else is retained.
+    #[serde(flatten)]
+    pub native_task_fields: super::native_tasks::TaskFields,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown

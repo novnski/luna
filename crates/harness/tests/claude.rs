@@ -682,7 +682,12 @@ async fn captured_live_background_subagent_frames_replay_correctly() {
                 e,
                 AgentEvent::Subagent { parent_tool_use_id, event }
                     if *parent_tool_use_id == spawn_id
-                        && !matches!(event.as_ref(), AgentEvent::UserMessage { .. })
+                        // Content only: the opening prompt and the spawn's
+                        // background flag ride with the spawn itself.
+                        && !matches!(
+                            event.as_ref(),
+                            AgentEvent::UserMessage { .. } | AgentEvent::ChildProgress { .. }
+                        )
             )
             .then_some(i)
         })
@@ -1648,4 +1653,394 @@ async fn cc02_lifecycle_unknown_and_tool_bodies_are_decoded_and_retained() {
             session_id: Some("sess-life".into()),
         })
     );
+}
+
+/// E25 (CC-08): a 2.1.286-shaped native agent graph through the whole driver
+/// path (argv opt-in → wire → normalizer → run loop). Root spawn A runs in
+/// the foreground; A spawns B (seen only in A's snapshot, no `task_started`)
+/// and background E (steered by A's `SendMessage`), and launches a background
+/// shell job; two background root children settle after the root's eager
+/// result. Failure cases: `$B/evidence/cc08-native-agents/failure-cases.md`.
+#[tokio::test]
+async fn native_nested_agents_keep_ownership_model_usage_and_completion() {
+    let (controls, _steer, _token) = controls("A");
+    // The fake CLI exits without output unless `--forward-subagent-text` is
+    // on the argv (F1), so any event at all proves the opt-in.
+    let events = run_to_end(&harness(), request("scenario:native-nested"), controls).await;
+    assert!(!events.is_empty(), "opt-in missing from argv");
+
+    let tagged = |spawn: &str| -> Vec<AgentEvent> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Subagent {
+                    parent_tool_use_id,
+                    event,
+                } if parent_tool_use_id == spawn => Some(event.as_ref().clone()),
+                _ => None,
+            })
+            .collect()
+    };
+    let progress = |model: Option<&str>,
+                    total_tokens: Option<u64>,
+                    tool_uses: Option<u64>,
+                    duration_ms: Option<u64>,
+                    last_tool: Option<&str>,
+                    background: Option<bool>| AgentEvent::ChildProgress {
+        model: model.map(str::to_owned),
+        total_tokens,
+        tool_uses,
+        duration_ms,
+        last_tool: last_tool.map(str::to_owned),
+        summary: None,
+        background,
+    };
+    let done = |status: DoneStatus, result: Option<&str>, error: Option<&str>| AgentEvent::Done {
+        status,
+        result: result.map(str::to_owned),
+        error: error.map(str::to_owned),
+        session_id: None,
+    };
+    let call = |events: &[AgentEvent], id: &str| {
+        events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::ToolCall { id: got, .. } if got == id))
+    };
+
+    // Root feed: only the root's own text, two root Dones (eager + wake), no
+    // child content, task row, hook or unknown notification (F9/F17/F18).
+    let root_text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        root_text,
+        "Delegating. Two watchers launched.Background agents finished."
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::Done { .. }))
+            .count(),
+        2,
+        "{events:?}"
+    );
+    for spawn in ["toolu_ghost", "toolu_wf", "agent-a", "ghost", "wf-1"] {
+        assert!(tagged(spawn).is_empty(), "{spawn} attached: {events:?}");
+    }
+    let debug = format!("{events:?}");
+    for leaked in [
+        "ghost finished",
+        "spec workflow done",
+        "late duplicate",
+        "again",
+    ] {
+        assert!(!debug.contains(leaked), "{leaked} leaked: {debug}");
+    }
+
+    // A (foreground root child): forwarded thinking and text (F2; redacted
+    // thinking never becomes text), its reported model once (F13), one
+    // progress row despite two ticks (F12), its nested calls and the
+    // background job's completion attributed to it (F7), then usage + Done.
+    let a = tagged("toolu_A");
+    assert_eq!(
+        a.first(),
+        Some(&AgentEvent::UserMessage {
+            text: "Map the parser module and delegate the lexer.".into()
+        })
+    );
+    assert!(a.contains(&AgentEvent::ReasoningDelta {
+        text: "The lexer is separable; delegate it.\n\n".into()
+    }));
+    assert!(a.contains(&AgentEvent::TextDelta {
+        text: "Splitting the work.\n\n".into()
+    }));
+    assert!(!format!("{a:?}").contains("cmVkYWN0ZWQ"));
+    assert_eq!(
+        a.iter()
+            .filter(|e| matches!(e, AgentEvent::ChildProgress { model: Some(_), .. }))
+            .collect::<Vec<_>>(),
+        [&progress(
+            Some("claude-haiku-4-5-20251001"),
+            None,
+            None,
+            None,
+            None,
+            None
+        )]
+    );
+    assert_eq!(
+        a.iter()
+            .filter(|e| matches!(
+                e,
+                AgentEvent::ChildProgress {
+                    last_tool: Some(_),
+                    ..
+                }
+            ))
+            .collect::<Vec<_>>(),
+        [&progress(
+            None,
+            Some(1200),
+            Some(1),
+            Some(4000),
+            Some("Agent"),
+            None
+        )],
+        "flood guard: the second tick changes no material field"
+    );
+    for nested in ["toolu_B", "toolu_E", "toolu_A_bg", "toolu_A_send"] {
+        assert!(call(&a, nested), "{nested} not in A's transcript: {a:?}");
+    }
+    assert!(a.iter().any(|e| matches!(e,
+        AgentEvent::ToolResult { id, is_error: false, output: Some(output), .. }
+            if id == "toolu_A_bg"
+                && output.starts_with("Background job completed: Background command \"Run tests\" completed (exit code 0)")
+                && output.contains("Output file: /tmp/claude/tasks/bash-a.output")
+    )), "{a:?}");
+    assert_eq!(
+        &a[a.len() - 2..],
+        [
+            progress(None, Some(2400), Some(3), Some(9000), None, None),
+            done(DoneStatus::Completed, Some("Parser mapped"), None),
+        ]
+    );
+
+    // B: nested, seen only in A's snapshot, no task_started (F3): opening
+    // prompt (F4), its OWN model (F13), content, usage and one Done (F10:
+    // the late duplicate after the wake result is ignored).
+    let b = tagged("toolu_B");
+    assert_eq!(
+        b.first(),
+        Some(&AgentEvent::UserMessage {
+            text: "Summarize lexer.rs states.".into()
+        })
+    );
+    assert!(b.contains(&progress(
+        Some("claude-sonnet-5"),
+        None,
+        None,
+        None,
+        None,
+        None
+    )));
+    assert!(b.contains(&AgentEvent::TextDelta {
+        text: "Lexer has three states.\n\n".into()
+    }));
+    assert!(call(&b, "toolu_B_read"));
+    assert_eq!(
+        &b[b.len() - 2..],
+        [
+            progress(None, Some(800), Some(1), Some(2000), None, None),
+            done(DoneStatus::Completed, Some("Lexer has three states"), None),
+        ]
+    );
+
+    // E: nested background child, steered by A's SendMessage (F5).
+    let e = tagged("toolu_E");
+    assert_eq!(
+        e[..3],
+        [
+            AgentEvent::UserMessage {
+                text: "List the token kinds.".into()
+            },
+            progress(None, None, None, None, None, Some(true)),
+            AgentEvent::UserMessage {
+                text: "Include keywords too.".into()
+            },
+        ]
+    );
+    assert_eq!(
+        e.last(),
+        Some(&done(
+            DoneStatus::Completed,
+            Some("Listed token kinds"),
+            None
+        ))
+    );
+
+    // C/D: background root children settling after the root's eager result
+    // (F11) with observed cancellation and failure (F15). The summary that
+    // only repeats the description is not an outcome.
+    let c = tagged("toolu_C");
+    assert_eq!(
+        c.last(),
+        Some(&done(
+            DoneStatus::Interrupted,
+            None,
+            Some("Stopped: the Claude worker restarted")
+        ))
+    );
+    let d = tagged("toolu_D");
+    assert_eq!(
+        d.last(),
+        Some(&done(
+            DoneStatus::Errored,
+            None,
+            Some("Docs site unreachable")
+        ))
+    );
+    let eager = events
+        .iter()
+        .position(|e| matches!(e, AgentEvent::Done { .. }))
+        .unwrap();
+    let settled = |spawn: &str| {
+        events.iter().position(|e| matches!(e,
+            AgentEvent::Subagent { parent_tool_use_id, event }
+                if parent_tool_use_id == spawn && matches!(event.as_ref(), AgentEvent::Done { .. })
+        ))
+    };
+    assert!(settled("toolu_C").unwrap() > eager && settled("toolu_D").unwrap() > eager);
+
+    // Exactly one Done per spawn; no Done for a non-spawn.
+    let mut dones: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Subagent {
+                parent_tool_use_id,
+                event,
+            } if matches!(event.as_ref(), AgentEvent::Done { .. }) => {
+                Some(parent_tool_use_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    dones.sort_unstable();
+    assert_eq!(
+        dones,
+        ["toolu_A", "toolu_B", "toolu_C", "toolu_D", "toolu_E"]
+    );
+}
+
+/// CC-08 task cancellation: `stop_native_child` writes the 2.1.286
+/// `stop_task` control request only for a running native child of the live
+/// run; everything else is refused locally (the fake CLI fails on any other
+/// stdin line). An acknowledgement is only a request receipt (2.1.286 also
+/// acknowledges unknown task ids — init probe): the child settles from its
+/// own `task_updated`/`task_notification` (F15/F16).
+#[tokio::test]
+async fn native_child_stop_is_authority_checked_and_settles_from_task_events() {
+    use luna_harness::NativeTaskStop;
+
+    let harness = harness();
+    let (controls, steer, _token) = controls("A");
+    let mut stream = harness
+        .run(request("scenario:native-stop"), controls)
+        .await
+        .expect("run starts");
+    let mut events = Vec::new();
+    let child_text = |event: &AgentEvent| {
+        matches!(event, AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_S" && matches!(event.as_ref(), AgentEvent::TextDelta { .. }))
+    };
+    assert!(next_until(&mut stream, &mut events, child_text).await);
+    let session = events
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::SessionStarted { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .expect("session started");
+
+    // Refused locally: unknown spawn, another session.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_unknown")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    assert!(matches!(
+        harness
+            .stop_native_child("sess-other", "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    // The real stop: acknowledged, but the child is not settled by that.
+    assert_eq!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Requested
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Subagent { event, .. }
+        if matches!(event.as_ref(), AgentEvent::Done { .. })))
+    );
+    let child_done = |event: &AgentEvent| {
+        matches!(event, AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_S" && matches!(event.as_ref(), AgentEvent::Done { .. }))
+    };
+    assert!(next_until(&mut stream, &mut events, child_done).await);
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Subagent {
+            parent_tool_use_id: "toolu_S".into(),
+            event: Box::new(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                result: None,
+                error: None,
+                session_id: None,
+            }),
+        })
+    );
+    // Settled: a second stop is refused without reaching the CLI.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    // Close the mailbox (stdin EOF); the rest of the run plays out.
+    drop(steer);
+    assert!(!next_until(&mut stream, &mut events, |_| false).await);
+    let root: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Done { status, error, .. } => Some((*status, error.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        root,
+        [(DoneStatus::Completed, None), (DoneStatus::Completed, None)],
+        "a refused stop leaked to stdin, or the child's stop ended the root: {events:?}"
+    );
+    // The run is gone: nothing is addressable any more.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+}
+
+/// Consume `stream` into `events` until `stop` matches (true) or it ends.
+async fn next_until(
+    stream: &mut futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+    events: &mut Vec<AgentEvent>,
+    stop: impl Fn(&AgentEvent) -> bool,
+) -> bool {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            let found = stop(&event);
+            events.push(event);
+            if found {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("stream progressed in time")
 }

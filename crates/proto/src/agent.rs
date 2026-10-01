@@ -1025,6 +1025,27 @@ pub enum AgentEvent {
     ChildStatus {
         status: ChildRuntimeStatus,
     },
+    /// Provider-reported progress of a native child task, only meaningful
+    /// inside `Subagent`. Each present field is the latest snapshot; absent
+    /// fields keep the previous observation. `total_tokens` is the provider's
+    /// own total and is never an input/output split.
+    #[serde(rename_all = "camelCase")]
+    ChildProgress {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_tokens: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_uses: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        duration_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        last_tool: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        summary: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        background: Option<bool>,
+    },
     /// The agent advertised (or changed) its slash-command set — ACP
     /// `available_commands_update`. The engine caches the latest list per
     /// harness for the composer's `/` popup; never persisted to docs.
