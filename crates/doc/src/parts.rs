@@ -321,10 +321,11 @@ impl SubagentActivity {
     pub fn apply(&mut self, event: &AgentEvent) {
         match event {
             // A new assignment clears the previous outcome; the same child
-            // keeps answering with the model it last reported.
+            // keeps its reported model and whether it runs in the background.
             AgentEvent::UserMessage { .. } | AgentEvent::Steered { .. } => {
                 *self = Self {
                     model: self.model.take(),
+                    background: self.background,
                     ..Self::default()
                 }
             }
