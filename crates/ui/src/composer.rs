@@ -4506,8 +4506,9 @@ fn slash_token(text: &str, cursor: usize) -> Option<MentionToken> {
 }
 
 /// Slash-command completion state: like [`FileMentionState`] but the
-/// candidate list is fetched once per harness (`ListCommands`) and filtered
-/// locally per keystroke — no RPC, debounce, or skeleton churn while typing.
+/// candidate list is fetched per harness (`ListCommands`, revalidated once per
+/// popup open) and filtered locally per keystroke — no RPC, debounce, or
+/// skeleton churn while typing.
 #[derive(Debug, Clone, Default)]
 struct SlashState {
     token: Option<MentionToken>,
@@ -4651,8 +4652,9 @@ pub struct Composer {
     integrations: integrations::IntegrationPicker,
     slash_task: Option<Task<()>>,
     slash: SlashState,
-    /// Advertised commands per harness (one `ListCommands` per harness per
-    /// composer lifetime; the engine caches discovery on its side too).
+    /// Advertised commands per harness (shown at once on reopen and
+    /// revalidated by one `ListCommands`; the engine re-discovers only after
+    /// the provider's extension files change).
     slash_cache: HashMap<HarnessId, Vec<SlashCommand>>,
     /// Slash-popup row scroll — the stack overflows into a wheel/keyboard-
     /// scrollable list once it outgrows the card.
@@ -8810,6 +8812,7 @@ impl Composer {
             self.refilter_slash(cx);
             return;
         }
+        let opening = self.slash.token.is_none() || harness_changed;
         self.slash.token = token.clone();
         self.slash.harness = harness;
         self.slash.error = None;
@@ -8824,15 +8827,21 @@ impl Composer {
             self.refilter_slash(cx);
             return;
         };
-        if self.slash_cache.contains_key(&harness) {
+        let cached = self.slash_cache.contains_key(&harness);
+        if cached {
             self.slash.loading = false;
             self.refilter_slash(cx);
-            return;
+            // Revalidate once per popup open, showing the cached list
+            // meanwhile: the engine re-discovers only after the provider's
+            // settings/commands/skills changed.
+            if !opening {
+                return;
+            }
         }
         // First open for this harness: one ListCommands, targeted like file
         // search (the chat/space host device owns the agent binary).
         self.slash.request = self.slash.request.wrapping_add(1);
-        self.slash.loading = true;
+        self.slash.loading = !cached;
         self.refilter_slash(cx);
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.slash.loading = false;
@@ -8866,7 +8875,10 @@ impl Composer {
                     },
                     Err(err) => {
                         tracing::debug!(%err, "slash command discovery failed");
-                        composer.slash.error = Some(slash_error_message(&err));
+                        // A failed revalidation keeps the last good list.
+                        if !composer.slash_cache.contains_key(&harness) {
+                            composer.slash.error = Some(slash_error_message(&err));
+                        }
                     }
                 }
                 composer.refilter_slash(cx);

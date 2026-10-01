@@ -108,6 +108,8 @@ pub struct HarnessesPage {
     runtime_contract: Loadable<RuntimeContractView>,
     runtime_task: Option<Task<()>>,
     runtime_task_id: Option<String>,
+    /// CC-12: effective Claude settings sources, style, hooks, commands.
+    native_extensions: Entity<super::native_extensions::NativeExtensionsPanel>,
     _state_observer: Subscription,
 }
 
@@ -138,6 +140,8 @@ impl HarnessesPage {
                 cx.notify();
             }
         });
+        let native_extensions =
+            cx.new(|cx| super::native_extensions::NativeExtensionsPanel::new(state.clone(), cx));
         let mut page = Self {
             title_settings: Loadable::Idle,
             title_models: Loadable::Idle,
@@ -179,6 +183,7 @@ impl HarnessesPage {
             runtime_contract: Loadable::Idle,
             runtime_task: None,
             runtime_task_id: None,
+            native_extensions,
             _state_observer: state_observer,
         };
         page.load(cx);
@@ -1775,6 +1780,7 @@ impl HarnessesPage {
                             || self.skill_notice.is_some(),
                         |el| el.child(self.render_skill_editor(&theme, cx)),
                     )
+                    .child(self.native_extensions.clone())
                     .child(self.render_instructions(&theme, cx))
                     .child(self.render_runtime_contract(&theme, cx))
             })

@@ -40,7 +40,8 @@ impl World {
     fn harness(&self) -> ClaudeHarness {
         ClaudeHarness::new()
             .with_executable(fake())
-            .with_extension_roots(&self.config, &self.managed)
+            .with_config_dir(&self.config)
+            .with_managed_settings_dir(&self.managed)
     }
 
     fn log(&self) -> String {
@@ -751,6 +752,7 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
         .find(|l| l.starts_with("ARGV:"))
         .unwrap();
     assert!(!readback_argv.contains("dangerously"), "{readback_argv}");
+    assert!(readback_argv.contains("disableAllHooks"), "{readback_argv}");
     assert!(
         readback_argv.contains("[--permission-mode] [default]"),
         "{readback_argv}"
@@ -840,7 +842,7 @@ async fn typed_skill_outside_the_effective_catalog_is_rejected_before_any_user_m
 }
 
 #[tokio::test]
-async fn discovery_and_view_reload_when_extension_files_change() {
+async fn extension_view_reloads_when_settings_files_change() {
     let root = tempfile::tempdir().unwrap();
     let world = World {
         config: root.path().join("config"),
@@ -854,33 +856,18 @@ async fn discovery_and_view_reload_when_extension_files_change() {
         "---\ndescription: first\n---\nx\n",
     );
     let harness = world.harness();
-    let names = |commands: Vec<luna_proto::SlashCommand>| {
-        commands.into_iter().map(|c| c.name).collect::<Vec<_>>()
-    };
-    let first = names(harness.commands().await.unwrap());
-    assert!(first.contains(&"first".to_owned()) && !first.contains(&"fresh".to_owned()));
-    assert_eq!(names(harness.commands().await.unwrap()), first);
-    assert_eq!(world.inits(), 1, "unchanged files reuse the catalog");
-    // D1/D2: a new command file re-runs discovery.
-    world.write(
-        "config/commands/fresh.md",
-        "---\ndescription: fresh\n---\nx\n",
-    );
-    let second = names(harness.commands().await.unwrap());
-    assert!(second.contains(&"fresh".to_owned()), "{second:?}");
-    assert_eq!(world.inits(), 2);
-
-    // D5: the effective view is reused until a settings file changes.
+    // D5: the verified view is reused until a relevant file changes.
     let before = harness
         .native_extensions(Some(&world.project), PermissionMode::Full, false)
         .await
         .unwrap();
+    assert!(before.native_verified);
     let again = harness
         .native_extensions(Some(&world.project), PermissionMode::Full, false)
         .await
         .unwrap();
     assert_eq!(before, again);
-    assert_eq!(world.inits(), 3);
+    assert_eq!(world.inits(), 1, "unchanged files reuse the verified view");
     world.write(
         ".claude/settings.json",
         &json!({"outputStyle": "Learning"}).to_string(),
@@ -891,11 +878,33 @@ async fn discovery_and_view_reload_when_extension_files_change() {
         .unwrap();
     assert_ne!(before.fingerprint, after.fingerprint);
     assert_eq!(after.output_style.configured_effective, "Learning");
-    assert_eq!(world.inits(), 4);
+    assert_eq!(world.inits(), 2);
+    // A new command file is a change too (D2), and Claude's answer follows it.
+    world.write(
+        "config/commands/fresh.md",
+        "---\ndescription: fresh\n---\nx\n",
+    );
+    let fresh = harness
+        .native_extensions(Some(&world.project), PermissionMode::Full, false)
+        .await
+        .unwrap();
+    assert_eq!(world.inits(), 3);
+    assert!(
+        fresh
+            .commands
+            .iter()
+            .any(|c| c.name == "fresh" && c.native == Some(true))
+    );
     // An explicit refresh always re-reads.
     harness
         .native_extensions(Some(&world.project), PermissionMode::Full, true)
         .await
         .unwrap();
-    assert_eq!(world.inits(), 5);
+    assert_eq!(world.inits(), 4);
+    // The readback never runs the user's hooks.
+    let log = world.log();
+    assert!(
+        log.contains("[--settings] [{\"disableAllHooks\":true}]"),
+        "{log}"
+    );
 }

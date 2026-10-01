@@ -93,13 +93,13 @@ pub struct ClaudeHarness {
     /// Grace between SIGTERM and SIGKILL.
     kill_grace: Duration,
     /// Command discovery cache: only a successful probe is cached, so a
-    /// broken CLI retries on the next picker open (ACP-harness parity). Keyed
-    /// by the extension fingerprint: editing settings, commands, skills or
-    /// output styles re-runs discovery (`extensions.rs`).
-    commands: tokio::sync::Mutex<Option<(String, Vec<SlashCommand>)>>,
-    /// Test/fixture overrides; production inherits `$CLAUDE_CONFIG_DIR` or
-    /// `~/.claude` and the platform managed-settings directory.
-    config_dir: Option<PathBuf>,
+    /// broken CLI retries on the next picker open (ACP-harness parity).
+    commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    /// Explicit provider home (`CLAUDE_CONFIG_DIR`); `None` inherits the
+    /// engine's `$CLAUDE_CONFIG_DIR` or `~/.claude`.
+    config_home: Option<PathBuf>,
+    /// Managed-settings directory override (tests/fixtures); `None` reads the
+    /// platform location (`extensions.rs`).
     managed_dir: Option<PathBuf>,
     /// Verified extension views per (cwd, mode), reused until the
     /// extension fingerprint changes.
@@ -112,8 +112,8 @@ impl Default for ClaudeHarness {
             executable: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
-            commands: tokio::sync::Mutex::new(None),
-            config_dir: None,
+            commands: tokio::sync::OnceCell::new(),
+            config_home: None,
             managed_dir: None,
             extension_views: Default::default(),
         }
@@ -128,6 +128,12 @@ impl ClaudeHarness {
     /// Use a fixed CLI binary instead of PATH/known-location resolution.
     pub fn with_executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable = Some(path.into());
+        self
+    }
+
+    /// Launch every Claude process with this provider home (`CLAUDE_CONFIG_DIR`).
+    pub fn with_config_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_home = Some(path.into());
         self
     }
 
@@ -262,8 +268,8 @@ impl ClaudeHarness {
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
         }
-        if let Some(dir) = &self.config_dir {
-            cmd.env("CLAUDE_CONFIG_DIR", dir);
+        if let Some(home) = &self.config_home {
+            cmd.env("CLAUDE_CONFIG_DIR", home);
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -291,9 +297,6 @@ impl ClaudeHarness {
             // CLI exits immediately with a usage error.
             "--verbose",
         ]);
-        if let Some(dir) = &self.config_dir {
-            cmd.env("CLAUDE_CONFIG_DIR", dir);
-        }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -466,7 +469,14 @@ impl Harness for ClaudeHarness {
     /// model turn (verified live, 2.1.228: the control_response is the first
     /// stdout line, well before any API traffic). Cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
-        self.commands_with_reload().await
+        self.commands
+            .get_or_try_init(|| async {
+                self.discover_initialize()
+                    .await
+                    .map(|response| parse_initialize_commands(&response))
+            })
+            .await
+            .cloned()
     }
 
     async fn native_extensions(

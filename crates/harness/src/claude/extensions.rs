@@ -1053,6 +1053,51 @@ pub(crate) fn command_args(command: &Command) -> Vec<String> {
         .collect()
 }
 
+/// The launch argv for an initialize-only readback: no bypass flag (it
+/// changes no settings source), and `disableAllHooks` merged into the one
+/// `--settings` layer — `initialize` alone runs SessionStart hooks, and hooks
+/// do not change the commands or styles it reports.
+pub(crate) fn readback_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(args.len() + 2);
+    let mut merged = false;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dangerously-skip-permissions" => {}
+            "--permission-mode" => {
+                out.push(arg.clone());
+                if let Some(mode) = iter.next() {
+                    out.push(if mode == "bypassPermissions" {
+                        "default".into()
+                    } else {
+                        mode.clone()
+                    });
+                }
+            }
+            "--settings" => {
+                let value = iter.next().cloned().unwrap_or_default();
+                out.push(arg.clone());
+                match serde_json::from_str::<Value>(&value) {
+                    Ok(Value::Object(mut map)) => {
+                        map.insert("disableAllHooks".into(), Value::Bool(true));
+                        out.push(Value::Object(map).to_string());
+                        merged = true;
+                    }
+                    // A settings file path stays; the extra layer below
+                    // disables hooks.
+                    _ => out.push(value),
+                }
+            }
+            _ => out.push(arg.clone()),
+        }
+    }
+    if !merged {
+        out.push("--settings".into());
+        out.push(r#"{"disableAllHooks":true}"#.into());
+    }
+    out
+}
+
 /// Run only the `initialize` control request under a launch's own argv, cwd
 /// and environment: no user message, no model turn. Returns the inner
 /// `response` object of the matching control_response.
@@ -1065,24 +1110,7 @@ pub(crate) async fn initialize_readback(
 ) -> Result<Value, HarnessError> {
     let mut cmd = Command::new(exe);
     crate::compose_child_path(&mut cmd, exe);
-    // A bypass flag changes no settings source; never launch with one here.
-    let mut skip_value = false;
-    for arg in args {
-        if skip_value {
-            skip_value = false;
-            cmd.arg(if arg == "bypassPermissions" {
-                "default"
-            } else {
-                arg
-            });
-            continue;
-        }
-        if arg == "--dangerously-skip-permissions" {
-            continue;
-        }
-        skip_value = arg == "--permission-mode";
-        cmd.arg(arg);
-    }
+    cmd.args(readback_args(args));
     if let Some(cwd) = cwd {
         cmd.current_dir(cwd);
     }
@@ -1296,44 +1324,22 @@ fn launch_probe_request(
 }
 
 impl super::ClaudeHarness {
-    /// Point settings discovery (and spawned CLIs) at explicit roots.
-    /// Production leaves both unset: the CLI's own `$CLAUDE_CONFIG_DIR` /
-    /// `~/.claude` and the platform managed-settings directory.
-    pub fn with_extension_roots(
-        mut self,
-        config_dir: impl Into<PathBuf>,
-        managed_dir: impl Into<PathBuf>,
-    ) -> Self {
-        self.config_dir = Some(config_dir.into());
-        self.managed_dir = Some(managed_dir.into());
+    /// Read managed settings from this directory instead of the platform
+    /// location (tests/fixtures; the real CLI always reads the platform path).
+    pub fn with_managed_settings_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.managed_dir = Some(dir.into());
         self
     }
 
     pub(super) fn extension_scope(&self, cwd: Option<PathBuf>) -> ExtensionScope {
         ExtensionScope::new(
             cwd,
-            self.config_dir
+            self.config_home
                 .clone()
                 .or_else(default_config_dir)
                 .unwrap_or_default(),
             self.managed_dir.clone().unwrap_or_else(default_managed_dir),
         )
-    }
-
-    /// Slash commands, re-discovered whenever the extension fingerprint for
-    /// the discovery launch changes (settings/commands/skills/styles edited).
-    pub(super) async fn commands_with_reload(&self) -> Result<Vec<SlashCommand>, HarnessError> {
-        let scope = self.extension_scope(std::env::current_dir().ok());
-        let key = fingerprint(&scope, &[]);
-        let mut cache = self.commands.lock().await;
-        if let Some((cached, commands)) = cache.as_ref()
-            && *cached == key
-        {
-            return Ok(commands.clone());
-        }
-        let commands = super::parse_initialize_commands(&self.discover_initialize().await?);
-        *cache = Some((key, commands.clone()));
-        Ok(commands)
     }
 
     pub(super) async fn native_extensions_view(
@@ -1361,7 +1367,7 @@ impl super::ClaudeHarness {
             &exe,
             &args,
             cwd,
-            self.config_dir.as_deref(),
+            self.config_home.as_deref(),
             self.kill_grace,
         )
         .await
@@ -1389,8 +1395,14 @@ impl super::ClaudeHarness {
         };
         let args = command_args(cmd);
         let cwd = (!request.cwd.is_empty()).then(|| Path::new(&request.cwd));
-        match initialize_readback(exe, &args, cwd, self.config_dir.as_deref(), self.kill_grace)
-            .await
+        match initialize_readback(
+            exe,
+            &args,
+            cwd,
+            self.config_home.as_deref(),
+            self.kill_grace,
+        )
+        .await
         {
             Ok(body) => check_effective_skill(&name, &body, &launch_sources(&args))?,
             Err(error) => tracing::warn!(
