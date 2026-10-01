@@ -574,3 +574,115 @@ async fn title_run_keeps_tools_disabled() {
         0
     );
 }
+
+/// LIVE E23 acceptance for the lead (real CLI, the user's normal Claude login,
+/// network, ONE `claude-haiku-4-5-20251001` turn). Agents never run it.
+/// `scripts/cargo.sh test --locked -p luna-harness --test claude_effective_config
+///  -- --ignored --nocapture live_e23_effective_configuration`
+/// Expected: Ask discovery omits the project canary and Full shows it (both
+/// initialize-only); the Ask run has Bash (any escalation is answered
+/// "Allow once" through LUNA's approval bridge) and returns `luna-e23-ask`.
+#[tokio::test]
+#[ignore = "real claude CLI + login + network + one haiku turn (lead QA only)"]
+async fn live_e23_effective_configuration() {
+    let root = tempfile::Builder::new()
+        .prefix("luna-e23-")
+        .tempdir()
+        .unwrap();
+    let project = root.path().join("project");
+    std::fs::create_dir_all(project.join(".claude/commands")).unwrap();
+    std::fs::write(
+        project.join(".claude/settings.json"),
+        r#"{"outputStyle":"Explanatory"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        project.join(".claude/commands/luna-e23-canary.md"),
+        "---\ndescription: E23 canary\n---\nReply with: canary.\n",
+    )
+    .unwrap();
+    let harness = ClaudeHarness::new();
+    let ask = harness
+        .commands_in(&scope(&project, PermissionMode::Ask, None))
+        .await
+        .expect("Ask discovery");
+    let full = harness
+        .commands_in(&scope(&project, PermissionMode::Full, None))
+        .await
+        .expect("Full discovery");
+    eprintln!(
+        "E23 discovery: ask={} commands (canary={}), full={} commands (canary={})",
+        ask.len(),
+        names(&ask).contains(&"luna-e23-canary".to_owned()),
+        full.len(),
+        names(&full).contains(&"luna-e23-canary".to_owned())
+    );
+    assert!(!names(&ask).contains(&"luna-e23-canary".to_owned()));
+    assert!(names(&full).contains(&"luna-e23-canary".to_owned()));
+
+    let asked = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = asked.clone();
+    let (steer_tx, steer_rx) = mpsc::channel(1);
+    let controls = RunControls {
+        request_input: Box::new(move |questions| {
+            let (tx, rx) = oneshot::channel();
+            seen.lock()
+                .unwrap()
+                .extend(questions.iter().map(|q| q.question.clone()));
+            let _ = tx.send(
+                questions
+                    .iter()
+                    .map(|q| UserInputAnswer {
+                        question_id: q.id.clone(),
+                        labels: vec!["Allow once".into()],
+                    })
+                    .collect(),
+            );
+            rx
+        }),
+        steering: steer_rx,
+        interrupt: CancellationToken::new(),
+        invoke_luna_tool: None,
+    };
+    let mut req = request(&project, PermissionMode::Ask);
+    req.model = Some("claude-haiku-4-5-20251001".into());
+    req.prompt =
+        "Use the Bash tool to run exactly `echo luna-e23-ask`, then reply with its output only."
+            .into();
+    let mut stream = harness.run(req, controls).await.expect("live run starts");
+    let events = tokio::time::timeout(Duration::from_secs(180), async {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            let event = event.expect("event");
+            let done = matches!(event, AgentEvent::Done { .. });
+            events.push(event);
+            if done {
+                break;
+            }
+        }
+        events
+    })
+    .await
+    .expect("live turn finished");
+    drop(steer_tx);
+    let bash = events.iter().any(|e| {
+        matches!(e, AgentEvent::ToolCall { call: luna_proto::ToolCall::Exec { command }, .. }
+            if command.contains("luna-e23-ask"))
+    });
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    eprintln!(
+        "E23 Ask run: bash_call={bash} approvals={:?} text={text:?} last={:?}",
+        asked.lock().unwrap(),
+        events.last()
+    );
+    // Whether `echo` escalates depends on the CLI's read-only allowlist; the
+    // approval list is printed for the QA record, not asserted.
+    assert!(bash, "Ask must expose Bash: {events:?}");
+    assert!(text.contains("luna-e23-ask"), "{text:?}");
+}
