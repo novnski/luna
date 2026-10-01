@@ -15,7 +15,6 @@ use luna_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing,
 
 struct ActiveChatRow {
     depth: usize,
-    descendants: Vec<String>,
     status: ChatIndicator,
     chat: luna_proto::Chat,
     can_settle: bool,
@@ -25,125 +24,171 @@ struct ActiveChatRow {
     group: Option<(String, String)>,
 }
 
-/// One tree projection shared by rendering and keyboard navigation. Filtering
-/// or pinning that excludes a parent promotes its child to a reachable root.
-struct ChildVisibleRow {
-    id: String,
-    depth: usize,
-    descendants: Vec<String>,
+/// The sidebar parent of `chat`: its child-thread parent when that row is in
+/// the same list, device, project and pin scope. Filtering, pinning or a
+/// missing/archived parent leaves the child a reachable root.
+fn lineage_parent<'a>(
+    rows: &std::collections::HashMap<&str, &'a luna_proto::Chat>,
+    chat: &luna_proto::Chat,
+) -> Option<&'a luna_proto::Chat> {
+    let id = &chat.child_thread.as_ref()?.parent_task_id;
+    let root = *rows.get(id.as_str())?;
+    (root.id != chat.id
+        && root.device_id == chat.device_id
+        && root.space_id == chat.space_id
+        && root.pinned_order.is_some() == chat.pinned_order.is_some())
+    .then_some(root)
 }
-fn child_visible_tree(
-    chats: &[luna_proto::Chat],
-    collapsed: &[String],
+
+/// Child chats are listed in their parent's right-pane Child chats surface,
+/// not the sidebar. Returns each folded child mapped to its nearest visible
+/// ancestor. The selected chat and its ancestors stay visible, so a child
+/// opened directly (search, notification, "Open as main chat") still shows,
+/// nested under its parent. Children whose parent is not in `chats`
+/// (archived, deleted, filtered out, other pin scope) and malformed or cyclic
+/// lineage are never folded.
+fn folded_child_chats(
+    chats: &[&luna_proto::Chat],
     selected: Option<&str>,
-) -> Vec<ChildVisibleRow> {
+) -> std::collections::HashMap<String, String> {
     use std::collections::{HashMap, HashSet};
     let rows: HashMap<&str, &luna_proto::Chat> =
-        chats.iter().map(|chat| (chat.id.as_str(), chat)).collect();
-    let parent = |chat: &luna_proto::Chat| -> Option<String> {
-        let id = &chat.child_thread.as_ref()?.parent_task_id;
-        let root = rows.get(id.as_str())?;
-        (root.id != chat.id
-            && root.device_id == chat.device_id
-            && root.space_id == chat.space_id
-            && root.pinned_order.is_some() == chat.pinned_order.is_some())
-        .then(|| id.clone())
-    };
-    let mut children: HashMap<String, Vec<String>> = HashMap::new();
-    for chat in chats {
-        if let Some(parent) = parent(chat) {
-            children.entry(parent).or_default().push(chat.id.clone());
-        }
-    }
+        chats.iter().map(|chat| (chat.id.as_str(), *chat)).collect();
     let mut revealed = HashSet::new();
-    let mut cursor = selected.and_then(|id| rows.get(id).and_then(|chat| parent(chat)));
-    while let Some(id) = cursor {
-        if !revealed.insert(id.clone()) {
+    let mut cursor = selected.and_then(|id| rows.get(id).copied());
+    while let Some(chat) = cursor {
+        if !revealed.insert(chat.id.as_str()) {
             break;
         }
-        cursor = rows.get(id.as_str()).and_then(|chat| parent(chat));
+        cursor = lineage_parent(&rows, chat);
     }
-    fn descendants(
-        id: &str,
-        children: &HashMap<String, Vec<String>>,
-        visited: &mut HashSet<String>,
-        output: &mut Vec<String>,
-    ) {
-        let mut pending = children.get(id).cloned().unwrap_or_default();
-        while let Some(child) = pending.pop() {
-            if visited.insert(child.clone()) {
-                pending.extend(children.get(&child).into_iter().flatten().cloned());
-                output.push(child);
+    let reaches_root = |chat: &luna_proto::Chat| {
+        let mut seen = HashSet::new();
+        let mut cursor = chat;
+        loop {
+            if seen.len() > 32 || !seen.insert(cursor.id.as_str()) {
+                return false;
+            }
+            match lineage_parent(&rows, cursor) {
+                Some(parent) => cursor = parent,
+                None => return true,
+            }
+        }
+    };
+    let mut folded = HashMap::new();
+    for chat in chats {
+        let Some(mut ancestor) = lineage_parent(&rows, chat) else {
+            continue;
+        };
+        if revealed.contains(chat.id.as_str()) || !reaches_root(chat) {
+            continue;
+        }
+        while !revealed.contains(ancestor.id.as_str())
+            && let Some(parent) = lineage_parent(&rows, ancestor)
+        {
+            ancestor = parent;
+        }
+        folded.insert(chat.id.clone(), ancestor.id.clone());
+    }
+    folded
+}
+
+/// Remove folded child chats from sidebar rows. A parent row carries the most
+/// urgent status of the children folded into it, so a child that needs
+/// approval or input (or is still working) keeps its parent visible and
+/// unsettled.
+fn fold_child_chats<'a>(
+    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    selected: Option<&str>,
+) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
+    let chats: Vec<&luna_proto::Chat> = rows.iter().map(|(_, chat)| *chat).collect();
+    let folded = folded_child_chats(&chats, selected);
+    if folded.is_empty() {
+        return rows;
+    }
+    let mut summary: std::collections::HashMap<&str, ChatIndicator> =
+        std::collections::HashMap::new();
+    for (status, chat) in &rows {
+        if let Some(ancestor) = folded.get(&chat.id) {
+            let entry = summary
+                .entry(ancestor.as_str())
+                .or_insert(ChatIndicator::Idle);
+            if child_indicator_priority(*status) > child_indicator_priority(*entry) {
+                *entry = *status;
             }
         }
     }
-    #[allow(clippy::too_many_arguments)]
-    fn visit(
-        id: &str,
+    rows.iter()
+        .filter(|(_, chat)| !folded.contains_key(&chat.id))
+        .map(|(status, chat)| {
+            let status = match summary.get(chat.id.as_str()) {
+                Some(child)
+                    if child_indicator_priority(*child) > child_indicator_priority(*status) =>
+                {
+                    *child
+                }
+                _ => *status,
+            };
+            (status, *chat)
+        })
+        .collect()
+}
+
+/// One tree projection shared by rendering and keyboard navigation. After
+/// [`fold_child_chats`] the only nested rows left are the selected chat's
+/// lineage; malformed or cyclic imported lineage must never hide a row.
+struct ChildVisibleRow {
+    id: String,
+    depth: usize,
+}
+fn child_visible_tree(chats: &[luna_proto::Chat]) -> Vec<ChildVisibleRow> {
+    use std::collections::{HashMap, HashSet};
+    let rows: HashMap<&str, &luna_proto::Chat> =
+        chats.iter().map(|chat| (chat.id.as_str(), chat)).collect();
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for chat in chats {
+        if let Some(parent) = lineage_parent(&rows, chat) {
+            children
+                .entry(parent.id.as_str())
+                .or_default()
+                .push(chat.id.as_str());
+        }
+    }
+    fn visit<'a>(
+        id: &'a str,
         depth: usize,
-        children: &HashMap<String, Vec<String>>,
-        collapsed: &[String],
-        revealed: &HashSet<String>,
-        visited: &mut HashSet<String>,
+        children: &HashMap<&'a str, Vec<&'a str>>,
+        visited: &mut HashSet<&'a str>,
         output: &mut Vec<ChildVisibleRow>,
     ) {
-        if depth > 32 || !visited.insert(id.into()) {
+        if depth > 32 || !visited.insert(id) {
             return;
         }
-        let mut all = Vec::new();
-        descendants(id, children, &mut HashSet::from([id.into()]), &mut all);
         output.push(ChildVisibleRow {
             id: id.into(),
             depth,
-            descendants: all,
         });
-        if collapsed.iter().any(|item| item == id) && !revealed.contains(id) {
-            let mut hidden = Vec::new();
-            descendants(id, children, visited, &mut hidden);
-            return;
-        }
-        for child in children.get(id).into_iter().flatten() {
-            visit(
-                child,
-                depth + 1,
-                children,
-                collapsed,
-                revealed,
-                visited,
-                output,
-            );
+        for &child in children.get(id).into_iter().flatten() {
+            visit(child, depth + 1, children, visited, output);
         }
     }
     let mut output = Vec::new();
     let mut visited = HashSet::new();
-    for chat in chats.iter().filter(|chat| parent(chat).is_none()) {
-        visit(
-            &chat.id,
-            0,
-            &children,
-            collapsed,
-            &revealed,
-            &mut visited,
-            &mut output,
-        );
+    for chat in chats
+        .iter()
+        .filter(|chat| lineage_parent(&rows, chat).is_none())
+    {
+        visit(&chat.id, 0, &children, &mut visited, &mut output);
     }
-    // Malformed or cyclic imported lineage must never hide a row forever.
     for chat in chats {
-        visit(
-            &chat.id,
-            0,
-            &children,
-            collapsed,
-            &revealed,
-            &mut visited,
-            &mut output,
-        );
+        visit(&chat.id, 0, &children, &mut visited, &mut output);
     }
     output
 }
 
-/// Pagination selects families. Keep their available ancestors/descendants
-/// together without resurrecting archived rows or crossing the filter/pin scope.
+/// Pagination selects families. Keep a visible (selected) child and its
+/// available ancestors together without resurrecting archived rows or
+/// crossing the filter/pin scope. Folded children are already absent.
 fn include_child_families<'a>(
     mut selected: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
     available: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
@@ -1630,18 +1675,22 @@ impl Shell {
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let state = self.state.read(cx);
         let now = Utc::now();
+        let selected = state.selected_chat.as_deref();
         let mut chats: Vec<luna_proto::Chat> = if self.activity.view_active {
-            activity_sidebar_chats_with_recent(
-                state.sidebar_chats(now, None),
-                &attention_task_keys,
-                &recent_completion_keys,
+            fold_child_chats(
+                activity_sidebar_chats_with_recent(
+                    state.sidebar_chats(now, None),
+                    &attention_task_keys,
+                    &recent_completion_keys,
+                ),
+                selected,
             )
             .into_iter()
             .filter(|(_, chat)| !self.pending_task_actions.contains_key(&chat.id))
             .map(|(_, chat)| chat.clone())
             .collect()
         } else {
-            let mut chats = state.sidebar_chats(now, filter.as_deref());
+            let mut chats = fold_child_chats(state.sidebar_chats(now, filter.as_deref()), selected);
             chats.sort_by(|left, right| {
                 compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
             });
@@ -1661,25 +1710,13 @@ impl Shell {
                 .map(|(_, chat)| chat.clone())
                 .collect()
         };
-        if self.activity.view_active {
-            return child_visible_tree(
-                &chats,
-                &self.settings.collapsed_child_chats,
-                state.selected_chat.as_deref(),
-            )
-            .into_iter()
-            .map(|row| row.id)
-            .collect();
-        }
-        if self.settings.sidebar_organization != SidebarOrganization::ByDevice {
-            return child_visible_tree(
-                &chats,
-                &self.settings.collapsed_child_chats,
-                state.selected_chat.as_deref(),
-            )
-            .into_iter()
-            .map(|row| row.id)
-            .collect();
+        if self.activity.view_active
+            || self.settings.sidebar_organization != SidebarOrganization::ByDevice
+        {
+            return child_visible_tree(&chats)
+                .into_iter()
+                .map(|row| row.id)
+                .collect();
         }
         let pinned_len = chats
             .iter()
@@ -1707,14 +1744,10 @@ impl Shell {
             .iter()
             .filter_map(|id| state.chats.iter().find(|chat| &chat.id == id).cloned())
             .collect();
-        child_visible_tree(
-            &chats,
-            &self.settings.collapsed_child_chats,
-            state.selected_chat.as_deref(),
-        )
-        .into_iter()
-        .map(|row| row.id)
-        .collect()
+        child_visible_tree(&chats)
+            .into_iter()
+            .map(|row| row.id)
+            .collect()
     }
 
     /// Normal sidebar: every session (idle included) under the saved project
@@ -1734,17 +1767,22 @@ impl Shell {
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let mut rows: Vec<ActiveChatRow> = {
             let state = self.state.read(cx);
+            let selected = state.selected_chat.as_deref();
             let (chats, hidden_count): (Vec<_>, usize) = if activity_view {
                 (
-                    activity_sidebar_chats_with_recent(
-                        state.sidebar_chats(now, None),
-                        &attention_task_keys,
-                        &recent_completion_keys,
+                    fold_child_chats(
+                        activity_sidebar_chats_with_recent(
+                            state.sidebar_chats(now, None),
+                            &attention_task_keys,
+                            &recent_completion_keys,
+                        ),
+                        selected,
                     ),
                     0,
                 )
             } else {
-                let mut chats = state.sidebar_chats(now, filter.as_deref());
+                let mut chats =
+                    fold_child_chats(state.sidebar_chats(now, filter.as_deref()), selected);
                 chats.sort_by(|left, right| {
                     compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
                 });
@@ -1809,7 +1847,6 @@ impl Shell {
                     };
                     ActiveChatRow {
                         depth: 0,
-                        descendants: Vec::new(),
                         status,
                         chat: chat.clone(),
                         can_settle,
@@ -1833,11 +1870,7 @@ impl Shell {
         }
 
         let hierarchy_chats: Vec<_> = rows.iter().map(|row| row.chat.clone()).collect();
-        let hierarchy = child_visible_tree(
-            &hierarchy_chats,
-            &self.settings.collapsed_child_chats,
-            self.state.read(cx).selected_chat.as_deref(),
-        );
+        let hierarchy = child_visible_tree(&hierarchy_chats);
         let mut mapped: std::collections::HashMap<String, ActiveChatRow> = rows
             .into_iter()
             .map(|row| (row.chat.id.clone(), row))
@@ -1847,11 +1880,11 @@ impl Shell {
             .filter_map(|node| {
                 mapped.remove(&node.id).map(|mut row| {
                     row.depth = node.depth;
-                    row.descendants = node.descendants;
                     row
                 })
             })
             .collect();
+        let child_counts = super::child_chats::direct_child_counts(&self.state.read(cx).chats);
 
         let mut groups: Vec<(Option<(String, String)>, Vec<ActiveChatRow>)> = Vec::new();
         for row in rows {
@@ -1896,8 +1929,7 @@ impl Shell {
             for row in rows {
                 let ActiveChatRow {
                     depth,
-                    descendants,
-                    mut status,
+                    status,
                     chat,
                     can_settle,
                     folder,
@@ -1905,21 +1937,6 @@ impl Shell {
                     change_request,
                     group: _,
                 } = row;
-                let collapsed = self.settings.collapsed_child_chats.contains(&chat.id)
-                    && !descendants.iter().any(|id| selected.as_ref() == Some(id));
-                if collapsed {
-                    let state = self.state.read(cx);
-                    for id in &descendants {
-                        if let Some(child) = state.chats.iter().find(|chat| &chat.id == id) {
-                            let indicator = state.display_status_for(child, now);
-                            if child_indicator_priority(indicator)
-                                > child_indicator_priority(status)
-                            {
-                                status = indicator;
-                            }
-                        }
-                    }
-                }
                 let time_ago: SharedString =
                     format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now).into();
                 let is_selected = selected.as_deref() == Some(chat.id.as_str());
@@ -1971,56 +1988,18 @@ impl Shell {
                     chat.pinned_order.is_some(),
                     activity_view,
                     can_settle,
+                    child_counts.get(&chat.id).copied().unwrap_or(0),
                     jump_label,
                     None,
                     Some(details),
                     theme,
                     cx,
                 );
-                let has_children = !descendants.is_empty();
-                let toggle_id = chat.id.clone();
+                // Only the selected chat's lineage is nested now; the rest of
+                // a parent's children live in its right-pane Child chats list.
                 let element = div()
-                    .flex()
-                    .items_center()
                     .pl(px((depth.min(4) * 14) as f32))
-                    .when(has_children, |row| {
-                        row.child(
-                            div()
-                                .id(SharedString::from(format!("child-disclosure-{}", chat.id)))
-                                .role(gpui::Role::Button)
-                                .aria_label(if collapsed {
-                                    "Expand child chats"
-                                } else {
-                                    "Collapse child chats"
-                                })
-                                .w(px(18.0))
-                                .h(px(28.0))
-                                .flex_none()
-                                .cursor_pointer()
-                                .text_color(theme.text_muted)
-                                .child(if collapsed { "▸" } else { "▾" })
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if this.settings.collapsed_child_chats.contains(&toggle_id) {
-                                        this.settings
-                                            .collapsed_child_chats
-                                            .retain(|id| id != &toggle_id);
-                                    } else {
-                                        this.settings.collapsed_child_chats.push(toggle_id.clone());
-                                    }
-                                    this.schedule_save(cx);
-                                    cx.notify();
-                                })),
-                        )
-                    })
-                    .child(div().flex_1().min_w_0().child(element))
-                    .when(has_children && collapsed, |row| {
-                        row.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.text_muted)
-                                .child(format!("{} children", descendants.len())),
-                        )
-                    })
+                    .child(element)
                     .into_any_element();
                 rendered_rows.push((format!("c:{}", chat.id), height, element));
             }
@@ -2148,25 +2127,28 @@ impl Shell {
         attention_task_keys.extend(self.settlement_blocking_task_keys());
         let mut rows: Vec<luna_proto::Chat> = {
             let state = self.state.read(cx);
-            state
-                .sidebar_chats(now, self.settings.space_filter.as_deref())
-                .into_iter()
-                .filter(
-                    |(status, chat)| match self.pending_task_actions.get(&chat.id) {
-                        Some(TaskConfirmation::Settle) => true,
-                        Some(TaskConfirmation::Archive | TaskConfirmation::Delete) => false,
-                        None => is_settled_chat(
-                            chat,
-                            *status,
-                            now,
-                            self.settings.sidebar_auto_settle_after_days,
-                            attention_task_keys
-                                .contains(&(chat.device_id.clone(), chat.id.clone())),
-                        ),
-                    },
-                )
-                .map(|(_, chat)| chat.clone())
-                .collect()
+            // Same folding as the active list, so a child never shows in
+            // Settled while its parent is listed in either section.
+            fold_child_chats(
+                state.sidebar_chats(now, self.settings.space_filter.as_deref()),
+                state.selected_chat.as_deref(),
+            )
+            .into_iter()
+            .filter(
+                |(status, chat)| match self.pending_task_actions.get(&chat.id) {
+                    Some(TaskConfirmation::Settle) => true,
+                    Some(TaskConfirmation::Archive | TaskConfirmation::Delete) => false,
+                    None => is_settled_chat(
+                        chat,
+                        *status,
+                        now,
+                        self.settings.sidebar_auto_settle_after_days,
+                        attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
+                    ),
+                },
+            )
+            .map(|(_, chat)| chat.clone())
+            .collect()
         };
         if rows.is_empty() {
             return None;

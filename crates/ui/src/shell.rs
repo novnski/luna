@@ -73,6 +73,7 @@ use crate::workspace_links::resolve_workspace_file_link;
 
 mod activity_center;
 mod agents;
+mod child_chats;
 mod command_palette;
 mod native_review;
 mod side_chats;
@@ -547,6 +548,9 @@ pub enum RightSurface {
     Subagent(u64),
     Agents,
     SideChats,
+    /// This conversation's persistent child chats: a list that drills into
+    /// one child's transcript and reply composer ([`child_chats`]).
+    ChildChats,
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
@@ -1913,6 +1917,8 @@ pub struct Shell {
     subagent_seq: u64,
     side_chat_panel: Option<Entity<side_chats::SideChatPanel>>,
     side_chat_events: Option<Subscription>,
+    child_chat_panel: Option<Entity<child_chats::ChildChatPanel>>,
+    child_chat_events: Option<Subscription>,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
@@ -2403,6 +2409,8 @@ impl Shell {
             subagent_seq: 0,
             side_chat_panel: None,
             side_chat_events: None,
+            child_chat_panel: None,
+            child_chat_events: None,
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
@@ -2856,6 +2864,13 @@ impl Shell {
         {
             self.release_side_chat(cx);
         }
+        if self
+            .child_chat_panel
+            .as_ref()
+            .is_some_and(|panel| !panel.read(cx).is_current(cx))
+        {
+            self.release_child_chat_panel(cx);
+        }
         // Chat switch: restore THAT chat's panel state (per-session open flags;
         // snap, no tween — the panels belong to the destination chat).
         let selected = state.read(cx).selected_chat.clone().unwrap_or_default();
@@ -2864,6 +2879,7 @@ impl Shell {
         }
         if selected != self.active_chat {
             self.release_side_chat(cx);
+            self.release_child_chat_panel(cx);
             self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             self.active_chat = selected;
@@ -3013,6 +3029,7 @@ impl Shell {
         let open = self.panels.toggle_changes(&key);
         if !open {
             self.release_side_chat(cx);
+            self.release_child_chat_panel(cx);
             self.suspend_subagent_watches(None, cx);
             self.suspend_file_images(cx);
             // Closing always leaves takeover mode — reopening at full bleed
@@ -3174,6 +3191,7 @@ impl Shell {
                 }),
                 RightSurface::Agents => Some((*surface, "Agents".into(), false, None)),
                 RightSurface::SideChats => Some((*surface, "Side chats".into(), false, None)),
+                RightSurface::ChildChats => Some((*surface, "Child chats".into(), false, None)),
                 RightSurface::Picker => None,
             })
             .collect()
@@ -3195,6 +3213,7 @@ impl Shell {
             | RightSurface::Terminal(_)
             | RightSurface::Agents
             | RightSurface::SideChats
+            | RightSurface::ChildChats
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_) => {
                 return None;
@@ -3300,10 +3319,13 @@ impl Shell {
             }
             // The tab's feed (watch or snapshot) runs from open to close —
             // activation needs no revalidation.
+            // The child chat panel keeps its one doc watch while its tab
+            // exists, so flipping tabs never churns the subscription.
             RightSurface::Subagent(_)
             | RightSurface::Browser(_)
             | RightSurface::Agents
-            | RightSurface::SideChats => {}
+            | RightSurface::SideChats
+            | RightSurface::ChildChats => {}
             RightSurface::Picker => {}
         }
         cx.notify();
@@ -4044,6 +4066,7 @@ impl Shell {
                 }
             }
             RightSurface::SideChats => self.release_side_chat(cx),
+            RightSurface::ChildChats => self.release_child_chat_panel(cx),
             RightSurface::Agents | RightSurface::Picker => {}
         }
         self.panels.update(&key, |p| {
@@ -7784,6 +7807,9 @@ impl Shell {
         pinned: bool,
         activity_row: bool,
         can_settle: bool,
+        // Non-archived child chats folded into this row; they are listed in
+        // its right-pane Child chats surface, reached through the count chip.
+        child_chats: usize,
         // This row's jump combo while the hint overlay is up. It takes the
         // corner outright — above hover and above the status word — so all
         // nine chips appear together instead of leaving a hole on whichever
@@ -8074,6 +8100,64 @@ impl Shell {
         };
         let select_id = id.clone();
         let menu_id = id.clone();
+        let child_chats_chip = (child_chats > 0 && search_query.is_none()).then(|| {
+            let label: SharedString = format!(
+                "Open {child_chats} child chat{}",
+                if child_chats == 1 { "" } else { "s" }
+            )
+            .into();
+            let tone = theme.text_muted;
+            let border_strong = theme.border_strong;
+            let click_id = id.clone();
+            let key_id = id.clone();
+            let tooltip = label.clone();
+            div()
+                .id(SharedString::from(format!("{row_id}-child-chats")))
+                .role(gpui::Role::Button)
+                .aria_label(label)
+                .tab_index(0)
+                .h(px(16.0))
+                .flex_none()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(3.0))
+                .px(px(4.0))
+                .rounded(px(4.0))
+                .border_1()
+                .border_color(gpui::transparent_black())
+                .bg(tone.opacity(0.08))
+                .text_size(crate::typography::ui_rems(10.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.readable_tone(tone, 0.85))
+                .cursor_pointer()
+                .hover(move |s| s.bg(tone.opacity(0.16)))
+                .focus_visible(move |s| s.border_color(border_strong))
+                .tooltip(move |_, cx| {
+                    cx.new(|_| SurfaceTabTooltip {
+                        text: tooltip.clone(),
+                    })
+                    .into()
+                })
+                .tooltip_show_delay(Duration::from_millis(350))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.open_child_chats_for(click_id.clone(), cx);
+                }))
+                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                    if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
+                        this.open_child_chats_for(key_id.clone(), cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(
+                    icon(icons::CHAT_ROUND_LINE)
+                        .size(px(10.0))
+                        .flex_none()
+                        .text_color(theme.readable_tone(tone, 0.7)),
+                )
+                .child(child_chats.to_string())
+        });
         // Hover fades over transition-colors (luna session-row.tsx) — both
         // the wash and the title brighten ride the same 150ms blend.
         let fade_key = format!("{row_id}-hover");
@@ -8224,7 +8308,8 @@ impl Shell {
                             .text_size(crate::typography::ui_rems(13.0))
                             .line_height(crate::typography::ui_rems(17.0))
                             .child(popover::search_highlight(title, search_query, theme)),
-                    )),
+                    ))
+                    .when_some(child_chats_chip, |el, chip| el.child(chip)),
             )
             // Omit the third line when both Branch and Pull request are hidden;
             // the two-line group stays centered in the uniform row height.
@@ -11784,6 +11869,7 @@ impl Shell {
             match self.resolved_right_active(cx) {
                 RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
                 RightSurface::SideChats if self.right_pane_open(cx) => self.render_side_chats(cx),
+                RightSurface::ChildChats if self.right_pane_open(cx) => self.render_child_chats(cx),
                 // Rendering a Files surface activates its image. Keep it unmounted
                 // throughout the closing animation after suspending its resources.
                 RightSurface::Files | RightSurface::File(_) if !self.right_pane_open(cx) => {
@@ -11945,6 +12031,14 @@ impl Shell {
         let muted = theme.text_muted;
         let border = theme.border;
         let border_strong = theme.border_strong;
+        let (child_chat_count, has_child_chats) = self.active_child_chat_count(cx);
+        let child_chat_label: SharedString = match child_chat_count {
+            0 => "Child chats".into(),
+            1 => "Child chats, 1 open".into(),
+            count => format!("Child chats, {count} open").into(),
+        };
+        let badge_tone = theme.text_muted;
+        let badge_text = theme.readable_tone(badge_tone, 0.85);
         let row = |id: &'static str, icon_path: &'static str, title: &'static str| {
             div()
                 .id(id)
@@ -12065,6 +12159,52 @@ impl Shell {
                                     this.add_history_surface(cx);
                                 }),
                             ),
+                        )
+                    })
+                    // Persistent chats this conversation started: listed
+                    // here instead of the sidebar tree. Shown only when the
+                    // chat has any, like the Git rows above.
+                    .when(has_child_chats, |el| {
+                        el.child(
+                            row(
+                                "surface-card-child-chats",
+                                icons::CHAT_ROUND_LINE,
+                                "Child chats",
+                            )
+                            .aria_label(child_chat_label)
+                            .child(div().flex_1())
+                            .when(child_chat_count > 0, |row| {
+                                row.child(
+                                    div()
+                                        .h(px(18.0))
+                                        .min_w(px(18.0))
+                                        .px(px(6.0))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .bg(badge_tone.opacity(0.12))
+                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(badge_text)
+                                        .child(child_chat_count.to_string()),
+                                )
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.add_work_surface(RightSurface::ChildChats, cx)
+                            }))
+                            .on_key_down(cx.listener(
+                                |this, event: &gpui::KeyDownEvent, _, cx| {
+                                    if is_settings_nav_activation(
+                                        &event.keystroke.key,
+                                        event.is_held,
+                                    ) {
+                                        this.add_work_surface(RightSurface::ChildChats, cx);
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            )),
                         )
                     }),
             )
@@ -12257,6 +12397,7 @@ impl Shell {
                     .unwrap_or(icons::LIST),
                 RightSurface::Subagent(_) | RightSurface::Agents => icons::BOT,
                 RightSurface::SideChats => icons::PLUS,
+                RightSurface::ChildChats => icons::CHAT_ROUND_LINE,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Browser(_) => icons::GLOBE,
                 RightSurface::Picker => icons::PLUS,
@@ -12673,6 +12814,37 @@ impl Shell {
                                             .text_color(theme.text_muted),
                                     )
                                     .child(SharedString::from("History")),
+                            )
+                        })
+                        .when(self.active_child_chat_count(cx).1, |menu| {
+                            menu.child(
+                                popover::menu_row(&theme, false, "right-plus-child-chats")
+                                    .id("right-plus-child-chats-row")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Child chats")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_work_surface(RightSurface::ChildChats, cx);
+                                        this.close_right_plus(cx);
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &gpui::KeyDownEvent, _, cx| {
+                                            if is_settings_nav_activation(
+                                                &event.keystroke.key,
+                                                event.is_held,
+                                            ) {
+                                                this.add_work_surface(RightSurface::ChildChats, cx);
+                                                this.close_right_plus(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                                    .child(
+                                        icon(icons::CHAT_ROUND_LINE)
+                                            .size(px(13.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Child chats"),
                             )
                         }),
                 )

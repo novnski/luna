@@ -932,6 +932,7 @@ impl Shell {
                     chat.pinned_order.is_some(),
                     false,
                     false,
+                    0,
                     None,
                     Some(&query),
                     None,
