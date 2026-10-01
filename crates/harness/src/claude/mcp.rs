@@ -54,7 +54,7 @@ const SETTLE_POLL: Duration = Duration::from_millis(300);
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 /// Wording 2.1.x uses for a control subtype the CLI does not implement.
 const UNSUPPORTED_SUBTYPE: &str = "Unsupported control request subtype";
-pub(crate) const APP_RENDER_UNAVAILABLE: &str = "LUNA does not render MCP App views: it has no sandboxed HTML host. The source is shown as inert text for inspection only.";
+pub(crate) const APP_RENDER_UNAVAILABLE: &str = "LUNA does not render MCP App views yet: untrusted app HTML needs an isolated host that enforces the declared CSP and binds app tool calls to the owning chat, and the general browser pane is not that host. The source is shown as inert text for inspection only.";
 
 // ---------------------------------------------------------------------------
 // Redaction and bounded decoding

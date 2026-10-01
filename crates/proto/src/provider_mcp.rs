@@ -71,7 +71,7 @@ pub struct ProviderMcpSessionState {
 }
 
 /// MCP Apps support as evidenced for this provider. Rendering is separate:
-/// LUNA has no sandboxed HTML host, so app views are never rendered.
+/// LUNA has no isolated MCP Apps host yet, so app views are never rendered.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ProviderMcpAppSupport {
@@ -133,7 +133,7 @@ pub struct ProviderMcpActionReceipt {
 }
 
 /// A provider-read MCP Apps `ui://` resource, reduced to inspectable facts.
-/// `rendered` is always false in this build: LUNA has no sandboxed host.
+/// `rendered` is always false in this build: no isolated MCP Apps host yet.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ProviderMcpAppResourceView {
