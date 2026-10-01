@@ -224,6 +224,14 @@ fn require_uuid(value: &str, what: &str) -> Result<(), HarnessError> {
         .map_err(|_| protocol(format!("{what} is not a Claude UUID")))
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ForkCut {
+    /// Copy the active chain through this inclusive position.
+    Through(usize),
+    /// Nothing precedes the prompt at this position.
+    BeforeFirst(usize),
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Transcript {
     path: PathBuf,
@@ -357,8 +365,8 @@ impl Transcript {
         }
     }
 
-    /// Inclusive chain position at which a fork ends.
-    fn fork_end(&self, boundary: &ProviderForkBoundary) -> Result<usize, HarnessError> {
+    /// Where a fork ends on the active chain.
+    fn fork_end(&self, boundary: &ProviderForkBoundary) -> Result<ForkCut, HarnessError> {
         if self.chain.is_empty() {
             return Err(protocol("the Claude session has no conversation to fork"));
         }
@@ -374,29 +382,36 @@ impl Transcript {
             Ok(position)
         };
         match boundary {
-            ProviderForkBoundary::Tip => Ok(self.chain.len() - 1),
+            ProviderForkBoundary::Tip => Ok(ForkCut::Through(self.chain.len() - 1)),
             ProviderForkBoundary::BeforeCheckpoint { checkpoint_id } => {
-                turn(checkpoint_id)?.checked_sub(1).ok_or_else(|| {
-                    protocol(
-                        "Claude has no history before its first turn; start a new chat instead",
-                    )
+                let position = turn(checkpoint_id)?;
+                Ok(match position.checked_sub(1) {
+                    Some(end) => ForkCut::Through(end),
+                    None => ForkCut::BeforeFirst(position),
                 })
             }
             ProviderForkBoundary::ThroughCheckpoint { checkpoint_id } => {
                 let position = turn(checkpoint_id)?;
-                Ok((position + 1..self.chain.len())
-                    .find(|&next| is_human_turn_start(self.chain_entry(next)))
-                    .map_or(self.chain.len() - 1, |next| next - 1))
+                Ok(ForkCut::Through(
+                    (position + 1..self.chain.len())
+                        .find(|&next| is_human_turn_start(self.chain_entry(next)))
+                        .map_or(self.chain.len() - 1, |next| next - 1),
+                ))
             }
         }
     }
 
-    fn kept(&self, end: usize) -> Vec<&Value> {
-        self.chain[..=end]
-            .iter()
-            .map(|&index| &self.entries[index])
-            .filter(|entry| entry_type(entry) != Some("progress"))
-            .collect()
+    /// Rows copied into the fork. A fork before the first turn copies only
+    /// that prompt, as a dead branch behind an explicit empty leaf.
+    fn copied(&self, cut: ForkCut) -> Vec<&Value> {
+        match cut {
+            ForkCut::Through(end) => self.chain[..=end]
+                .iter()
+                .map(|&index| &self.entries[index])
+                .filter(|entry| entry_type(entry) != Some("progress"))
+                .collect(),
+            ForkCut::BeforeFirst(position) => vec![self.chain_entry(position)],
+        }
     }
 
     fn title(&self) -> Option<String> {
@@ -412,15 +427,18 @@ impl Transcript {
     }
 
     /// The Agent SDK `forkSession` copy: fresh uuids, linear parent links,
-    /// `forkedFrom` provenance, no file history, then a title row.
+    /// `forkedFrom` provenance, no file history, then a title row. A fork
+    /// before the first turn ends with the CLI's own rewind marker for an
+    /// empty conversation (`last-prompt` with an explicit null leaf), which
+    /// 2.1.286 resumes (probed) while a metadata-only file is not resumable.
     fn fork_entries(
         &self,
-        end: usize,
+        cut: ForkCut,
         source_session: &str,
         fork_session: &str,
         title: Option<&str>,
     ) -> Result<(Vec<Value>, Vec<(String, String)>), HarnessError> {
-        let kept = self.kept(end);
+        let kept = self.copied(cut);
         if kept.is_empty() {
             return Err(protocol("the Claude session has no messages to fork"));
         }
@@ -498,6 +516,12 @@ impl Transcript {
                 json!({ "sessionId": source_session, "messageUuid": mapping[index].0 }),
             );
             out.push(Value::Object(copy));
+        }
+        if let ForkCut::BeforeFirst(_) = cut {
+            out.push(json!({
+                "type": "last-prompt", "leafUuid": null, "explicit": true, "rewound": true,
+                "sessionId": fork_session,
+            }));
         }
         let replacements: Vec<Value> = self
             .entries
@@ -798,7 +822,11 @@ pub(crate) async fn fork_session(
         &fork_id,
         request.target_name.as_deref(),
     )?;
-    let kept = source.kept(end);
+    // Rows that stay on the fork's active chain (none before the first turn).
+    let kept = match end {
+        ForkCut::Through(_) => source.copied(end),
+        ForkCut::BeforeFirst(_) => Vec::new(),
+    };
     let source_turns: HashSet<&str> = kept
         .iter()
         .filter(|entry| is_human_turn_start(entry))
@@ -831,10 +859,16 @@ pub(crate) async fn fork_session(
                 "the Claude fork transcript did not read back as the source prefix",
             ));
         }
-        let tip = mapping
-            .last()
-            .map(|(_, new)| new.clone())
-            .unwrap_or_default();
+        // `--fork-session` with no user message persists nothing; the
+        // anchor check proves the CLI's own loader sees the copied tip.
+        let mut args = vec![
+            format!("--resume={fork_id}"),
+            "--fork-session".into(),
+            format!("--session-id={}", uuid::Uuid::new_v4()),
+        ];
+        if let (ForkCut::Through(_), Some((_, tip))) = (end, mapping.last()) {
+            args.push(format!("--resume-session-at={tip}"));
+        }
         let run = run_control(
             executable,
             &NativeHistoryScope {
@@ -842,12 +876,7 @@ pub(crate) async fn fork_session(
                 cwd: request.cwd.clone(),
                 provider_home: request.provider_home.clone(),
             },
-            &[
-                format!("--resume={fork_id}"),
-                "--fork-session".into(),
-                format!("--session-id={}", uuid::Uuid::new_v4()),
-                format!("--resume-session-at={tip}"),
-            ],
+            &args,
             false,
             &[],
             None,

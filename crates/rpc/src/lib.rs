@@ -181,6 +181,10 @@ pub mod methods {
     pub const GET_HISTORY_CAPABILITY: &str = "GetHistoryCapability";
     /// Read durable pre-edit recovery snapshots available for one task.
     pub const LIST_HISTORY_RECOVERIES: &str = "ListHistoryRecoveries";
+    /// CC-10 dry-run a provider-native file checkpoint restore (Claude).
+    pub const PREVIEW_NATIVE_FILE_REWIND: &str = "PreviewNativeFileRewind";
+    /// CC-10 restore provider-checkpointed files after a matching preview.
+    pub const APPLY_NATIVE_FILE_REWIND: &str = "ApplyNativeFileRewind";
     /// Explicit supported-provider refresh for one task binding.
     pub const REFRESH_TASK_BINDING: &str = "RefreshTaskBinding";
     /// Read-only provider-native import preview. No task or provider state is mutated.
@@ -388,6 +392,8 @@ pub mod methods {
         MUTATE_ATTENTION,
         GET_HISTORY_CAPABILITY,
         LIST_HISTORY_RECOVERIES,
+        PREVIEW_NATIVE_FILE_REWIND,
+        APPLY_NATIVE_FILE_REWIND,
         REFRESH_TASK_BINDING,
         PREVIEW_PROVIDER_TASK_IMPORT,
         ADOPT_PROVIDER_TASK,

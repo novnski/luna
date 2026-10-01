@@ -414,15 +414,37 @@ async fn forks_copy_the_native_prefix_into_an_independent_session() {
     let (tip, _) = fork(cwd, &run.session_id, ProviderForkBoundary::Tip).await;
     assert_eq!(tip.unwrap().checkpoint_map.len(), 3, "B2: tip");
 
-    // Before the first turn there is no native prefix; refuse before mutation.
+    // Before the first turn: an empty native conversation (the CLI's own
+    // explicit null leaf) that still resumes, e.g. to edit the first prompt.
     let (first, progress) = fork(
         cwd,
         &run.session_id,
         ProviderForkBoundary::BeforeCheckpoint { checkpoint_id: c1 },
     )
     .await;
-    assert!(first.unwrap_err().to_string().contains("first turn"));
-    assert!(progress.is_empty());
+    let first = first.expect("fork before the first turn");
+    assert!(first.checkpoint_map.is_empty());
+    assert_eq!(progress.len(), 2);
+    let empty = harness()
+        .native_history_turns(scope(cwd, &first.provider_session_id))
+        .await
+        .unwrap();
+    assert!(empty.turn_starts.is_empty());
+    let edited = drive(
+        cwd,
+        Some(&first.provider_session_id),
+        &[("edited first prompt", 1)],
+        &[],
+    )
+    .await;
+    let edited_turns = harness()
+        .native_history_turns(scope(cwd, &first.provider_session_id))
+        .await
+        .unwrap();
+    assert_eq!(
+        edited_turns.turn_starts,
+        vec![edited.dones[0].1.clone().unwrap()]
+    );
     // B5: unknown checkpoint, refused before mutation.
     let (unknown, progress) = fork(
         cwd,
@@ -460,8 +482,8 @@ async fn forks_copy_the_native_prefix_into_an_independent_session() {
     assert_eq!(progress, vec!["started".to_string()]);
     let sessions = std::fs::read_dir(source.parent().unwrap()).unwrap().count();
     assert_eq!(
-        sessions, 4,
-        "source + three forks; the failed fork was removed"
+        sessions, 5,
+        "source + four forks; the failed fork was removed"
     );
 }
 

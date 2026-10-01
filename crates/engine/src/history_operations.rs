@@ -21,19 +21,17 @@ const HISTORY_RECOVERY_SCHEMA_VERSION: u32 = 1;
 pub fn capability_for(provider: HarnessId) -> ProviderForkCapability {
     match provider {
         HarnessId::Codex | HarnessId::Opencode => ProviderForkCapability::Checkpoint,
-        // The current Claude adapter uses the CLI streaming wire and has no
-        // non-turn session-management dependency.
+        // CC-10: native prompt uuids are checkpoints; forks follow the Agent
+        // SDK `forkSession` contract and are loaded by the CLI before binding.
+        HarnessId::ClaudeCode => ProviderForkCapability::Checkpoint,
         _ => ProviderForkCapability::None,
     }
 }
 
 pub fn unavailable_reason(provider: HarnessId) -> Option<&'static str> {
     match provider {
-        HarnessId::ClaudeCode => Some(
-            "Claude's pinned LUNA CLI adapter has no safe idle session-fork operation; use Start new task with context.",
-        ),
         HarnessId::Mock => Some("The synthetic Mock provider has no native history store."),
-        HarnessId::Codex | HarnessId::Opencode => None,
+        HarnessId::Codex | HarnessId::Opencode | HarnessId::ClaudeCode => None,
         _ => Some("This provider is no longer supported by LUNA."),
     }
 }
@@ -487,12 +485,11 @@ mod tests {
             capability_for(HarnessId::Opencode),
             ProviderForkCapability::Checkpoint
         );
-        for provider in [
-            HarnessId::ClaudeCode,
-            HarnessId::Pi,
-            HarnessId::Cursor,
-            HarnessId::Mock,
-        ] {
+        assert_eq!(
+            capability_for(HarnessId::ClaudeCode),
+            ProviderForkCapability::Checkpoint
+        );
+        for provider in [HarnessId::Pi, HarnessId::Cursor, HarnessId::Mock] {
             assert_eq!(capability_for(provider), ProviderForkCapability::None);
             assert!(unavailable_reason(provider).is_some());
         }
