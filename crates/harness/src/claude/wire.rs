@@ -57,6 +57,9 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// Hook lifecycle / `commands_changed` (decoded by `hooks.rs`).
+    #[serde(skip)]
+    pub extension: Option<super::hooks::ExtensionFrame>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -282,8 +285,10 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
         "system" => {
             let observation = (value.get("subtype").and_then(Value::as_str) == Some("init"))
                 .then(|| init_integration_observation(&value));
+            let extension = super::hooks::parse_extension_frame(&value);
             let mut system: SystemFrame = serde_json::from_value(value)?;
             system.integration_observation = observation;
+            system.extension = extension;
             Frame::System(system)
         }
         "stream_event" => Frame::StreamEvent(serde_json::from_value(value)?),

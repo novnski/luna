@@ -158,6 +158,9 @@ pub mod methods {
     pub const SET_INSTRUCTION_SETTINGS: &str = "SetInstructionSettings";
     /// Read-only provider-owned skill/MCP configuration inventory.
     pub const GET_INTEGRATION_INVENTORY: &str = "GetIntegrationInventory";
+    /// Effective native settings sources, output style, hooks, commands and
+    /// skills for the launch a chat/project would use (local device only).
+    pub const GET_NATIVE_EXTENSIONS: &str = "GetNativeExtensions";
     /// Provider-owned SKILL.md library on the engine's local device.
     pub const GET_SKILL_DOCUMENT: &str = "GetSkillDocument";
     pub const SAVE_SKILL_DOCUMENT: &str = "SaveSkillDocument";
@@ -374,6 +377,7 @@ pub mod methods {
         GET_INSTRUCTION_SETTINGS,
         SET_INSTRUCTION_SETTINGS,
         GET_INTEGRATION_INVENTORY,
+        GET_NATIVE_EXTENSIONS,
         GET_SKILL_DOCUMENT,
         SAVE_SKILL_DOCUMENT,
         INSTALL_SKILL,

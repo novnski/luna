@@ -233,6 +233,8 @@ pub(crate) struct Normalizer {
     assistant_message_id: String,
     /// Last session id seen (init or result) — used for synthetic Dones.
     pub session_id: Option<String>,
+    /// Native hook runs and command-list pushes (`hooks.rs`).
+    hooks: super::hooks::HookTracker,
 }
 
 impl Normalizer {
@@ -245,6 +247,7 @@ impl Normalizer {
             agent_spawn_tools: std::collections::HashSet::new(),
             assistant_message_id: new_message_id(),
             session_id: None,
+            hooks: Default::default(),
         }
     }
 
@@ -266,7 +269,10 @@ impl Normalizer {
     /// a post-interrupt `result` into `Done { status: Interrupted }`.
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
-            Frame::System(f) => {
+            Frame::System(mut f) => {
+                if let Some(extension) = f.extension.take() {
+                    return self.hooks.observe(extension, self.saw_init);
+                }
                 // A background subagent's completion arrives as an UNTAGGED
                 // `task_notification` carrying the spawning tool's id — the
                 // wire's only terminal signal for it (live-verified 2.1.228:
@@ -335,14 +341,16 @@ impl Normalizer {
                         observed,
                     });
                 }
-                vec![AgentEvent::SessionStarted {
+                let mut out = vec![AgentEvent::SessionStarted {
                     harness: HarnessId::ClaudeCode,
                     model: f.model,
                     tools: f.tools,
                     cwd: f.cwd,
                     session_id: f.session_id,
                     assistant_message_id: self.assistant_message_id.clone(),
-                }]
+                }];
+                out.extend(self.hooks.take_pending());
+                out
             }
 
             // Frames with `parent_tool_use_id` set belong to a SUBAGENT's
@@ -683,7 +691,7 @@ impl Normalizer {
                         session_id: f.session_id,
                     }
                 };
-                let mut out = Vec::new();
+                let mut out = self.hooks.take_pending();
                 if let Some(window) = window {
                     out.push(AgentEvent::ContextUsage {
                         tokens: None,

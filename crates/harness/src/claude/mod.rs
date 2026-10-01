@@ -31,6 +31,8 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+pub mod extensions;
+mod hooks;
 mod normalize;
 mod wire;
 
@@ -91,8 +93,17 @@ pub struct ClaudeHarness {
     /// Grace between SIGTERM and SIGKILL.
     kill_grace: Duration,
     /// Command discovery cache: only a successful probe is cached, so a
-    /// broken CLI retries on the next picker open (ACP-harness parity).
-    commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    /// broken CLI retries on the next picker open (ACP-harness parity). Keyed
+    /// by the extension fingerprint: editing settings, commands, skills or
+    /// output styles re-runs discovery (`extensions.rs`).
+    commands: tokio::sync::Mutex<Option<(String, Vec<SlashCommand>)>>,
+    /// Test/fixture overrides; production inherits `$CLAUDE_CONFIG_DIR` or
+    /// `~/.claude` and the platform managed-settings directory.
+    config_dir: Option<PathBuf>,
+    managed_dir: Option<PathBuf>,
+    /// Verified extension views per (cwd, mode), reused until the
+    /// extension fingerprint changes.
+    extension_views: extensions::ViewCache,
 }
 
 impl Default for ClaudeHarness {
@@ -101,7 +112,10 @@ impl Default for ClaudeHarness {
             executable: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
-            commands: tokio::sync::OnceCell::new(),
+            commands: tokio::sync::Mutex::new(None),
+            config_dir: None,
+            managed_dir: None,
+            extension_views: Default::default(),
         }
     }
 }
@@ -248,6 +262,9 @@ impl ClaudeHarness {
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
         }
+        if let Some(dir) = &self.config_dir {
+            cmd.env("CLAUDE_CONFIG_DIR", dir);
+        }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -274,6 +291,9 @@ impl ClaudeHarness {
             // CLI exits immediately with a usage error.
             "--verbose",
         ]);
+        if let Some(dir) = &self.config_dir {
+            cmd.env("CLAUDE_CONFIG_DIR", dir);
+        }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -446,14 +466,16 @@ impl Harness for ClaudeHarness {
     /// model turn (verified live, 2.1.228: the control_response is the first
     /// stdout line, well before any API traffic). Cached on success.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
-        self.commands
-            .get_or_try_init(|| async {
-                self.discover_initialize()
-                    .await
-                    .map(|response| parse_initialize_commands(&response))
-            })
-            .await
-            .cloned()
+        self.commands_with_reload().await
+    }
+
+    async fn native_extensions(
+        &self,
+        cwd: Option<&std::path::Path>,
+        mode: luna_proto::PermissionMode,
+        refresh: bool,
+    ) -> Result<luna_proto::NativeExtensionsView, HarnessError> {
+        self.native_extensions_view(cwd, mode, refresh).await
     }
 
     async fn run(
@@ -525,7 +547,12 @@ impl ClaudeHarness {
                 "--setting-sources",
                 "",
             ]);
+        } else {
+            // SessionStart/Setup stream by default; every other hook event
+            // needs this opt-in (`hooks.rs`).
+            cmd.arg("--include-hook-events");
         }
+        let typed_skill = self.typed_skill_for_launch(&exe, &cmd, &request).await?;
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(exe.display().to_string())
@@ -564,10 +591,12 @@ impl ClaudeHarness {
         // also ride the prompt text, so a skipped/unreadable file degrades to
         // the old-app behavior (the agent opens the path with its Read tool).
         let images = load_image_blocks(&request.attachments).await;
-        let first = wire::user_message_line_with_images(
-            &apply_ultrathink(request.reasoning, &request.prompt),
-            &images,
-        );
+        let text = apply_ultrathink(request.reasoning, &request.prompt);
+        let text = match &typed_skill {
+            Some(name) => extensions::skill_invocation_text(name, &text),
+            None => text,
+        };
+        let first = wire::user_message_line_with_images(&text, &images);
         let _ = stdin_tx.send(StdinMsg::line(first));
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);

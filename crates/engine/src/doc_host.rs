@@ -7635,11 +7635,7 @@ impl DocHost {
         let mut prompt = self.resolve_prompt_attachments(prompt);
         let mut attachments = attachments.to_vec();
         self.resolve_input_attachments(&mut prompt, &mut attachments);
-        if self.harness_for(chat_id) == luna_proto::HarnessId::Codex {
-            luna_harness::validate_composer_inputs(&attachments, input_items)?;
-        } else if !input_items.is_empty() {
-            return Err(EngineError::Other("Native plugin, app and skill selections require Codex; keep the draft and choose Codex or remove them.".into()));
-        }
+        crate::typed_inputs::admit(self.harness_for(chat_id), &attachments, input_items)?;
         if self.held_until_turn_end(
             sessions,
             chat_id,

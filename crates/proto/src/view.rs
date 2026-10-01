@@ -463,7 +463,10 @@ fn tool_chip_content_raw(call: &crate::ToolCall) -> (&'static str, String) {
         ToolCall::Unknown { name, .. } => match name.strip_prefix("Agent: ") {
             Some(description) => ("Agent", description.to_owned()),
             None if name == "Agent" => ("Agent", String::new()),
-            None => ("Tool", name.clone()),
+            None => match call.native_hook_name() {
+                Some(hook) => ("Hook", hook.replace(':', " · ")),
+                None => ("Tool", name.clone()),
+            },
         },
     }
 }

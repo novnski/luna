@@ -158,6 +158,7 @@ pub mod task_identity;
 pub mod terminals;
 pub mod titles;
 mod transcript_history;
+mod typed_inputs;
 pub mod uploads;
 pub mod usage;
 mod usage_opencode;

@@ -629,12 +629,16 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     } else {
                         *output_bytes =
                             Some(output_bytes.unwrap_or(0).saturating_add(text.len() as u64));
-                        if !matches!(
-                            call,
-                            ToolCall::Mcp { .. }
-                                | ToolCall::ComputerUse { .. }
-                                | ToolCall::Unknown { .. }
-                        ) {
+                        // Native hook runs print like a shell command; their
+                        // live tail is as shareable as a Run chip's.
+                        if call.native_hook_name().is_some()
+                            || !matches!(
+                                call,
+                                ToolCall::Mcp { .. }
+                                    | ToolCall::ComputerUse { .. }
+                                    | ToolCall::Unknown { .. }
+                            )
+                        {
                             *output = activity_tail(output.as_deref(), text, *kind);
                         }
                     }
@@ -666,12 +670,13 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     *resolved = true;
                     // Preserve a small synced preview for each tool kind;
                     // full text stays in the owning host's journal.
-                    let private_result = matches!(
-                        call,
-                        ToolCall::Mcp { .. }
-                            | ToolCall::ComputerUse { .. }
-                            | ToolCall::Unknown { .. }
-                    );
+                    let private_result = call.native_hook_name().is_none()
+                        && matches!(
+                            call,
+                            ToolCall::Mcp { .. }
+                                | ToolCall::ComputerUse { .. }
+                                | ToolCall::Unknown { .. }
+                        );
                     if let Some(full) = output {
                         *out_slot = if private_result {
                             rich_tool_output_summary(full, *is_error)

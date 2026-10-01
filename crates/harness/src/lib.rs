@@ -258,6 +258,20 @@ pub trait Harness: Send + Sync {
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         Ok(Vec::new())
     }
+    /// Effective native extension configuration (settings sources, output
+    /// style, hooks, commands and skills) for a launch in `cwd` under `mode`,
+    /// including the provider's own readback for that launch. Adapters reuse
+    /// a view until its settings files change; `refresh` forces a new one.
+    async fn native_extensions(
+        &self,
+        _cwd: Option<&std::path::Path>,
+        _mode: luna_proto::PermissionMode,
+        _refresh: bool,
+    ) -> Result<luna_proto::NativeExtensionsView, HarnessError> {
+        Err(HarnessError::Protocol(
+            "native extension inventory is unsupported by this harness".into(),
+        ))
+    }
     /// Run the harness's own native/session compaction operation. Adapters
     /// must opt in; the default is honest unsupported behavior.
     async fn compact_context(&self, _request: ContextCompactRequest) -> Result<(), HarnessError> {
