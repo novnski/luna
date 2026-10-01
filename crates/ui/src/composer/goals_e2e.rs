@@ -432,6 +432,7 @@ fn goal_nodes(tree: &Value) -> Vec<Value> {
             aria["label"].as_str().is_some_and(|label| {
                 label == "Goal"
                     || label == "Goal mode"
+                    || label == "Sent as goal"
                     || label == "Edit goal"
                     || label.starts_with("Pursuing goal")
                     || label.starts_with("Goal ")
@@ -469,7 +470,11 @@ fn node_starting<'a>(nodes: &'a [Value], prefix: &str) -> Option<&'a Value> {
 fn bar_nodes(nodes: &[Value]) -> Vec<&Value> {
     nodes
         .iter()
-        .filter(|node| node["label"] != "Goal mode" && node["role"] != "Status")
+        .filter(|node| {
+            node["label"] != "Goal mode"
+                && node["label"] != "Sent as goal"
+                && node["role"] != "Status"
+        })
         .collect()
 }
 
@@ -699,7 +704,8 @@ pub async fn run_goal_card_e2e(
                     node(&nodes, label)
                         .is_some_and(|node| node["click"] == true && node["focus"] == true)
                 })
-            && node(&nodes, "Goal").is_some_and(|node| node["role"] == "Group"),
+            && node(&nodes, "Goal").is_some_and(|node| node["role"] == "Group")
+            && node(&nodes, "Sent as goal").is_some(),
         "pursuing bar semantics wrong: {nodes:?}"
     );
     // The timer is live: it advances while Codex works.
