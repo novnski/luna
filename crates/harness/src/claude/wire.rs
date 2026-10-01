@@ -59,7 +59,7 @@ pub(crate) struct SystemFrame {
     pub subagent_type: Option<String>,
     /// `peer_message_hold` fields (state/lane/from/cause/outcome…).
     #[serde(flatten)]
-    pub peer_hold: super::peer::PeerHoldFields,
+    pub peer_hold: Box<super::peer::PeerHoldFields>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
