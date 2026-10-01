@@ -332,6 +332,7 @@ fn render_schedules(schedules: &[NativeSchedule], below_goal: bool, theme: &Them
         )
         .child(
             div()
+                .id("goal-schedule-list")
                 .role(Role::List)
                 .pl(px(2.0))
                 .flex()
