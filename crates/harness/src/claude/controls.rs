@@ -914,7 +914,12 @@ fn approval_card(
         provider_thread_id: (!context.session_id.is_empty()).then(|| context.session_id.clone()),
         item_id: tool_use_id.clone(),
         approval_id: Some(request_id.to_owned()),
-        kind: Some(display.clone()),
+        // An MCP card already names the tool; use Codex's kind for parity.
+        kind: Some(if tool_context.is_some() {
+            "mcp_tool_call".to_owned()
+        } else {
+            display.clone()
+        }),
         cwd: (!context.cwd.is_empty()).then(|| context.cwd.clone()),
         command: command.clone(),
         reason: (!reasons.is_empty()).then(|| reasons.join(" · ")),
@@ -942,6 +947,7 @@ fn approval_card(
         question: format!(
             "{summary}. {}Target: {target}.",
             command
+                .filter(|command| !summary.contains(command.as_str()))
                 .map(|command| format!("{command} "))
                 .unwrap_or_default()
         ),
