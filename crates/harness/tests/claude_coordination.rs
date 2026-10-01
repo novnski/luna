@@ -349,7 +349,7 @@ async fn resume_held_by_an_external_background_session_is_refused() {
     let mut req = request("scenario:happy");
     req.resume = Some("sess-held".into());
     let result = ClaudeHarness::new()
-        .with_executable(&exe)
+        .with_executable(exe)
         .run(req, controls())
         .await;
     kill(external);
@@ -385,8 +385,9 @@ async fn resume_ignores_luna_owned_stopped_and_unrelated_rows() {
     let exe = wrapper(dir.path(), &rows, 0);
     let mut req = request("scenario:happy");
     req.resume = Some("sess-held".into());
-    let events = run_to_end(&ClaudeHarness::new().with_executable(&exe), req).await;
+    let events = run_to_end(&ClaudeHarness::new().with_executable(exe), req).await;
     let _ = own_child.kill();
+    let _ = own_child.wait();
     kill(external);
     assert!(dir.path().join("launched").exists());
     assert!(events.iter().any(|e| matches!(
@@ -406,7 +407,7 @@ async fn resume_proceeds_when_the_session_listing_is_unavailable() {
     let exe = wrapper(dir.path(), "not json", 2);
     let mut req = request("scenario:happy");
     req.resume = Some("sess-held".into());
-    let events = run_to_end(&ClaudeHarness::new().with_executable(&exe), req).await;
+    let events = run_to_end(&ClaudeHarness::new().with_executable(exe), req).await;
     assert!(events.iter().any(|e| matches!(
         e,
         AgentEvent::Done {
@@ -437,10 +438,11 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
     );
     let exe = wrapper(dir.path(), &rows, 0);
     let view = ClaudeHarness::new()
-        .with_executable(&exe)
+        .with_executable(exe)
         .external_sessions()
         .await;
     let _ = own_child.kill();
+    let _ = own_child.wait();
     assert_eq!(view.unavailable_reason, None);
     assert_eq!(view.sessions.len(), 4);
     let own_row = &view.sessions[0];
@@ -475,7 +477,7 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
 
     let broken = wrapper(dir.path(), "{\"not\":\"an array\"}", 0);
     let view = ClaudeHarness::new()
-        .with_executable(&broken)
+        .with_executable(broken)
         .external_sessions()
         .await;
     assert!(view.sessions.is_empty());
@@ -485,7 +487,7 @@ async fn external_session_listing_maps_real_rows_and_explicit_unavailability() {
     );
     let failing = wrapper(dir.path(), "", 1);
     let view = ClaudeHarness::new()
-        .with_executable(&failing)
+        .with_executable(failing)
         .external_sessions()
         .await;
     assert!(view.unavailable_reason.unwrap().contains("agents --json"));
@@ -510,7 +512,7 @@ async fn live_workflow_capture_replays_into_a_settled_graph() {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
     let events = run_to_end(
-        &ClaudeHarness::new().with_executable(&exe),
+        &ClaudeHarness::new().with_executable(exe),
         request("live workflow replay"),
     )
     .await;

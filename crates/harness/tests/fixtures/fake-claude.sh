@@ -232,12 +232,21 @@ case "$first" in
   # emitter (task_progress.workflow_progress, logs filtered). The launching
   # turn settles first; the run then reports while the session is parked and
   # ends in a wake turn — the 2.1.228 background-task shape.
+  # LUNA's isolated title run replays the same first line: answer it as a
+  # title, never as a second workflow process.
+  case "$*" in *"You generate session titles."*)
+    emit '{"type":"result","subtype":"success","result":"Audit Routes","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-title"}'
+    exit 0 ;;
+  esac
   S='"session_id":"sess-wf"'
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Workflow","Agent","Bash"],"cwd":"/tmp","session_id":"sess-wf"}'
   emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"toolu_wf","name":"Workflow","input":{"script":"export const meta = { name: \"audit-routes\", description: \"Audit routes\" }\nphase(\"Discover\")\nawait agent(\"List routes\", { label: \"list routes\" })"}}]}}'
   emit '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"wf1","task_type":"local_workflow","description":"Audit routes"}],"uuid":"u-btc-1",'"$S"'}'
   emit '{"type":"system","subtype":"task_started","task_id":"wf1","tool_use_id":"toolu_wf","description":"Audit routes","task_type":"local_workflow","workflow_name":"audit-routes","prompt":"","uuid":"u-ts-1",'"$S"'}'
   emit '{"type":"user","parent_tool_use_id":null,"message":{"content":[{"type":"tool_result","tool_use_id":"toolu_wf","content":"Workflow running in background (task wf1).","is_error":false}]}}'
+  # Root text streams as deltas (--include-partial-messages); the closing
+  # assistant frame repeats it and is not re-emitted by the normalizer.
+  emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Started the audit workflow."}}}'
   emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"Started the audit workflow."}]}}'
   emit '{"type":"result","subtype":"success","result":"Started the audit workflow.","errors":[],"usage":{"input_tokens":5,"output_tokens":5},'"$S"'}'
   P1='{"type":"workflow_phase","index":1,"title":"Discover","kind":"agent"}'
@@ -274,9 +283,15 @@ case "$first" in
   emit '{"type":"result","subtype":"success","result":"The audit found one blocked file.","errors":[],"usage":{"input_tokens":5,"output_tokens":7},'"$S"'}'
   ;;
 
-*scenario:workflow-abandoned*)
+*scenario:abandoned-workflow*)
+  # (Not `scenario:workflow-…`: the `*scenario:workflow*` glob above would
+  # match it first.)
   # The provider process exits while its workflow is still running (crash,
   # reaper, app quit): nothing it owned can still be running afterwards.
+  case "$*" in *"You generate session titles."*)
+    emit '{"type":"result","subtype":"success","result":"Migrate","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-title"}'
+    exit 0 ;;
+  esac
   S='"session_id":"sess-wf-gone"'
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Workflow"],"cwd":"/tmp","session_id":"sess-wf-gone"}'
   emit '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"toolu_wf2","name":"Workflow","input":{"scriptPath":"/tmp/wf.js"}}]}}'
