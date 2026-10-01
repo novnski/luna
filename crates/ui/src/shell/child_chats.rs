@@ -301,10 +301,6 @@ impl ChildChatPanel {
         &self.parent
     }
 
-    pub(super) fn open_child_id(&self) -> Option<&str> {
-        self.open.as_ref().map(|open| open.id.as_str())
-    }
-
     /// A replaced engine invalidates the watch and any in-flight send.
     pub(super) fn is_current(&self, cx: &App) -> bool {
         self.state.read(cx).engine_generation() == self.engine_generation
@@ -1225,7 +1221,7 @@ impl Shell {
             "pickerBadge": badge,
             "pickerCardVisible": any,
             "panelParent": panel.map(|panel| panel.parent().to_string()),
-            "openChild": panel.and_then(|panel| panel.open_child_id().map(str::to_string)),
+            "openChild": open.map(|open| open.id.clone()),
             "openNotice": open.and_then(|open| open.notice.as_ref().map(|(error, text)| serde_json::json!({"error": error, "text": text}))),
             "openSending": open.map(|open| open.sending),
             "openInput": open.map(|open| open.input.read(cx).text().to_string()),
