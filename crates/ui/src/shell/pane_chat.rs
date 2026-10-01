@@ -139,6 +139,7 @@ impl PaneComposers {
             .all(|composer| composer.read(cx).draft_flush_complete())
     }
 
+    #[cfg(feature = "appshots-fixture")]
     pub(super) fn ids(&self) -> Vec<String> {
         let mut ids: Vec<String> = self.composers.keys().cloned().collect();
         ids.sort();

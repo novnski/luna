@@ -36,7 +36,6 @@ const SIDE_ANSWER: &str =
 const SIDE_REQUEST: &str = "side-fixture-approval";
 const SIDE_DRAFT: &str = "SIDE_DRAFT_KEEP: compare with the settings rename";
 const SIDE_PENDING: &str = "SIDE_NAV_PENDING: and the UI flag?";
-const SIDE_AFTER_IDLE: &str = "SIDE_AFTER_IDLE: still there?";
 
 fn config() -> ChatConfig {
     ChatConfig {
