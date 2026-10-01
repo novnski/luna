@@ -209,6 +209,35 @@ pub(super) fn child_chat_rows(
     rows
 }
 
+/// Engine, host device and live-run flag for a reply, or why it cannot be
+/// sent (`None` = silently ignored, e.g. archived).
+fn prepare_reply(
+    state: &AppState,
+    id: &str,
+    now: DateTime<Utc>,
+) -> Result<(EngineHandle, String, bool), Option<&'static str>> {
+    let chat = state
+        .chats
+        .iter()
+        .find(|chat| chat.id == id)
+        .ok_or(Some("This child chat is no longer available."))?;
+    if chat.archived {
+        return Err(None);
+    }
+    let engine = state
+        .engine()
+        .cloned()
+        .ok_or(Some("Engine not connected"))?;
+    let capability = luna_proto::capabilities::MESSAGE_QUEUE_V1;
+    if !engine.engine_info().supports(capability) || !state.chat_host_supports(id, capability) {
+        return Err(Some(
+            "Update this child chat's engine to reply from here, or open it as the main chat.",
+        ));
+    }
+    let running = child_chat_status(state, chat, now) == ChildChatStatus::Running;
+    Ok((engine, chat.device_id.clone(), running))
+}
+
 pub(super) enum ChildChatEvent {
     /// Promote this child to the main conversation view.
     OpenAsMain(String),
@@ -350,46 +379,26 @@ impl ChildChatPanel {
         if !self.is_current(cx) {
             return;
         }
+        let Some((id, text)) = self.open.as_ref().and_then(|open| {
+            let text = open.input.read(cx).text().trim().to_string();
+            (!open.sending && !text.is_empty()).then(|| (open.id.clone(), text))
+        }) else {
+            return;
+        };
+        let prepared = prepare_reply(self.state.read(cx), &id, Utc::now());
         let Some(open) = self.open.as_mut() else {
             return;
         };
-        if open.sending {
-            return;
-        }
-        let text = open.input.read(cx).text().trim().to_string();
-        if text.is_empty() {
-            return;
-        }
-        let state = self.state.read(cx);
-        let now = Utc::now();
-        let Some(chat) = state.chats.iter().find(|chat| chat.id == open.id) else {
-            open.notice = Some((true, "This child chat is no longer available.".into()));
-            cx.notify();
-            return;
+        let (engine, host, running) = match prepared {
+            Ok(prepared) => prepared,
+            Err(None) => return,
+            Err(Some(error)) => {
+                open.notice = Some((true, error.into()));
+                cx.notify();
+                return;
+            }
         };
-        if chat.archived {
-            return;
-        }
-        let Some(engine): Option<EngineHandle> = state.engine().cloned() else {
-            open.notice = Some((true, "Engine not connected".into()));
-            cx.notify();
-            return;
-        };
-        let capability = luna_proto::capabilities::MESSAGE_QUEUE_V1;
-        if !engine.engine_info().supports(capability)
-            || !state.chat_host_supports(&chat.id, capability)
-        {
-            open.notice = Some((
-                true,
-                "Update this child chat's engine to reply from here, or open it as the main chat."
-                    .into(),
-            ));
-            cx.notify();
-            return;
-        }
-        let running = child_chat_status(state, chat, now) == ChildChatStatus::Running;
-        let chat_id = chat.id.clone();
-        let host = chat.device_id.clone();
+        let chat_id = id;
         let message_id = uuid::Uuid::new_v4().to_string();
         let intent = serde_json::json!({
             "kind": "queueMessage",
