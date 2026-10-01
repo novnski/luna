@@ -1206,6 +1206,7 @@ enum MutateParams {
     },
 }
 
+mod claude_history;
 mod prompt_stash;
 mod side_chats;
 
@@ -4064,6 +4065,10 @@ impl EngineRpc {
                     .map(|path| path.to_string_lossy().into_owned()),
                 execution.codex_file_auth,
             )
+        } else if binding.provider_id == HarnessId::ClaudeCode {
+            // CC-10: Claude's native transcripts live under its config dir.
+            let (claude_home, _) = self.agent_accounts.skill_config_dirs();
+            (Some(claude_home.to_string_lossy().into_owned()), false)
         } else {
             (None, false)
         };
@@ -5448,9 +5453,17 @@ impl EngineRpc {
                 let (chat, binding) = self
                     .ensure_history_operation_ready(task_id)
                     .map_err(TaskProjectionError::Mutation)?;
+                if binding.provider_id == HarnessId::ClaudeCode {
+                    return self
+                        .rewind_claude_conversation(
+                            command_id, task_id, message_id, review, chat, binding,
+                        )
+                        .await;
+                }
                 if binding.provider_id != HarnessId::Codex {
                     return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "Same-chat native rewind is supported only for Codex.".into(),
+                        "Same-chat native rewind is supported only for Codex and Claude Code."
+                            .into(),
                     )));
                 }
                 self.validate_history_review(task_id, &chat, &binding, &review)
@@ -5673,6 +5686,12 @@ impl EngineRpc {
                 }
             }
             TaskCommandIntent::ReconcileConversationRewind { rewind_command_id } => {
+                if let Some(receipt) = self
+                    .reconcile_claude_rewind(command_id, task_id, &rewind_command_id)
+                    .await?
+                {
+                    return Ok(Some(receipt));
+                }
                 use luna_harness::codex::native::CodexRewindObservation;
                 let (chat, binding) = self
                     .rewind_reconciliation_ready(task_id)
@@ -8500,6 +8519,9 @@ impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
+        }
+        if claude_history::handles(method) {
+            return self.handle_native_file_rewind(method, params).await;
         }
         if params
             .get("chatId")

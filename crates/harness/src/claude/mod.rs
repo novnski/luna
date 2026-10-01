@@ -36,6 +36,7 @@ mod controls;
 mod delivery;
 mod discovery;
 mod events;
+mod history;
 mod input;
 mod live_session;
 mod mcp;
@@ -272,6 +273,9 @@ impl ClaudeHarness {
         let mut profile = ClaudeLaunchProfile::for_request(request, self.config_home.clone());
         profile.tools = tools;
         profile.apply(&mut cmd, &settings);
+        // CC-10: the SDK's enableFileCheckpointing, so `rewind_files` can
+        // restore Edit/Write/NotebookEdit changes later.
+        cmd.env(history::FILE_CHECKPOINT_ENV, "1");
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -452,6 +456,43 @@ impl Harness for ClaudeHarness {
         self.mcp_sessions.get(provider_session_id)
     }
 
+    /// CC-10: Claude forks follow the Agent SDK `forkSession` contract.
+    fn fork_capability(&self) -> luna_proto::ProviderForkCapability {
+        luna_proto::ProviderForkCapability::Checkpoint
+    }
+    async fn fork_session(
+        &self,
+        request: luna_proto::ProviderForkRequest,
+    ) -> Result<luna_proto::ProviderForkResult, HarnessError> {
+        self.fork_session_staged(request, &|_| Ok(())).await
+    }
+    async fn fork_session_staged(
+        &self,
+        request: luna_proto::ProviderForkRequest,
+        progress: &crate::ProviderForkProgressReporter,
+    ) -> Result<luna_proto::ProviderForkResult, HarnessError> {
+        history::fork_session(&self.resolve_executable()?, request, progress).await
+    }
+    async fn native_history_turns(
+        &self,
+        scope: crate::NativeHistoryScope,
+    ) -> Result<crate::NativeHistoryTurns, HarnessError> {
+        history::native_turns(&scope)
+    }
+    async fn rewind_native_conversation(
+        &self,
+        request: crate::NativeRewindRequest,
+        progress: &crate::NativeRewindProgressReporter,
+    ) -> Result<crate::NativeRewindOutcome, HarnessError> {
+        history::rewind_conversation(&self.resolve_executable()?, request, progress).await
+    }
+    async fn rewind_native_files(
+        &self,
+        request: crate::NativeFileRewindRequest,
+    ) -> Result<crate::NativeFileRewindResult, HarnessError> {
+        history::rewind_files(&self.resolve_executable()?, request).await
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
@@ -577,6 +618,11 @@ impl ClaudeHarness {
         let mut norm = Normalizer::new();
         let (first, initial_uuid) =
             transport.stamp_user_line(first.line, transport::InputKind::Initial, None);
+        // CC-10 checkpoints key on the same client uuid.
+        let mut identities = history::TurnIdentities::default();
+        if !title_only {
+            identities.record(initial_uuid.clone());
+        }
         norm.native
             .ledger
             .register_native(turns::SendKind::Initial, None, initial_uuid);
@@ -614,6 +660,7 @@ impl ClaudeHarness {
                 staged: self.staged.clone(),
             },
             mcp_sessions: (!title_only).then(|| self.mcp_sessions.clone()),
+            identities,
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -693,6 +740,8 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    /// CC-10 client uuids and per-turn provider checkpoints.
+    identities: history::TurnIdentities,
     mcp_sessions: Option<Arc<mcp::SessionMcpRegistry>>,
     cc06: Cc06Session,
 }
@@ -724,6 +773,7 @@ async fn run_session(session: Session) {
         stderr_tail,
         cc06,
         mcp_sessions,
+        mut identities,
     } = session;
     let RunControls {
         request_input,
@@ -823,6 +873,7 @@ async fn run_session(session: Session) {
                             break 'main;
                         }
                     }
+                    identities.observe(line);
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
                         Err(e) => {
@@ -859,6 +910,11 @@ async fn run_session(session: Session) {
                         }
                     }
                     for ev in norm.normalize_native(frame, interrupted) {
+                        if let Some(checkpoint) = identities.checkpoint_before(&ev)
+                            && event_tx.send(Ok(checkpoint)).await.is_err()
+                        {
+                            break 'main;
+                        }
                         let is_done = matches!(ev, AgentEvent::Done { .. });
                         if is_done {
                             // Stream-json result frames are the authoritative
@@ -928,6 +984,7 @@ async fn run_session(session: Session) {
                         if explicit { transport::InputKind::Explicit } else { transport::InputKind::Ordinary },
                         msg.message_id.clone(),
                     );
+                    identities.record(uuid.clone());
                     if explicit {
                         if explicit_steer_unconfirmed {
                             if let Some(tx) = msg.acceptance {

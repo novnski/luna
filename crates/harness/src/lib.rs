@@ -8,6 +8,11 @@ mod command_scope;
 mod composer_input;
 pub use command_scope::CommandScope;
 pub use composer_input::validate_composer_inputs;
+pub mod native_history;
+pub use native_history::{
+    NativeFileRewindRequest, NativeFileRewindResult, NativeHistoryScope, NativeHistoryTurns,
+    NativeRewindOutcome, NativeRewindProgress, NativeRewindProgressReporter, NativeRewindRequest,
+};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -260,6 +265,35 @@ pub trait Harness: Send + Sync {
         _to: &LiveRuntimeSelection,
     ) -> bool {
         false
+    }
+
+    /// Read the provider's own active-history turn identities (CC-10).
+    async fn native_history_turns(
+        &self,
+        _scope: NativeHistoryScope,
+    ) -> Result<NativeHistoryTurns, HarnessError> {
+        Err(HarnessError::Protocol(
+            "native history readback is not supported by this harness".into(),
+        ))
+    }
+    /// Truncate the same provider session before a turn (CC-10).
+    async fn rewind_native_conversation(
+        &self,
+        _request: NativeRewindRequest,
+        _progress: &NativeRewindProgressReporter,
+    ) -> Result<NativeRewindOutcome, HarnessError> {
+        Err(HarnessError::Protocol(
+            "same-session native rewind is not supported by this harness".into(),
+        ))
+    }
+    /// Preview or restore provider file checkpoints (CC-10).
+    async fn rewind_native_files(
+        &self,
+        _request: NativeFileRewindRequest,
+    ) -> Result<NativeFileRewindResult, HarnessError> {
+        Err(HarnessError::Protocol(
+            "native file checkpoints are not supported by this harness".into(),
+        ))
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError>;
     /// A provider-authored catalog suitable for replacing a saved snapshot.

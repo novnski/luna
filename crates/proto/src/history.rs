@@ -77,3 +77,33 @@ pub struct HistoryCapabilityView {
     pub capability: ProviderForkCapability,
     pub unavailable_reason: Option<String>,
 }
+
+/// CC-10 readback of a provider-native file checkpoint preview or restore.
+/// Native checkpoints are distinct from LUNA's Git checkpoints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeFileRewindView {
+    pub task_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub provider: Option<crate::HarnessId>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub can_rewind: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub files_changed: Vec<String>,
+    #[serde(default)]
+    pub insertions: u64,
+    #[serde(default)]
+    pub deletions: u64,
+    /// Digest of the previewed scope. A restore must quote the digest of the
+    /// preview the user reviewed.
+    #[serde(default)]
+    pub digest: String,
+    /// What the provider's checkpoints never restore.
+    #[serde(default)]
+    pub limitations: String,
+}
