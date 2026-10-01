@@ -13,6 +13,7 @@ use luna_harness::{
     NativeRewindOutcome, NativeRewindProgress, NativeRewindRequest,
 };
 use luna_proto::NativeFileRewindView;
+use sha2::Digest as _;
 
 const CLAUDE_REWIND_PREFIX: &str = "luna-claude-rewind-v1";
 const NATIVE_TIMEOUT: Duration = Duration::from_secs(30);
