@@ -353,43 +353,47 @@ fn main() -> anyhow::Result<()> {
         true,
     )?;
     let now = Utc::now();
-    let mut ui_chats = Vec::new();
-    for spec in &SPECS {
-        core.workspace.create_chat(
-            spec.id,
-            Some(PROJECT),
-            Some(&device),
-            Some(config()),
-            Some(project.to_string_lossy().into_owned()),
-        )?;
-        core.workspace.rename_chat(spec.id, spec.title)?;
-        let at = now - TimeDelta::minutes(spec.minutes_ago);
-        let at_ms = at.timestamp_millis();
-        let doc = core.doc_host.open(spec.id)?;
-        doc.doc().push_message(&text_entry(
-            &format!("{}-prompt", spec.id),
-            MessageRole::User,
-            spec.prompt,
-            &device,
-            at_ms - 60_000,
-        ))?;
-        doc.doc().push_message(&text_entry(
-            &format!("{}-answer", spec.id),
-            MessageRole::Assistant,
-            spec.answer,
-            &device,
-            at_ms,
-        ))?;
-        let mut chat = core.workspace.chat(spec.id)?.expect("seeded chat");
-        chat.created_at = at - TimeDelta::minutes(2);
-        chat.last_message_at = Some(at);
-        chat.last_seen_at = spec.seen.then(|| at + TimeDelta::seconds(1));
-        chat.archived = spec.archived;
-        core.workspace.import_chat_row(&chat)?;
-        // Lineage only in the UI copy (see the module docs).
-        chat.child_thread = child_thread(spec, at_ms);
-        ui_chats.push(chat);
-    }
+    // Doc hosts spawn onto the engine's Tokio runtime.
+    let ui_chats = runtime.block_on(async {
+        let mut ui_chats = Vec::new();
+        for spec in &SPECS {
+            core.workspace.create_chat(
+                spec.id,
+                Some(PROJECT),
+                Some(&device),
+                Some(config()),
+                Some(project.to_string_lossy().into_owned()),
+            )?;
+            core.workspace.rename_chat(spec.id, spec.title)?;
+            let at = now - TimeDelta::minutes(spec.minutes_ago);
+            let at_ms = at.timestamp_millis();
+            let doc = core.doc_host.open(spec.id)?;
+            doc.doc().push_message(&text_entry(
+                &format!("{}-prompt", spec.id),
+                MessageRole::User,
+                spec.prompt,
+                &device,
+                at_ms - 60_000,
+            ))?;
+            doc.doc().push_message(&text_entry(
+                &format!("{}-answer", spec.id),
+                MessageRole::Assistant,
+                spec.answer,
+                &device,
+                at_ms,
+            ))?;
+            let mut chat = core.workspace.chat(spec.id)?.expect("seeded chat");
+            chat.created_at = at - TimeDelta::minutes(2);
+            chat.last_message_at = Some(at);
+            chat.last_seen_at = spec.seen.then(|| at + TimeDelta::seconds(1));
+            chat.archived = spec.archived;
+            core.workspace.import_chat_row(&chat)?;
+            // Lineage only in the UI copy (see the module docs).
+            chat.child_thread = child_thread(spec, at_ms);
+            ui_chats.push(chat);
+        }
+        anyhow::Ok(ui_chats)
+    })?;
     let spaces = core.workspace.read_spaces()?;
     let handle = runtime.block_on(state::EngineHandle::fixture_from_core(&core))?;
     let boot = EngineBootConfig {
