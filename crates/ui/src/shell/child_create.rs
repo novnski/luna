@@ -775,9 +775,11 @@ impl Shell {
         });
     }
 
+    /// The checkbox's own click path (toggles the grant, clears the error).
     pub fn fixture_child_dialog_confirm_grant(&mut self, cx: &mut Context<Self>) {
         if let Some(dialog) = self.child_thread_dialog.as_mut() {
             dialog.grant_confirmed = true;
+            dialog.error = None;
         }
         cx.notify();
     }

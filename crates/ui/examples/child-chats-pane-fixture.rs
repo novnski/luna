@@ -1019,7 +1019,7 @@ fn main() -> anyhow::Result<()> {
                     settle(cx, 400).await;
                     capture(window, cx, output.join("p14-create-dialog-confirmed.png"))?;
                     let granted = window.update(cx, |shell, _, cx| shell.fixture_child_dialog_readback(cx))?;
-                    anyhow::ensure!(granted["grantConfirmed"] == true, "grant not recorded: {granted}");
+                    anyhow::ensure!(granted["grantConfirmed"] == true && granted["error"].is_null(), "grant not recorded or stale error kept: {granted}");
                     anyhow::ensure!(granted["request"]["permissionMode"] == "full", "request must carry the granted access: {granted}");
                     anyhow::ensure!(granted["request"]["checkout"] == serde_json::json!({"kind": "newWorktree", "branch": "spike/settings-rename"}), "request must carry the worktree plan: {granted}");
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
