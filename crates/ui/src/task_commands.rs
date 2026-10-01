@@ -39,6 +39,8 @@ fn revision_fenced_kind(kind: Option<&str>) -> bool {
                 | "forkTask"
                 | "editEarlierMessage"
                 | "restoreHistoryRecovery"
+                | "rewindConversation"
+                | "reconcileConversationRewind"
         )
     )
 }
@@ -78,6 +80,8 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
                 | "forkTask"
                 | "editEarlierMessage"
                 | "restoreHistoryRecovery"
+                | "rewindConversation"
+                | "reconcileConversationRewind"
         )
     )
 }
@@ -331,6 +335,8 @@ mod tests {
             "forkTask",
             "editEarlierMessage",
             "restoreHistoryRecovery",
+            "rewindConversation",
+            "reconcileConversationRewind",
         ] {
             assert!(revision_fenced_kind(Some(kind)), "revision fence: {kind}");
             assert!(binding_fenced_kind(Some(kind)), "binding fence: {kind}");
