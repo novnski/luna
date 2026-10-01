@@ -62,7 +62,7 @@ fn config() -> ChatConfig {
     }
 }
 
-fn request(prompt: &str, goal: bool) -> RunRequest {
+fn request(prompt: &str, goal: bool, cwd: &str) -> RunRequest {
     RunRequest {
         review: None,
         goal: goal.then(|| GoalStartRequest {
@@ -76,7 +76,7 @@ fn request(prompt: &str, goal: bool) -> RunRequest {
         model: Some("gpt-6.1-sol".into()),
         reasoning: Some(ReasoningLevel::Ultra),
         model_options: Default::default(),
-        cwd: "/tmp".into(),
+        cwd: cwd.into(),
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: false,
         permission_mode: PermissionMode::Ask,
@@ -126,13 +126,13 @@ async fn execute(
         .unwrap()
 }
 
-async fn create_task(client: &RpcClient, core: &EngineCore, task_id: &str) {
+async fn create_task(client: &RpcClient, core: &EngineCore, task_id: &str, cwd: &str) {
     client
         .call(
             methods::MUTATE,
             serde_json::json!({
                 "op": "createSpace", "spaceId": "goal-project",
-                "deviceId": core.device_id, "path": "/tmp"
+                "deviceId": core.device_id, "path": cwd
             }),
         )
         .await
@@ -145,7 +145,7 @@ async fn create_task(client: &RpcClient, core: &EngineCore, task_id: &str) {
         serde_json::json!({
             "kind": "createChat",
             "spaceId": "goal-project",
-            "cwd": "/tmp",
+            "cwd": cwd,
             "config": config(),
         }),
     )
@@ -269,9 +269,15 @@ async fn goal_sent_to_a_cold_task_starts_working_and_is_marked_achieved() {
     // Managed task identities are UUIDs; human ids stay legacy chats.
     let task_id = uuid::Uuid::new_v4().to_string();
     let task = task_id.as_str();
-    create_task(&client, &core, task).await;
+    create_task(&client, &core, task, "/tmp").await;
     let objective = "scenario:goal-start count to three";
-    let receipt = send(&client, task, "goal-message", request(objective, true)).await;
+    let receipt = send(
+        &client,
+        task,
+        "goal-message",
+        request(objective, true, "/tmp"),
+    )
+    .await;
     assert_ne!(
         receipt.status,
         CommandReceiptStatus::Rejected,
@@ -321,37 +327,55 @@ async fn goal_sent_to_a_warm_task_starts_on_the_loaded_runtime() {
     // Managed task identities are UUIDs; human ids stay legacy chats.
     let task_id = uuid::Uuid::new_v4().to_string();
     let task = task_id.as_str();
-    create_task(&client, &core, task).await;
-    send(
-        &client,
-        task,
-        "first-message",
-        request("scenario:goal-warm", false),
-    )
-    .await;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let replied = entries(&core, task)
-                .iter()
-                .any(|entry| entry.role == MessageRole::Assistant && text(entry).contains("ready"));
-            if replied
-                && snapshot(&client, task)
-                    .await
-                    .snapshot
-                    .active_turn_id
-                    .is_none()
-            {
-                break;
+    // Its own folder: the peer resumes the same native thread there.
+    let workspace = root.path().join("goal-warm-workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let cwd = workspace.to_str().unwrap();
+    create_task(&client, &core, task, cwd).await;
+    // The first turn's runtime contract predates the provider binding, so
+    // the next send restarts the runtime by design (contract changed). The
+    // runtime it leaves warm is the one a later goal must reuse.
+    for (index, message) in ["first-message", "second-message"].into_iter().enumerate() {
+        send(
+            &client,
+            task,
+            message,
+            request("scenario:goal-warm", false, cwd),
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let replies = entries(&core, task)
+                    .iter()
+                    .filter(|entry| {
+                        entry.role == MessageRole::Assistant && text(entry).contains("ready")
+                    })
+                    .count();
+                if replies > index
+                    && snapshot(&client, task)
+                        .await
+                        .snapshot
+                        .active_turn_id
+                        .is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await
-    .expect("first turn settles with the runtime still warm");
+        })
+        .await
+        .expect("turn settles with the runtime still warm");
+    }
     assert!(core.sessions.session_status(task).is_some());
 
     let objective = "Ship the warm goal";
-    let receipt = send(&client, task, "warm-goal-message", request(objective, true)).await;
+    let receipt = send(
+        &client,
+        task,
+        "warm-goal-message",
+        request(objective, true, cwd),
+    )
+    .await;
     assert_ne!(
         receipt.status,
         CommandReceiptStatus::Rejected,
@@ -376,12 +400,12 @@ async fn goal_sent_to_a_warm_task_starts_on_the_loaded_runtime() {
             .iter()
             .filter(|entry| entry.role == MessageRole::User)
             .count(),
-        2
+        3
     );
     assert_eq!(text(&entries[goal_index]), objective);
     let state = control(&core, task);
     assert!(state.goal_marks.is_sent("warm-goal-message"));
-    assert!(!state.goal_marks.is_sent("first-message"));
+    assert!(!state.goal_marks.is_sent("second-message"));
     let mark = &state.goal_marks.achieved[0];
     let achieved_index = entries
         .iter()

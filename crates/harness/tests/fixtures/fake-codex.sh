@@ -222,6 +222,9 @@ if has "$line" '"method":"thread/resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-fresh\"}}}"
   elif has "$line" '"threadId":"context-resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"context-resume\"}}}"
+  elif has "$line" 'goal-warm-workspace'; then
+    # The goal E2E's later sends resume the same native thread.
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')\"}}}"
   elif has "$line" '"threadId":"goal-resume"'; then
     if [ "$pre_cleared" != 'goal-resume' ]; then
       emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32600,\"message\":\"resume before the stale goal was cleared\"}}"

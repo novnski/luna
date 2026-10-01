@@ -675,12 +675,10 @@ impl RuntimeConfig {
     }
 
     /// A Codex goal start runs on the loaded runtime when its execution
-    /// configuration matches. The native thread-name and strict-resume
-    /// options describe how a COLD runtime binds its thread (they are added
-    /// after routing), and the runtime contract's `context` records binding
-    /// metadata that only exists after the first turn; neither changes what
-    /// the loaded runtime executes, so both are ignored. Instructions, tools,
-    /// environment and every other setting must still match.
+    /// configuration matches, including the runtime contract (a changed
+    /// contract still needs a fresh runtime at this safe boundary). Only the
+    /// native thread-name and strict-resume options are ignored: they describe
+    /// how a COLD runtime binds its thread and are added after routing.
     fn can_route_goal(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
         let execution = |config: &Self| {
             let mut config = config.clone();
@@ -689,13 +687,6 @@ impl RuntimeConfig {
                 luna_harness::codex::LUNA_STRICT_RESUME_OPTION,
             ] {
                 config.model_options.remove(key);
-            }
-            if let Some(serde_json::Value::Object(contract)) = config
-                .model_options
-                .get_mut(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
-            {
-                contract.remove("context");
-                contract.remove("contentHash");
             }
             config
         };
@@ -3638,16 +3629,6 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
-        if request.goal.is_some() && let Some(h) = lock(&self.inner.runs).get(chat_id) {
-            let now = RuntimeConfig::from_request(harness_id, &request);
-            let key = luna_proto::LUNA_RUNTIME_CONTRACT_OPTION;
-            if let (Some(serde_json::Value::Object(a)), Some(serde_json::Value::Object(b))) = (h.runtime_config.model_options.get(key), now.model_options.get(key)) {
-                for (k, v) in a { if b.get(k) != Some(v) { eprintln!("GOALDEBUG contract {k}: {} VS {}", v.to_string().chars().take(300).collect::<String>(), b.get(k).map(|x| x.to_string()).unwrap_or_default().chars().take(300).collect::<String>()); } }
-            }
-            let mut a = h.runtime_config.clone(); a.model_options.clear(); let mut b = now.clone(); b.model_options.clear();
-            if a != b { eprintln!("GOALDEBUG config {a:?} vs {b:?}"); }
-            eprintln!("GOALDEBUG goal route {}", h.runtime_config.can_route_goal(harness_id, &request));
-        }
         let goal_runtime = request.goal.is_some()
             && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
                 h.workspace_repair_revision == workspace_repair_revision
