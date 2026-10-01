@@ -8,6 +8,8 @@
 //! engine, provider, LUNA app or user data is involved.
 use super::*;
 use gpui::{AnyWindowHandle, AsyncApp};
+use luna_doc::MessageStatus;
+use luna_proto::SessionStatus;
 use serde_json::{Value, json};
 use std::path::Path;
 

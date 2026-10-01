@@ -2464,7 +2464,7 @@ async fn run_session(session: Session) {
                             );
                         }
                     });
-                    // Escalate if the app server doesn't wind down (turn/aborted)
+                    // Escalate if the app server doesn't wind down (turn/completed)
                     // within the grace periods: SIGTERM, then SIGKILL.
                     if let Some(pid) = crate::process::signal_target(&child) {
                         escalation = Some(tokio::spawn(async move {
