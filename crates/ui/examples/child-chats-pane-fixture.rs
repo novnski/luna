@@ -262,6 +262,9 @@ fn capture(
     cx: &mut AsyncApp,
     path: PathBuf,
 ) -> anyhow::Result<()> {
+    // Draw through the untyped handle: a typed update would lease the Shell
+    // that the frame is about to render.
+    let window = gpui::AnyWindowHandle::from(window);
     window.update(cx, |_, window, cx| -> anyhow::Result<()> {
         window.draw(cx).clear();
         window.render_to_image()?.save(path)?;
