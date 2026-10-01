@@ -9,6 +9,7 @@ pub(super) fn handles(method: &str) -> bool {
             | methods::SEND_SIDE_CHAT
             | methods::UNLOAD_SIDE_CHAT
             | methods::STOP_SIDE_CHAT
+            | methods::RENEW_SIDE_CHAT
             | methods::ANSWER_SIDE_CHAT
     )
 }
@@ -228,6 +229,12 @@ impl EngineRpc {
             methods::UNLOAD_SIDE_CHAT => RpcReply::value(
                 &service
                     .unload(&p.id, p.lease.as_deref())
+                    .await
+                    .map_err(fail)?,
+            ),
+            methods::RENEW_SIDE_CHAT => RpcReply::value(
+                &service
+                    .renew(&p.id, p.lease.as_deref().unwrap_or_default())
                     .await
                     .map_err(fail)?,
             ),
