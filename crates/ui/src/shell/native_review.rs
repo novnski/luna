@@ -467,7 +467,7 @@ fn claude_cloud_lane(theme: &Theme) -> impl IntoElement {
     const TEXT: &str = "Cloud ultrareview is a separate claude.ai service job. LUNA can't start or track one yet, so this review always runs locally. Run /ultrareview in a terminal if your account offers it.";
     div()
         .id("native-review-cloud-lane")
-        .role(Role::Status)
+        .role(gpui::Role::Status)
         .aria_label(TEXT)
         .mt(px(10.0))
         .px(px(10.0))
