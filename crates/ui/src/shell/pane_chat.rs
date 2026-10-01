@@ -44,7 +44,13 @@ pub(super) struct PaneComposers {
     composers: HashMap<String, Entity<Composer>>,
     /// Wakes observers (the shell's quit flow) when a pane draft flush lands.
     events: HashMap<String, Subscription>,
+    /// Least recently opened first; bounds the idle composers kept alive.
+    order: Vec<String>,
 }
+
+/// Idle cached pane composers beyond this are dropped (their drafts are
+/// durable); composers with unsaved text or work in flight are always kept.
+const PANE_COMPOSER_CACHE: usize = 8;
 
 impl PaneComposers {
     pub(super) fn new(state: Entity<AppState>, cx: &App) -> Self {
@@ -54,6 +60,7 @@ impl PaneComposers {
             generation,
             composers: HashMap::new(),
             events: HashMap::new(),
+            order: Vec::new(),
         }
     }
 
@@ -63,12 +70,15 @@ impl PaneComposers {
             self.generation = generation;
             self.composers.clear();
             self.events.clear();
+            self.order.clear();
         }
     }
 
     /// The cached composer bound to `chat_id`, created on first use.
     pub(super) fn composer(&mut self, chat_id: &str, cx: &mut Context<Self>) -> Entity<Composer> {
         self.sync_generation(cx);
+        self.order.retain(|id| id != chat_id);
+        self.order.push(chat_id.to_string());
         if let Some(composer) = self.composers.get(chat_id) {
             return composer.clone();
         }
@@ -82,7 +92,24 @@ impl PaneComposers {
         });
         self.events.insert(chat_id.to_string(), events);
         self.composers.insert(chat_id.to_string(), composer.clone());
+        self.evict_idle(chat_id, cx);
         composer
+    }
+
+    fn evict_idle(&mut self, keep: &str, cx: &App) {
+        while self.composers.len() > PANE_COMPOSER_CACHE {
+            let victim = self.order.iter().find(|id| {
+                id.as_str() != keep
+                    && self.composers.get(*id).is_some_and(|composer| {
+                        let composer = composer.read(cx);
+                        composer.draft_flush_complete() && !composer.has_work_in_flight()
+                    })
+            });
+            let Some(victim) = victim.cloned() else {
+                return;
+            };
+            self.remove(&victim);
+        }
     }
 
     pub(super) fn get(&self, chat_id: &str) -> Option<Entity<Composer>> {
@@ -91,6 +118,7 @@ impl PaneComposers {
 
     pub(super) fn remove(&mut self, chat_id: &str) -> Option<Entity<Composer>> {
         self.events.remove(chat_id);
+        self.order.retain(|id| id != chat_id);
         self.composers.remove(chat_id)
     }
 

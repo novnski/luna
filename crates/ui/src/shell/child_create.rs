@@ -459,6 +459,27 @@ impl Shell {
                 &theme,
             ));
         } else {
+            // The parent's model stays offered even when this device's
+            // catalog no longer lists it (it is what the child would inherit).
+            if let Some(parent_model) = parent
+                .model
+                .clone()
+                .filter(|id| !parent.models.iter().any(|candidate| &candidate.id == id))
+            {
+                let selected = model.as_deref() == Some(parent_model.as_str());
+                model_row = model_row.child(
+                    self.option_chip(
+                        "child-create-model-parent",
+                        format!("{parent_model} (parent)"),
+                        selected,
+                        None,
+                        &theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.child_dialog_update(cx, |dialog, _| dialog.model = None)
+                    })),
+                );
+            }
             for (index, candidate) in parent.models.iter().take(6).enumerate() {
                 let id = candidate.id.clone();
                 let is_parent = Some(&candidate.id) == parent.model.as_ref();
@@ -638,8 +659,15 @@ impl Shell {
             })
             .child(section("Reasoning"))
             .child(reasoning_row)
-            .when(ladder.is_none() && !parent.models.is_empty(), |el| {
-                el.child(note("This model reports no reasoning levels.".into()))
+            .when(!parent.models.is_empty(), |el| match &ladder {
+                Some(levels) if levels.is_empty() => {
+                    el.child(note("This model reports no reasoning levels.".into()))
+                }
+                None => el.child(note(
+                    "This model's levels are not in the catalog; the child keeps the parent's reasoning."
+                        .into(),
+                )),
+                Some(_) => el,
             })
             .child(section("Access"))
             .child(access_row)
