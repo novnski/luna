@@ -3423,6 +3423,14 @@ impl Transcript {
             if self.own_turn.is_some() {
                 self.remeasure_last_row();
                 self.own_turn_kick = true;
+            } else if self.pane_chat {
+                // A pane chat's composer (and its approval card) overlays the
+                // transcript bottom: the last row's clearance follows that
+                // stack, and a pinned view keeps the latest message above it.
+                self.remeasure_last_row();
+                if self.pinned {
+                    self.wake_spring();
+                }
             }
             cx.notify();
         }
@@ -9261,12 +9269,16 @@ impl Render for Transcript {
                 let max = f32::from(self.list.max_offset_for_scrollbar().y);
                 max - self.distance_from_bottom() > 1.0
             };
+            // A pane chat's composer overlays its bottom like the main
+            // view's stack: fade the content out under it the same way.
+            let pane_bottom = self.pane_chat && self.bottom_clearance > 0.0;
             crate::edge_fade::edge_faded(
                 Theme::TRANSCRIPT_FADE_BAND,
                 scrolled_under_top,
-                false,
+                pane_bottom,
                 list_el,
             )
+            .band_bottom(self.bottom_clearance.max(1.0))
             .into_any_element()
         } else {
             list_el.into_any_element()

@@ -11925,6 +11925,13 @@ impl Shell {
         } else {
             bg
         };
+        // Side and child chats are chats: they sit on the same shell frost
+        // as the main conversation (one surface for both, like the Codex
+        // reference) instead of the work-surface panel tone.
+        let chat_surface = matches!(
+            self.resolved_right_active(cx),
+            RightSurface::SideChats | RightSurface::ChildChats
+        );
         let panel = div()
             .size_full()
             .flex()
@@ -11943,7 +11950,7 @@ impl Shell {
                 let corner = Self::window_corner_radius(window);
                 el.rounded_tr(px(corner)).rounded_br(px(corner))
             })
-            .bg(panel_bg)
+            .when(!chat_surface, |el| el.bg(panel_bg))
             .overflow_hidden()
             // The titlebar is a glass overlay over the full-height content
             // row; the panel's own chrome starts below it.

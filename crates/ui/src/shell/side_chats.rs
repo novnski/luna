@@ -962,7 +962,6 @@ impl SideChatPanel {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.bg)
             .text_size(crate::typography::ui_rems(12.0))
             .text_color(theme.text)
             .child(header)

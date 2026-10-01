@@ -430,6 +430,9 @@ pub(super) struct PaneChatView {
     /// Composer slot width measured at paint, fed back as the composer's
     /// available width so its chips adapt to the pane.
     composer_width: Rc<Cell<f32>>,
+    /// Height of the composer stack (approval card, goal bar, queue, pill)
+    /// overlaying the transcript bottom; the transcript clears it.
+    composer_height: Rc<Cell<f32>>,
     /// Owner-supplied status for chats without a session-derived one (a side
     /// chat's lease lifetime).
     status_override: Option<(SharedString, gpui::Hsla)>,
@@ -484,6 +487,7 @@ impl PaneChatView {
             transcript,
             composer,
             composer_width: Rc::new(Cell::new(0.0)),
+            composer_height: Rc::new(Cell::new(0.0)),
             status_override: None,
             _subscriptions: subscriptions,
         }
@@ -646,7 +650,19 @@ impl Render for PaneChatView {
                 composer.set_available_width(width - 2.0 * PANE_COMPOSER_INSET, cx)
             });
         }
+        // The main view's layout: the transcript spans the body and the
+        // composer stack floats over its bottom, so the transcript's last row
+        // clears the measured stack height (approval card included).
+        let clearance = if archived {
+            0.0
+        } else {
+            self.composer_height.get()
+        };
+        self.transcript.update(cx, |transcript, cx| {
+            transcript.set_bottom_clearance(clearance, cx)
+        });
         let measured = self.composer_width.clone();
+        let measured_height = self.composer_height.clone();
         let composer_slot = if archived {
             div()
                 .id("pane-chat-read-only")
@@ -672,8 +688,12 @@ impl Render for PaneChatView {
                     gpui::canvas(
                         move |bounds, window, _| {
                             let next = f32::from(bounds.size.width);
-                            if (measured.get() - next).abs() > 0.5 {
+                            let height = f32::from(bounds.size.height);
+                            if (measured.get() - next).abs() > 0.5
+                                || (measured_height.get() - height).abs() > 0.5
+                            {
                                 measured.set(next);
+                                measured_height.set(height);
                                 window.request_animation_frame();
                             }
                         },
@@ -685,20 +705,50 @@ impl Render for PaneChatView {
                 .child(self.composer.clone())
                 .into_any_element()
         };
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .relative()
+            .child(self.transcript.clone())
+            .when(loading, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .top(px(16.0))
+                        .left(px(16.0))
+                        .text_color(theme.text_muted)
+                        .child("Loading messages…"),
+                )
+            });
+        let body = if archived {
+            div()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .flex()
+                .flex_col()
+                .child(body)
+                .child(composer_slot)
+        } else {
+            body.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .child(composer_slot),
+            )
+        };
+        // No own background: the pane sits on the shell frost like the main
+        // conversation column.
         div()
             .id("pane-chat-view")
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.bg)
             .text_color(theme.text)
             .child(header)
-            .child(render_pane_body(
-                Vec::new(),
-                self.transcript.clone().into_any_element(),
-                loading,
-                composer_slot,
-                &theme,
-            ))
+            .child(body)
     }
 }
