@@ -201,7 +201,25 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
     std::fs::create_dir_all(skill.parent().unwrap()).unwrap();
     std::fs::write(&skill, "---\nname: fixture-skill\n---\nFixture body\n").unwrap();
 
-    // 1. Cold first turn from a durable Run command with a staged ref. It
+    // 1. A steer-intent image row queued while idle holds (not
+    //    AttachmentsUnsupported) until there is a turn to steer.
+    let queued = client
+        .call(
+            methods::QUEUE_MESSAGE,
+            json!({"chatId":CHAT,"messageId":"queued-steer","text":"queued image steer",
+                   "attachments":[image],"followUpBehavior":"steer","holdForTurnEnd":true}),
+        )
+        .await
+        .unwrap();
+    let queued_id = queued["id"].as_str().unwrap().to_string();
+    let held = core
+        .doc_host
+        .queued_message(CHAT, &queued_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(held.hold_reason, None, "{held:?}");
+
+    // 2. Cold first turn from a durable Run command with a staged ref. It
     //    holds the provider turn open for the in-turn steer below.
     core.doc_host
         .queue_command(
@@ -222,17 +240,7 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
     })
     .await;
 
-    // 2. A queued image row with steer intent is admitted for Claude (not held
-    //    as AttachmentsUnsupported) and steered into the active turn.
-    let queued = client
-        .call(
-            methods::QUEUE_MESSAGE,
-            json!({"chatId":CHAT,"messageId":"queued-steer","text":"queued image steer",
-                   "attachments":[image],"followUpBehavior":"steer","holdForTurnEnd":true}),
-        )
-        .await
-        .unwrap();
-    let queued_id = queued["id"].as_str().unwrap().to_string();
+    // 3. Steer now: the queued image row reaches the active Claude turn.
     let steered = client
         .call(
             methods::STEER_QUEUED_MESSAGE_NOW,
@@ -247,13 +255,14 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
     })
     .await;
 
-    // 3. Follow-up on the parked process: images never use Claude's warm
-    //    mailbox; the engine replaces it with a resumed process.
+    // 4. Follow-up on the parked process: images never use Claude's warm
+    //    mailbox; the engine replaces it with a resumed process. This turn
+    //    holds too, for the composer's preferred auto-steer below.
     core.doc_host
         .queue_command(
             CHAT,
             SessionCommandPayload::Steer {
-                prompt: "follow-up with image".into(),
+                prompt: "cc04:hold follow-up with image".into(),
                 message_id: Some("follow-up".into()),
                 attachments: vec![image.clone()],
                 input_items: Vec::new(),
@@ -261,12 +270,27 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
         )
         .unwrap();
     wait_for("resumed follow-up frame", || user_frames(&cwd).len() == 3).await;
+    wait_for("resumed active turn", || {
+        core.sessions.active_turn_id(CHAT).is_some()
+    })
+    .await;
+
+    // 5. Queueing a steer-intent image during a turn steers it at once.
+    client
+        .call(
+            methods::QUEUE_MESSAGE,
+            json!({"chatId":CHAT,"messageId":"auto-steer","text":"auto steer image",
+                   "attachments":[image],"followUpBehavior":"steer","holdForTurnEnd":false}),
+        )
+        .await
+        .unwrap();
+    wait_for("auto steer frame", || user_frames(&cwd).len() == 4).await;
     wait_for("follow-up to settle", || {
         !core.sessions.turn_in_flight(CHAT)
     })
     .await;
 
-    // 4. Image-only follow-up (empty prompt over the command plane).
+    // 6. Image-only follow-up (empty prompt over the command plane).
     core.doc_host
         .queue_command(
             CHAT,
@@ -278,13 +302,13 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
             },
         )
         .unwrap();
-    wait_for("image-only frame", || user_frames(&cwd).len() == 4).await;
+    wait_for("image-only frame", || user_frames(&cwd).len() == 5).await;
     wait_for("image-only to settle", || {
         !core.sessions.turn_in_flight(CHAT)
     })
     .await;
 
-    // 5. Typed Claude skill + image + prose, dispatched natively.
+    // 7. Typed Claude skill + image + prose, dispatched natively.
     let encoded: String = skill
         .to_string_lossy()
         .bytes()
@@ -312,32 +336,26 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
             },
         )
         .unwrap();
-    wait_for("typed skill frame", || user_frames(&cwd).len() == 5).await;
+    wait_for("typed skill frame", || user_frames(&cwd).len() == 6).await;
 
     let frames = user_frames(&cwd);
     let sent: Vec<Vec<String>> = frames.iter().map(blocks).collect();
+    let with = |text: &str| vec![expected.clone(), format!("text:{text}")];
+    assert_eq!(sent[0], with("cc04:hold first look"));
+    assert_eq!(sent[1], with("queued image steer"));
+    assert_eq!(sent[2], with("cc04:hold follow-up with image"));
+    assert_eq!(sent[3], with("auto steer image"));
+    assert_eq!(sent[4], vec![expected.clone()]);
     assert_eq!(
-        sent[0],
-        vec![expected.clone(), "text:cc04:hold first look".into()]
-    );
-    assert_eq!(
-        sent[1],
-        vec![expected.clone(), "text:queued image steer".into()]
-    );
-    assert_eq!(
-        sent[2],
-        vec![expected.clone(), "text:follow-up with image".into()]
-    );
-    assert_eq!(sent[3], vec![expected.clone()]);
-    assert_eq!(
-        sent[4],
+        sent[5],
         vec![
             "text:Compare these".to_string(),
             expected.clone(),
             "text:/fixture-skill using the screenshot".into()
         ]
     );
-    // Every staged ref resolved to the host's upload, never a pending:// path.
+    // One native conversation: the cold process starts it and every image
+    // follow-up resumes it in a replacement process.
     let argv: Vec<Value> = peer_log(&cwd)
         .into_iter()
         .filter(|entry| entry["kind"] == "argv")
@@ -361,6 +379,17 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
             .all(|arg| !arg.as_str().unwrap().starts_with("--resume")),
         "the cold turn starts a fresh native session"
     );
+    assert_eq!(argv.len(), 4, "{argv:?}");
+    let resume = format!("--resume={session}");
+    for args in &argv[1..] {
+        assert!(
+            args.as_array()
+                .unwrap()
+                .iter()
+                .any(|arg| arg == &json!(resume)),
+            "{args}"
+        );
+    }
     let row = core.doc_host.queued_message(CHAT, &queued_id).unwrap();
     core.sessions.interrupt(CHAT).await.unwrap();
     evidence(

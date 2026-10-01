@@ -525,7 +525,7 @@ impl ClaudeHarness {
             &request.input_items,
         )
         .await?;
-        tracing::debug!(target: "luna_harness::claude", input = %first.manifest.summary(), "first user line");
+        tracing::info!(target: "luna_harness::claude", input = %first.manifest.summary(), "first user line");
         let mut cmd = self.build_command(&exe, &request);
         if title_only {
             cmd.args([
@@ -779,7 +779,7 @@ async fn run_session(session: Session) {
                     .await
                     {
                         Ok(input) => {
-                            tracing::debug!(target: "luna_harness::claude", input = %input.manifest.summary(), "steer user line");
+                            tracing::info!(target: "luna_harness::claude", input = %input.manifest.summary(), "steer user line");
                             input.line
                         }
                         Err(error) => {
