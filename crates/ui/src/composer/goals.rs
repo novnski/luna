@@ -559,7 +559,11 @@ impl Composer {
             .when(!enabled, |button| {
                 button
                     .when(!spinning, |button| button.opacity(0.45))
-                    .aria_description(BUSY_REASON)
+                    .aria_description(if spinning {
+                        "In progress."
+                    } else {
+                        BUSY_REASON
+                    })
             })
             .when(icon_only, |button| {
                 button
@@ -793,6 +797,9 @@ impl Composer {
         } else if pending.is_some() && !editing {
             Some(
                 div()
+                    .id("goal-progress")
+                    .role(Role::ProgressIndicator)
+                    .aria_label("Goal change in progress")
                     .size(px(24.0))
                     .flex()
                     .items_center()
