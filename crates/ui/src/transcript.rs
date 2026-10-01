@@ -3427,9 +3427,12 @@ impl Transcript {
                 // A pane chat's composer (and its approval card) overlays the
                 // transcript bottom: the last row's clearance follows that
                 // stack, and a pinned view keeps the latest message above it.
+                // `scroll_to_end` is item-anchored, so it lands on the end the
+                // next layout measures with the new clearance.
                 self.remeasure_last_row();
                 if self.pinned {
-                    self.wake_spring();
+                    self.list.scroll_to_end();
+                    self.last_scroll_distance = 0.0;
                 }
             }
             cx.notify();
@@ -3629,6 +3632,15 @@ impl Transcript {
             self.list.remeasure_items(last..last + 1);
             self.viewport_layout_revision = self.viewport_layout_revision.wrapping_add(1);
         }
+    }
+
+    /// Pin/clearance state for headless fixtures.
+    pub(crate) fn scroll_readback(&self) -> serde_json::Value {
+        serde_json::json!({
+            "pinned": self.pinned,
+            "distanceFromBottom": self.distance_from_bottom(),
+            "bottomClearance": self.bottom_clearance,
+        })
     }
 
     pub(crate) fn distance_from_bottom(&self) -> f32 {

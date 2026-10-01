@@ -458,6 +458,17 @@ fn main() -> anyhow::Result<()> {
                     window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(360.0, cx))?;
                     settle(cx, 700).await;
                     capture(window, cx, output.join("f09-side-full-light-narrow.png"))?;
+                    let narrow = readback(window, cx)?;
+                    // The latest message scrolls into view above the stacked
+                    // approval card + composer: pinned at the end, clearance =
+                    // the measured stack.
+                    anyhow::ensure!(
+                        narrow["paneTranscript"]["pinned"] == true
+                            && narrow["paneTranscript"]["distanceFromBottom"].as_f64().unwrap_or(f64::MAX) <= 2.0
+                            && narrow["paneTranscript"]["bottomClearance"].as_f64().unwrap_or(0.0) > 300.0,
+                        "the narrow pane must keep the latest message above the approval card: {narrow}"
+                    );
+                    record.insert("narrowApproval".into(), narrow);
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
                     settle(cx, 700).await;
                     capture(window, cx, output.join("f10-side-full-dark-narrow.png"))?;

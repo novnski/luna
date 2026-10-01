@@ -873,6 +873,7 @@ impl Shell {
             "panelParent": panel.map(|panel| panel.parent().to_string()),
             "openChild": open.map(|open| open.id.clone()),
             "openComposer": open.map(|open| open.view.read(cx).composer().read(cx).readback(cx)),
+            "openTranscriptScroll": open.map(|open| open.view.read(cx).transcript().read(cx).scroll_readback()),
             "openNotice": open.and_then(|open| open.view.read(cx).composer().read(cx).failure.as_ref().map(|text| serde_json::json!({"error": true, "text": text.to_string()}))),
             "openSending": open.map(|open| open.view.read(cx).composer().read(cx).is_sending()),
             "openInput": open.map(|open| open.view.read(cx).composer().read(cx).input.read(cx).text().to_string()),

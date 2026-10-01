@@ -920,6 +920,12 @@ fn main() -> anyhow::Result<()> {
                     settle(cx, 800).await;
                     capture(window, cx, output.join("p11-approval-dark-narrow.png"))?;
                     let narrow = readback(window, cx)?;
+                    anyhow::ensure!(
+                        narrow["openTranscriptScroll"]["pinned"] == true
+                            && narrow["openTranscriptScroll"]["distanceFromBottom"].as_f64().unwrap_or(f64::MAX) <= 2.0
+                            && narrow["openTranscriptScroll"]["bottomClearance"].as_f64().unwrap_or(0.0) > 300.0,
+                        "the narrow pane must keep the latest message above the approval card: {narrow}"
+                    );
                     record.insert("narrow".into(), narrow);
                     window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(520.0, cx))?;
                     settle(cx, 300).await;

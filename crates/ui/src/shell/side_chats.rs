@@ -1679,6 +1679,7 @@ impl Shell {
             "paneChats": self.state.read(cx).pane_chat_ids(),
             "watchedDocs": self.state.read(cx).fixture_sub_watch_ids(),
             "fullComposer": panel.full_view.as_ref().map(|(view, _)| view.read(cx).composer().read(cx).readback(cx)),
+            "paneTranscript": panel.full_view.as_ref().map(|(view, _)| view.read(cx).transcript().read(cx).scroll_readback()),
         })
     }
 }
