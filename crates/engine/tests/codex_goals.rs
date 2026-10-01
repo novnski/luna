@@ -261,7 +261,9 @@ async fn goal_sent_to_a_cold_task_starts_working_and_is_marked_achieved() {
     let root = tempfile::tempdir().unwrap();
     let core = assemble(root.path());
     let client = luna_rpc::memory_client(core.rpc_service());
-    let task = "goal-cold-task";
+    // Managed task identities are UUIDs; human ids stay legacy chats.
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let task = task_id.as_str();
     create_task(&client, &core, task).await;
     let objective = "scenario:goal-start count to three";
     let receipt = send(&client, task, "goal-message", request(objective, true)).await;
@@ -304,7 +306,9 @@ async fn goal_sent_to_a_warm_task_starts_on_the_loaded_runtime() {
     let root = tempfile::tempdir().unwrap();
     let core = assemble(root.path());
     let client = luna_rpc::memory_client(core.rpc_service());
-    let task = "goal-warm-task";
+    // Managed task identities are UUIDs; human ids stay legacy chats.
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let task = task_id.as_str();
     create_task(&client, &core, task).await;
     send(
         &client,
