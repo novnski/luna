@@ -215,10 +215,15 @@ async fn wait_for_achieved(core: &EngineCore, client: &RpcClient, task_id: &str,
         }
     })
     .await;
+    let view = core.task_identity.view(task_id);
     assert!(
         settled.is_ok(),
-        "goal never completed: {:?}\nentries: {:?}",
+        "goal never completed: {:?}\nbinding: {:?}\nenvironment: {:?} device: {}\nentries: {:?}",
         control(core, task_id),
+        view.as_ref().and_then(|view| view.current_binding.clone()),
+        view.as_ref()
+            .map(|view| view.workspace.environment_id.clone()),
+        core.device_id,
         entries(core, task_id)
             .iter()
             .map(|entry| (entry.role, entry.id.clone(), text(entry)))
