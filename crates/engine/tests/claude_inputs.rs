@@ -347,9 +347,16 @@ async fn claude_images_reach_the_cli_on_every_admitted_turn_type() {
     let sent: Vec<Vec<String>> = frames.iter().map(blocks).collect();
     let with = |text: &str| vec![expected.clone(), format!("text:{text}")];
     assert_eq!(sent[0], with("cc04:hold first look"));
-    assert_eq!(sent[1], with("queued image steer"));
+    // Queued rows also carry the shared host-path trailer; it names the
+    // host-owned upload, never a sender path or pending:// ref.
+    let queued = |text: &str| {
+        with(&format!(
+            "{text}\n\nAttached images (local files \u{2014} open them to view):\n- {image}"
+        ))
+    };
+    assert_eq!(sent[1], queued("queued image steer"));
     assert_eq!(sent[2], with("cc04:hold follow-up with image"));
-    assert_eq!(sent[3], with("auto steer image"));
+    assert_eq!(sent[3], queued("auto steer image"));
     assert_eq!(sent[4], vec![expected.clone()]);
     assert_eq!(
         sent[5],
