@@ -53,10 +53,6 @@ impl ChildChatStatus {
         }
     }
 
-    fn is_active(self) -> bool {
-        self.rank() < 2
-    }
-
     /// The sidebar's status palette, so a child reads the same in both places.
     fn color(self, theme: &Theme) -> gpui::Hsla {
         let indicator = match self {
