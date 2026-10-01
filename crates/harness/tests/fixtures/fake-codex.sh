@@ -302,10 +302,9 @@ if has "$turnline" '"method":"thread/goal/clear"'; then
     ;;
   esac
   # A turn/start here would be a second turn: the goal turn is Codex's own.
-  if read -r extra; then
-    if has "$extra" '"method":"turn/start"'; then
-      emit "{\"method\":\"error\",\"params\":{\"threadId\":\"$gthread\",\"message\":\"unexpected turn/start after a goal start\"}}"
-    fi
+  # (`read -t` where the shell has it; otherwise skip the probe.)
+  if read -t 1 -r extra 2>/dev/null && has "$extra" '"method":"turn/start"'; then
+    emit "{\"method\":\"error\",\"params\":{\"threadId\":\"$gthread\",\"message\":\"unexpected turn/start after a goal start\"}}"
   fi
   exit 0
 fi
