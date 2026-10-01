@@ -338,6 +338,13 @@ async fn hook_lifecycle_becomes_root_hook_chips_with_truthful_outcomes() {
         luna_proto::view::tool_chip_content(&call),
         ("Hook", "PreToolUse · Bash".to_owned())
     );
+    let run = ToolCall::Exec {
+        command: "rm -rf build".into(),
+    };
+    assert_eq!(
+        luna_proto::view::tool_group_summary(&[(run, true), (call.clone(), true), (call, false)]),
+        "Ran 1 command · 2 hooks · 2 failed"
+    );
 }
 
 #[tokio::test]
