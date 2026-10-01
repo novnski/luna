@@ -7,7 +7,7 @@
 //! (no link, no lifecycle). This index records which child transcript owns
 //! each nested spawn chip, learned from the tagged spawn call itself.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use luna_doc::SessionDoc;
@@ -22,6 +22,9 @@ const MAX_NESTED_SPAWNS: usize = 4096;
 pub(super) struct NestedSpawns {
     /// Nested spawn tool_use id → the spawn id whose transcript holds it.
     owners: HashMap<String, String>,
+    /// Owners whose transcript already froze (its static blob uploaded)
+    /// before a nested chip in it changed: their blob is re-uploaded.
+    refrozen: HashSet<String>,
 }
 
 impl NestedSpawns {
@@ -47,7 +50,7 @@ impl NestedSpawns {
     /// its folded copy never carries subagent fields, so later flushes keep
     /// what is written here.
     pub(super) fn chip_doc(
-        &self,
+        &mut self,
         spawn: &str,
         inner: &Inner,
         chat_id: &str,
@@ -61,10 +64,44 @@ impl NestedSpawns {
         }
         // A settled owner's transcript is closed but still the chip's home.
         match inner.doc_host()?.open(&subagent_doc_id(chat_id, owner)) {
-            Ok(handle) => Some(handle.doc_arc()),
+            Ok(handle) => {
+                self.refrozen.insert(owner.clone());
+                Some(handle.doc_arc())
+            }
             Err(error) => {
                 tracing::warn!(chat = %chat_id, %owner, %error, "nested spawn owner doc open failed");
                 None
+            }
+        }
+    }
+
+    /// Re-upload the static blob of every frozen owner transcript whose
+    /// nested chip changed since it froze (viewers prefer that blob over the
+    /// live doc, so it would otherwise show the nested child's old status).
+    pub(super) fn refreeze(&mut self, inner: &Inner, chat_id: &str) {
+        if self.refrozen.is_empty() {
+            return;
+        }
+        let Some(host) = inner.doc_host() else {
+            return;
+        };
+        for owner in std::mem::take(&mut self.refrozen) {
+            let doc_id = subagent_doc_id(chat_id, &owner);
+            let json = host
+                .open(&doc_id)
+                .ok()
+                .and_then(|handle| handle.doc().read_entries().ok())
+                .map(luna_doc::join_continuation_entries)
+                .and_then(|entries| serde_json::to_string(&entries).ok());
+            if let Some(json) = json {
+                host.upload_tool_sidecar(
+                    chat_id,
+                    luna_doc::SidecarPayload {
+                        part_id: doc_id,
+                        output: Some(json),
+                        diff: None,
+                    },
+                );
             }
         }
     }

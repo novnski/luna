@@ -7333,6 +7333,7 @@ async fn drive_run(
                             Some(None),
                         );
                     }
+                    nested_spawns.refreeze(&inner, &chat_id);
                     continue;
                 }
                 if !metadata_only {
@@ -7390,6 +7391,7 @@ async fn drive_run(
                     }
                 }
             }
+            nested_spawns.refreeze(&inner, &chat_id);
             continue;
         }
 
@@ -8460,6 +8462,7 @@ async fn drive_run(
             );
         }
     }
+    nested_spawns.refreeze(&inner, &chat_id);
     // Any child transcript still streaming freezes as-is: the parent event
     // stream is gone, so this sink cannot receive more content in this run.
     for (_, sink) in subagents.drain() {
