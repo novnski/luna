@@ -758,6 +758,8 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
     .unwrap();
     let mut req = request("summarize the parser", &world.project, PermissionMode::Full);
     req.attachments = vec![png.to_string_lossy().into_owned()];
+    // A run-only settings layer (fast mode) must merge with the hook opt-out.
+    req.model_options.insert("fastMode".into(), json!("on"));
     req.input_items = vec![ComposerInput::Skill {
         name: "cc12-project-only".into(),
         path: world
@@ -786,7 +788,11 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
         .find(|l| l.starts_with("ARGV:"))
         .unwrap();
     assert!(!readback_argv.contains("dangerously"), "{readback_argv}");
-    assert!(readback_argv.contains("disableAllHooks"), "{readback_argv}");
+    assert!(
+        readback_argv.contains(r#"[--settings] [{"disableAllHooks":true,"fastMode":true}]"#),
+        "{readback_argv}"
+    );
+    assert_eq!(readback_argv.matches("[--settings]").count(), 1, "{readback_argv}");
     assert!(
         readback_argv.contains("[--permission-mode] [default]"),
         "{readback_argv}"
