@@ -107,6 +107,7 @@ fn notes(row: &LiveSessionUsage, now_ms: i64) -> Vec<(String, bool)> {
 pub(super) fn live_sessions_section(
     rows: &[LiveSessionUsage],
     title_of: impl Fn(&str) -> Option<String>,
+    limit_note: Option<String>,
     theme: &Theme,
     now_ms: i64,
 ) -> Option<AnyElement> {
@@ -139,7 +140,15 @@ pub(super) fn live_sessions_section(
                             "Reported by each running provider session · latest running \
                              totals, not added to the history below",
                         ),
-                ),
+                )
+                .when_some(limit_note, |header, note| {
+                    header.child(
+                        div()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.warning)
+                            .child(format!("Claude limits on this page: {note}")),
+                    )
+                }),
         )
         .child(usage_table_row(
             theme,

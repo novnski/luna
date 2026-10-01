@@ -13,6 +13,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{UsageProvider, UsageTokens};
 
+/// `UsageLimitSnapshot::account_label` of Claude windows taken from a live
+/// session's `rate_limit_event` (not from the account probe). Such a limit has
+/// no verified account id, so it is never merged with an account.
+pub const STREAM_OBSERVED_LIMIT_LABEL: &str = "Live session stream · account not verified";
+
 /// One observation from a provider stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]

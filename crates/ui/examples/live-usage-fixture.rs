@@ -363,7 +363,8 @@ fn main() -> anyhow::Result<()> {
                         })?;
                         if limit.as_ref().is_some_and(|l| {
                             l.availability == LimitAvailability::Ready
-                                && l.detail.as_deref().is_some_and(|d| d.contains("stream"))
+                                && l.account_label.as_deref()
+                                    == Some(luna_proto::STREAM_OBSERVED_LIMIT_LABEL)
                         }) {
                             break;
                         }

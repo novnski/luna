@@ -273,7 +273,7 @@ pub fn attach(
     // missing verified id keeps them out of account de-duplication.
     limit.availability = LimitAvailability::Ready;
     limit.verified_account_id = None;
-    limit.account_label = Some("Live session stream · account not verified".into());
+    limit.account_label = Some(luna_proto::STREAM_OBSERVED_LIMIT_LABEL.into());
     limit.windows = windows;
     limit.checked_at_ms = Some(observation.observed_at_ms);
     limit.detail = Some(match probe {

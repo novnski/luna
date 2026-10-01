@@ -2110,9 +2110,21 @@ impl Shell {
                     .find(|chat| chat.id == task)
                     .and_then(|chat| chat.title.clone())
             };
-            if let Some(section) =
-                live::live_sessions_section(&snapshot.live_sessions, title_of, &theme, now_ms)
-            {
+            // Provenance of any Claude windows taken from a session stream.
+            let limit_note = snapshot
+                .limits
+                .iter()
+                .find(|limit| {
+                    limit.account_label.as_deref() == Some(luna_proto::STREAM_OBSERVED_LIMIT_LABEL)
+                })
+                .and_then(|limit| limit.detail.clone());
+            if let Some(section) = live::live_sessions_section(
+                &snapshot.live_sessions,
+                title_of,
+                limit_note,
+                &theme,
+                now_ms,
+            ) {
                 content = content.child(section);
             }
             if limits_view {
