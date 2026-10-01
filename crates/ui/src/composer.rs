@@ -76,6 +76,11 @@ fn composer_surface_radius(dock_amount: f32) -> f32 {
     COMPOSER_RADIUS - 4.0 * dock_amount
 }
 
+/// The pill chrome for pane views that render their own input (side chats).
+pub(crate) fn pane_composer_surface(theme: &Theme) -> gpui::Div {
+    composer_surface(theme, COMPOSER_RADIUS)
+}
+
 /// The question wizard and the ordinary composer use the same pill chrome.
 fn composer_surface(theme: &Theme, radius: f32) -> gpui::Div {
     let border = theme.border;

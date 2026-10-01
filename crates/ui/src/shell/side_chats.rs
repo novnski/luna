@@ -1,5 +1,7 @@
+use super::pane_chat::{PaneChatChrome, PaneHeaderActions, PaneIdentity};
 use super::*;
 use crate::state::EngineHandle;
+use std::rc::Rc;
 use luna_engine::side_chats::{SideChatCreated, SideChatList, SideChatPage};
 use serde_json::{Value, json};
 
@@ -32,6 +34,9 @@ enum PanelAction {
     Answer(String),
     Approve(luna_proto::ApprovalDecision),
     RevealOrigin,
+    /// Leave the open side chat: unload a writable one (it becomes read-only
+    /// history), or just return to the list from a read-only page.
+    Back,
 }
 
 pub(super) enum SideChatEvent {
@@ -189,6 +194,27 @@ impl SideChatPanel {
     }
 
     fn action(&mut self, action: PanelAction, cx: &mut Context<Self>) {
+        if matches!(action, PanelAction::Back) {
+            // A send or unload in flight finishes first: navigation never
+            // drops an in-flight side chat request or its readback.
+            if self.busy || !self.is_current(cx) {
+                return;
+            }
+            if self.lease.is_some() {
+                self.action(PanelAction::Unload, cx);
+                return;
+            }
+            if let Some(page) = self.page.take() {
+                self.state
+                    .update(cx, |state, _| state.unwatch_subagent_doc(&page.meta.id));
+            }
+            self.transcript = None;
+            self.transcript_events = None;
+            self.before = None;
+            self.answers.clear();
+            self.action(PanelAction::Refresh, cx);
+            return;
+        }
         if matches!(action, PanelAction::RevealOrigin) {
             if self.is_current(cx)
                 && let Some(message_id) = self
@@ -219,7 +245,7 @@ impl SideChatPanel {
         };
         let offer_snapshot = matches!(&action, PanelAction::New);
         let (method, params) = match action.clone() {
-            PanelAction::RevealOrigin => return,
+            PanelAction::RevealOrigin | PanelAction::Back => return,
             PanelAction::Answer(_) | PanelAction::Approve(_) => {
                 let Some((request_id, questions)) = self.pending_question() else {
                     return;
@@ -534,6 +560,432 @@ impl SideChatPanel {
         self.page = Some(page);
     }
 
+    /// The open side chat in the shared pane chat layout: identity header,
+    /// the main transcript, and a composer-styled input. Side chats run on
+    /// the engine's leased side-chat RPCs, so the composer offers exactly
+    /// what they support (text and approvals) and says so.
+    fn render_page(
+        &mut self,
+        page: SideChatPage,
+        window: &mut Window,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let writable = page.meta.state == "active" && self.lease.is_some();
+        if writable && self.focus_pending {
+            window.focus(&self.input.focus_handle(cx), cx);
+            self.focus_pending = false;
+        }
+        let context = if page.meta.context_mode == "nativeFork" {
+            "Native fork"
+        } else {
+            "Context snapshot"
+        };
+        let provider = super::child_chats::provider_label(page.meta.config.harness);
+        let model = page
+            .meta
+            .config
+            .model
+            .clone()
+            .filter(|model| !model.is_empty())
+            .unwrap_or_else(|| "Provider default".into());
+        let status = if writable {
+            let minutes = ((page.meta.expires_at_ms - Utc::now().timestamp_millis()).max(0)
+                + 59_999)
+                / 60_000;
+            (
+                SharedString::from(format!("Writable · {minutes} min left")),
+                theme.success,
+                false,
+            )
+        } else {
+            (
+                SharedString::from(format!("Read-only · {}", state_label(&page.meta.state))),
+                theme.readable_muted(0.6),
+                false,
+            )
+        };
+        let title = page
+            .meta
+            .title
+            .trim()
+            .to_string()
+            .chars()
+            .take(120)
+            .collect::<String>();
+        let chrome = PaneChatChrome {
+            identity: PaneIdentity::Side,
+            title: if title.is_empty() { "Side chat".into() } else { title.into() },
+            parent_title: transcript::single_line(&self.parent_title).into(),
+            status: Some(status),
+            meta: Some(format!("{provider} · {model} · {context}").into()),
+        };
+        let has_origin = page.meta.origin_message_id.is_some();
+        let header = super::pane_chat::render_pane_header(
+            &chrome,
+            PaneHeaderActions {
+                back_label: "Side chats",
+                back: Rc::new(|panel: &mut Self, cx| panel.action(PanelAction::Back, cx)),
+                open_main: None,
+                show_parent: has_origin.then(|| {
+                    Rc::new(|panel: &mut Self, cx: &mut Context<Self>| {
+                        panel.action(PanelAction::RevealOrigin, cx)
+                    }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
+                }),
+                extra: Vec::new(),
+            },
+            theme,
+            cx,
+        );
+
+        let mut notices: Vec<AnyElement> = Vec::new();
+        if let Some(label) = self.operation_label {
+            notices.push(
+                div()
+                    .px(px(16.0))
+                    .pt(px(8.0))
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .text_color(theme.text_muted)
+                    .child(label)
+                    .into_any_element(),
+            );
+        }
+        if let Some(error) = self.error.clone() {
+            notices.push(
+                div()
+                    .px(px(12.0))
+                    .pt(px(8.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    .child(crate::settings::widgets::error_strip(theme, error))
+                    .child(self.button(
+                        "side-refresh",
+                        "Refresh saved state",
+                        PanelAction::Refresh,
+                        cx,
+                    ))
+                    .into_any_element(),
+            );
+        }
+        if let Some(quote) = page.meta.anchor_text.clone() {
+            notices.push(
+                div()
+                    .mx(px(16.0))
+                    .mt(px(10.0))
+                    .max_h(px(72.0))
+                    .overflow_hidden()
+                    .border_l_2()
+                    .border_color(theme.border_strong)
+                    .pl(px(10.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text_muted)
+                    .child(quote)
+                    .into_any_element(),
+            );
+        }
+        if let Some(detail) = page.meta.detail.clone() {
+            notices.push(
+                div()
+                    .px(px(16.0))
+                    .pt(px(8.0))
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .text_color(theme.text_muted)
+                    .child(detail)
+                    .into_any_element(),
+            );
+        }
+        if page.before.is_some() || self.before.is_some() {
+            notices.push(
+                div()
+                    .px(px(12.0))
+                    .pt(px(8.0))
+                    .flex()
+                    .gap(px(6.0))
+                    .when(page.before.is_some(), |el| {
+                        el.child(self.button("side-older", "Older messages", PanelAction::Older, cx))
+                    })
+                    .when(self.before.is_some(), |el| {
+                        el.child(self.button(
+                            "side-latest",
+                            "Latest messages",
+                            PanelAction::Latest,
+                            cx,
+                        ))
+                    })
+                    .into_any_element(),
+            );
+        }
+
+        let transcript: AnyElement = match &self.transcript {
+            Some(transcript) if !page.entries.is_empty() => transcript.clone().into_any_element(),
+            _ => div()
+                .p(px(16.0))
+                .text_color(theme.text_muted)
+                .child(if writable {
+                    "Ask a question here. Your parent conversation stays unchanged."
+                } else {
+                    "This side chat has no saved messages."
+                })
+                .into_any_element(),
+        };
+
+        let composer = if writable {
+            self.render_side_composer(&page, &model, provider, theme, cx)
+        } else {
+            div()
+                .id("side-read-only")
+                .w_full()
+                .flex_none()
+                .px(px(16.0))
+                .py(px(12.0))
+                .border_t_1()
+                .border_color(theme.border)
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text_muted)
+                .child(format!(
+                    "Read-only · {} · saved transcript. Start a new side chat to continue.",
+                    state_label(&page.meta.state)
+                ))
+                .into_any_element()
+        };
+        div()
+            .id("side-chat-page")
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(theme.bg)
+            .text_size(crate::typography::ui_rems(12.0))
+            .text_color(theme.text)
+            .child(header)
+            .child(super::pane_chat::render_pane_body(
+                notices, transcript, false, composer, theme,
+            ))
+            .into_any_element()
+    }
+
+    /// The side chat's input in the main composer's pill chrome. Text and
+    /// approvals only: the leased side-chat RPCs carry no attachments,
+    /// queue/steer, model change or goals, and the composer says so.
+    fn render_side_composer(
+        &mut self,
+        page: &SideChatPage,
+        model: &str,
+        provider: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let working = page.working;
+        let status: &'static str = match page.status {
+            Some(luna_proto::SessionStatus::AwaitingInput) => "Waiting for input",
+            Some(luna_proto::SessionStatus::AwaitingApproval) => "Approval needed",
+            Some(luna_proto::SessionStatus::Errored) => "Provider error",
+            _ if self.busy => "Sending…",
+            _ if working => "Working…",
+            _ => "",
+        };
+        let blocked = self.busy || working || self.input.read(cx).is_empty();
+        let question_card = self.render_side_question(theme, cx);
+        let muted = theme.text_muted;
+        let (brand, brand_color) = crate::pickers::harness_brand_icon(page.meta.config.harness);
+        let chip = |icon_path: &'static str, tint: Option<gpui::Hsla>, label: String| {
+            div()
+                .h(px(28.0))
+                .min_w_0()
+                .px(px(6.0))
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .rounded(px(8.0))
+                .text_size(crate::typography::ui_rems(12.5))
+                .text_color(muted)
+                .child(
+                    icon(icon_path)
+                        .size(px(14.0))
+                        .flex_none()
+                        .text_color(tint.unwrap_or(muted)),
+                )
+                .child(div().min_w_0().truncate().child(label))
+        };
+        let send = div()
+            .id("side-send")
+            .role(gpui::Role::Button)
+            .aria_label("Send to side chat")
+            .tab_index(0)
+            .size(px(28.0))
+            .flex_none()
+            .rounded_full()
+            .bg(theme.text)
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(blocked, |el| el.opacity(0.35))
+            .when(!blocked, |el| {
+                el.cursor_pointer()
+                    .hover(|style| style.opacity(0.85))
+                    .on_click(cx.listener(|panel, _, _, cx| panel.action(PanelAction::Send, cx)))
+            })
+            .child(
+                icon(icons::ARROW_UP)
+                    .size(px(14.0))
+                    .text_color(theme.bg),
+            );
+        let pill = crate::composer::pane_composer_surface(theme)
+            .id("side-composer-surface")
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .min_h(px(44.0))
+                    .max_h(px(160.0))
+                    .px(px(16.0))
+                    .pt(px(12.0))
+                    .pb(px(4.0))
+                    .overflow_hidden()
+                    .child(self.input.clone()),
+            )
+            .child(
+                div()
+                    .h(px(46.0))
+                    .px(px(12.0))
+                    .pb(px(10.0))
+                    .pt(px(2.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(chip(brand, brand_color, format!("{provider} · {model}")))
+                            .child(chip(icons::KEY_MINIMALISTIC, None, "Parent's access".into())),
+                    )
+                    .when(!status.is_empty(), |el| {
+                        el.child(
+                            div()
+                                .flex_none()
+                                .text_size(crate::typography::ui_rems(11.5))
+                                .text_color(theme.readable_muted(0.6))
+                                .child(status),
+                        )
+                    })
+                    .child(send),
+            );
+        div()
+            .id("side-composer")
+            .w_full()
+            .flex_none()
+            .px(px(12.0))
+            .pt(px(4.0))
+            .pb(px(10.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .children(question_card)
+            .child(pill)
+            .child(
+                div()
+                    .px(px(4.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.readable_muted(0.55))
+                    .child("Side chat · text and approvals. It inherits the parent's checkout, model and access; attachments, queue and goals belong to full chats."),
+            )
+            .into_any_element()
+    }
+
+    /// A pending question or approval in the composer's card chrome.
+    fn render_side_question(&mut self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, questions) = self.pending_question()?;
+        let question = questions
+            .iter()
+            .find(|question| !self.answers.contains_key(&question.id))?
+            .clone();
+        let mut card = crate::composer::pane_composer_surface(theme)
+            .id("side-question-card")
+            .w_full()
+            .px(px(16.0))
+            .py(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.readable_muted(0.65))
+                    .child(question.header.to_uppercase()),
+            )
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(13.5))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child(question.question.clone()),
+            );
+        if let Some(approval) = &question.approval {
+            let (label, value) = crate::composer::approval_expiry_row(approval);
+            card = card.child(
+                div()
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .text_color(theme.text_muted)
+                    .child(format!("{label}: {value}")),
+            );
+        }
+        let mut buttons = div().flex().flex_wrap().gap(px(6.0)).pt(px(4.0));
+        if let Some(details) = question
+            .approval
+            .as_ref()
+            .and_then(|approval| approval.details.as_ref())
+        {
+            for (label, value) in details.display_rows() {
+                card = card.child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_color(theme.text_muted)
+                        .child(format!("{label}: {value}")),
+                );
+            }
+            for (index, choice) in details.choices.iter().enumerate() {
+                buttons = buttons.child(self.button(
+                    format!("side-approval-{index}"),
+                    choice.label.clone(),
+                    PanelAction::Approve(luna_proto::ApprovalDecision::ProviderChoice {
+                        index: index as u32,
+                    }),
+                    cx,
+                ));
+            }
+        } else if question.approval.is_some() {
+            buttons = buttons
+                .child(self.button(
+                    "side-allow",
+                    "Allow once",
+                    PanelAction::Approve(luna_proto::ApprovalDecision::AllowOnce),
+                    cx,
+                ))
+                .child(self.button(
+                    "side-deny",
+                    "Deny",
+                    PanelAction::Approve(luna_proto::ApprovalDecision::Deny),
+                    cx,
+                ));
+        } else {
+            for (index, option) in question.options.iter().enumerate() {
+                buttons = buttons.child(self.button(
+                    format!("side-answer-{index}"),
+                    option.clone(),
+                    PanelAction::Answer(option.clone()),
+                    cx,
+                ));
+            }
+        }
+        Some(card.child(buttons).into_any_element())
+    }
+
     fn button(
         &self,
         id: impl Into<SharedString>,
@@ -577,6 +1029,9 @@ impl SideChatPanel {
 impl Render for SideChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        if let Some(page) = self.page.clone() {
+            return self.render_page(page, window, &theme, cx);
+        }
         let mut root = div()
             .size_full()
             .flex()
@@ -613,270 +1068,61 @@ impl Render for SideChatPanel {
                     cx,
                 ));
         }
-        if let Some(page) = self.page.clone() {
-            let writable = page.meta.state == "active" && self.lease.is_some();
-            if writable && self.focus_pending {
-                window.focus(&self.input.focus_handle(cx), cx);
-                self.focus_pending = false;
-            }
-            let context = if page.meta.context_mode == "nativeFork" {
-                "Native fork · parent context retained"
-            } else {
-                "Context snapshot · up to 32 recent messages"
-            };
-            let lifetime = if writable {
-                let minutes = ((page.meta.expires_at_ms - Utc::now().timestamp_millis()).max(0)
-                    + 59_999)
-                    / 60_000;
-                format!("Writable for {minutes} more min · leaving this view makes it read-only")
-            } else {
-                format!(
-                    "Read-only · {} · saved transcript",
-                    state_label(&page.meta.state)
-                )
-            };
-            root = root.child(
-                div()
-                    .px(px(16.0))
-                    .py(px(10.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.0))
-                    .child(div().text_color(theme.text_muted).child(context))
-                    .child(div().text_color(theme.text_muted).child(format!(
-                            "{:?} · {} · inherited account",
-                            page.meta.config.harness,
-                            page.meta
-                                .config
-                                .model
-                                .as_deref()
-                                .unwrap_or("Provider default")
-                        )))
-                    .when_some(page.meta.anchor_text.clone(), |el, quote| {
-                        el.child(
-                            div()
-                                .max_h(px(92.0))
-                                .overflow_hidden()
-                                .border_l_1()
-                                .border_color(theme.border_strong)
-                                .pl(px(10.0))
-                                .text_color(theme.text_muted)
-                                .child(quote),
-                        )
-                    })
-                    .child(div().text_color(theme.text_muted).child(lifetime))
-                    .when(page.meta.origin_message_id.is_some(), |el| {
-                        el.child(self.button(
-                            "side-origin",
-                            "Show original message",
-                            PanelAction::RevealOrigin,
-                            cx,
-                        ))
-                    })
-                    .when_some(page.meta.detail, |el, detail| el.child(detail))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(6.0))
-                            .child(self.button(
-                                "side-unload",
-                                if self.busy { "Saving…" } else { "Unload" },
-                                PanelAction::Unload,
-                                cx,
-                            ))
-                            .when(page.before.is_some(), |el| {
-                                el.child(self.button(
-                                    "side-older",
-                                    "Older messages",
-                                    PanelAction::Older,
-                                    cx,
-                                ))
-                            })
-                            .when(self.before.is_some(), |el| {
-                                el.child(self.button(
-                                    "side-latest",
-                                    "Latest messages",
-                                    PanelAction::Latest,
-                                    cx,
-                                ))
-                            }),
-                    ),
-            );
-            if let Some(transcript) = &self.transcript {
-                root = root.child(div().flex_1().min_h_0().child(transcript.clone()));
-            }
-            if page.entries.is_empty() {
-                root = root.child(div().p(px(16.0)).text_color(theme.text_muted).child(
-                    if writable {
-                        "Ask a question here. Your parent conversation stays unchanged."
-                    } else {
-                        "This side chat has no saved messages."
-                    },
-                ));
-            }
-            if writable {
-                if let Some((_, questions)) = self.pending_question()
-                    && let Some(question) = questions
-                        .iter()
-                        .find(|question| !self.answers.contains_key(&question.id))
-                {
-                    let mut card = div()
-                        .px(px(16.0))
-                        .py(px(10.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.0))
-                        .child(question.header.clone())
-                        .child(question.question.clone());
-                    if let Some(details) = question
-                        .approval
-                        .as_ref()
-                        .and_then(|approval| approval.details.as_ref())
-                    {
-                        if let Some(approval) = &question.approval {
-                            let (label, value) = crate::composer::approval_expiry_row(approval);
-                            card = card.child(format!("{label}: {value}"));
-                        }
-                        for (label, value) in details.display_rows() {
-                            card = card.child(format!("{label}: {value}"));
-                        }
-                        for (index, choice) in details.choices.iter().enumerate() {
-                            card = card.child(choice.description.clone()).child(self.button(
-                                format!("side-approval-{index}"),
-                                choice.label.clone(),
-                                PanelAction::Approve(
-                                    luna_proto::ApprovalDecision::ProviderChoice {
-                                        index: index as u32,
-                                    },
-                                ),
-                                cx,
-                            ));
-                        }
-                    } else if question.approval.is_some() {
-                        card = card
-                            .child(self.button(
-                                "side-allow",
-                                "Allow once",
-                                PanelAction::Approve(luna_proto::ApprovalDecision::AllowOnce),
-                                cx,
-                            ))
-                            .child(self.button(
-                                "side-deny",
-                                "Deny",
-                                PanelAction::Approve(luna_proto::ApprovalDecision::Deny),
-                                cx,
-                            ));
-                    } else {
-                        for (index, option) in question.options.iter().enumerate() {
-                            card = card.child(self.button(
-                                format!("side-answer-{index}"),
-                                option.clone(),
-                                PanelAction::Answer(option.clone()),
-                                cx,
-                            ));
-                        }
-                    }
-                    root = root.child(card);
-                }
-                root = root.child(
+        root = root.child(div().p(px(16.0)).flex().flex_col().gap(px(12.0))
+            .child(self.button("side-new", "Start side chat", PanelAction::New, cx))
+            .when(self.snapshot_alternative, |el| el.child(self.button("side-new-snapshot", "Start with recent context", PanelAction::NewSnapshot, cx)))
+            .child(self.button("side-refresh-history", "Refresh history", PanelAction::Refresh, cx))
+            .child(div().text_color(theme.text_muted).child("A separate conversation with this parent's context. Writable for two hours; saved history remains available."))
+            .child(div().text_color(theme.text_muted).child("Previous side chats · open to read")));
+        let mut list = div()
+            .id("side-history")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0));
+        if let Some(history) = &self.history {
+            if history.items.is_empty() {
+                list = list.child(
                     div()
-                        .p(px(12.0))
-                        .border_t_1()
-                        .border_color(theme.border)
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .child(
-                            div()
-                                .min_h(px(48.0))
-                                .max_h(px(160.0))
-                                .rounded(px(8.0))
-                                .border_1()
-                                .border_color(theme.border)
-                                .p(px(10.0))
-                                .child(self.input.clone()),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .justify_between()
-                                .items_center()
-                                .child(div().text_color(theme.text_muted).child(
-                                    match page.status {
-                                        Some(luna_proto::SessionStatus::AwaitingInput) => {
-                                            "Waiting for input"
-                                        }
-                                        Some(luna_proto::SessionStatus::AwaitingApproval) => {
-                                            "Approval needed"
-                                        }
-                                        Some(luna_proto::SessionStatus::Errored) => {
-                                            "Provider error"
-                                        }
-                                        _ if page.working => "Working…",
-                                        _ => "Ready",
-                                    },
-                                ))
-                                .child(self.button("side-send", "Send", PanelAction::Send, cx)),
-                        ),
+                        .text_color(theme.text_muted)
+                        .child("No previous side chats"),
                 );
             }
-        } else {
-            root = root.child(div().p(px(16.0)).flex().flex_col().gap(px(12.0))
-                .child(self.button("side-new", "Start side chat", PanelAction::New, cx))
-                .when(self.snapshot_alternative, |el| el.child(self.button("side-new-snapshot", "Start with recent context", PanelAction::NewSnapshot, cx)))
-                .child(self.button("side-refresh-history", "Refresh history", PanelAction::Refresh, cx))
-                .child(div().text_color(theme.text_muted).child("A separate conversation with this parent's context. Writable for two hours; saved history remains available."))
-                .child(div().text_color(theme.text_muted).child("Previous side chats · open to read")));
-            let mut list = div()
-                .id("side-history")
-                .flex_1()
-                .min_h_0()
-                .overflow_y_scroll()
-                .px(px(16.0))
-                .flex()
-                .flex_col()
-                .gap(px(8.0));
-            if let Some(history) = &self.history {
-                if history.items.is_empty() {
-                    list = list.child(
-                        div()
-                            .text_color(theme.text_muted)
-                            .child("No previous side chats"),
-                    );
-                }
-                for meta in &history.items {
-                    let stamp = chrono::DateTime::from_timestamp_millis(meta.created_at_ms)
-                        .map(|date| {
-                            date.with_timezone(&chrono::Local)
-                                .format("%b %d · %H:%M")
-                                .to_string()
-                        })
-                        .unwrap_or_default();
-                    list = list.child(self.button(
-                        format!("side-history-{}", meta.id),
-                        format!(
-                            "{stamp} · {} · {} messages",
-                            state_label(&meta.state),
-                            meta.message_count
-                        ),
-                        PanelAction::Open(meta.id.clone()),
-                        cx,
-                    ));
-                }
-                if history.before.is_some() {
-                    list = list.child(self.button(
-                        "side-more-history",
-                        "Earlier side chats",
-                        PanelAction::MoreHistory,
-                        cx,
-                    ));
-                }
-            } else {
-                list = list.child("Loading saved side chats…");
+            for meta in &history.items {
+                let stamp = chrono::DateTime::from_timestamp_millis(meta.created_at_ms)
+                    .map(|date| {
+                        date.with_timezone(&chrono::Local)
+                            .format("%b %d · %H:%M")
+                            .to_string()
+                    })
+                    .unwrap_or_default();
+                list = list.child(self.button(
+                    format!("side-history-{}", meta.id),
+                    format!(
+                        "{stamp} · {} · {} messages",
+                        state_label(&meta.state),
+                        meta.message_count
+                    ),
+                    PanelAction::Open(meta.id.clone()),
+                    cx,
+                ));
             }
-            root = root.child(list);
+            if history.before.is_some() {
+                list = list.child(self.button(
+                    "side-more-history",
+                    "Earlier side chats",
+                    PanelAction::MoreHistory,
+                    cx,
+                ));
+            }
+        } else {
+            list = list.child("Loading saved side chats…");
         }
-        root
+        root = root.child(list);
+        root.into_any_element()
     }
 }
 

@@ -1039,6 +1039,15 @@ impl Pickers {
         }
     }
 
+    /// The loaded model catalog for `harness`, if any (the child creation
+    /// dialog offers the parent's provider's models from it).
+    pub(crate) fn loaded_models(&self, harness: HarnessId) -> Option<Vec<Model>> {
+        self.models
+            .get(&harness)
+            .and_then(Loadable::ready)
+            .cloned()
+    }
+
     pub fn draft(&self) -> &DraftConfig {
         &self.config
     }
