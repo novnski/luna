@@ -4,6 +4,7 @@
 use luna_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, ToolCall};
 use serde_json::Value;
 
+use super::native_tasks::NativeTasks;
 use super::wire::{ContentBlock, Frame, InitIntegrationObservation};
 
 const MAX_OBSERVED_SESSION_ID_BYTES: usize = 256;
@@ -215,19 +216,13 @@ pub(crate) struct Normalizer {
     saw_init: bool,
     init_integration_receipt: Option<SessionIntegrationReceipt>,
     last_model: Option<String>,
-    /// Background-agent ids (`task_started.task_id`) → the spawning Agent
-    /// tool_use id. `SendMessage` steers address the AGENT id; this map
-    /// re-keys them onto the spawn chip's feed (the wire never echoes the
-    /// steer on the child feed — live-verified 2.1.228).
-    agent_tasks: std::collections::HashMap<String, String>,
-    /// tool_use ids of Agent/Task spawn calls, recorded from their own
-    /// assistant frames (plus `task_started`'s agent-task pairing). Gates
+    /// Native agent/task ownership graph: spawn ids (root and nested),
+    /// agent id → spawn (`SendMessage` re-keying), task lifecycle. Gates
     /// `task_notification`: background SHELL tasks settle through the same
     /// subtype carrying their Bash call's id, and tagging that Done as
-    /// subagent traffic stamped a spawn ref onto an ordinary Run chip —
-    /// which then opened as an empty, never-created subagent doc (user
-    /// report 2026-08-20).
-    agent_spawn_tools: std::collections::HashSet<String>,
+    /// subagent traffic stamped a spawn ref onto an ordinary Run chip
+    /// (user report 2026-08-20).
+    tasks: NativeTasks,
     /// Rotates at each assistant-frame close and at each steer; SessionStarted
     /// carries the first value so folds can attribute deltas from the start.
     assistant_message_id: String,
@@ -241,8 +236,7 @@ impl Normalizer {
             saw_init: false,
             init_integration_receipt: None,
             last_model: None,
-            agent_tasks: std::collections::HashMap::new(),
-            agent_spawn_tools: std::collections::HashSet::new(),
+            tasks: NativeTasks::default(),
             assistant_message_id: new_message_id(),
             session_id: None,
         }
@@ -267,58 +261,11 @@ impl Normalizer {
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
             Frame::System(f) => {
-                // A background subagent's completion arrives as an UNTAGGED
-                // `task_notification` carrying the spawning tool's id — the
-                // wire's only terminal signal for it (live-verified 2.1.228:
-                // no tagged frame follows; the subagent's stream just stops).
-                // Surface it as the subagent's tagged Done so the chip flips
-                // done/failed and the transcript freezes.
-                if f.subtype == "task_notification" {
-                    let Some(parent) = f.tool_use_id.as_deref().filter(|t| !t.is_empty()) else {
-                        return Vec::new();
-                    };
-                    // Only a KNOWN spawn settles as a subagent. Background
-                    // SHELL tasks (`Bash` with `run_in_background`) settle
-                    // through this same subtype carrying the Bash call's id —
-                    // tagging that Done would bind a subagent ref onto an
-                    // ordinary Run chip. A real spawn's tool_use frame always
-                    // precedes its notification on the wire, so the set is
-                    // populated by the time a genuine one arrives.
-                    if !self.agent_spawn_tools.contains(parent) {
-                        return Vec::new();
-                    }
-                    let status = match f.status.as_deref().unwrap_or("") {
-                        "completed" | "complete" | "succeeded" | "success" => DoneStatus::Completed,
-                        "failed" | "errored" | "error" => DoneStatus::Errored,
-                        "killed" | "cancelled" | "canceled" | "stopped" | "interrupted" => {
-                            DoneStatus::Interrupted
-                        }
-                        // Non-terminal notification shapes: nothing to close.
-                        _ => return Vec::new(),
-                    };
-                    return vec![tag(
-                        parent,
-                        AgentEvent::Done {
-                            status,
-                            result: None,
-                            error: None,
-                            session_id: None,
-                        },
-                    )];
-                }
-                // An AGENT task starting (subagent_type present — subagent-
-                // owned shell tasks carry the same subtype without it):
-                // record agentId → spawn id for SendMessage steer re-keying.
-                if f.subtype == "task_started"
-                    && f.subagent_type.is_some()
-                    && let (Some(task), Some(tool)) = (
-                        f.task_id.as_deref().filter(|t| !t.is_empty()),
-                        f.tool_use_id.as_deref().filter(|t| !t.is_empty()),
-                    )
-                {
-                    self.agent_tasks.insert(task.to_owned(), tool.to_owned());
-                    self.agent_spawn_tools.insert(tool.to_owned());
-                    return Vec::new();
+                // Agent/shell/workflow task lifecycle (started, progress,
+                // updated, notification): attributed to its owning spawn or
+                // dropped, never a root event. See `native_tasks`.
+                if let Some(events) = self.tasks.system(&f) {
+                    return events;
                 }
                 if f.subtype != "init" || self.saw_init {
                     return Vec::new();
@@ -397,31 +344,13 @@ impl Normalizer {
 
             Frame::Assistant(f) => {
                 if let Some(parent) = &f.parent_tool_use_id {
-                    // Subagent content, attributed. The 2.1.x wire streams NO
-                    // tagged partial deltas (live-verified): a subagent's text
-                    // arrives only as full text blocks on its tagged
-                    // assistant frames — emit them, in block order with the
-                    // tool calls, or subagent transcripts are tool-chips-only.
-                    let mut out: Vec<AgentEvent> = f
-                        .message
-                        .blocks()
-                        .filter_map(|b: ContentBlock| match b.kind.as_str() {
-                            "text" if !b.text.is_empty() => Some(tag(
-                                parent,
-                                AgentEvent::TextDelta {
-                                    text: format!("{}\n\n", b.text.trim_end()),
-                                },
-                            )),
-                            "tool_use" => Some(tag(
-                                parent,
-                                AgentEvent::ToolCall {
-                                    id: b.id.clone(),
-                                    call: decode_tool_use(&b.name, &b.input),
-                                },
-                            )),
-                            _ => None,
-                        })
-                        .collect();
+                    // Subagent content, attributed, in block order: text,
+                    // thinking (`--forward-subagent-text`) and tool calls. The
+                    // 2.1.x wire streams NO tagged partial deltas
+                    // (live-verified), so these snapshots are the transcript.
+                    // A nested spawn here is registered with this child as
+                    // its owner (it never appears on the root feed).
+                    let mut out = self.tasks.tagged_assistant(parent, &f.message);
                     if let Some(code) = &f.error {
                         out.push(tag(
                             parent,
@@ -433,12 +362,8 @@ impl Normalizer {
                     return out;
                 }
                 // Record spawn tool ids up front: `task_notification` keys on
-                // them, and only foreground spawns ever get a `task_started`.
-                for b in f.message.blocks() {
-                    if b.kind == "tool_use" && matches!(b.name.as_str(), "Agent" | "Task") {
-                        self.agent_spawn_tools.insert(b.id.clone());
-                    }
-                }
+                // them even when no `task_started` arrives.
+                self.tasks.root_calls(&f.message);
                 let mut out: Vec<AgentEvent> = f
                     .message
                     .blocks()
@@ -469,26 +394,7 @@ impl Normalizer {
                         // A SendMessage steer never echoes on the child feed
                         // (live-verified) — surface it from the parent's own
                         // call, re-keyed onto the spawn it addresses.
-                        let steer = (b.name == "SendMessage")
-                            .then(|| {
-                                let to = ["to", "recipient"]
-                                    .iter()
-                                    .find_map(|k| b.input.get(*k))
-                                    .and_then(Value::as_str)?;
-                                let spawn = self.agent_tasks.get(to)?;
-                                let text = ["message", "content"]
-                                    .iter()
-                                    .find_map(|k| b.input.get(*k))
-                                    .and_then(Value::as_str)
-                                    .filter(|m| !m.trim().is_empty())?;
-                                Some(tag(
-                                    spawn,
-                                    AgentEvent::UserMessage {
-                                        text: text.to_owned(),
-                                    },
-                                ))
-                            })
-                            .flatten();
+                        let steer = self.tasks.send_message_steer(&b.name, &b.input);
                         std::iter::once(call).chain(opening).chain(steer)
                     })
                     .collect();

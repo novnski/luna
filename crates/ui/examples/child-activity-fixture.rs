@@ -209,6 +209,7 @@ fn spawn_part(spec: &ChildSpec) -> MessagePart {
             error: spec.error.map(str::to_owned),
             input_tokens: Some(spec.usage.0),
             output_tokens: Some(spec.usage.1),
+            ..Default::default()
         }),
     }
 }

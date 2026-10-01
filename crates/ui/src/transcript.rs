@@ -8185,6 +8185,7 @@ fn child_inspection_lines(tool: &ToolItem) -> Vec<String> {
         if let Some(error) = &activity.error {
             lines.push(format!("Error: {error}"));
         }
+        lines.extend(crate::native_agents::inspection_lines(activity));
     }
     lines
 }

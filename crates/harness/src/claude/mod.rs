@@ -31,6 +31,7 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod native_tasks;
 mod normalize;
 mod wire;
 
@@ -525,6 +526,8 @@ impl ClaudeHarness {
                 "--setting-sources",
                 "",
             ]);
+        } else {
+            cmd.args(native_tasks::RUN_ARGS);
         }
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {

@@ -57,6 +57,10 @@ pub(crate) struct SystemFrame {
     /// absent on subagent-owned background shell tasks.
     #[serde(default)]
     pub subagent_type: Option<String>,
+    /// Every other field, read leniently by `native_tasks` (task type, usage,
+    /// patch, summary…): a mistyped field never fails the whole frame.
+    #[serde(flatten)]
+    pub native_task_fields: serde_json::Map<String, Value>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown

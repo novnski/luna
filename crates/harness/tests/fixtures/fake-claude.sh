@@ -38,6 +38,7 @@ case "$first" in
       --system-prompt) shift; case "$1" in "You generate session titles."*) system_set=true ;; esac ;;
       --strict-mcp-config) mcp_off=true ;;
       --dangerously-skip-permissions) exit 1 ;;
+      --forward-subagent-text) exit 1 ;;
     esac
     shift
   done
@@ -88,6 +89,17 @@ case "$first" in
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Bash"],"cwd":"/tmp","session_id":"sess-wake"}'
   emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"subagent finished"}}}'
   emit '{"type":"result","subtype":"success","result":"wrapped up","errors":[],"usage":{"input_tokens":3,"output_tokens":3},"session_id":"sess-wake"}'
+  ;;
+
+*scenario:native-nested*)
+  # CC-08 / E25: 2.1.286-shaped native agent graph (see the fixture). A run
+  # without the subagent forwarding opt-in is a different CLI contract.
+  forwarded=false
+  for arg in "$@"; do
+    [ "$arg" = '--forward-subagent-text' ] && forwarded=true
+  done
+  [ "$forwarded" = true ] || exit 1
+  cat "$(dirname "$0")/claude/native-agents-2.1.286.jsonl"
   ;;
 
 *scenario:askuser*)

@@ -53,6 +53,8 @@ use crate::registry::{HarnessDescriptor, HarnessRegistry};
 use crate::run_journal::RunJournal;
 use crate::{EngineError, new_id, now_ms};
 
+mod native_subagents;
+
 /// One journaled event: the durable seq plus the event, as broadcast to subscribers.
 #[derive(Debug, Clone)]
 pub struct JournaledEvent {
@@ -6973,6 +6975,8 @@ async fn drive_run(
         std::collections::HashMap::new();
     let mut child_activity: std::collections::HashMap<String, luna_doc::SubagentActivity> =
         std::collections::HashMap::new();
+    // Nested spawn chips live in their owning child's transcript.
+    let mut nested_spawns = native_subagents::NestedSpawns::default();
 
     let mut final_completed_turn = None;
     let mut journal_failure: Option<EngineError> = None;
@@ -7187,6 +7191,7 @@ async fn drive_run(
                 // pre-viz behavior), never a reopened doc.
                 continue;
             }
+            nested_spawns.observe(parent_tool_use_id, sub_event);
             let sub_id = subagent_doc_id(&chat_id, parent_tool_use_id);
             let observation = child_activity
                 .entry(parent_tool_use_id.clone())
@@ -7201,6 +7206,7 @@ async fn drive_run(
                 AgentEvent::Usage { .. }
                     | AgentEvent::ContextUsage { .. }
                     | AgentEvent::ChildStatus { .. }
+                    | AgentEvent::ChildProgress { .. }
             );
             // A Done with NO sink (a subagent that never streamed — codex
             // turn ends can beat registration) is chip-only: minting a doc
@@ -7208,6 +7214,26 @@ async fn drive_run(
             // would link the chip to that never-created doc (an empty tab
             // on click).
             let done_only = !sink_known && matches!(sub_event.as_ref(), AgentEvent::Done { .. });
+            // A nested spawn's chip is in its owning child's transcript; any
+            // chip refresh below targets that doc instead of the root's.
+            let nested_chip_doc = (!chip_streaming
+                && (!sink_known
+                    || subagent_chip_update(sub_event).is_some()
+                    || matches!(
+                        sub_event.as_ref(),
+                        AgentEvent::Usage { .. } | AgentEvent::ChildProgress { .. }
+                    )))
+            .then(|| {
+                nested_spawns.chip_doc(
+                    parent_tool_use_id,
+                    &inner,
+                    &chat_id,
+                    &mut subagents,
+                    &device_id,
+                )
+            })
+            .flatten();
+            let chip_doc: &SessionDoc = nested_chip_doc.as_deref().unwrap_or(doc_ref);
             if chip_streaming {
                 if !sink_known && !done_only {
                     for p in folded.iter_mut() {
@@ -7259,7 +7285,7 @@ async fn drive_run(
                         },
                     );
                     if !chip_streaming {
-                        let _ = doc_ref.update_subagent_chip(
+                        let _ = chip_doc.update_subagent_chip(
                             parent_tool_use_id,
                             Some(&sub_id),
                             Some("running"),
@@ -7277,13 +7303,15 @@ async fn drive_run(
                 && (done_only
                     || matches!(
                         sub_event.as_ref(),
-                        AgentEvent::Usage { .. } | AgentEvent::ChildStatus { .. }
+                        AgentEvent::Usage { .. }
+                            | AgentEvent::ChildStatus { .. }
+                            | AgentEvent::ChildProgress { .. }
                     ))
                 && !chip_streaming
             {
                 // Completion or usage can arrive before child content. Update
                 // the chip without manufacturing an empty transcript doc.
-                let _ = doc_ref.update_subagent_chip(
+                let _ = chip_doc.update_subagent_chip(
                     parent_tool_use_id,
                     None,
                     subagent_chip_update(sub_event),
@@ -7297,7 +7325,7 @@ async fn drive_run(
                     // sink level (the fold ignores UserMessage).
                     sink.push_user(&device_id, text);
                     if !chip_streaming {
-                        let _ = doc_ref.update_subagent_chip(
+                        let _ = chip_doc.update_subagent_chip(
                             parent_tool_use_id,
                             None,
                             Some("running"),
@@ -7314,11 +7342,14 @@ async fn drive_run(
                 }
                 if !chip_streaming
                     && (subagent_chip_update(sub_event).is_some()
-                        || matches!(sub_event.as_ref(), AgentEvent::Usage { .. }))
+                        || matches!(
+                            sub_event.as_ref(),
+                            AgentEvent::Usage { .. } | AgentEvent::ChildProgress { .. }
+                        ))
                 {
                     // In-place refresh only on observed status/usage/result.
                     // Text deltas never rewrite the parent doc.
-                    let _ = doc_ref.update_subagent_chip(
+                    let _ = chip_doc.update_subagent_chip(
                         parent_tool_use_id,
                         None,
                         subagent_chip_update(sub_event),
@@ -8418,7 +8449,15 @@ async fn drive_run(
     // This also covers metadata-only children that never opened a transcript.
     for parent_id in child_activity.keys() {
         if !settled_subagents.contains(parent_id) {
-            let _ = doc_ref.update_subagent_chip(parent_id, None, Some("unobserved"), None, None);
+            let nested =
+                nested_spawns.chip_doc(parent_id, &inner, &chat_id, &mut subagents, &device_id);
+            let _ = nested.as_deref().unwrap_or(doc_ref).update_subagent_chip(
+                parent_id,
+                None,
+                Some("unobserved"),
+                None,
+                None,
+            );
         }
     }
     // Any child transcript still streaming freezes as-is: the parent event
