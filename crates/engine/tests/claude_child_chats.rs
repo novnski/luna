@@ -578,26 +578,26 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
 
     // B3/B4: a Full parent and an Ask child differ in Claude's permission class,
     // so LUNA skips the continuation with a notice instead of queueing a report
-    // Claude would hold.
-    std::fs::write(
-        root.path().join("engine/composer-defaults.json"),
-        r#"{"permissionByHarness":{"claude-code":"ask"}}"#,
-    )
-    .unwrap();
+    // Claude would hold. Children default to the parent's access, so the
+    // creator asks for Ask explicitly.
     core.workspace
         .set_chat_config(
             &parent,
             &serde_json::from_value(claude_config("full")).unwrap(),
         )
         .unwrap();
-    let parity_child = create_child(
-        &client,
-        &parent,
-        "cc09-parity",
-        "Parity child",
-        "sid:parity reply",
-    )
-    .await;
+    let parity_child = client
+        .call(
+            "CreateChildThread",
+            json!({"parentTaskId":parent,"request":{
+                "prompt":"sid:parity reply","idempotencyKey":"cc09-parity","title":"Parity child",
+                "reportResults":true,"continueParent":true,"permissionMode":"ask"}}),
+        )
+        .await
+        .unwrap()["taskId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     let child_mode = core
         .workspace
         .chat(&parity_child)

@@ -209,6 +209,7 @@ fn account_config(root: &Path) -> AgentAccountsConfig {
 fn assemble(root: &Path, id: HarnessId) -> (EngineCore, Recorder) {
     worktrees_root();
     let recorder = Recorder::default();
+    let _ = RUN_LOG.set(recorder.clone());
     let registry = Arc::new(HarnessRegistry::new());
     registry.register(Arc::new(Synthetic {
         id,
@@ -364,10 +365,35 @@ async fn until(what: &str, mut ready: impl FnMut() -> bool) {
     while !ready() {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for {what}"
+            "timed out waiting for {what}; recorded runs: {}",
+            RUN_LOG.get().map(run_summary).unwrap_or_default()
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// Diagnostics only: the last assembled recorder in this test process.
+static RUN_LOG: OnceLock<Recorder> = OnceLock::new();
+
+fn run_summary(recorder: &Recorder) -> String {
+    recorder
+        .runs
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|run| {
+            format!(
+                "[thread={:?} prompt={:?} resume={:?}]",
+                run.model_options
+                    .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+                    .and_then(|contract| contract.pointer("/context/threadId"))
+                    .and_then(Value::as_str),
+                run.prompt,
+                run.resume
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn evidence(name: &str, value: &Value) {
@@ -824,7 +850,10 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
         )
         .await
         .unwrap();
-    until("side turn running", || core.sessions.turn_in_flight(&side)).await;
+    until("side turn running", || {
+        core.sessions.turn_in_flight(&side) && !runs_for(&recorder, &side).is_empty()
+    })
+    .await;
     let side_run = runs_for(&recorder, &side)[0].clone();
     assert_eq!(side_run.cwd, parent_wt.to_str().unwrap());
     assert_eq!(side_run.resume.as_deref(), Some(fork_session.as_str()));
