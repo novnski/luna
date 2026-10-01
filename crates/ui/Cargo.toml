@@ -38,6 +38,10 @@ name = "integrations-picker-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "codex-prompts-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "goal-card-fixture"
 required-features = ["appshots-fixture"]
 

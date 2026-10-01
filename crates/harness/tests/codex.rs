@@ -3432,7 +3432,6 @@ async fn generic_mcp_elicitation_roundtrips_typed_fields_and_actions() {
             "foreign"
                 | "bad-schema"
                 | "foreign-thread"
-                | "null-turn"
                 | "bad-default"
                 | "bad-required"
                 | "too-many"
@@ -3461,4 +3460,328 @@ async fn generic_mcp_elicitation_roundtrips_typed_fields_and_actions() {
         )
         .unwrap();
     }
+}
+
+// ---------------------------------------------------------------------------
+// codex-adapter fixes. Failure cases were written first in
+// `evidence/codex-adapter/failure-cases.md`; the peer replays frame shapes
+// from codex-rs source and `evidence/codex-adapter/probes/`.
+// ---------------------------------------------------------------------------
+
+fn adapter_peer() -> CodexHarness {
+    let path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-adapter-peer.py");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+    }
+    CodexHarness::new().with_executable(path)
+}
+
+fn peer_request(scenario: &str, home: &std::path::Path) -> RunRequest {
+    let mut request = computer_use_request(scenario, home);
+    request.auto_approve = false;
+    request.cwd = "/tmp".into();
+    request
+}
+
+/// Drive the peer to completion while `answer` decides each parked request.
+/// Returns the events and every (questions, sender) the adapter parked.
+async fn run_peer(
+    scenario: &str,
+    mut answer: impl FnMut(&[UserInputQuestion]) -> Option<Vec<UserInputAnswer>> + Send + 'static,
+) -> (Vec<AgentEvent>, Vec<ParkedApproval>) {
+    let home = tempfile::tempdir().unwrap();
+    let (controls, mut parked, _steer) = parked_computer_controls();
+    let mut stream = adapter_peer()
+        .run(peer_request(scenario, home.path()), controls)
+        .await
+        .expect("peer run starts");
+    let kept = Arc::new(Mutex::new(Vec::new()));
+    let kept_by_answerer = kept.clone();
+    let answerer = tokio::spawn(async move {
+        while let Some((questions, sender)) = parked.recv().await {
+            match answer(&questions) {
+                Some(answers) => {
+                    let _ = sender.send(answers);
+                    kept_by_answerer
+                        .lock()
+                        .unwrap()
+                        .push((questions, oneshot::channel().0));
+                }
+                None => kept_by_answerer.lock().unwrap().push((questions, sender)),
+            }
+        }
+    });
+    let events = tokio::time::timeout(Duration::from_secs(15), async {
+        let mut events = Vec::new();
+        while let Some(event) = stream.next().await {
+            events.push(event.expect("stream event"));
+        }
+        events
+    })
+    .await
+    .expect("peer run settles");
+    answerer.abort();
+    let kept = std::mem::take(&mut *kept.lock().unwrap());
+    if let Some(directory) = std::env::var_os("LUNA_CODEX_ADAPTER_EVIDENCE_DIR") {
+        let directory = PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let name: String = scenario
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect();
+        let questions: Vec<_> = kept
+            .iter()
+            .map(|(questions, _)| questions.clone())
+            .collect();
+        std::fs::write(
+            directory.join(format!("{name}.json")),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "provider": "deterministic codex-adapter peer (codex-rs frame shapes)",
+                "scenario": scenario, "questions": questions, "events": events,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    (events, kept)
+}
+
+fn label_answer(
+    questions: &[UserInputQuestion],
+    pick: impl Fn(&UserInputQuestion) -> &str,
+) -> Vec<UserInputAnswer> {
+    questions
+        .iter()
+        .map(|question| UserInputAnswer {
+            question_id: question.id.clone(),
+            labels: vec![pick(question).to_owned()],
+        })
+        .collect()
+}
+
+fn peer_verified(events: &[AgentEvent]) -> bool {
+    events.iter().any(
+        |event| matches!(event, AgentEvent::TextDelta { text } if text.contains("peer-verified")),
+    ) && matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    )
+}
+
+#[tokio::test]
+async fn subagent_approval_and_null_turn_mcp_prompt_reach_the_user() {
+    let (events, parked) = run_peer("subagent:command", |questions| {
+        Some(label_answer(questions, |question| {
+            match question.header.as_str() {
+                "name" => "Ada",
+                _ if question.mcp.is_some() => "Accept",
+                _ => "Allow once",
+            }
+        }))
+    })
+    .await;
+    assert!(peer_verified(&events), "{events:?}");
+    // Ghost thread and stale child turn were declined without a card.
+    assert_eq!(parked.len(), 2, "{parked:#?}");
+    let approval = parked
+        .iter()
+        .flat_map(|(questions, _)| questions)
+        .find_map(|question| question.approval.as_ref().map(|a| (question, a)))
+        .expect("sub-agent approval card");
+    assert_eq!(approval.0.header, "Approve command · sub-agent alpha");
+    let details = approval.1.details.as_ref().unwrap();
+    assert_eq!(details.subagent.as_deref(), Some("alpha"));
+    assert_eq!(details.provider_thread_id.as_deref(), Some("child-alpha"));
+    assert_eq!(approval.1.turn_id.as_deref(), Some("child-turn-1"));
+    assert_eq!(approval.1.expires_at_ms, luna_proto::APPROVAL_NO_EXPIRY);
+    let mcp = parked
+        .iter()
+        .flat_map(|(questions, _)| questions)
+        .find_map(|question| question.mcp.as_ref())
+        .expect("child MCP prompt card");
+    assert_eq!(mcp.thread_id, "child-alpha");
+    assert_eq!(
+        mcp.turn_id, "child-turn-1",
+        "null turnId binds to the child's live turn"
+    );
+    assert_eq!(mcp.expires_at_ms, luna_proto::APPROVAL_NO_EXPIRY);
+}
+
+#[tokio::test]
+async fn subagent_approvals_close_on_resolution_and_child_turn_end() {
+    let (events, parked) = run_peer("subagent:closed", |_| None).await;
+    assert!(peer_verified(&events), "{events:?}");
+    assert_eq!(parked.len(), 2, "{parked:#?}");
+    for (questions, sender) in parked {
+        assert!(
+            sender.send(Vec::new()).is_err(),
+            "parked answer must close: {:?}",
+            questions[0].header
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_tool_call_approval_renders_tool_context_and_sends_persist() {
+    for (scenario, label) in [
+        ("mcp-tool:once", "Allow once"),
+        ("mcp-tool:session", "Allow for session"),
+        ("mcp-tool:always", "Always allow"),
+        ("mcp-tool:deny", "Deny"),
+        ("mcp-tool:cancel", "Cancel"),
+        ("mcp-tool:forged", "Always allow"),
+    ] {
+        let (events, parked) = run_peer(scenario, move |questions| {
+            Some(label_answer(questions, |_| label))
+        })
+        .await;
+        assert!(peer_verified(&events), "{scenario}: {events:?}");
+        assert_eq!(parked.len(), 1, "{scenario}");
+        let question = &parked[0].0[0];
+        assert!(question.mcp.is_none(), "an approval, not a data form");
+        assert_eq!(question.header, "Approve MCP tool");
+        let approval = question.approval.as_ref().unwrap();
+        assert_eq!(approval.summary, "fixture wants to run Create issue");
+        assert_eq!(approval.expires_at_ms, luna_proto::APPROVAL_NO_EXPIRY);
+        let details = approval.details.as_ref().unwrap();
+        let tool = details.tool.as_ref().unwrap();
+        assert_eq!(tool.server, "fixture");
+        assert_eq!(tool.tool.as_deref(), Some("Create issue"));
+        assert_eq!(
+            tool.arguments,
+            vec![
+                ("Title".to_owned(), "Bug".to_owned()),
+                ("Labels".to_owned(), "[\"p1\"]".to_owned())
+            ]
+        );
+        let labels: Vec<_> = details.choices.iter().map(|c| c.label.as_str()).collect();
+        if scenario == "mcp-tool:forged" {
+            assert_eq!(
+                labels,
+                ["Allow once", "Allow for session", "Deny", "Cancel"]
+            );
+        } else {
+            assert_eq!(
+                labels,
+                [
+                    "Allow once",
+                    "Allow for session",
+                    "Always allow",
+                    "Deny",
+                    "Cancel"
+                ]
+            );
+        }
+        let rows = details.display_rows();
+        assert!(
+            rows.contains(&("Argument · Title".into(), "Bug".into())),
+            "{rows:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn retrying_errors_warnings_and_mcp_progress_are_transient() {
+    let (events, _) = run_peer("notices", |_| None).await;
+    assert!(peer_verified(&events), "{events:?}");
+    let notices: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::ProviderNotice { notice } => Some((false, notice)),
+            AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                AgentEvent::ProviderNotice { notice } => Some((true, notice)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert!(notices.iter().any(|(child, n)| !child
+        && n.kind == luna_proto::ProviderNoticeKind::Retrying
+        && n.message == "Reconnecting... 1/5"));
+    assert!(notices.iter().any(|(child, n)| *child
+        && n.kind == luna_proto::ProviderNoticeKind::Retrying
+        && n.message == "Reconnecting... 2/5"));
+    assert!(
+        notices
+            .iter()
+            .any(|(_, n)| n.kind == luna_proto::ProviderNoticeKind::Warning
+                && n.message == "Model rerouted to gpt-6.1-sol")
+    );
+    // Only the non-retrying error is an Error; no retry became one.
+    let errors: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::Error { message } => Some(message.as_str()),
+            AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                AgentEvent::Error { message } => Some(message.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(errors, ["quota exhausted"]);
+    assert!(events.iter().any(|event| matches!(
+        event,
+        AgentEvent::ToolActivity { id, kind: luna_proto::ToolActivityKind::Progress, text }
+            if id == "mcp-call-1" && text == "Indexed 40 of 100 files"
+    )));
+}
+
+#[tokio::test]
+async fn request_user_input_keeps_descriptions_free_text_and_secret_flags() {
+    let (events, parked) = run_peer("request-input", |questions| {
+        Some(label_answer(questions, |question| {
+            if question.header == "Color" {
+                "Blue"
+            } else {
+                "s3cret"
+            }
+        }))
+    })
+    .await;
+    assert!(peer_verified(&events), "{events:?}");
+    let questions = &parked[0].0;
+    let color = &questions[0];
+    assert_eq!(color.options, ["Blue", "Red"]);
+    assert_eq!(color.option_description(0), Some("Calm"));
+    assert!(!color.accepts_typed_answer(), "isOther:false with options");
+    assert!(!color.is_secret());
+    let token = &questions[1];
+    assert!(token.accepts_typed_answer());
+    assert!(token.is_secret());
+}
+
+#[tokio::test]
+async fn initial_turn_start_carries_the_engine_user_message_id() {
+    let home = tempfile::tempdir().unwrap();
+    let mut request = peer_request("initial-client-id", home.path());
+    request.model_options.insert(
+        luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION.into(),
+        "luna-user-message-1".into(),
+    );
+    let (controls, _parked, _steer) = parked_computer_controls();
+    let events = tokio::time::timeout(
+        Duration::from_secs(10),
+        adapter_peer()
+            .run(request, controls)
+            .await
+            .unwrap()
+            .map(|event| event.unwrap())
+            .collect::<Vec<_>>(),
+    )
+    .await
+    .unwrap();
+    assert!(peer_verified(&events), "{events:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "the first message is not a steer boundary: {events:?}"
+    );
 }

@@ -898,6 +898,8 @@ pub struct AppState {
     pub queue: Vec<luna_doc::QueuedMessage>,
     pub context_usage: Option<luna_proto::ContextUsage>,
     pub context_control: luna_proto::ContextControlState,
+    /// The selected chat's transient provider status (retry/warning).
+    pub provider_notice: Option<luna_proto::ProviderNotice>,
     /// The selected chat's opening `WatchDocMessages` reset has landed. An
     /// empty transcript is otherwise indistinguishable from the pre-replay
     /// gap after selection, where optimistic echoes may already be visible.
@@ -996,6 +998,7 @@ impl AppState {
             queue: Vec::new(),
             context_usage: None,
             context_control: Default::default(),
+            provider_notice: None,
             transcript_replayed: false,
             transcript_baselines: HashMap::new(),
             transcript_revision: 0,
@@ -1147,6 +1150,7 @@ impl AppState {
             self.transcript.clear();
             self.context_usage = None;
             self.context_control = Default::default();
+            self.provider_notice = None;
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
             self.transcript_task = None;
@@ -1465,6 +1469,10 @@ impl AppState {
         }
         if self.context_control != update.context_control {
             self.context_control = update.context_control;
+            cx.notify();
+        }
+        if self.provider_notice != update.provider_notice {
+            self.provider_notice = update.provider_notice;
             cx.notify();
         }
         Ok(())
@@ -1946,6 +1954,7 @@ impl AppState {
         self.transcript_baselines.clear();
         self.context_usage = None;
         self.context_control = Default::default();
+        self.provider_notice = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         self.echoes.clear();
@@ -2256,6 +2265,7 @@ impl AppState {
         self.transcript.clear();
         self.context_usage = None;
         self.context_control = Default::default();
+        self.provider_notice = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         self.transcript_task = None;

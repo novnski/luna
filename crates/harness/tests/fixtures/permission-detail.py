@@ -64,7 +64,7 @@ if scenario.endswith(':resolved'):
     raise SystemExit(0)
 answer = read()
 if answer.get('result') != expected:
-    emit({'method': 'turn/failed', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'permission-turn', 'error': {'message': f'Expected {expected!r}; received {answer!r}'}}}})
+    emit({'method': 'turn/completed', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'permission-turn', 'status': 'failed', 'error': {'message': f'Expected {expected!r}; received {answer!r}'}}}})
 else:
     status = 'interrupted' if scenario == 'command:cancel' else 'completed'
     emit({'method': 'turn/completed', 'params': {'threadId': 'permission-thread', 'turn': {'id': 'permission-turn', 'status': status}}})

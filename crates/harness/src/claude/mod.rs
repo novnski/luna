@@ -1042,6 +1042,7 @@ fn handle_control_request(
                     supports_task_allowance: false,
                     details: None,
                 }),
+                input: None,
             };
             let allowed = tokio::time::timeout(
                 std::time::Duration::from_secs(120),
@@ -1128,6 +1129,7 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
                     .collect(),
                 mcp: None,
                 approval: None,
+                input: None,
             }
         })
         .collect()

@@ -592,19 +592,13 @@ impl CodexNativeClient {
         })
     }
 
+    /// Complete ascending history through the paginated API; `thread/read
+    /// includeTurns:true` is deprecated (`thread_processor.rs:40`).
     async fn thread_turns(&self, thread_id: &str) -> Result<Vec<Value>, HarnessError> {
-        let value = self
-            .call(
-                "thread/read",
-                json!({"threadId": thread_id, "includeTurns": true}),
-            )
-            .await?;
-        let thread = value.get("thread").unwrap_or(&value);
-        thread
-            .get("turns")
-            .and_then(Value::as_array)
-            .cloned()
-            .ok_or_else(|| HarnessError::Protocol("thread/read returned no turn history".into()))
+        let mut connection = self.connect(None).await?;
+        let turns = page_turns(&connection.client, thread_id, false, 100, 100, |_| true).await;
+        connection.close().await;
+        turns
     }
 
     /// Start asynchronous native compaction and wait for the provider's
@@ -619,6 +613,9 @@ impl CodexNativeClient {
         let mut connection = self.connect(Some(cwd)).await?;
         let mut resume = serde_json::Map::new();
         resume.insert("threadId".into(), thread_id.into());
+        // Metadata only: full-history hydration is deprecated
+        // (`thread_processor.rs:39`) and compaction needs no turns.
+        resume.insert("excludeTurns".into(), true.into());
         if !cwd.is_empty() {
             resume.insert("cwd".into(), cwd.into());
         }
@@ -885,6 +882,79 @@ fn parse_mcp_config(response: &Value) -> Result<Vec<CodexMcpConfigEntry>, Harnes
     Ok(entries)
 }
 
+/// Page `thread/turns/list` with full items: the non-deprecated history read
+/// for paginated and legacy threads (`thread_processor.rs:3073-3140`).
+/// `keep_paging` sees each page in request order and may stop early.
+pub(super) async fn page_turns(
+    client: &RpcClient,
+    thread_id: &str,
+    descending: bool,
+    page_size: usize,
+    max_pages: usize,
+    mut keep_paging: impl FnMut(&[Value]) -> bool,
+) -> Result<Vec<Value>, HarnessError> {
+    const MAX_BYTES: usize = 32 * 1024 * 1024;
+    let mut turns = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut seen_cursors = std::collections::HashSet::new();
+    let mut bytes = 0usize;
+    for _ in 0..max_pages {
+        let page = client
+            .request(
+                "thread/turns/list",
+                json!({
+                    "threadId": thread_id, "cursor": cursor, "limit": page_size,
+                    "sortDirection": if descending { "desc" } else { "asc" },
+                    "itemsView": "full"
+                }),
+            )
+            .await?;
+        let data = page
+            .get("data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| HarnessError::Protocol("Codex turn page has no data".into()))?;
+        if data.len() > page_size {
+            return Err(HarnessError::Protocol(
+                "Codex turn page exceeded requested size".into(),
+            ));
+        }
+        for turn in data {
+            bytes += serde_json::to_vec(turn)
+                .map_err(|e| HarnessError::Protocol(e.to_string()))?
+                .len();
+            if bytes > MAX_BYTES {
+                return Err(HarnessError::Protocol(
+                    "Codex turn history exceeds the 32 MiB read limit".into(),
+                ));
+            }
+        }
+        turns.extend(data.iter().cloned());
+        cursor = match page.get("nextCursor") {
+            Some(Value::Null) | None => None,
+            Some(Value::String(value)) => Some(value.clone()),
+            _ => {
+                return Err(HarnessError::Protocol(
+                    "Codex turn page has an invalid pagination cursor".into(),
+                ));
+            }
+        };
+        if !keep_paging(data) {
+            return Ok(turns);
+        }
+        let Some(next) = cursor.as_ref() else {
+            return Ok(turns);
+        };
+        if next.is_empty() || !seen_cursors.insert(next.clone()) {
+            return Err(HarnessError::Protocol(
+                "Codex turn pagination repeated a cursor".into(),
+            ));
+        }
+    }
+    Err(HarnessError::Protocol(format!(
+        "Codex turn history exceeds {max_pages} pages"
+    )))
+}
+
 async fn read_rewind_history(
     client: &RpcClient,
     thread_id: &str,
@@ -987,6 +1057,9 @@ fn same_rewind_history(left: &[Value], right: &[Value]) -> bool {
 fn fork_params(request: &ProviderForkRequest) -> serde_json::Map<String, Value> {
     let mut params = serde_json::Map::new();
     params.insert("threadId".into(), request.source_session_id.clone().into());
+    // The fork's history is read back through `thread/turns/list`; avoid the
+    // deprecated full hydration in the fork response (`thread_processor.rs:4917`).
+    params.insert("excludeTurns".into(), true.into());
     if !request.cwd.is_empty() {
         params.insert("cwd".into(), request.cwd.clone().into());
     }
@@ -1194,11 +1267,18 @@ impl NativeCompactTracker {
             }
             return None;
         }
-        if matches!(method, "turn/failed" | "turn/aborted")
+        // v2 ends every turn with `turn/completed {turn:{id,status,error}}`
+        // (`v2/turn.rs:33-38`); there is no turn/failed or turn/aborted. A
+        // compaction turn that ends before its item completed did not compact.
+        let completed_turn = params
+            .pointer("/turn/id")
+            .and_then(Value::as_str)
+            .unwrap_or(turn_id);
+        if method == "turn/completed"
             && self
                 .active
                 .as_ref()
-                .is_some_and(|(turn, _)| turn == turn_id)
+                .is_some_and(|(turn, _)| turn == completed_turn)
         {
             self.active = None;
             return Some(CompactNotification::Failed(
@@ -1503,11 +1583,10 @@ mod tests {
         assert_eq!(
             failed.notification(
                 "thread-1",
-                "turn/failed",
+                "turn/completed",
                 &json!({
                     "threadId": "thread-1",
-                    "turnId": "turn-failed",
-                    "turn": { "error": { "message": "provider failed" } }
+                    "turn": { "id": "turn-failed", "status": "failed", "error": { "message": "provider failed" } }
                 }),
             ),
             Some(CompactNotification::Failed("provider failed".into()))

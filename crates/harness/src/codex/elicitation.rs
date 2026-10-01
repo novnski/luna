@@ -1,11 +1,110 @@
 //! MCP 2025-11-25 primitive forms and URL prompts; experimental OpenAI
 //! verification/form variants remain unsupported until their contracts are implemented.
-use luna_proto::{McpFieldSchema, McpInput, McpInputKind, UserInputQuestion};
+use luna_proto::{ApprovalToolContext, McpFieldSchema, McpInput, McpInputKind, UserInputQuestion};
 use serde_json::Value;
 
+/// A Codex MCP/app tool-call approval sent as an elicitation: an empty form
+/// plus `_meta.codex_approval_kind:"mcp_tool_call"` (`core/src/mcp_tool_call.rs`
+/// `build_mcp_tool_approval_elicitation_request`; keys in
+/// `protocol/src/mcp_approval_meta.rs`).
+pub(super) struct ToolApproval {
+    pub(super) message: String,
+    pub(super) persist_session: bool,
+    pub(super) persist_always: bool,
+    pub(super) context: ApprovalToolContext,
+}
+
+pub(super) fn tool_approval(params: &Value) -> Option<ToolApproval> {
+    let meta = params.get("_meta")?.as_object()?;
+    if meta.get("codex_approval_kind").and_then(Value::as_str) != Some("mcp_tool_call")
+        || params.get("mode").and_then(Value::as_str) != Some("form")
+        || params.to_string().len() > 64 * 1024
+    {
+        return None;
+    }
+    // Same message-only test as the TUI: an absent/null schema or an object
+    // schema with no properties. Anything else stays a generic form.
+    let schema = params.get("requestedSchema").unwrap_or(&Value::Null);
+    let message_only = schema.is_null()
+        || (schema.get("type").and_then(Value::as_str) == Some("object")
+            && schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .is_some_and(serde_json::Map::is_empty));
+    if !message_only {
+        return None;
+    }
+    let text = |key: &str, maximum: usize| {
+        meta.get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && value.len() <= maximum)
+            .map(str::to_owned)
+    };
+    let persists = |mode: &str| match meta.get("persist") {
+        Some(Value::String(value)) => value == mode,
+        Some(Value::Array(values)) => values.iter().any(|value| value.as_str() == Some(mode)),
+        _ => false,
+    };
+    let render = |value: &Value| match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    let mut arguments: Vec<(String, String)> = meta
+        .get("tool_params_display")
+        .and_then(Value::as_array)
+        .map(|params| {
+            params
+                .iter()
+                .filter_map(|param| {
+                    let name = param
+                        .get("display_name")
+                        .and_then(Value::as_str)
+                        .filter(|name| !name.is_empty())
+                        .or_else(|| param.get("name").and_then(Value::as_str))?;
+                    Some((name.to_owned(), render(param.get("value")?)))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if arguments.is_empty()
+        && let Some(params) = meta.get("tool_params").and_then(Value::as_object)
+    {
+        arguments = params
+            .iter()
+            .map(|(name, value)| (name.clone(), render(value)))
+            .collect();
+    }
+    let message = params
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|message| !message.trim().is_empty() && message.len() <= luna_proto::MCP_MAX_TEXT)?
+        .to_owned();
+    let server = params
+        .get("serverName")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty() && name.len() <= 128)?
+        .to_owned();
+    Some(ToolApproval {
+        message,
+        persist_session: persists("session"),
+        persist_always: persists("always"),
+        context: ApprovalToolContext {
+            server,
+            connector: text("connector_name", 256),
+            tool: text("tool_title", 256).or_else(|| text("tool_name", 256)),
+            description: text("tool_description", 2_048),
+            arguments,
+        },
+    })
+}
+
+/// `turn_id` is the request's turn, or the active turn the adapter bound a
+/// null `turnId` to (the protocol field is nullable, `v2/mcp.rs:422-428`).
 pub(super) fn questions(
     params: &Value,
     request_id: &Value,
+    turn_id: &str,
 ) -> Result<Vec<UserInputQuestion>, &'static str> {
     if params.to_string().len() > 64 * 1024 {
         return Err("MCP request is too large");
@@ -30,8 +129,13 @@ pub(super) fn questions(
         server_name: bounded("serverName", 128)?,
         provider_request_id,
         thread_id: bounded("threadId", 256)?,
-        turn_id: bounded("turnId", 256)?,
-        expires_at_ms: chrono_time_ms() + 120_000,
+        turn_id: Some(turn_id)
+            .filter(|turn| !turn.is_empty() && turn.len() <= 256)
+            .ok_or("Missing or excessive MCP context")?
+            .to_owned(),
+        // Codex expresses no elicitation deadline; a slow URL/OAuth flow must
+        // not be cancelled by LUNA. The turn, Stop or the provider ends it.
+        expires_at_ms: luna_proto::APPROVAL_NO_EXPIRY,
         kind: McpInputKind::FormAction,
         launch_url: None,
     };
@@ -50,6 +154,7 @@ pub(super) fn questions(
             multi_select,
             approval: None,
             mcp: Some(meta),
+            input: None,
         }
     };
     match params.get("mode").and_then(Value::as_str) {
@@ -159,13 +264,6 @@ pub(super) fn questions(
         }
         _ => Err("Unsupported MCP elicitation mode"),
     }
-}
-
-fn chrono_time_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
 }
 
 fn sensitive_field(name: &str, schema: &Value) -> bool {

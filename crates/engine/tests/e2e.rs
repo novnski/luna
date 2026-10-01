@@ -1192,6 +1192,7 @@ async fn respond_input_resolves_pending_question() {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -1356,6 +1357,7 @@ async fn typed_live_approval_rejects_respond_input_and_accepts_only_respond_appr
                         supports_task_allowance: false,
                         details: None,
                     }),
+                    input: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -1549,6 +1551,7 @@ async fn structured_approval_preserves_details_and_rejects_unadvertised_choice()
                     options: vec!["Deny".into(), "Allow once".into(), "Cancel turn".into()],
                     multi_select: false,
                     mcp: None,
+                    input: None,
                     approval: Some(luna_proto::ApprovalRequest {
                         provider_request_id: "provider-approval".into(),
                         provider: HarnessId::Mock,
@@ -1900,6 +1903,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }],
                 resolved: false,
             }],
@@ -1969,6 +1973,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
                         supports_task_allowance: false,
                         details: None,
                     }),
+                    input: None,
                 }],
                 resolved: false,
             }],
@@ -2717,6 +2722,7 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }])
                 .await
                 .unwrap_or_default();
@@ -2913,6 +2919,7 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
                         multi_select: false,
                         mcp: None,
                         approval: None,
+                        input: None,
                     }])
                     .await;
                     interrupt.cancelled().await;
@@ -3064,6 +3071,7 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 };
                 // The pre-fix Claude/Codex shape: surface the question under
                 // the harness's own id BEFORE asking through the bridge.
@@ -4355,6 +4363,7 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
                                 schema: Box::new(schema),
                             },
                         )),
+                        input: None,
                     },
                     UserInputQuestion {
                         id: "form-action".into(),
@@ -4364,6 +4373,7 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
                         multi_select: false,
                         approval: None,
                         mcp: Some(binding("form", McpInputKind::FormAction)),
+                        input: None,
                     },
                 ];
                 let mut url_meta = binding(
@@ -4384,6 +4394,7 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
                     multi_select: false,
                     approval: None,
                     mcp: Some(url_meta),
+                    input: None,
                 }];
                 assert!(!format!("{url:?}").contains("private-url-token"));
                 let form_rx = (controls.request_input)(form.clone());
@@ -4709,4 +4720,88 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
         std::fs::write(std::path::PathBuf::from(output).join("engine-stop-restart.json"), serde_json::to_vec_pretty(&serde_json::json!({"synthetic":true,"checks":["stop-invalidates-url","restart-invalidates-url","stale-accept-rejected","no-orphan-model-turn","stale-decline-local-only"],"entries":entries(&restarted),"error":error})).unwrap()).unwrap();
     }
     restarted.shutdown().await;
+}
+
+/// codex-adapter fix 5 (failure cases in evidence/codex-adapter/failure-cases.md):
+/// a Codex `error {willRetry:true}` and a `warning` reach the engine through
+/// the real adapter as a transient task notice (doc metadata), are cleared
+/// when the turn ends, and never become transcript Error parts. A
+/// non-retrying error still does.
+#[tokio::test]
+async fn codex_retry_and_warning_are_transient_notices_not_error_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let peer = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../harness/tests/fixtures/codex-adapter-peer.py");
+    let accounts = luna_engine::AgentAccountsConfig {
+        data_dir: dir.path().join("synthetic-provider-state"),
+        claude_config_dir: dir.path().join("synthetic-claude"),
+        claude_config_file: dir.path().join("synthetic-claude.json"),
+        codex_home: dir.path().join("synthetic-codex"),
+    };
+    accounts.disable_claude_keychain_fallback().unwrap();
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        luna_engine::EngineProfile::development(
+            &dir.path().join("engine"),
+            "synthetic-org",
+            "synthetic-user",
+        ),
+        registry_with(Arc::new(
+            luna_harness::CodexHarness::new().with_executable(peer),
+        )),
+        HarnessId::Codex,
+        None,
+        accounts,
+    )
+    .unwrap();
+    let handle = core.doc_host.open(CHAT).unwrap();
+    let mut request = run_request("notices");
+    request.harness = Some(HarnessId::Codex);
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "notice-run",
+        SessionCommandPayload::Run {
+            request,
+            message_id: "notice-user".into(),
+        },
+    );
+    wait_for(
+        || {
+            handle.doc().provider_notice().is_some_and(|notice| {
+                notice.kind == luna_proto::ProviderNoticeKind::Retrying
+                    && notice.message == "Reconnecting... 1/5"
+            })
+        },
+        "retry notice on task metadata",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.role == MessageRole::Assistant
+                    && entry
+                        .parts
+                        .iter()
+                        .any(|part| matches!(part, MessagePart::Text { text, .. } if text.contains("peer-verified")))
+                    && entry.status == Some(MessageStatus::Complete)
+            })
+        },
+        "completed Codex turn",
+    )
+    .await;
+    wait_for(
+        || handle.doc().provider_notice().is_none(),
+        "notice cleared at turn end",
+    )
+    .await;
+    let errors: Vec<_> = entries(&core)
+        .iter()
+        .flat_map(|entry| entry.parts.clone())
+        .filter_map(|part| match part {
+            MessagePart::Error { message, .. } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(errors, ["quota exhausted"], "retries are not errors");
+    core.shutdown().await;
 }

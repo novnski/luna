@@ -8111,6 +8111,7 @@ mod luna_approval_recovery_tests {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 

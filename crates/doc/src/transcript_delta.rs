@@ -24,6 +24,9 @@ pub struct TranscriptUpdate {
     pub frame: TranscriptFrame,
     #[serde(default)]
     pub context_usage: Option<luna_proto::ContextUsage>,
+    /// Transient provider status for the working indicator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_notice: Option<luna_proto::ProviderNotice>,
     /// Durable harness-owned compaction and explicit context-boundary state.
     #[serde(default)]
     pub context_control: luna_proto::ContextControlState,
@@ -524,6 +527,7 @@ mod context_update_tests {
                 window: Some(200000),
             }),
             context_control: luna_proto::ContextControlState::default(),
+            provider_notice: None,
         })
         .unwrap();
         assert_eq!(value["contextUsage"]["tokens"], 0);

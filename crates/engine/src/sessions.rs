@@ -230,6 +230,7 @@ impl LunaSendProposal {
                     supports_task_allowance: false,
                     details: None,
                 }),
+                input: None,
             };
         }
         UserInputQuestion {
@@ -259,6 +260,7 @@ impl LunaSendProposal {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 }
@@ -319,6 +321,7 @@ impl LunaSyntheticArchiveProposal {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 
@@ -479,11 +482,14 @@ fn schedule_approval_expiry(
     else {
         return;
     };
+    // A request with native choices, or a Codex request that waits without a
+    // provider deadline (v2 sends none), is retired as soon as the adapter
+    // closes it (`serverRequest/resolved`, Stop or the end of its turn).
     let native_choices = questions.iter().any(|question| {
-        question
-            .approval
-            .as_ref()
-            .is_some_and(|approval| approval.details.is_some())
+        question.approval.as_ref().is_some_and(|approval| {
+            approval.details.is_some()
+                || (approval.provider == HarnessId::Codex && approval.expires().is_none())
+        })
     });
     tokio::spawn(async move {
         let delay_ms = expires_at_ms.saturating_sub(now_ms()).max(0) as u64;
@@ -826,6 +832,7 @@ impl LunaProspectiveInterruptProposal {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 
@@ -3607,6 +3614,14 @@ impl SessionsEngine {
         let handle = self.doc_handle(chat_id)?;
         let user_id = message_id.unwrap_or_else(new_id);
         handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+        if harness_id == HarnessId::Codex {
+            // The first turn/start carries the same correlation id as every
+            // steer, so native readback can prove this message's delivery.
+            request.model_options.insert(
+                luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION.into(),
+                user_id.clone().into(),
+            );
+        }
 
         // Engine-owned resume (luna sessions.ts:736 — every dispatch read the
         // chat's stored harness session): callers always send `resume: None`;
@@ -6908,6 +6923,12 @@ async fn drive_run(
     // a session nobody comes back to (luna SESSION_IDLE_MS).
     const SESSION_IDLE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
     let mut idle_since: Option<tokio::time::Instant> = None;
+    // The kind of the transient provider notice currently on the doc, if any.
+    // A notice left by a run that died mid-retry is stale for this run.
+    let mut provider_notice: Option<luna_proto::ProviderNoticeKind> = None;
+    if let Err(err) = doc_ref.set_provider_notice(None) {
+        tracing::warn!(%chat_id, error = %err, "stale provider notice clear failed");
+    }
     let steerable = harness.supports_steering();
     // TURN-QUIESCE WATCHDOG (2026-08-12 stuck-Working incident): a harness
     // that loses a turn's Done — the adapter never settles `session/prompt`
@@ -7155,6 +7176,42 @@ async fn drive_run(
             };
             event
         };
+
+        // ── transient provider status ─────────────────────────────────
+        // Retry/warning notices (root or sub-agent) are task metadata for the
+        // working indicator: never a transcript part, never a turn failure.
+        // A retry notice ends when output resumes; every notice ends with the
+        // root turn.
+        let notice = match &event {
+            AgentEvent::ProviderNotice { notice } => Some(notice),
+            AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                AgentEvent::ProviderNotice { notice } => Some(notice),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(notice) = notice {
+            if let Err(err) = doc_ref.set_provider_notice(Some(notice)) {
+                tracing::warn!(%chat_id, error = %err, "provider notice write failed");
+            }
+            provider_notice = Some(notice.kind);
+            continue;
+        }
+        if let Some(kind) = provider_notice {
+            let output_resumed = matches!(
+                &event,
+                AgentEvent::TextDelta { text } | AgentEvent::ReasoningDelta { text }
+                    if !text.is_empty()
+            ) || matches!(&event, AgentEvent::ToolCall { .. });
+            if matches!(&event, AgentEvent::Done { .. })
+                || (kind == luna_proto::ProviderNoticeKind::Retrying && output_resumed)
+            {
+                if let Err(err) = doc_ref.set_provider_notice(None) {
+                    tracing::warn!(%chat_id, error = %err, "provider notice clear failed");
+                }
+                provider_notice = None;
+            }
+        }
 
         // ── subagent routing ───────────────────────────────────────────
         // Tagged events NEVER fold into the parent transcript: they stream
@@ -9427,6 +9484,7 @@ mod tests {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         };
         let answer = approval_answer(&question, luna_proto::ApprovalDecision::AllowTask).unwrap();
         assert_eq!(answer.labels, vec!["Deny"]);
@@ -9563,6 +9621,7 @@ mod tests {
                         supports_task_allowance: true,
                         details: None,
                     }),
+                    input: None,
                 }],
                 resolver,
             },
@@ -9600,6 +9659,7 @@ mod tests {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         };
         let pending = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let (luna_tx, mut luna_rx) = tokio::sync::oneshot::channel();
@@ -9664,6 +9724,7 @@ mod tests {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }],
                 resolver: ordinary_tx,
             },
@@ -12821,6 +12882,7 @@ mod tests {
                         supports_task_allowance: false,
                         details: None,
                     }),
+                    input: None,
                 }],
                 resolver: forged_tx,
             },
