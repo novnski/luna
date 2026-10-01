@@ -1543,7 +1543,11 @@ async fn cc02_lifecycle_unknown_and_tool_bodies_are_decoded_and_retained() {
         "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
     );
     assert_eq!(reset["trigger"], "clear");
-    assert_eq!(evidence(&events, "command_lifecycle")[0]["state"], "queued");
+    // `command_lifecycle` is transport-owned (cc01 consumes it before
+    // normalization and forwards receipts to the turn ledger); it must never
+    // surface as an unknown frame.
+    assert!(evidence(&events, "unknown:command_lifecycle").is_empty());
+    assert!(evidence(&events, "command_lifecycle").is_empty());
 
     // Unprojected, unknown, redaction, bounds, flood caps (D1–D6).
     assert_eq!(
