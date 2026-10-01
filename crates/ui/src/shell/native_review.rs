@@ -1,4 +1,10 @@
 //! Native review picker. Reuses ordinary chat creation and the durable Run command.
+//!
+//! Codex runs its native `review/start`. Claude Code runs its own
+//! `/code-review` (the engine maps the target; custom instructions are an
+//! ordinary message) and reports findings through `ReportFindings`. Claude's
+//! cloud ultrareview is a separate service lane, shown unavailable until its
+//! job, cost and result interface is verified.
 use super::*;
 use luna_proto::{Chat, NativeReviewRequest, ReviewTarget, RunRequest, TaskCommandRead};
 use luna_rpc::RpcError;
@@ -6,6 +12,8 @@ use serde_json::json;
 
 pub(super) struct NativeReviewDialog {
     source: Chat,
+    /// Claude Code's `/code-review` lane rather than Codex's native review.
+    claude: bool,
     origin: HistoryEngineOrigin,
     snapshot: Option<TaskCommandSnapshot>,
     input: Entity<ComposerInput>,
@@ -35,14 +43,16 @@ impl Shell {
         let Some(source) = state.chats.iter().find(|chat| chat.id == task_id).cloned() else {
             return;
         };
-        if source
+        let Some(harness) = source
             .config
             .as_ref()
-            .is_none_or(|config| config.harness != HarnessId::Codex)
-        {
-            self.sidebar_notice = Some("Native code review requires Codex.".into());
+            .map(|config| config.harness)
+            .filter(|harness| matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode))
+        else {
+            self.sidebar_notice = Some("Code review needs a Codex or Claude Code chat.".into());
             return;
-        }
+        };
+        let claude = harness == HarnessId::ClaudeCode;
         let Some(engine) = state.engine().cloned() else {
             self.sidebar_notice = Some("Engine not connected.".into());
             return;
@@ -60,6 +70,7 @@ impl Shell {
         });
         self.native_review_dialog = Some(NativeReviewDialog {
             source,
+            claude,
             origin,
             snapshot: None,
             input,
@@ -142,6 +153,7 @@ impl Shell {
         let placeholder = match kind {
             1 => "Base branch (for example main or origin/main)",
             2 => "Commit SHA or Git commit reference",
+            _ if dialog.claude => "What Claude should review, and how",
             _ => "Instructions for the native reviewer",
         };
         dialog.input.update(cx, |input, cx| {
@@ -264,7 +276,7 @@ impl Shell {
                     }),
                     goal: None,
                     prompt: target.label(),
-                    harness: Some(HarnessId::Codex),
+                    harness: Some(config.harness),
                     provider_account_id: config.provider_account_id,
                     model: config.model,
                     reasoning: config.reasoning,
@@ -352,6 +364,7 @@ impl Shell {
         let error = dialog.error.clone();
         let reference_error = dialog.reference_error.clone();
         let destination = dialog.created_task_id.clone();
+        let claude = dialog.claude;
         let cwd = dialog.source.cwd.clone().unwrap_or_default();
         let branches = dialog.branches.clone();
         let theme = Theme::of(cx).for_popup();
@@ -361,11 +374,21 @@ impl Shell {
             "Commit",
             "Custom instructions",
         ];
-        let description = match kind {
-            0 => "Review staged, unstaged, and untracked files in this checkout.",
-            1 => "Review changes between the current branch and the selected base branch.",
-            2 => "Review the changes introduced by one commit.",
-            _ => "Run the native reviewer with your instructions.",
+        let description = match (claude, kind) {
+            (false, 0) => "Review staged, unstaged, and untracked files in this checkout.",
+            (false, 1) => "Review changes between the current branch and the selected base branch.",
+            (false, 2) => "Review the changes introduced by one commit.",
+            (false, _) => "Run the native reviewer with your instructions.",
+            (true, 0) => {
+                "Claude's /code-review reads this branch's commits since its upstream plus uncommitted changes."
+            }
+            (true, 1) => {
+                "Claude's /code-review of <base>...HEAD: the changes since the selected base branch."
+            }
+            (true, 2) => "Claude's /code-review of the changes introduced by one commit.",
+            (true, _) => {
+                "Sends your instructions as an ordinary message; Claude reviews in the chat."
+            }
         };
         let card = popover::dialog_card(&theme)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
@@ -375,6 +398,9 @@ impl Shell {
                 }
             }))
             .child(popover::dialog_title(&theme, "Review code"))
+            .when(claude, |card| card.child(div().mt(px(4.0)).text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text_muted)
+                .child("Claude Code /code-review. Findings appear in the chat with their source revision.")))
             .child(div().mt(px(12.0)).flex().flex_wrap().gap(px(6.0)).children(
                 targets.into_iter().enumerate().map(|(index, label)| {
                     popover::btn_ghost(&theme, label, format!("native-review-target-{index}"))
@@ -403,6 +429,7 @@ impl Shell {
                     })
                 ))
             })
+            .when(claude, |card| card.child(claude_cloud_lane(&theme)))
             .when(kind == 1 && reference_error.is_some(), |card| card.child(div().mt(px(6.0))
                 .text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted)
                 .child(reference_error.unwrap_or_default())))
@@ -430,5 +457,79 @@ impl Shell {
                     .when(ready, |button| button.on_click(cx.listener(|this, _, _, cx| this.submit_native_review(cx))))))
             .into_any_element();
         Some(popover::modal("native-review-dialog", viewport, card))
+    }
+}
+
+/// Claude's cloud ultrareview: a separate claude.ai service job with its own
+/// cost and result delivery. LUNA has no verified interface to start, track
+/// or read one, so the lane states that instead of offering a control.
+fn claude_cloud_lane(theme: &Theme) -> impl IntoElement {
+    const TEXT: &str = "Cloud ultrareview is a separate claude.ai service job. LUNA can't start or track one yet, so this review always runs locally. Run /ultrareview in a terminal if your account offers it.";
+    div()
+        .id("native-review-cloud-lane")
+        .role(Role::Status)
+        .aria_label(TEXT)
+        .mt(px(10.0))
+        .px(px(10.0))
+        .py(px(8.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.border)
+        .flex()
+        .gap(px(8.0))
+        .items_start()
+        .text_size(crate::typography::ui_rems(12.0))
+        .line_height(crate::typography::ui_rems(16.0))
+        .text_color(theme.text_muted)
+        .child(
+            div()
+                .flex_none()
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.text)
+                .child("Cloud ultrareview \u{00b7} unavailable"),
+        )
+        .child(div().flex_1().min_w_0().child(TEXT))
+}
+
+/// Headless fixture hooks: the production dialog, driven without pointer
+/// coordinates (`claude-review-fixture`).
+#[cfg(feature = "appshots-fixture")]
+impl Shell {
+    pub fn fixture_open_native_review(&mut self, task_id: String, cx: &mut Context<Self>) {
+        self.open_native_review(task_id, cx);
+    }
+
+    pub fn fixture_native_review_target(
+        &mut self,
+        kind: usize,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_native_review_target(kind, cx);
+        if let Some(dialog) = self.native_review_dialog.as_ref() {
+            let text = text.to_owned();
+            dialog
+                .input
+                .update(cx, |input, cx| input.set_text(text, cx));
+        }
+        cx.notify();
+    }
+
+    pub fn fixture_submit_native_review(&mut self, cx: &mut Context<Self>) {
+        self.submit_native_review(cx);
+    }
+
+    pub fn fixture_native_review_state(&self) -> serde_json::Value {
+        match self.native_review_dialog.as_ref() {
+            None => json!({"open": false}),
+            Some(dialog) => json!({
+                "open": true,
+                "claude": dialog.claude,
+                "kind": dialog.target_kind,
+                "snapshotReady": dialog.snapshot.is_some(),
+                "sending": dialog.sending,
+                "error": dialog.error,
+            }),
+        }
     }
 }
