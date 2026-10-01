@@ -116,9 +116,7 @@ def scenario(text, turn):
     if "[mcp-qa:first]" in text:
         post({"jsonrpc": "2.0", "id": "denied", "method": "tools/list"}, bearer="wrong-token", label="wrong-token")
         tool(f"{turn}-foreign", "luna_status", {}, thread="foreign-thread", label="foreign-thread")
-    if "[mcp-qa:resume]" in text:
-        # On the resumed thread: parks on the local LUNA approval until QA
-        # stops the turn.
+        # Parks on the local LUNA approval until QA stops the turn.
         record({"pid": os.getpid(), "label": "create_thread:sent", "threadId": thread_id, "turnId": active_turn})
         tool(f"{turn}-create", "create_thread",
              {"prompt": "MCP QA child brief", "idempotencyKey": "mcp-qa-child", "title": "MCP QA child"})
