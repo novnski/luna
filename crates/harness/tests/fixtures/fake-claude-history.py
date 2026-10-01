@@ -390,7 +390,9 @@ def handle_control(frame):
     subtype = request.get("subtype")
     knob = KNOBS.get(subtype, {})
     if subtype == "initialize":
-        response(request_id, {"commands": [], "models": [], "account": {}, "pid": os.getpid()})
+        response(request_id, {"commands": [], "account": {}, "pid": os.getpid(), "models": [
+            {"value": "haiku", "resolvedModel": "claude-haiku-4-5-20251001",
+             "displayName": "Haiku", "description": "synthetic"}]})
     elif subtype == "rewind_conversation":
         if knob.get("reply"):
             response(request_id, knob["reply"])
