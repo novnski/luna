@@ -82,19 +82,6 @@ fn entries(core: &EngineCore, chat: &str) -> Vec<SessionMessageEntry> {
 }
 
 async fn run_until_idle(core: &EngineCore, chat: &str, prompt: &str, dir: &Path) {
-    // Pre-titled so the auto-titler never runs a second fake process.
-    core.workspace
-        .create_chat(
-            chat,
-            None,
-            Some(&core.device_id),
-            None,
-            Some(dir.display().to_string()),
-        )
-        .expect("create chat row");
-    core.workspace
-        .rename_chat(chat, "Pre-titled")
-        .expect("rename chat");
     core.sessions
         .dispatch(
             chat,
