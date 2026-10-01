@@ -213,6 +213,14 @@ struct ChildCardPlan {
     reasoning: String,
 }
 
+/// "Ask access", "Auto access", "Full access".
+fn access_label(mode: PermissionMode) -> String {
+    format!(
+        "{} access",
+        crate::claude_child_reports::mode_label(mode).trim_end_matches(" access")
+    )
+}
+
 const CHILD_CARD_DENY: &str = "Deny";
 const CHILD_CARD_ALLOW: &str = "Allow once";
 
@@ -228,16 +236,12 @@ enum ChildCardAnswer {
 
 impl ChildCardPlan {
     fn grant_label(&self) -> Option<String> {
-        self.escalation.map(|mode| {
-            format!(
-                "Allow once and grant {} access",
-                crate::claude_child_reports::mode_label(mode).trim_end_matches(" access")
-            )
-        })
+        self.escalation
+            .map(|mode| format!("Allow once and grant {}", access_label(mode)))
     }
 
     fn choices(&self) -> Vec<luna_proto::ApprovalChoice> {
-        let label = crate::claude_child_reports::mode_label;
+        let label = access_label;
         let mut choices = vec![
             luna_proto::ApprovalChoice {
                 label: CHILD_CARD_DENY.into(),
@@ -249,11 +253,11 @@ impl ChildCardPlan {
                 scope: "request".into(),
                 description: match self.escalation {
                     Some(requested) => format!(
-                        "Create the child once with {} access, this chat's ceiling. The requested {} access is not granted.",
+                        "Create the child once with {}, this chat's ceiling. The requested {} is not granted.",
                         label(self.capped),
                         label(requested)
                     ),
-                    None => format!("Create the child once with {} access.", label(self.capped)),
+                    None => format!("Create the child once with {}.", label(self.capped)),
                 },
             },
         ];
@@ -262,7 +266,7 @@ impl ChildCardPlan {
                 label: grant,
                 scope: "request".into(),
                 description: format!(
-                    "Create the child once with {} access, above this chat's {} access. You are granting it to the child.",
+                    "Create the child once with {}, above this chat's {}. You are granting it to the child.",
                     label(requested),
                     label(self.ceiling)
                 ),
@@ -295,17 +299,17 @@ impl ChildCardPlan {
 impl LunaSendProposal {
     fn question(&self) -> UserInputQuestion {
         if let (Some(request), Some(plan)) = (&self.child_request, &self.child_plan) {
-            let label = crate::claude_child_reports::mode_label;
+            let label = access_label;
             let access = match plan.escalation {
                 Some(requested) => format!(
-                    "{} requested, above this chat's {} access. Allow once caps it at {}; only the grant choice gives {}.",
+                    "{} requested, above this chat's {}. Allow once caps it at {}; only the grant choice gives {}.",
                     label(requested),
                     label(plan.ceiling),
                     label(plan.capped),
                     label(requested)
                 ),
                 None => format!(
-                    "{} (this chat's access is {}).",
+                    "{} (this chat has {}).",
                     label(plan.capped),
                     label(plan.ceiling)
                 ),
@@ -315,7 +319,7 @@ impl LunaSendProposal {
                 id: format!("question-{}", self.request_id),
                 header: "LUNA approval".into(),
                 question: format!(
-                    "Create a fresh persistent child {} under {} in project {} on {}?\nCheckout: {}\nModel: {}; reasoning: {}; title: {:?}\nAccess: {}\nResults: {}; queue parent continuation: {}. Only the explicit prompt is copied.\n\n{}",
+                    "Create a fresh persistent child {} under {} in project {} on {}?\nCheckout: {}\nModel: {}; reasoning: {}; title: {}\nAccess: {}\nResults: {}; queue parent continuation: {}. Only the explicit prompt is copied.\n\n{}",
                     self.fence.request.task_id,
                     self.claim.source_task_id,
                     self.project_id,
@@ -323,7 +327,7 @@ impl LunaSendProposal {
                     plan.checkout,
                     plan.model,
                     plan.reasoning,
-                    request.title,
+                    request.title.as_deref().unwrap_or("untitled"),
                     access,
                     request.report_results,
                     request.continue_parent,
@@ -1794,7 +1798,7 @@ impl SessionsEngine {
                 branch.as_deref().unwrap_or("luna/child-… (generated)"),
                 base.clone()
                     .or_else(|| parent_branch.clone().map(|branch| format!("{branch} (this chat's branch)")))
-                    .unwrap_or_else(|| "this chat's HEAD".into())
+                    .unwrap_or_else(|| "this chat's current branch".into())
             ),
             (_, Some(cwd)) => format!("existing directory {cwd}"),
             _ => format!(

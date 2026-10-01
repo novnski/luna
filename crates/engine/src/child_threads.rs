@@ -233,12 +233,6 @@ impl EngineRpc {
             .repos
             .provision_child_worktree(&repo, &dir, &branch, &base)
             .await?;
-        if fresh && let Some(commands) = self.project_commands.as_ref() {
-            // The same setup hook the composer's WorktreeSpec path runs.
-            if let Err(error) = commands.prepare_new_worktree(parent_id, &worktree.path).await {
-                tracing::warn!(child = %child_id, %error, "child worktree setup preparation deferred");
-            }
-        }
         let provisioned = ProvisionedChildWorktree {
             repo_path: space.path,
             worktree,
@@ -252,8 +246,10 @@ impl EngineRpc {
         Ok(Some(provisioned))
     }
 
-    /// Drop the pending provisioning; remove a fresh worktree when no child
-    /// row was committed, so a failed creation leaves no orphaned checkout.
+    /// Drop the pending provisioning. A fresh worktree whose child committed
+    /// gets the project's new-worktree setup (owned by the child, as the
+    /// composer's WorktreeSpec path does); one whose child did not commit is
+    /// removed, so a failed creation leaves no orphaned checkout.
     async fn settle_child_provisioning(
         &self,
         child_id: &str,
@@ -266,16 +262,31 @@ impl EngineRpc {
         let Some(provisioned) = provisioned.filter(|provisioned| provisioned.fresh) else {
             return;
         };
-        if matches!(self.workspace.chat(child_id), Ok(None))
-            && let Err(error) = self
-                .repos
-                .discard_child_worktree(
-                    std::path::Path::new(&provisioned.repo_path),
-                    &provisioned.worktree,
-                )
-                .await
-        {
-            tracing::warn!(child = %child_id, %error, "uncommitted child worktree cleanup failed");
+        match self.workspace.chat(child_id) {
+            Ok(Some(_)) => {
+                if let Some(commands) = self.project_commands.as_ref()
+                    && let Err(error) = commands
+                        .setup_new_worktree(child_id, &provisioned.worktree.path)
+                        .await
+                {
+                    tracing::warn!(child = %child_id, %error, "child worktree setup did not start");
+                }
+            }
+            Ok(None) => {
+                if let Err(error) = self
+                    .repos
+                    .discard_child_worktree(
+                        std::path::Path::new(&provisioned.repo_path),
+                        &provisioned.worktree,
+                    )
+                    .await
+                {
+                    tracing::warn!(child = %child_id, %error, "uncommitted child worktree cleanup failed");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(child = %child_id, %error, "child worktree outcome unknown; kept");
+            }
         }
     }
 
