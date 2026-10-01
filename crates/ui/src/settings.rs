@@ -23,6 +23,7 @@ pub mod devices;
 pub mod files;
 pub mod general;
 pub mod harnesses;
+pub mod native_extensions;
 pub mod notifications;
 pub mod project_defaults;
 pub mod shortcuts;

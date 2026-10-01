@@ -244,6 +244,8 @@ pub(crate) struct Normalizer {
     peer: super::peer::PeerState,
     /// Native workflows/teammates/remote agents (never subagent spawns).
     coordination: super::coordination::CoordinationTracker,
+    /// Native hook runs and command-list pushes (`hooks.rs`).
+    hooks: super::hooks::HookTracker,
 }
 
 impl Normalizer {
@@ -259,6 +261,7 @@ impl Normalizer {
             native: Default::default(),
             peer: Default::default(),
             coordination: Default::default(),
+            hooks: Default::default(),
         }
     }
 
@@ -284,10 +287,21 @@ impl Normalizer {
     /// Normalize one stdout frame into 0+ unified events. `interrupted` folds
     /// a post-interrupt `result` into `Done { status: Interrupted }`.
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
+        // Hook chips held while the root turn was idle precede its activity.
+        let mut out = self.hooks.resume_before(&frame);
+        out.extend(self.normalize_frame(frame, interrupted));
+        out
+    }
+
+    fn normalize_frame(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         self.peer.observe(&frame);
         match frame {
             Frame::System(f) if f.subtype == "peer_message_hold" => self.peer.hold_events(&f),
-            Frame::System(f) => {
+            Frame::System(mut f) => {
+                // CC-12 hook lifecycle / commands_changed.
+                if let Some(extension) = f.extension.take() {
+                    return self.hooks.observe(*extension, self.saw_init);
+                }
                 // Native workflows/teammates/remote agents (CC-13) first: they
                 // are never subagent spawns.
                 if let Some(events) = self.coordination.observe(&f) {
@@ -314,14 +328,16 @@ impl Normalizer {
                         observed,
                     });
                 }
-                vec![AgentEvent::SessionStarted {
+                let mut out = vec![AgentEvent::SessionStarted {
                     harness: HarnessId::ClaudeCode,
                     model: f.model,
                     tools: f.tools,
                     cwd: f.cwd,
                     session_id: f.session_id,
                     assistant_message_id: self.assistant_message_id.clone(),
-                }]
+                }];
+                out.extend(self.hooks.take_pending());
+                out
             }
 
             // Frames with `parent_tool_use_id` set belong to a SUBAGENT's
@@ -627,11 +643,13 @@ impl Normalizer {
                         session_id: f.session_id,
                     }
                 };
-                let mut out = f
-                    .structured_output
-                    .as_ref()
-                    .map(|value| self.tools.structured_output(value))
-                    .unwrap_or_default();
+                let mut out = self.hooks.turn_ended();
+                out.extend(
+                    f.structured_output
+                        .as_ref()
+                        .map(|value| self.tools.structured_output(value))
+                        .unwrap_or_default(),
+                );
                 if let Some(window) = window {
                     out.push(AgentEvent::ContextUsage {
                         tokens: None,

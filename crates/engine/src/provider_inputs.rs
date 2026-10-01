@@ -18,7 +18,11 @@ pub(crate) fn admit(
 ) -> Result<(), EngineError> {
     match harness {
         HarnessId::Codex => luna_harness::validate_composer_inputs(attachments, input_items)?,
-        HarnessId::ClaudeCode => luna_harness::claude::validate_inputs(attachments, input_items)?,
+        HarnessId::ClaudeCode => {
+            luna_harness::claude::validate_inputs(attachments, input_items)?;
+            // CC-12: one Claude skill invocation per line, no plugin/app.
+            luna_harness::claude::extensions::typed_skill(input_items)?;
+        }
         _ if !input_items.is_empty() => {
             return Err(EngineError::Other(
                 "Native plugin, app and skill selections need Codex (Claude Code runs skills only). Keep the draft and choose a supported provider or remove the selections.".into(),

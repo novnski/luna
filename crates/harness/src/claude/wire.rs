@@ -84,6 +84,9 @@ pub(crate) struct SystemFrame {
     /// Workflow/teammate task fields (tolerant raw values; see coordination).
     #[serde(flatten)]
     pub task_fields: super::coordination::TaskFrameFields,
+    /// Hook lifecycle / `commands_changed` (decoded by `hooks.rs`).
+    #[serde(skip)]
+    pub extension: Option<Box<super::hooks::ExtensionFrame>>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -357,9 +360,11 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
                 .to_owned();
             let observation = (subtype == "init").then(|| init_integration_observation(&value));
             let native = events::decode_system(&subtype, &value, line);
+            let extension = super::hooks::parse_extension_frame(&value);
             let mut system: SystemFrame = serde_json::from_value(value)?;
             system.integration_observation = observation;
             system.native = Some(Box::new(native));
+            system.extension = extension.map(Box::new);
             Frame::System(system)
         }
         "stream_event" => {

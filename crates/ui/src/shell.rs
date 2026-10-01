@@ -19968,4 +19968,8 @@ impl Shell {
         self.transcript
             .update(cx, |t, cx| t.fixture_appshots_start(cx));
     }
+    pub fn fixture_open_tool_groups(&self, cx: &mut Context<Self>) {
+        self.transcript
+            .update(cx, |t, cx| t.fixture_open_tool_groups(cx));
+    }
 }

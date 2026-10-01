@@ -38,10 +38,12 @@ mod coordination;
 mod delivery;
 mod discovery;
 mod events;
+pub mod extensions;
 mod findings;
 mod goal_control;
 mod goals;
 mod history;
+mod hooks;
 mod input;
 mod live_session;
 mod mcp;
@@ -135,8 +137,12 @@ pub struct ClaudeHarness {
     mcp_sessions: Arc<mcp::SessionMcpRegistry>,
     /// Live runs addressable by `stop_native_child` (CC-08).
     live_children: native_stop::LiveChildren,
-    /// Explicit Claude config dir (tests); `None` inherits the child's own.
-    config_dir: Option<PathBuf>,
+    /// Managed-settings directory override (tests/fixtures); `None` reads the
+    /// platform location (`extensions.rs`).
+    managed_dir: Option<PathBuf>,
+    /// Verified extension views per (cwd, mode), reused until the
+    /// extension fingerprint changes.
+    extension_views: extensions::ViewCache,
 }
 
 impl Default for ClaudeHarness {
@@ -150,7 +156,8 @@ impl Default for ClaudeHarness {
             staged: Default::default(),
             mcp_sessions: Arc::default(),
             live_children: native_stop::LiveChildren::default(),
-            config_dir: None,
+            managed_dir: None,
+            extension_views: Default::default(),
         }
     }
 }
@@ -179,19 +186,10 @@ impl ClaudeHarness {
         self
     }
 
-    /// Pin the Claude config dir (`CLAUDE_CONFIG_DIR`) for launched CLIs and
-    /// for reading their session records. Production inherits the user's.
-    pub fn with_config_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.config_dir = Some(dir.into());
-        self
-    }
-
-    /// Where Claude persists this harness's session records.
+    /// Where Claude persists this harness's session records (CC-14): the
+    /// pinned provider home (`with_config_dir`), else the user's.
     fn goal_config_dir(&self) -> Option<PathBuf> {
-        self.config_dir
-            .clone()
-            .or_else(|| self.config_home.clone())
-            .or_else(goals::default_config_dir)
+        self.config_home.clone().or_else(goals::default_config_dir)
     }
 
     fn resolve_executable(&self) -> Result<PathBuf, HarnessError> {
@@ -241,9 +239,6 @@ impl ClaudeHarness {
         // CC-15: LUNA renders Claude's typed review findings, so `/code-review`
         // reports through `ReportFindings` (Claude's host opt-in).
         cmd.env("CLAUDE_CODE_REPORT_FINDINGS", "1");
-        if let Some(dir) = &self.config_dir {
-            cmd.env("CLAUDE_CONFIG_DIR", dir);
-        }
         // The 1M context window is selected via a model-id suffix
         // (`sonnet[1m]`), exactly how the CLI itself does it; fast mode and
         // always-on thinking are settings overrides.
@@ -480,6 +475,15 @@ impl Harness for ClaudeHarness {
         Ok(commands)
     }
 
+    async fn native_extensions(
+        &self,
+        cwd: Option<&std::path::Path>,
+        mode: luna_proto::PermissionMode,
+        refresh: bool,
+    ) -> Result<luna_proto::NativeExtensionsView, HarnessError> {
+        self.native_extensions_view(cwd, mode, refresh).await
+    }
+
     async fn run(
         &self,
         request: RunRequest,
@@ -640,7 +644,13 @@ impl ClaudeHarness {
             ]);
         } else {
             cmd.args(native_tasks::RUN_ARGS);
+            // SessionStart/Setup stream by default; every other hook event
+            // needs this opt-in (`hooks.rs`).
+            cmd.arg("--include-hook-events");
         }
+        // CC-12: a typed skill must be in this launch's effective catalog; the
+        // CC-04 line builder writes its invocation.
+        self.typed_skill_for_launch(&exe, &cmd, &request).await?;
         let mut child = cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(exe.display().to_string())

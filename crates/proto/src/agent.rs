@@ -712,6 +712,16 @@ impl ToolCall {
         name == "Agent" || name.starts_with("Agent: ")
     }
 
+    /// A provider-native hook run, decoded as `Unknown` named
+    /// `Hook: <hook name>` (Claude `hook_started`/`hook_response`): observed
+    /// native lifecycle, never a model tool call. Returns the hook name.
+    pub fn native_hook_name(&self) -> Option<&str> {
+        match self {
+            ToolCall::Unknown { name, .. } => name.strip_prefix(NATIVE_HOOK_TOOL_PREFIX),
+            _ => None,
+        }
+    }
+
     /// The model a subagent SPAWN was given, when the spawn named one.
     ///
     /// Read off the spawn's own input rather than the session's picked model:
@@ -742,6 +752,9 @@ impl ToolCall {
 /// Spawn-input keys that carry a child model, in precedence order. Drivers
 /// disagree on the spelling, so the lookup is by key set, not by harness —
 /// a new adapter naming it any of these needs no code change here.
+/// Name prefix of a [`ToolCall::Unknown`] that records a native hook run.
+pub const NATIVE_HOOK_TOOL_PREFIX: &str = "Hook: ";
+
 pub const SUBAGENT_MODEL_KEYS: [&str; 4] = ["model", "modelId", "model_id", "subagent_model"];
 
 /// The spawn-input keys [`sanitize_tool_call`](crate::) must preserve so the

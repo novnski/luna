@@ -169,6 +169,9 @@ pub mod methods {
     pub const SET_PROVIDER_MCP_SERVER_ENABLED: &str = "SetProviderMcpServerEnabled";
     /// Owner-local: read one declared MCP Apps `ui://` resource as inert facts.
     pub const READ_PROVIDER_MCP_APP_RESOURCE: &str = "ReadProviderMcpAppResource";
+    /// Effective native settings sources, output style, hooks, commands and
+    /// skills for the launch a chat/project would use (local device only).
+    pub const GET_NATIVE_EXTENSIONS: &str = "GetNativeExtensions";
     /// Provider-owned SKILL.md library on the engine's local device.
     pub const GET_SKILL_DOCUMENT: &str = "GetSkillDocument";
     pub const SAVE_SKILL_DOCUMENT: &str = "SaveSkillDocument";
@@ -393,6 +396,7 @@ pub mod methods {
         GET_INTEGRATION_INVENTORY,
         SET_PROVIDER_MCP_SERVER_ENABLED,
         READ_PROVIDER_MCP_APP_RESOURCE,
+        GET_NATIVE_EXTENSIONS,
         GET_SKILL_DOCUMENT,
         SAVE_SKILL_DOCUMENT,
         INSTALL_SKILL,

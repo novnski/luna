@@ -1206,8 +1206,9 @@ enum MutateParams {
     },
 }
 
-mod claude_history;
 mod claude_goals;
+mod claude_history;
+mod native_extensions;
 mod prompt_stash;
 mod side_chats;
 
@@ -9195,6 +9196,9 @@ impl RpcService for EngineRpc {
                     .save(p.project_id.as_deref(), &p.text, p.expected_revision)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&saved)
+            }
+            methods::GET_NATIVE_EXTENSIONS => {
+                RpcReply::value(&native_extensions::get(self, parse_params(params)?).await?)
             }
             methods::GET_INTEGRATION_INVENTORY => {
                 let p: IntegrationInventoryParams = parse_params(params)?;

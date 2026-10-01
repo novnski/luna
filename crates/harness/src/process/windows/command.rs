@@ -23,6 +23,11 @@ impl Command {
             stdio: [Stdio::inherit(); 3],
         }
     }
+    /// The launch description (program, argv, cwd) without spawning it.
+    pub fn as_std(&self) -> &std::process::Command {
+        &self.metadata
+    }
+
     pub fn arg(&mut self, arg: impl AsRef<OsStr>) -> &mut Self {
         self.metadata.arg(arg);
         self

@@ -463,7 +463,10 @@ fn tool_chip_content_raw(call: &crate::ToolCall) -> (&'static str, String) {
         ToolCall::Unknown { name, .. } => match name.strip_prefix("Agent: ") {
             Some(description) => ("Agent", description.to_owned()),
             None if name == "Agent" => ("Agent", String::new()),
-            None => ("Tool", name.clone()),
+            None => match call.native_hook_name() {
+                Some(hook) => ("Hook", hook.replace(':', " · ")),
+                None => ("Tool", name.clone()),
+            },
         },
     }
 }
@@ -482,6 +485,7 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     let mut images = 0usize;
     let mut todos = 0usize;
     let mut other = 0usize;
+    let mut hooks = 0usize;
     let mut failed = 0usize;
     for (call, is_error) in tools {
         if *is_error {
@@ -507,6 +511,7 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
             ToolCall::WebFetch { .. } => fetches += 1,
             ToolCall::ViewImage { .. } => images += 1,
             ToolCall::Todo { .. } => todos += 1,
+            ToolCall::Unknown { .. } if call.native_hook_name().is_some() => hooks += 1,
             ToolCall::Mcp { .. } | ToolCall::ComputerUse { .. } | ToolCall::Unknown { .. } => {
                 other += 1
             }
@@ -536,6 +541,9 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     }
     if other > 0 {
         segments.push(format!("called {}", plural(other, "tool", "tools")));
+    }
+    if hooks > 0 {
+        segments.push(plural(hooks, "hook", "hooks"));
     }
     if segments.is_empty() {
         segments.push(plural(tools.len(), "tool", "tools"));
