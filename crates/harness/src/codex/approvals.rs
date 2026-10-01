@@ -222,6 +222,8 @@ fn details(params: &Value) -> ApprovalDetails {
             .cloned()
             .unwrap_or_default(),
         choices: Vec::new(),
+        subagent: None,
+        tool: None,
     }
 }
 fn valid_permission_profile(value: &Value) -> bool {

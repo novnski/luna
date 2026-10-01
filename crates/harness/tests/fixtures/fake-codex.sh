@@ -13,7 +13,13 @@ has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
 
 fail_turn() { # $1 = request id, $2 = message
   emit "{\"id\":$1,\"result\":{\"turn\":{\"id\":\"t-bad\"}}}"
-  emit "{\"method\":\"turn/failed\",\"params\":{\"turn\":{\"id\":\"t-bad\",\"error\":{\"message\":\"$2\"}}}}"
+  # v2 has no turn/failed: a failed turn is turn/completed status=failed.
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"th-1\",\"turn\":{\"id\":\"t-bad\",\"status\":\"failed\",\"error\":{\"message\":\"$2\"}}}}"
+}
+
+# Real `thread/turns/list` page shape (probe frames-turns-list.jsonl).
+turn_page() { # $1 = request line, $2 = data json
+  emit "{\"id\":$(rid "$1"),\"result\":{\"data\":$2,\"nextCursor\":null,\"backwardsCursor\":null}}"
 }
 
 # ---- handshake -------------------------------------------------------------
