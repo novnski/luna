@@ -59,9 +59,9 @@ pub(crate) struct SystemFrame {
     pub subagent_type: Option<String>,
     /// `init`: raw MCP rows and capability words, decoded only by `mcp.rs`.
     #[serde(default)]
-    pub mcp_servers: Option<Value>,
+    pub mcp_servers: Option<Box<Value>>,
     #[serde(default)]
-    pub capabilities: Option<Value>,
+    pub capabilities: Option<Box<Value>>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown

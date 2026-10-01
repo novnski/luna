@@ -1,11 +1,12 @@
 //! CC-11: Claude's effective MCP state in the shared integration inventory,
 //! provider-owned enable/disable, and inert MCP Apps resource inspection.
 //!
-//! Sources, never mixed:
-//! - provider readback: `mcp_status` from a control-only Claude process in the
-//!   selected project, once per distinct launch configuration (LUNA's Ask/Auto
-//!   runs use Claude's restricted mode, which loads no configured servers);
-//! - session evidence: the selected chat's own Claude `system:init` report.
+//! Two sources, never mixed. The provider readback is `mcp_status` from a
+//! control-only Claude process in the selected project, once per distinct
+//! launch configuration (LUNA's Ask/Auto runs use Claude's restricted mode,
+//! which loads no configured servers). Session evidence is the selected
+//! chat's own Claude `system:init` report.
+//!
 //! Configuration files are never read or written here; Claude owns its
 //! config, and LUNA never registers or replaces MCP servers.
 
@@ -505,7 +506,7 @@ pub(crate) async fn read_app_resource(
     match tokio::time::timeout(ACTION_TIMEOUT, harness.mcp_control(request)).await {
         Ok(Ok(McpControlReply::AppResource(mut view))) => {
             view.identity = identity.to_owned();
-            Ok(view)
+            Ok(*view)
         }
         Ok(Ok(_)) => Err("Claude returned an unexpected reply".into()),
         Ok(Err(error)) => Err(provider_message(error)),

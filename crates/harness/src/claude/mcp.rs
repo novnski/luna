@@ -314,7 +314,7 @@ fn session_observation(frame: &SystemFrame) -> Option<SessionMcpObservation> {
     {
         return None;
     }
-    let rows = frame.mcp_servers.as_ref()?.as_array()?;
+    let rows = frame.mcp_servers.as_deref()?.as_array()?;
     if rows.len() > MAX_SESSION_SERVERS {
         return None;
     }
@@ -334,7 +334,7 @@ fn session_observation(frame: &SystemFrame) -> Option<SessionMcpObservation> {
     }
     let capabilities: Option<Vec<&str>> = frame
         .capabilities
-        .as_ref()
+        .as_deref()
         .and_then(Value::as_array)
         .map(|words| words.iter().filter_map(Value::as_str).collect());
     Some(SessionMcpObservation {
@@ -838,18 +838,12 @@ fn resource_view(
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let (text_preview, truncated) = match text {
         Some(text) => {
-            let mut preview = String::new();
-            let mut count = 0usize;
-            for c in text.chars() {
-                if count == MAX_PREVIEW_CHARS {
-                    break;
-                }
-                if c == '\n' || c == '\t' || !c.is_control() {
-                    preview.push(c);
-                }
-                count += 1;
-            }
-            (Some(preview), text.chars().count() > MAX_PREVIEW_CHARS)
+            let preview: String = text
+                .chars()
+                .take(MAX_PREVIEW_CHARS)
+                .filter(|c| *c == '\n' || *c == '\t' || !c.is_control())
+                .collect();
+            (Some(preview), text.chars().nth(MAX_PREVIEW_CHARS).is_some())
         }
         None => (None, false),
     };
@@ -955,9 +949,8 @@ async fn read_app_resource(
             )
             .await
         {
-            Ok(Answer::Success(payload)) => {
-                resource_view(server, uri, &payload).map(McpControlReply::AppResource)
-            }
+            Ok(Answer::Success(payload)) => resource_view(server, uri, &payload)
+                .map(|view| McpControlReply::AppResource(Box::new(view))),
             Ok(Answer::Error(message)) if message.contains(UNSUPPORTED_SUBTYPE) => {
                 Err(HarnessError::Protocol(
                     "This Claude CLI does not support MCP Apps resource reads".into(),

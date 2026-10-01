@@ -81,7 +81,7 @@ pub enum McpControlReply {
         message: Option<String>,
     },
     /// `identity` is left empty for the engine to fill.
-    AppResource(ProviderMcpAppResourceView),
+    AppResource(Box<ProviderMcpAppResourceView>),
 }
 
 /// One server row from a session's own start frame.
