@@ -958,13 +958,13 @@ async fn cc01_withdrawn_approval_is_never_answered_late() {
     let token = CancellationToken::new();
     let counter = Arc::clone(&asked);
     let controls = RunControls {
-        // Answer "Allow once" only after the CLI has already withdrawn the
-        // prompt: that answer must never reach the CLI.
+        // The fake withdraws the surfaced prompt after ~300 ms; "Allow once"
+        // arrives after that and must never reach the CLI.
         request_input: Box::new(move |questions: Vec<UserInputQuestion>| {
             *counter.lock().unwrap() += 1;
             let (tx, rx) = oneshot::channel();
             tokio::spawn(async move {
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                tokio::time::sleep(Duration::from_millis(700)).await;
                 let _ = tx.send(
                     questions
                         .iter()

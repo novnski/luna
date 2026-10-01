@@ -67,7 +67,9 @@ case "$first" in
 *scenario:cc01-cancel-approval*)
   emit "$INIT_286"
   emit '{"type":"control_request","request_id":"cr-perm","request":{"subtype":"can_use_tool","tool_name":"Bash","display_name":"Bash","input":{"command":"touch cc01-should-not-run"},"tool_use_id":"toolu_cc01"}}'
-  # The CLI withdraws its prompt (e.g. the turn was interrupted elsewhere).
+  # Let LUNA surface the approval, then withdraw it (e.g. the turn was
+  # interrupted elsewhere, or another client answered).
+  sleep 0.3
   emit '{"type":"control_cancel_request","request_id":"cr-perm"}'
   # The test answers "Allow once" late, inside this window.
   sleep 1
