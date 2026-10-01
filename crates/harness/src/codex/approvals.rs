@@ -372,7 +372,7 @@ fn question(
         Some(label) => (
             format!("{header} · sub-agent {label}"),
             format!(
-                "Codex sub-agent {label}: {}",
+                "Codex sub-agent {label} {}",
                 summary.trim_start_matches("Codex ")
             ),
         ),
