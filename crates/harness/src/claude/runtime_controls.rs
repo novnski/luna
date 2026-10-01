@@ -87,7 +87,7 @@ pub(crate) fn remember_catalog(exe: &Path, response: &Value) {
             Some(levels) => Some(
                 LEVELS
                     .into_iter()
-                    .filter(|level| levels.iter().any(|v| v.as_str() == Some(level)))
+                    .filter(|level| levels.iter().any(|v| v.as_str() == Some(*level)))
                     .collect(),
             ),
             None if entry.get("supportsEffort").and_then(Value::as_bool) == Some(true) => None,
@@ -151,8 +151,8 @@ pub(crate) fn effort_flag(
     let rank = LEVELS.iter().position(|l| *l == level).unwrap_or(0);
     LEVELS[rank..]
         .iter()
-        .find(|l| ladder.contains(l))
-        .or_else(|| LEVELS[..rank].iter().rev().find(|l| ladder.contains(l)))
+        .find(|l| ladder.contains(*l))
+        .or_else(|| LEVELS[..rank].iter().rev().find(|l| ladder.contains(*l)))
         .copied()
 }
 

@@ -96,7 +96,12 @@ impl SessionsEngine {
         let Ok(harness) = self.inner.registry.resolve(harness_id) else {
             return false;
         };
-        if !harness.stage_live_reconfiguration(message_id, &from, &next.live_selection()) {
+        if !luna_harness::Harness::stage_live_reconfiguration(
+            harness.as_ref(),
+            message_id,
+            &from,
+            &next.live_selection(),
+        ) {
             return false;
         }
         {
