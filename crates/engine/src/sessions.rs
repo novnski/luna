@@ -677,7 +677,10 @@ impl RuntimeConfig {
     /// A Codex goal start runs on the loaded runtime when its execution
     /// configuration matches. The native thread-name and strict-resume
     /// options describe how a COLD runtime binds its thread (they are added
-    /// after routing), not how the live one executes, so they are ignored.
+    /// after routing), and the runtime contract's `context` records binding
+    /// metadata that only exists after the first turn; neither changes what
+    /// the loaded runtime executes, so both are ignored. Instructions, tools,
+    /// environment and every other setting must still match.
     fn can_route_goal(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
         let execution = |config: &Self| {
             let mut config = config.clone();
@@ -686,6 +689,13 @@ impl RuntimeConfig {
                 luna_harness::codex::LUNA_STRICT_RESUME_OPTION,
             ] {
                 config.model_options.remove(key);
+            }
+            if let Some(serde_json::Value::Object(contract)) = config
+                .model_options
+                .get_mut(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
+            {
+                contract.remove("context");
+                contract.remove("contentHash");
             }
             config
         };
@@ -3628,16 +3638,6 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
-        if request.goal.is_some() && let Some(h) = lock(&self.inner.runs).get(chat_id) {
-            let now = RuntimeConfig::from_request(harness_id, &request);
-            eprintln!("GOALDEBUG rev {} vs {} steerable {}", h.workspace_repair_revision, workspace_repair_revision, h.steerable);
-            for (key, value) in &h.runtime_config.model_options {
-                if now.model_options.get(key) != Some(value) { eprintln!("GOALDEBUG option {key} differs: {value} vs {:?}", now.model_options.get(key)); }
-            }
-            for key in now.model_options.keys() { if !h.runtime_config.model_options.contains_key(key) { eprintln!("GOALDEBUG new option {key}"); } }
-            let mut a = h.runtime_config.clone(); a.model_options.clear(); let mut b = now.clone(); b.model_options.clear();
-            if a != b { eprintln!("GOALDEBUG config {a:?} vs {b:?}"); }
-        }
         let goal_runtime = request.goal.is_some()
             && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
                 h.workspace_repair_revision == workspace_repair_revision
