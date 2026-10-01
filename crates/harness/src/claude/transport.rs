@@ -494,6 +494,12 @@ impl ControlChannel {
                 let _ = tx.send(SteerAcceptance::Rejected(
                     "Claude cancelled the queued input when the run was stopped".into(),
                 ));
+            } else if input.kind != InputKind::Ordinary {
+                tracing::info!(
+                    target: "luna_harness::claude::transport",
+                    uuid = bounded(uuid), kind = ?input.kind,
+                    "Claude did not run an accepted input (cancelled by Stop)"
+                );
             }
         }
     }
