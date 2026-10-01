@@ -37,6 +37,8 @@ use serde_json::{Value, json};
 #[derive(Clone, Default)]
 struct Recorder {
     runs: Arc<Mutex<Vec<RunRequest>>>,
+    /// `(provider session, steer prompt)` for every accepted native steer.
+    steers: Arc<Mutex<Vec<(String, String)>>>,
     checkpoints: Arc<Mutex<HashMap<String, Vec<String>>>>,
     sequence: Arc<AtomicUsize>,
 }
@@ -61,10 +63,10 @@ impl Harness for Synthetic {
         "pane-chat synthetic provider"
     }
     fn supports_steering(&self) -> bool {
-        false
+        true
     }
     fn steering_mode(&self) -> SteeringMode {
-        SteeringMode::TurnBoundary
+        SteeringMode::StepBoundary
     }
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
         &[ReasoningLevel::Low, ReasoningLevel::Medium, ReasoningLevel::High]
@@ -130,19 +132,53 @@ impl Harness for Synthetic {
             text: format!("ACK {n}"),
         };
         if request.prompt.contains("HOLD") {
-            let interrupt = controls.interrupt.clone();
-            let tail = futures::stream::once(async move {
-                interrupt.cancelled().await;
-                Ok(AgentEvent::Done {
-                    status: DoneStatus::Interrupted,
-                    result: None,
-                    error: None,
-                    session_id: Some(session),
-                })
+            // Holds the turn open: native steers are accepted and recorded,
+            // Stop ends it as interrupted.
+            let RunControls {
+                interrupt,
+                mut steering,
+                ..
+            } = controls;
+            let steers = self.recorder.steers.clone();
+            let (tx, rx) = tokio::sync::mpsc::channel(16);
+            tokio::spawn(async move {
+                let _ = tx.send(Ok(started)).await;
+                let _ = tx.send(Ok(text)).await;
+                let status = loop {
+                    tokio::select! {
+                        _ = interrupt.cancelled() => break DoneStatus::Interrupted,
+                        steer = steering.recv() => match steer {
+                            Some(mut steer) => {
+                                if let Some(ack) = steer.acceptance.take() {
+                                    let _ = ack.send(luna_harness::SteerAcceptance::Accepted);
+                                }
+                                steers.lock().unwrap().push((session.clone(), steer.prompt.clone()));
+                                let _ = tx.send(Ok(AgentEvent::Steered {
+                                    user_message_id: steer.message_id.clone(),
+                                    assistant_message_id: None,
+                                    next_assistant_message_id: Some(uuid::Uuid::new_v4().to_string()),
+                                })).await;
+                                let _ = tx.send(Ok(AgentEvent::TextDelta {
+                                    text: format!("STEERED {}", steer.prompt),
+                                })).await;
+                            }
+                            None => break DoneStatus::Completed,
+                        },
+                    }
+                };
+                let _ = tx
+                    .send(Ok(AgentEvent::Done {
+                        status,
+                        result: None,
+                        error: None,
+                        session_id: Some(session),
+                    }))
+                    .await;
             });
-            return Ok(futures::stream::iter(vec![Ok(started), Ok(text)])
-                .chain(tail)
-                .boxed());
+            return Ok(futures::stream::unfold(rx, |mut rx| async move {
+                rx.recv().await.map(|item| (item, rx))
+            })
+            .boxed());
         }
         Ok(futures::stream::iter(vec![
             Ok(started),
@@ -985,6 +1021,546 @@ async fn codex_side_chat_forks_inherits_and_runs_independently() {
 #[tokio::test(flavor = "multi_thread")]
 async fn claude_side_chat_forks_inherits_and_runs_independently() {
     side_chat_forks_inherits_and_runs_independently(HarnessId::ClaudeCode, "full").await;
+}
+
+// ---------------------------------------------------------------------------
+// Side chats on the ordinary composer path (task commands and per-chat RPCs)
+// ---------------------------------------------------------------------------
+
+/// A valid 1×1 PNG: native image admission sniffs the real format.
+const PNG_1X1: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+    0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x64, 0x60, 0xF8, 0x5F,
+    0x0F, 0x00, 0x02, 0x87, 0x01, 0x80, 0xEB, 0x47, 0xBA, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+/// An ordinary task command, fenced on the task's current snapshot the way the
+/// composer's `task_commands::execute` does.
+async fn command(client: &RpcClient, task: &str, id: &str, intent: Value) -> Result<Value, String> {
+    let snapshot: luna_proto::TaskCommandRead = client
+        .call_as(luna_rpc::methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId": task}))
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut envelope = json!({
+        "commandId": id, "actorId": "pane-test", "clientId": "pane-test",
+        "clientSessionId": "pane-test", "taskId": task, "intent": intent,
+        "expectedTaskRevision": snapshot.snapshot.task_revision,
+    });
+    if let Some(generation) = snapshot.snapshot.binding_generation {
+        envelope["expectedBindingGeneration"] = generation.into();
+    }
+    if let Some(turn) = snapshot.snapshot.active_turn_id {
+        envelope["expectedTurnId"] = turn.into();
+    }
+    client
+        .call(luna_rpc::methods::EXECUTE_TASK_COMMAND, envelope)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn queue_with(client: &RpcClient, chat: &str, params: Value) -> Result<Value, String> {
+    let mut params = params;
+    params["chatId"] = chat.into();
+    client
+        .call("QueueMessage", params)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Failure context for one chat: queue rows, transcript and session status.
+fn chat_diag(core: &EngineCore, recorder: &Recorder, chat: &str) -> String {
+    let mut out = format!(
+        "status {:?}; in flight {}\n",
+        core.sessions.session_status(chat).map(|s| s.status),
+        core.sessions.turn_in_flight(chat)
+    );
+    if let Ok(handle) = core.doc_host.open(chat) {
+        for row in handle.doc().read_queue().unwrap_or_default() {
+            out.push_str(&format!(
+                "  queue {} {:?} hold={:?} gate={:?}\n",
+                row.id, row.status, row.hold_reason, row.delivery_gate
+            ));
+        }
+        for entry in handle.doc().read_entries().unwrap_or_default() {
+            out.push_str(&format!("  entry {:?} {} {:?}\n", entry.role, entry.id, entry.parts));
+        }
+    }
+    out.push_str(&run_summary(recorder));
+    out
+}
+
+async fn until_diag(what: &str, mut ready: impl FnMut() -> bool, diag: impl Fn() -> String) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !ready() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for {what}\n{}",
+            diag()
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+async fn until_diag_side(
+    core: &EngineCore,
+    recorder: &Recorder,
+    side: &str,
+    what: &str,
+    ready: impl FnMut() -> bool,
+) {
+    until_diag(what, ready, || chat_diag(core, recorder, side)).await;
+}
+
+fn queued_ids(core: &EngineCore, chat: &str) -> Vec<String> {
+    core.doc_host
+        .open(chat)
+        .and_then(|handle| Ok(handle.doc().read_queue()?))
+        .map(|rows| rows.into_iter().map(|row| row.id).collect())
+        .unwrap_or_default()
+}
+
+/// G1–G7, G10 for one provider identity: queue, steer, attachments, the
+/// ordinary Stop, model/effort and access changes on a leased side chat,
+/// while the parent's run, queue, config and transcript stay untouched.
+async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
+    use base64::Engine as _;
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_test_writer()
+        .try_init();
+    let tmp = tempfile::tempdir().unwrap();
+    let base = tmp.path().canonicalize().unwrap();
+    let repo = base.join(format!("repo-pane-side-ordinary-{}", provider_name(id)));
+    init_repo(&repo);
+    let (core, recorder) = assemble(&base, id);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    core.workspace
+        .create_space("space-ordinary", &core.device_id, repo.to_str().unwrap(), None, true)
+        .unwrap();
+    let parent = uuid::Uuid::new_v4().to_string();
+    create_chat(
+        &client,
+        &parent,
+        "space-ordinary",
+        &repo,
+        config(id, mode, "parent-model", "medium"),
+    )
+    .await;
+    core.workspace.set_chat_branch(&parent, "main").unwrap();
+    queue(&client, &parent, "parent-context", "PARENT_CONTEXT").await;
+    until("parent bound and idle", || {
+        runs_for(&recorder, &parent).len() == 1
+            && !core.sessions.turn_in_flight(&parent)
+            && core
+                .task_identity
+                .view(&parent)
+                .and_then(|view| view.current_binding)
+                .is_some_and(|binding| !binding.provider_task_id.is_empty())
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let parent_before = core.workspace.chat(&parent).unwrap().unwrap();
+    let parent_entries = entry_count(&core, &parent);
+    let parent_untouched = |core: &EngineCore, recorder: &Recorder, step: &str| {
+        assert_eq!(runs_for(recorder, &parent).len(), 1, "{step}: parent ran");
+        assert!(!core.sessions.turn_in_flight(&parent), "{step}: parent busy");
+        assert_eq!(queue_len(core, &parent), 0, "{step}: parent queue");
+        assert_eq!(entry_count(core, &parent), parent_entries, "{step}: parent transcript");
+        assert_eq!(
+            core.workspace.chat(&parent).unwrap().unwrap().config,
+            parent_before.config,
+            "{step}: parent config"
+        );
+        assert!(
+            recorder.steers.lock().unwrap().iter().all(|(session, _)| {
+                Some(session) != parent_before.harness_session_id.as_ref()
+            }),
+            "{step}: parent steered"
+        );
+    };
+    let created: Value = client
+        .call(
+            "CreateSideChat",
+            json!({"parentId": parent, "requestId": uuid::Uuid::new_v4().to_string()}),
+        )
+        .await
+        .unwrap();
+    let side = created["meta"]["id"].as_str().unwrap().to_owned();
+    let lease = created["lease"].as_str().unwrap().to_owned();
+    let fork_session = core
+        .workspace
+        .chat(&side)
+        .unwrap()
+        .unwrap()
+        .harness_session_id
+        .unwrap();
+
+    // pane-ui gate: the capability is advertised and the live side chat is
+    // published in WatchChats without spaceId (never a sidebar task).
+    let info: Value = client
+        .call(luna_rpc::methods::ENGINE_INFO, json!({}))
+        .await
+        .unwrap();
+    assert!(
+        info["capabilities"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|capability| capability == "side-chat-task-commands-v1"),
+        "{info}"
+    );
+    let mut chats = client
+        .subscribe(luna_rpc::methods::WATCH_CHATS, json!({}))
+        .await
+        .unwrap();
+    let rows = tokio::time::timeout(Duration::from_secs(5), chats.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let side_published = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == side.as_str())
+        .cloned()
+        .expect("live side chat row published");
+    assert!(side_published.get("spaceId").is_none(), "{side_published}");
+    assert_eq!(side_published["sideChatParentId"], parent.as_str());
+    assert_eq!(side_published["config"]["model"], "parent-model");
+    assert!(
+        rows.as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == parent.as_str() && row["spaceId"].is_string())
+    );
+    drop(chats);
+    // The per-chat reads the full composer binds accept the side id.
+    for method in [
+        luna_rpc::methods::WATCH_DOC_MESSAGES,
+        luna_rpc::methods::WATCH_QUEUE,
+        luna_rpc::methods::WATCH_NATIVE_TASKS,
+    ] {
+        let stream = client.subscribe_checked(method, json!({"chatId": side})).await;
+        assert!(stream.is_ok(), "{method}: {:?}", stream.err());
+    }
+    client
+        .call(
+            luna_rpc::methods::GET_COMPOSER_DRAFT,
+            json!({"taskId": side}),
+        )
+        .await
+        .unwrap();
+
+    // G3: an attachment through the ordinary upload + QueueMessage path.
+    client
+        .call(
+            luna_rpc::methods::UPLOAD_CHUNK,
+            json!({"uploadId":"att-side","seq":0,
+                "data": base64::engine::general_purpose::STANDARD.encode(PNG_1X1)}),
+        )
+        .await
+        .unwrap();
+    client
+        .call(
+            luna_rpc::methods::UPLOAD_COMMIT,
+            json!({"uploadId":"att-side","fileName":"pic.png"}),
+        )
+        .await
+        .unwrap();
+    queue_with(
+        &client,
+        &side,
+        json!({"messageId":"side-q1","holdForTurnEnd":true,
+            "text":"HOLD side work\n\nAttached images (local files — open them to view):\n- pending://att-side/pic.png",
+            "attachments":["pending://att-side/pic.png"]}),
+    )
+    .await
+    .unwrap();
+    until_diag(
+        "side ordinary run",
+        || core.sessions.turn_in_flight(&side) && !runs_for(&recorder, &side).is_empty(),
+        || chat_diag(&core, &recorder, &side),
+    )
+    .await;
+    let run = runs_for(&recorder, &side)[0].clone();
+    assert!(run.prompt.contains("HOLD side work"), "{}", run.prompt);
+    assert_eq!(run.attachments.len(), 1, "{:?}", run.attachments);
+    assert!(run.attachments[0].ends_with("att-side-pic.png"), "{:?}", run.attachments);
+    assert_eq!(run.resume.as_deref(), Some(fork_session.as_str()));
+    assert_eq!(
+        contract(&run).context.chat.unwrap().role,
+        RuntimeChatRole::Side
+    );
+    parent_untouched(&core, &recorder, "attachment run");
+
+    // G4: steer reaches the running side turn only.
+    queue_with(
+        &client,
+        &side,
+        json!({"messageId":"side-steer","text":"STEER into side","holdForTurnEnd":true,
+            "followUpBehavior":"steer"}),
+    )
+    .await
+    .unwrap();
+    until_diag_side(&core, &recorder, &side, "side steer", || {
+        recorder
+            .steers
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(session, prompt)| session == &fork_session && prompt == "STEER into side")
+    })
+    .await;
+    assert!(core.sessions.turn_in_flight(&side));
+    parent_untouched(&core, &recorder, "steer");
+
+    // G4: queue while the side turn runs holds in the side queue only.
+    queue_with(
+        &client,
+        &side,
+        json!({"messageId":"side-q2","text":"QUEUED after hold","holdForTurnEnd":true}),
+    )
+    .await
+    .unwrap();
+    until_diag_side(&core, &recorder, &side, "side queue holds", || queued_ids(&core, &side).contains(&"side-q2".to_string())).await;
+    parent_untouched(&core, &recorder, "queue");
+
+    // G5: the ordinary Stop task command stops only the side turn.
+    command(
+        &client,
+        &side,
+        "side-stop",
+        json!({"kind":"session","command":{"kind":"interrupt"}}),
+    )
+    .await
+    .unwrap();
+    until_diag_side(&core, &recorder, &side, "side stopped", || !core.sessions.turn_in_flight(&side)).await;
+    parent_untouched(&core, &recorder, "stop");
+    // The held follow-up still belongs to the side chat; send it now if the
+    // queue was paused by Stop.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while tokio::time::Instant::now() < deadline
+        && !runs_for(&recorder, &side)
+            .iter()
+            .any(|run| run.prompt.contains("QUEUED after hold"))
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if !runs_for(&recorder, &side)
+        .iter()
+        .any(|run| run.prompt.contains("QUEUED after hold"))
+    {
+        command(
+            &client,
+            &side,
+            "side-send-q2",
+            json!({"kind":"sendQueuedNow","messageId":"side-q2"}),
+        )
+        .await
+        .unwrap();
+    }
+    until_diag_side(&core, &recorder, &side, "queued side follow-up ran", || {
+        runs_for(&recorder, &side)
+            .iter()
+            .any(|run| run.prompt.contains("QUEUED after hold"))
+            && !core.sessions.turn_in_flight(&side)
+    })
+    .await;
+
+    // Like a main chat, Stop freezes the side queue until a fresh
+    // user-authored turn: the composer's idle send is a session `run`.
+    let side_row = core.workspace.chat(&side).unwrap().unwrap();
+    let side_config_now = side_row.config.clone().unwrap();
+    let fresh = RunRequest {
+        review: None,
+        goal: None,
+        input_items: Vec::new(),
+        prompt: "fresh turn after stop".into(),
+        harness: Some(id),
+        provider_account_id: side_config_now.provider_account_id.clone(),
+        model: side_config_now.model.clone(),
+        reasoning: side_config_now.reasoning,
+        model_options: Default::default(),
+        cwd: side_row.cwd.clone().unwrap(),
+        sandbox: side_config_now.sandbox,
+        auto_approve: false,
+        permission_mode: side_config_now.permission_mode,
+        parent_permission_ceiling: None,
+        environment_permission_ceiling: None,
+        permission_policy: None,
+        attachments: Vec::new(),
+        worktree: None,
+        resume: None,
+    };
+    command(
+        &client,
+        &side,
+        "side-fresh",
+        json!({"kind":"session","command":{"kind":"run","messageId":"side-fresh","request": fresh}}),
+    )
+    .await
+    .unwrap();
+    until_diag_side(&core, &recorder, &side, "fresh side turn", || {
+        runs_for(&recorder, &side)
+            .iter()
+            .any(|run| run.prompt == "fresh turn after stop")
+            && !core.sessions.turn_in_flight(&side)
+    })
+    .await;
+    parent_untouched(&core, &recorder, "fresh turn");
+
+    // G6: model/effort change on the side chat applies to its next turn only.
+    let mut side_config = core.workspace.chat(&side).unwrap().unwrap().config.unwrap();
+    side_config.model = Some("side-model".into());
+    side_config.reasoning = Some(ReasoningLevel::Low);
+    command(
+        &client,
+        &side,
+        "side-model",
+        json!({"kind":"setModel","config": side_config}),
+    )
+    .await
+    .unwrap();
+    let before = runs_for(&recorder, &side).len();
+    queue_with(&client, &side, json!({"messageId":"side-q3","text":"after model change","holdForTurnEnd":true}))
+        .await
+        .unwrap();
+    until_diag_side(&core, &recorder, &side, "side model run", || {
+        runs_for(&recorder, &side).len() == before + 1 && !core.sessions.turn_in_flight(&side)
+    })
+    .await;
+    let run = runs_for(&recorder, &side)[before].clone();
+    assert_eq!(run.model.as_deref(), Some("side-model"));
+    assert_eq!(run.reasoning, Some(ReasoningLevel::Low));
+    parent_untouched(&core, &recorder, "model change");
+
+    // G6: access change on the side chat; above the parent's ceiling it is capped.
+    command(&client, &side, "side-ask", json!({"kind":"setPermission","mode":"ask"}))
+        .await
+        .unwrap();
+    let before = runs_for(&recorder, &side).len();
+    queue_with(&client, &side, json!({"messageId":"side-q4","text":"after access change","holdForTurnEnd":true}))
+        .await
+        .unwrap();
+    until_diag_side(&core, &recorder, &side, "side ask run", || runs_for(&recorder, &side).len() == before + 1).await;
+    assert_eq!(
+        runs_for(&recorder, &side)[before]
+            .permission_policy
+            .as_ref()
+            .unwrap()
+            .effective_mode,
+        PermissionMode::Ask
+    );
+    until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
+    if mode != "full" {
+        command(&client, &side, "side-full", json!({"kind":"setPermission","mode":"full"}))
+            .await
+            .unwrap();
+        let before = runs_for(&recorder, &side).len();
+        queue_with(&client, &side, json!({"messageId":"side-q5","text":"above parent","holdForTurnEnd":true}))
+            .await
+            .unwrap();
+        until_diag_side(&core, &recorder, &side, "side capped run", || runs_for(&recorder, &side).len() == before + 1).await;
+        let policy = runs_for(&recorder, &side)[before].permission_policy.clone().unwrap();
+        assert_eq!(
+            policy.effective_mode,
+            parent_before.config.as_ref().unwrap().effective_permission_mode,
+            "a side chat never runs above its parent"
+        );
+        until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
+    }
+    parent_untouched(&core, &recorder, "access change");
+
+    // G7: commands that would leave the parent's checkout/provider are refused.
+    for (key, intent, reason) in [
+        ("side-cwd", json!({"kind":"setCwd","cwd": base}), "shares its parent's checkout"),
+        ("side-branch", json!({"kind":"setBranch","branch":"other"}), "shares its parent's checkout"),
+        ("side-archive", json!({"kind":"setArchived","archived":true}), "not sidebar tasks"),
+        ("side-account", json!({"kind":"setProviderAccount","accountId":"other"}), "keeps its parent's provider"),
+    ] {
+        let error = command(&client, &side, key, intent).await.expect_err(key);
+        assert!(error.contains(reason), "{key}: {error}");
+    }
+
+    // G10: the legacy side-panel send still works alongside.
+    client
+        .call(
+            "SendSideChat",
+            json!({"id":side,"lease":lease,"messageId":"side-legacy","text":"legacy send"}),
+        )
+        .await
+        .unwrap();
+    until_diag_side(&core, &recorder, &side, "legacy side send", || {
+        runs_for(&recorder, &side)
+            .iter()
+            .any(|run| run.prompt == "legacy send")
+    })
+    .await;
+    until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
+    // The legacy send now honours the side chat's own model change.
+    assert_eq!(
+        runs_for(&recorder, &side)
+            .iter()
+            .find(|run| run.prompt == "legacy send")
+            .unwrap()
+            .model
+            .as_deref(),
+        Some("side-model")
+    );
+
+    // RenewSideChat keeps the lease without a history read.
+    let renewed: Value = client
+        .call("RenewSideChat", json!({"id":side,"lease":lease}))
+        .await
+        .unwrap();
+    assert_eq!(renewed["state"], "active");
+
+    // G2: after unload the side chat is read-only for ordinary commands too.
+    client
+        .call("UnloadSideChat", json!({"id":side,"lease":lease}))
+        .await
+        .unwrap();
+    let error = queue_with(&client, &side, json!({"messageId":"side-late","text":"late","holdForTurnEnd":true}))
+        .await
+        .unwrap_err();
+    assert!(error.contains("read-only"), "{error}");
+    let error = command(&client, &side, "side-late-stop", json!({"kind":"session","command":{"kind":"interrupt"}}))
+        .await
+        .unwrap_err();
+    assert!(error.contains("read-only"), "{error}");
+    assert!(!queued_ids(&core, &side).contains(&"side-late".to_string()));
+    let stream = client
+        .subscribe_checked(luna_rpc::methods::WATCH_DOC_MESSAGES, json!({"chatId": side}))
+        .await;
+    assert!(stream.is_err(), "an unloaded side chat is not a live chat");
+    parent_untouched(&core, &recorder, "after unload");
+    evidence(
+        &format!("side-ordinary-{}-summary.json", provider_name(id)),
+        &json!({
+            "parent": parent, "side": side, "forkSession": fork_session,
+            "sideRuns": runs_for(&recorder, &side).iter().map(|run| json!({
+                "prompt": run.prompt, "model": run.model, "reasoning": run.reasoning,
+                "attachments": run.attachments, "resume": run.resume,
+                "effectiveMode": run.permission_policy.as_ref().map(|p| p.effective_mode),
+            })).collect::<Vec<_>>(),
+            "steers": recorder.steers.lock().unwrap().clone(),
+            "parentRuns": runs_for(&recorder, &parent).len(),
+        }),
+    );
+    drop(client);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn codex_side_chat_ordinary_queue_steer_stop_attachments_and_model() {
+    side_chat_ordinary_commands(HarnessId::Codex, "auto").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn claude_side_chat_ordinary_queue_steer_stop_attachments_and_model() {
+    side_chat_ordinary_commands(HarnessId::ClaudeCode, "full").await;
 }
 
 // ---------------------------------------------------------------------------

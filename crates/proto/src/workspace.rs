@@ -17,6 +17,9 @@ pub mod capabilities {
     pub const TASK_IDENTITY_V1: &str = "task-identity-v1";
     pub const SESSION_HISTORY_SEARCH_V1: &str = "session-history-search-v1";
     pub const REMOTE_AUTH_V1: &str = "remote-auth-v1";
+    /// A side chat with a live view lease accepts ordinary task commands and
+    /// per-chat RPCs, and is published in `WatchChats` without `spaceId`.
+    pub const SIDE_CHAT_TASK_COMMANDS_V1: &str = "side-chat-task-commands-v1";
 
     pub const CURRENT: &[&str] = &[
         LUNA_OWNER_IPC_V1,
@@ -27,6 +30,7 @@ pub mod capabilities {
         MESSAGE_QUEUE_EDIT_LEASE_V1,
         TASK_IDENTITY_V1,
         SESSION_HISTORY_SEARCH_V1,
+        SIDE_CHAT_TASK_COMMANDS_V1,
     ];
 
     pub fn current() -> Vec<String> {
@@ -95,12 +99,15 @@ mod tests {
                 "deviceId": "device-1",
                 "workspaceScope": "local",
                 "capabilities": [
+                    "luna-owner-ipc-v1",
                     "message-queue-v1",
                     "message-queue-actions-v1",
                     "message-queue-attachments-v1",
                     "message-queue-clean-attachment-text-v1",
                     "message-queue-edit-lease-v1",
-                    "task-identity-v1"
+                    "task-identity-v1",
+                    "session-history-search-v1",
+                    "side-chat-task-commands-v1"
                 ],
             })
         );

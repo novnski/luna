@@ -1324,11 +1324,17 @@ struct Inner {
     turn_listener: OnceLock<TurnListener>,
     git_checkpoints: OnceLock<crate::git_checkpoints::GitCheckpoints>,
     side_chat_lookup: OnceLock<SideChatLookup>,
+    side_chat_admission: OnceLock<SideChatAdmission>,
 }
 
 /// Turn-start hook: called with `(chat_id, cwd)`.
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type SideChatLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+/// Lease-gated admission of an ordinary-path run for a side chat: checks the
+/// live view lease, applies the parent ceiling and the first-turn seed.
+pub(crate) type SideChatAdmission = Arc<
+    dyn Fn(&str, &mut RunRequest, &mut Option<String>) -> Result<(), EngineError> + Send + Sync,
+>;
 
 /// CC-06 live accounting and native live model/effort switch hooks.
 #[path = "sessions_cc06.rs"]
@@ -1395,6 +1401,7 @@ impl SessionsEngine {
                 turn_listener: OnceLock::new(),
                 git_checkpoints: OnceLock::new(),
                 side_chat_lookup: OnceLock::new(),
+                side_chat_admission: OnceLock::new(),
             }),
         }
     }
@@ -3511,6 +3518,31 @@ impl SessionsEngine {
         let _ = self.inner.side_chat_lookup.set(lookup);
     }
 
+    pub(crate) fn set_side_chat_admission(&self, admission: SideChatAdmission) {
+        let _ = self.inner.side_chat_admission.set(admission);
+    }
+
+    /// A side chat reaches the ordinary dispatch path only through its lease.
+    fn admit_side_chat_run(
+        &self,
+        chat_id: &str,
+        request: &mut RunRequest,
+        message_id: &mut Option<String>,
+    ) -> Result<(), EngineError> {
+        if !self
+            .inner
+            .side_chat_lookup
+            .get()
+            .is_some_and(|lookup| lookup(chat_id))
+        {
+            return Ok(());
+        }
+        let admission = self.inner.side_chat_admission.get().ok_or_else(|| {
+            EngineError::Other("Side chats require an active side-panel lease".into())
+        })?;
+        admission(chat_id, request, message_id)
+    }
+
     pub(crate) async fn dispatch_side_chat(
         &self,
         chat_id: &str,
@@ -3539,16 +3571,7 @@ impl SessionsEngine {
         request: RunRequest,
         message_id: Option<String>,
     ) -> Result<String, EngineError> {
-        if self
-            .inner
-            .side_chat_lookup
-            .get()
-            .is_some_and(|lookup| lookup(chat_id))
-        {
-            return Err(EngineError::Other(
-                "Side chats require an active side-panel lease".into(),
-            ));
-        }
+        // Side-chat lease admission happens once, in the revision-bound path.
         let workspace_revision = self.inner.recovery.workspace_repair_revision(chat_id)?;
         self.dispatch_at_workspace_revision(
             chat_id,
@@ -3567,20 +3590,11 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         harness_id: HarnessId,
-        request: RunRequest,
-        message_id: Option<String>,
+        mut request: RunRequest,
+        mut message_id: Option<String>,
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
-        if self
-            .inner
-            .side_chat_lookup
-            .get()
-            .is_some_and(|lookup| lookup(chat_id))
-        {
-            return Err(EngineError::Other(
-                "Side chats require an active side-panel lease".into(),
-            ));
-        }
+        self.admit_side_chat_run(chat_id, &mut request, &mut message_id)?;
         self.dispatch_with_context(
             chat_id,
             harness_id,
