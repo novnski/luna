@@ -933,6 +933,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::ProviderTurnStarted { .. }
         | AgentEvent::GoalChanged { .. }
         | AgentEvent::NativeSchedules { .. }
+        | AgentEvent::NativeTaskChanged { .. }
         | AgentEvent::ChildStatus { .. }
         | AgentEvent::ProviderNotice { .. }
         | AgentEvent::ChildProgress { .. }

@@ -81,6 +81,9 @@ pub(crate) struct SystemFrame {
     /// `peer_message_hold` fields (state/lane/from/cause/outcome…).
     #[serde(flatten)]
     pub peer_hold: Box<super::peer::PeerHoldFields>,
+    /// Workflow/teammate task fields (tolerant raw values; see coordination).
+    #[serde(flatten)]
+    pub task_fields: super::coordination::TaskFrameFields,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown

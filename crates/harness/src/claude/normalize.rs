@@ -242,6 +242,8 @@ pub(crate) struct Normalizer {
     pub(crate) native: super::turns::NativeTracker,
     /// Cross-session peer arrivals and receive-side holds.
     peer: super::peer::PeerState,
+    /// Native workflows/teammates/remote agents (never subagent spawns).
+    coordination: super::coordination::CoordinationTracker,
 }
 
 impl Normalizer {
@@ -256,6 +258,7 @@ impl Normalizer {
             session_id: None,
             native: Default::default(),
             peer: Default::default(),
+            coordination: Default::default(),
         }
     }
 
@@ -285,6 +288,11 @@ impl Normalizer {
         match frame {
             Frame::System(f) if f.subtype == "peer_message_hold" => self.peer.hold_events(&f),
             Frame::System(f) => {
+                // Native workflows/teammates/remote agents (CC-13) first: they
+                // are never subagent spawns.
+                if let Some(events) = self.coordination.observe(&f) {
+                    return events;
+                }
                 // Agent/shell/workflow task lifecycle (started, progress,
                 // updated, notification): attributed to its owning spawn or
                 // dropped, never a root event. See `native_tasks`.

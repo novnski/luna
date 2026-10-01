@@ -42,7 +42,14 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(8.0));
-        if rows.is_empty() {
+        // Native workflows/teammates are their own family, never subagent rows.
+        let native =
+            crate::claude_advanced::native_task_section(&theme, &self.state.read(cx).native_tasks);
+        let has_native = native.is_some();
+        if let Some(section) = native {
+            content = content.child(section);
+        }
+        if rows.is_empty() && !has_native {
             content = content.child(div().p(px(20.0)).text_color(theme.text_muted).child("No agents yet. Native subagents from this conversation appear here when the provider reports them."));
         }
         for (id, title, label, activity, metrics, doc_id, frozen) in rows {

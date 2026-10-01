@@ -31,8 +31,10 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 mod accounting;
+pub mod background_sessions;
 pub mod catalog;
 mod controls;
+mod coordination;
 mod delivery;
 mod discovery;
 mod events;
@@ -216,6 +218,7 @@ impl ClaudeHarness {
     fn build_command(&self, exe: &PathBuf, request: &RunRequest, tools: ToolSelection) -> Command {
         let mut cmd = Command::new(exe);
         crate::compose_child_path(&mut cmd, exe);
+        coordination::scrub_inherited_session_env(&mut cmd);
         cmd.args([
             "--print",
             "--input-format",
@@ -327,6 +330,7 @@ impl ClaudeHarness {
         discovery::initialize_probe(
             &exe,
             |cmd| {
+                coordination::scrub_inherited_session_env(cmd);
                 cmd.arg("--settings");
                 cmd.arg(Value::Object(profile::discovery_settings()).to_string());
                 if let Some(home) = &home {
@@ -462,9 +466,15 @@ impl Harness for ClaudeHarness {
             return Ok(commands);
         }
         let settings = profile::discovery_settings();
-        let response =
-            discovery::initialize_probe(&exe, |cmd| profile.apply(cmd, &settings), self.kill_grace)
-                .await?;
+        let response = discovery::initialize_probe(
+            &exe,
+            |cmd| {
+                coordination::scrub_inherited_session_env(cmd);
+                profile.apply(cmd, &settings);
+            },
+            self.kill_grace,
+        )
+        .await?;
         let commands = parse_initialize_commands(&response);
         self.discovery.put(key, commands.clone());
         Ok(commands)
@@ -612,6 +622,11 @@ impl ClaudeHarness {
         } else {
             ToolSelection::ModeDefault
         };
+        // CC-13: never become a second writer of a session another live
+        // Claude process owns.
+        if !title_only && let Some(resume) = request.resume.as_deref() {
+            background_sessions::refuse_concurrent_writer(&exe, resume).await?;
+        }
         let mut cmd = self.build_command(&exe, &request, tools);
         if title_only {
             cmd.args([

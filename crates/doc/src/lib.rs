@@ -11,6 +11,7 @@
 pub mod commands;
 pub mod constants;
 pub mod native_output;
+pub mod native_tasks;
 pub mod parts;
 pub mod queue;
 pub mod rebuild;

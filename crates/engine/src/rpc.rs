@@ -10024,6 +10024,20 @@ impl RpcService for EngineRpc {
                     handle.doc_arc(),
                 )))
             }
+            methods::WATCH_NATIVE_TASKS => {
+                let p: ChatParams = parse_params(params)?;
+                let handle = self
+                    .doc_host
+                    .open(&p.chat_id)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(crate::native_tasks::watch_stream(
+                    handle.watch_messages(),
+                    handle.doc_arc(),
+                )))
+            }
+            methods::LIST_CLAUDE_EXTERNAL_SESSIONS => {
+                RpcReply::value(&crate::native_tasks::list_claude_external_sessions().await)
+            }
             methods::WATCH_QUEUE => {
                 let p: ChatParams = parse_params(params)?;
                 let handle = self
