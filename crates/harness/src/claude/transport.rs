@@ -285,6 +285,7 @@ impl ControlChannel {
                     .collect()
             })
             .unwrap_or_default();
+        let before = self.snapshot.clone();
         // A wake turn re-emits init; a capability never disappears mid-process.
         self.snapshot.capabilities.extend(advertised);
         if let Some(version) = init.get("claude_code_version").and_then(Value::as_str) {
@@ -304,9 +305,17 @@ impl ControlChannel {
             }
             self.snapshot.native_permission_mode = Some(mode);
         }
-        tracing::debug!(
+        if self.snapshot == before {
+            return;
+        }
+        tracing::info!(
             target: "luna_harness::claude::transport",
             version = self.snapshot.cli_version.as_deref().unwrap_or("unknown"),
+            permission_mode = self
+                .snapshot
+                .native_permission_mode
+                .as_deref()
+                .unwrap_or("unreported"),
             interrupt_receipt = self.snapshot.has(CAP_INTERRUPT_RECEIPT),
             interrupt_cancel_queued = self.snapshot.has(CAP_INTERRUPT_CANCEL_QUEUED),
             msg_lifecycle = self.snapshot.has(CAP_MSG_LIFECYCLE),
