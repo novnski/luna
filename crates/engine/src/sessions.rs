@@ -674,6 +674,27 @@ impl RuntimeConfig {
         }
     }
 
+    /// A Codex goal start runs on the loaded runtime when its execution
+    /// configuration matches. The native thread-name and strict-resume
+    /// options describe how a COLD runtime binds its thread (they are added
+    /// after routing), not how the live one executes, so they are ignored.
+    fn can_route_goal(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
+        let execution = |config: &Self| {
+            let mut config = config.clone();
+            for key in [
+                luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION,
+                luna_harness::codex::LUNA_STRICT_RESUME_OPTION,
+            ] {
+                config.model_options.remove(key);
+            }
+            config
+        };
+        harness_id == HarnessId::Codex
+            && request.review.is_none()
+            && request.goal.is_some()
+            && execution(self) == execution(&Self::from_request(harness_id, request))
+    }
+
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
         // Codex's warm mailbox carries typed inputs and attachments; other
         // harnesses take text only. Native review targets require a fresh
@@ -3607,6 +3628,11 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
+        let goal_runtime = request.goal.is_some()
+            && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
+                h.workspace_repair_revision == workspace_repair_revision
+                    && h.runtime_config.can_route_goal(harness_id, &request)
+            });
         if routed.as_ref().is_some_and(|(_, _, _, _, ledger)| {
             lock(ledger)
                 .iter()
@@ -3625,7 +3651,7 @@ impl SessionsEngine {
             let user_id = message_id.clone().unwrap_or_else(new_id);
             if let Some(goal) = request.goal.clone()
                 && steerable
-                && same_runtime
+                && goal_runtime
                 && self
                     .start_goal_on_live_runtime(
                         chat_id, &run_id, &steer_tx, &user_id, &request, goal,
