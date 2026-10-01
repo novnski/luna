@@ -8821,7 +8821,10 @@ impl Composer {
                     serde_json::json!({ "spaceId": space.id, "permissionMode": mode }),
                     format!("space:{}:{mode:?}", space.id),
                 ),
-                (None, None) => (serde_json::json!({}), String::new()),
+                (None, None) => (
+                    serde_json::json!({ "permissionMode": mode }),
+                    format!("none:{mode:?}"),
+                ),
             }
         };
         let harness_changed = self.slash.harness != harness || self.slash.scope != scope;
