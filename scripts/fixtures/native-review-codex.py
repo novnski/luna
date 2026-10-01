@@ -86,16 +86,26 @@ for line in sys.stdin:
         emit({"id": request_id, "result": {"turn": {"id": active_turn, "status": "inProgress", "items": []}, "reviewThreadId": returned_thread}})
         if returned_thread != thread_id:
             continue
-        notify("turn/started", {"threadId": thread_id, "turn": {"id": active_turn, "status": "inProgress"}})
+        # Real Codex 0.159 shape (qa-parity/probe-review/frames.jsonl): no
+        # turn/started for the root turn; entered/exited items and the final
+        # turn/completed carry the root id, while ONE turn/started announces a
+        # different review sub-turn id.
         entry = {"id": active_turn + "-entry", "type": "enteredReviewMode", "review": target["type"]}
         for phase in ("started", "completed"):
             notify("item/" + phase, {"threadId": thread_id, "turnId": active_turn, "item": entry})
+        notify("turn/started", {"threadId": thread_id, "turn": {"id": active_turn + "-review", "items": [], "status": "inProgress"}})
         if "[hold]" in target.get("instructions", ""):
             continue
-        final = {"id": active_turn + "-exit", "type": "exitedReviewMode", "review": f"[P1] Fixture finding for {target['type']}\n\nInspect fixture.js:1. Deterministic protocol evidence only."}
+        notify("item/started", {"threadId": thread_id, "turnId": active_turn, "item": {"id": active_turn + "-final", "type": "agentMessage", "text": "", "phase": "final_answer"}})
+        review_text = f"[P1] Fixture finding for {target['type']}\n\nInspect fixture.js:1. Deterministic protocol evidence only."
+        final = {"id": active_turn + "-exit", "type": "exitedReviewMode", "review": review_text}
         if "[missing]" not in target.get("instructions", ""):
             for phase in ("started", "completed", "completed"):
                 notify("item/" + phase, {"threadId": thread_id, "turnId": active_turn, "item": final})
+            # Codex also delivers the same review text as a final agent message.
+            message = {"id": active_turn + "-message", "type": "agentMessage", "text": review_text}
+            for phase in ("started", "completed"):
+                notify("item/" + phase, {"threadId": thread_id, "turnId": active_turn, "item": message})
         notify("turn/completed", {"threadId": thread_id, "turn": {"id": active_turn, "status": "completed"}})
         continue
     elif method == "turn/start" and title_only:
