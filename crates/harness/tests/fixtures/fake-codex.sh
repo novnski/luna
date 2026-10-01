@@ -29,7 +29,13 @@ mcp_tool() { # $1 id, $2 tool, $3 arguments JSON, $4 thread, $5 turn, $6 call id
 
 fail_turn() { # $1 = request id, $2 = message
   emit "{\"id\":$1,\"result\":{\"turn\":{\"id\":\"t-bad\"}}}"
-  emit "{\"method\":\"turn/failed\",\"params\":{\"turn\":{\"id\":\"t-bad\",\"error\":{\"message\":\"$2\"}}}}"
+  # v2 has no turn/failed: a failed turn is turn/completed status=failed.
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"th-1\",\"turn\":{\"id\":\"t-bad\",\"status\":\"failed\",\"error\":{\"message\":\"$2\"}}}}"
+}
+
+# Real `thread/turns/list` page shape (probe frames-turns-list.jsonl).
+turn_page() { # $1 = request line, $2 = data json
+  emit "{\"id\":$(rid "$1"),\"result\":{\"data\":$2,\"nextCursor\":null,\"backwardsCursor\":null}}"
 }
 
 # ---- handshake -------------------------------------------------------------
@@ -46,28 +52,55 @@ has "$line" '"method":"initialized"' || exit 1
 
 # ---- thread start / resume -------------------------------------------------
 read -r line || exit 1
-if has "$line" '"method":"thread/read"'; then
+# A cold "send as goal" clears the previous goal BEFORE loading the thread, so
+# thread/resume cannot auto-start the stale goal's continuation (real 0.159,
+# evidence/goal-parity/probes/p4-cold-metadata). Codex always notifies.
+pre_cleared=''
+if has "$line" '"method":"thread/goal/clear"'; then
+  pre_cleared=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  emit "{\"method\":\"thread/goal/cleared\",\"params\":{\"threadId\":\"$pre_cleared\"}}"
+  emit "{\"id\":$(rid "$line"),\"result\":{\"cleared\":true}}"
+  read -r line || exit 1
+fi
+# Fork history reads page `thread/turns/list` (thread/read includeTurns is
+# deprecated). Turn objects follow the probe's real page shape.
+if has "$line" '"method":"thread/turns/list"'; then
   thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  has "$line" '"sortDirection":"asc"' || exit 1
+  has "$line" '"itemsView":"full"' || exit 1
   case "$thread_id" in
     fork-source-preflight-fail)
       emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32603,\"message\":\"injected fork preflight failure\"}}"
       exit 0
       ;;
     fork-source-good|fork-source-mismatch|fork-source-timeout)
-      emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"Fork source\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"idle\"},\"turns\":[{\"id\":\"source-turn-1\",\"status\":{\"type\":\"completed\"},\"items\":[{\"id\":\"source-item-1\",\"type\":\"agentMessage\",\"text\":\"one\",\"payload\":{\"id\":\"semantic-id\",\"time\":17}}]}]}}}"
+      turn_page "$line" '[{"id":"source-turn-1","status":"completed","itemsView":"full","error":null,"items":[{"id":"source-item-1","type":"agentMessage","text":"one","payload":{"id":"semantic-id","time":17}}]}]'
       exec sleep 30
+      ;;
+    forked-fork-source-good|forked-fork-source-mismatch)
+      text=one
+      if [ "$thread_id" = 'forked-fork-source-mismatch' ]; then text=changed; fi
+      turn_page "$line" "[{\"id\":\"fork-turn-1\",\"status\":\"completed\",\"itemsView\":\"full\",\"error\":null,\"items\":[{\"id\":\"fork-item-1\",\"type\":\"agentMessage\",\"text\":\"$text\",\"payload\":{\"id\":\"semantic-id\",\"time\":17}}]}]"
+      exec sleep 30
+      ;;
+  esac
+  turn_page "$line" '[]'
+  exec sleep 30
+fi
+if has "$line" '"method":"thread/read"'; then
+  # Full-history hydration is deprecated; LUNA reads metadata only here.
+  if has "$line" '"includeTurns":true'; then exit 1; fi
+  thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  case "$thread_id" in
+    fork-source-preflight-fail)
+      emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32603,\"message\":\"injected fork preflight failure\"}}"
+      exit 0
       ;;
     forked-fork-source-timeout)
       exec sleep 30
       ;;
     forked-fork-source-good|forked-fork-source-mismatch)
-      if has "$line" '"includeTurns":true'; then
-        text=one
-        if [ "$thread_id" = 'forked-fork-source-mismatch' ]; then text=changed; fi
-        emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"Forked\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"idle\"},\"turns\":[{\"id\":\"fork-turn-1\",\"status\":{\"type\":\"completed\"},\"items\":[{\"id\":\"fork-item-1\",\"type\":\"agentMessage\",\"text\":\"$text\",\"payload\":{\"id\":\"semantic-id\",\"time\":17}}]}]}}}"
-      else
-        emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"Forked\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"idle\"},\"updatedAt\":1770000000,\"cliVersion\":\"0.154.0\",\"projectId\":null,\"ephemeral\":false}}}"
-      fi
+      emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$thread_id\",\"name\":\"Forked\",\"cwd\":\"/tmp\",\"status\":{\"type\":\"idle\"},\"updatedAt\":1770000000,\"cliVersion\":\"0.154.0\",\"projectId\":null,\"ephemeral\":false}}}"
       exec sleep 30
       ;;
   esac
@@ -92,6 +125,8 @@ if has "$line" '"method":"thread/read"'; then
   exec sleep 30
 fi
 if has "$line" '"method":"thread/fork"'; then
+  # The fork response must not hydrate deprecated full history.
+  has "$line" '"excludeTurns":true' || exit 1
   thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
   printf '%s\n' "$thread_id" >> "$CODEX_HOME/fork-mutations"
   emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"forked-$thread_id\"}}}"
@@ -180,7 +215,12 @@ if has "$line" '"method":"model/list"'; then
   emit "{\"id\":$(rid "$line"),\"result\":{\"data\":[{\"id\":\"gpt-5.6-sol\",\"model\":\"gpt-5.6-sol\",\"displayName\":\"GPT-5.6-Sol\",\"description\":\"Reliable agentic workhorse for everyday tasks.\",\"hidden\":false,\"supportedReasoningEfforts\":[{\"reasoningEffort\":\"low\"},{\"reasoningEffort\":\"ultra\"}],\"additionalSpeedTiers\":[],\"serviceTiers\":[],\"defaultServiceTier\":null,\"isDefault\":false}],\"nextCursor\":null}}"
   exec sleep 30
 fi
+history=''
+history_mode=''
 if has "$line" '"method":"thread/resume"'; then
+  # Cold resume is metadata-only: full-history hydration is deprecated
+  # (thread_processor.rs:39); history is paged with thread/turns/list.
+  has "$line" '"excludeTurns":true' || exit 1
   if has "$line" '"threadId":"compact-ok"'; then
     printf '%s\n' 'resume' >> "$CODEX_HOME/compact-trace"
     pwd > "$CODEX_HOME/compact-cwd"
@@ -217,9 +257,18 @@ if has "$line" '"method":"thread/resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"different-thread\",\"status\":{\"type\":\"idle\"}}}}"
     exec sleep 30
   elif has "$line" '"threadId":"resume-with-child-v1"'; then
-    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"items\":[{\"type\":\"collabAgentToolCall\",\"id\":\"spawn-alpha\",\"tool\":\"spawnAgent\",\"status\":\"completed\",\"receiverThreadIds\":[\"child-alpha\"]}]}]}}}"
+    # excludeTurns: no turns here; ownership comes from the history pages.
+    history='[{"id":"old-turn","status":"completed","itemsView":"full","error":null,"items":[{"type":"collabAgentToolCall","id":"spawn-alpha","tool":"spawnAgent","status":"completed","senderThreadId":"th-resumed","receiverThreadIds":["child-alpha"],"prompt":null,"model":null,"reasoningEffort":null,"agentsStates":{}}]}]'
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"paginated\",\"turns\":[]}}}"
+  elif has "$line" '"threadId":"resume-with-child-legacy"'; then
+    # A legacy (non-paginated) thread: thread/turns/list would replay the
+    # rollout once per page, so the adapter must read the history once.
+    history_mode=legacy
+    history='[{"id":"old-turn","status":"completed","items":[{"type":"collabAgentToolCall","id":"spawn-alpha","tool":"spawnAgent","status":"completed","senderThreadId":"th-resumed","receiverThreadIds":["child-alpha"],"prompt":null,"model":null,"reasoningEffort":null,"agentsStates":{}}]}]'
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"legacy\",\"turns\":[]}}}"
   elif has "$line" '"threadId":"resume-with-child-v2"'; then
-    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"items\":[{\"type\":\"subAgentActivity\",\"id\":\"spawn-alpha\",\"kind\":\"started\",\"agentThreadId\":\"child-alpha\",\"agentPath\":\"/root/alpha\"},{\"type\":\"subAgentActivity\",\"id\":\"subagent-completed-old\",\"kind\":\"completed\",\"agentThreadId\":\"child-alpha\",\"agentPath\":\"/root/alpha\"}]}]}}}"
+    history='[{"id":"old-turn","status":"completed","itemsView":"full","error":null,"items":[{"type":"subAgentActivity","id":"spawn-alpha","kind":"started","agentThreadId":"child-alpha","agentPath":"/root/alpha"},{"type":"subAgentActivity","id":"subagent-completed-old","kind":"completed","agentThreadId":"child-alpha","agentPath":"/root/alpha"}]}]'
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"paginated\",\"turns\":[]}}}"
   elif has "$line" '"threadId":"resume-fail"'; then
     # Missing/foreign rollout: reject, expect the fresh-start fallback.
     emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32600,\"message\":\"rollout not found\"}}"
@@ -228,6 +277,16 @@ if has "$line" '"method":"thread/resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-fresh\"}}}"
   elif has "$line" '"threadId":"context-resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"context-resume\"}}}"
+  elif has "$line" 'goal-warm-workspace'; then
+    # The goal E2E's later sends resume the same native thread.
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')\"}}}"
+  elif has "$line" '"threadId":"goal-resume"'; then
+    if [ "$pre_cleared" != 'goal-resume' ]; then
+      emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32600,\"message\":\"resume before the stale goal was cleared\"}}"
+      exit 0
+    fi
+    has "$line" '"model_reasoning_summary":"auto"' || { emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32600,\"message\":\"goal resume without reasoning summaries\"}}"; exit 0; }
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"goal-resume\"}}}"
   else
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\"}}}"
   fi
@@ -250,16 +309,83 @@ if has "$turnline" '"method":"thread/name/set"'; then
   emit "{\"id\":$(rid "$turnline"),\"result\":{}}"
   read -r turnline || exit 1
 fi
+# A cold resume rebuilds sub-agent ownership from ascending full history.
+if [ "$history_mode" = legacy ]; then
+  has "$turnline" '"method":"thread/read"' && has "$turnline" '"includeTurns":true' || exit 1
+  emit "{\"id\":$(rid "$turnline"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"legacy\",\"turns\":$history}}}"
+  read -r turnline || exit 1
+fi
+while has "$turnline" '"method":"thread/turns/list"' && has "$turnline" '"sortDirection":"asc"'; do
+  [ "$history_mode" = legacy ] && exit 1
+  has "$turnline" '"itemsView":"full"' || exit 1
+  turn_page "$turnline" "${history:-[]}"
+  read -r turnline || exit 1
+done
 # Installed Codex 0.159 answers the adapter's startup goal readback
 # (ThreadGoalGetResponse); these scenarios have no goal.
 if has "$turnline" '"method":"thread/goal/get"'; then
   emit "{\"id\":$(rid "$turnline"),\"result\":{\"goal\":null}}"
   read -r turnline || exit 1
 fi
-if has "$turnline" '"method":"thread/read"' && has "$turnline" '"threadId":"th-resumed"'; then
-  emit "{\"id\":$(rid "$turnline"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"id\":\"prior-turn\",\"items\":[{\"type\":\"userMessage\",\"clientId\":\"prior-steer\"},{\"type\":\"userMessage\",\"clientId\":\"unrelated-input\"}]}]}}}"
+# Resume steer reconciliation pages newest-first and stops once found.
+if has "$turnline" '"method":"thread/turns/list"' && has "$turnline" '"threadId":"th-resumed"'; then
+  has "$turnline" '"sortDirection":"desc"' || exit 1
+  turn_page "$turnline" '[{"id":"prior-turn","status":"completed","itemsView":"full","error":null,"items":[{"type":"userMessage","id":"u-prior","clientId":"prior-steer","content":[]},{"type":"userMessage","id":"u-other","clientId":"unrelated-input","content":[]}]}]'
   read -r turnline || exit 1
 fi
+# ---- send as goal ----------------------------------------------------------
+# Codex's own sequence on the loaded thread: clear, then set active. The server
+# starts the goal turn itself (no turn/start, no userMessage item); the model's
+# update_goal surfaces only as thread/goal/updated with turnId. Frames mirror
+# evidence/goal-parity/probes/p1-start (installed 0.159.0, gpt-6.1-sol).
+goal_json() { # $1 thread, $2 status, $3 time used, $4 tokens used
+  printf '{"threadId":"%s","objective":"%s","status":"%s","tokenBudget":null,"tokensUsed":%s,"timeUsedSeconds":%s,"createdAt":1790858093,"updatedAt":1790858108}' "$1" "$goal_objective" "$2" "$4" "$3"
+}
+goal_turn() { # $1 thread, $2 turn id, $3 answer
+  emit "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"$1\",\"turn\":{\"id\":\"$2\",\"items\":[],\"status\":\"inProgress\"}}}"
+  emit "{\"method\":\"item/started\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"item\":{\"type\":\"agentMessage\",\"id\":\"$2-msg\",\"text\":\"\"}}}"
+  emit "{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"itemId\":\"$2-msg\",\"delta\":\"$3\"}}"
+  emit "{\"method\":\"thread/goal/updated\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"goal\":$(goal_json "$1" active 14 21440)}}"
+  emit "{\"method\":\"thread/goal/updated\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"goal\":$(goal_json "$1" complete 14 21440)}}"
+  emit "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"item\":{\"type\":\"agentMessage\",\"id\":\"$2-msg\",\"text\":\"$3\"}}}"
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"$1\",\"turn\":{\"id\":\"$2\",\"items\":[],\"status\":\"completed\"}}}"
+}
+goal_start() { # $1 = the thread/goal/clear line; answers through the set
+  gthread=$(printf '%s' "$1" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  emit "{\"method\":\"thread/goal/cleared\",\"params\":{\"threadId\":\"$gthread\"}}"
+  emit "{\"id\":$(rid "$1"),\"result\":{\"cleared\":false}}"
+  read -r setline || exit 1
+  if ! has "$setline" '"method":"thread/goal/set"' || ! has "$setline" '"status":"active"'; then
+    emit "{\"method\":\"error\",\"params\":{\"threadId\":\"$gthread\",\"message\":\"expected thread/goal/set active after clear\"}}"
+    exit 0
+  fi
+  goal_objective=$(printf '%s' "$setline" | sed 's/.*"objective":"\([^"]*\)".*/\1/')
+  if has "$setline" 'scenario:goal-rejected'; then
+    emit "{\"id\":$(rid "$setline"),\"error\":{\"code\":-32600,\"message\":\"goals feature is disabled\"}}"
+    return 1
+  fi
+  emit "{\"id\":$(rid "$setline"),\"result\":{\"goal\":$(goal_json "$gthread" active 0 0)}}"
+  emit "{\"method\":\"thread/goal/updated\",\"params\":{\"threadId\":\"$gthread\",\"turnId\":null,\"goal\":$(goal_json "$gthread" active 0 0)}}"
+}
+if has "$turnline" '"method":"thread/goal/clear"'; then
+  goal_start "$turnline" || { exec sleep 2; }
+  case "$setline" in
+  *scenario:goal-no-turn*)
+    # Codex accepted the goal but never started a turn (e.g. Plan mode).
+    exec sleep 5
+    ;;
+  *)
+    goal_turn "$gthread" goal-turn-1 '1\n2\n3'
+    ;;
+  esac
+  # A turn/start here would be a second turn: the goal turn is Codex's own.
+  # (`read -t` where the shell has it; otherwise skip the probe.)
+  if read -t 1 -r extra 2>/dev/null && has "$extra" '"method":"turn/start"'; then
+    emit "{\"method\":\"error\",\"params\":{\"threadId\":\"$gthread\",\"message\":\"unexpected turn/start after a goal start\"}}"
+  fi
+  exit 0
+fi
+
 tid=$(rid "$turnline")
 
 case "$turnline" in
@@ -283,7 +409,7 @@ case "$turnline" in
   emit "{\"id\":$(rid "$nextturn"),\"result\":{\"turn\":{\"id\":\"t2\"}}}"
   emit '{"id":922,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"th-1","turnId":"t2","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"}]}}}}}'
   read -r answer || exit 1
-  { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t2","error":{"message":"response-owned t2 approval was withheld"}}}}'; exit 0; }
+  { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t2","status":"failed","error":{"message":"response-owned t2 approval was withheld"}}}}'; exit 0; }
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t2"}}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t2","status":"completed"}}}'
   ;;
@@ -300,13 +426,13 @@ case "$turnline" in
   elif has "$turnline" 'late-t1-completed'; then
     emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t1","status":"completed"}}}'
   elif has "$turnline" 'late-t1-failed'; then
-    emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t1","error":{"message":"stale failure"}}}}'
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t1","status":"failed","error":{"message":"stale failure"}}}}'
   else
-    emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t1"}}}'
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t1","status":"interrupted"}}}'
   fi
   emit '{"method":"item/agentMessage/delta","params":{"itemId":"stale-barrier","delta":"stale-delivered"}}'
   read -r answer || exit 1
-  { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t2","error":{"message":"t2 approval was wrongly withheld"}}}}'; exit 0; }
+  { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t2","status":"failed","error":{"message":"t2 approval was wrongly withheld"}}}}'; exit 0; }
   emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t2","item":{"type":"mcpToolCall","id":"cu-t2","server":"computer-use","tool":"click","status":"completed"}}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t2","status":"completed"}}}'
   ;;
@@ -337,7 +463,7 @@ case "$turnline" in
   if has "$intline" '"method":"turn/interrupt"' && has "$intline" '"turnId":"t-computer"'; then
     emit "{\"id\":$(rid "$intline"),\"result\":{}}"
     emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed"}}}'
-    emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t-computer"}}}'
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-computer","status":"interrupted"}}}'
   else
     fail_turn "$tid" "expected computer-use turn interrupt"
   fi
@@ -368,7 +494,7 @@ case "$turnline" in
   emit '{"id":901,"method":"mcpServer/elicitation/request","params":{"serverName":"computer-use","threadId":"th-1","turnId":"t-computer","mode":"form","message":"Allow ChatGPT to use Finder?","requestedSchema":{"properties":{"approval":{"oneOf":[{"const":"once"},{"const":"always"}]}}}}}'
   read -r answer || exit 1
   if has "$turnline" 'scenario:computer-use:allow'; then
-    { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/failed","params":{"threadId":"th-1","turn":{"id":"t-computer","error":{"message":"one-request approval was not returned"}}}}'; exit 0; }
+    { has "$answer" '"action":"accept"' && has "$answer" '"approval":"once"'; } || { emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-computer","status":"failed","error":{"message":"one-request approval was not returned"}}}}'; exit 0; }
     emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","arguments":{"app":"Finder","x":10},"status":"inProgress"}}}'
     emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"stale-turn","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed"}}}'
     emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-computer","item":{"type":"mcpToolCall","id":"cu-1","server":"computer-use","tool":"click","status":"completed","result":{"content":[{"type":"image","data":"private pixels"}]}}}}'
@@ -475,7 +601,7 @@ case "$turnline" in
   read -r denied_response || exit 1
   has "$denied_response" '"success":false' || { fail_turn "$tid" "cancelled tool call was not denied"; exit 0; }
   emit "{\"id\":$(rid "$interrupt_line"),\"result\":{}}"
-  emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t-runtime-cancelled","status":"aborted"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-runtime-cancelled","status":"interrupted"}}}'
   ;;
 
 *scenario:runtime-contract*)
@@ -594,7 +720,7 @@ case "$turnline" in
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-auto-interrupted\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-auto-interrupted"}}}'
   emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-auto-interrupted","item":{"id":"compact-interrupted","type":"contextCompaction"}}}'
-  emit '{"method":"turn/aborted","params":{"threadId":"th-1","turn":{"id":"t-auto-interrupted","status":"interrupted"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-auto-interrupted","status":"interrupted"}}}'
   ;;
 
 *scenario:auto-context-disconnect*)
@@ -816,9 +942,9 @@ case "$turnline" in
     else
       emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
       read -r readback || exit 1
-      has "$readback" '"method":"thread/read"' || exit 1
-      has "$readback" '"includeTurns":true' || exit 1
-      emit "{\"id\":$(rid "$readback"),\"result\":{\"thread\":{\"id\":\"th-1\",\"turns\":[{\"id\":\"t-1\",\"items\":[{\"type\":\"userMessage\",\"clientId\":\"$client_id\"}]}]}}}"
+      has "$readback" '"method":"thread/turns/list"' || exit 1
+      has "$readback" '"sortDirection":"desc"' || exit 1
+      turn_page "$readback" "[{\"id\":\"t-1\",\"status\":\"completed\",\"itemsView\":\"full\",\"error\":null,\"items\":[{\"type\":\"userMessage\",\"id\":\"u1\",\"clientId\":\"$client_id\",\"content\":[]}]}]"
     fi
   fi
   ;;
@@ -885,7 +1011,7 @@ case "$turnline" in
   read -r steerline || exit 1
   sid=$(rid "$steerline")
   has "$steerline" '"method":"turn/steer"' ||
-    { emit "{\"id\":$sid,\"result\":{}}"; emit '{"method":"turn/failed","params":{"turn":{"id":"t-1","error":{"message":"expected turn/steer"}}}}'; exit 0; }
+    { emit "{\"id\":$sid,\"result\":{}}"; emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"failed","error":{"message":"expected turn/steer"}}}}'; exit 0; }
   # The turn completed under the steer: reject, then announce completion.
   emit "{\"id\":$sid,\"error\":{\"code\":-32602,\"message\":\"turn already completed\"}}"
   emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
@@ -918,7 +1044,7 @@ case "$turnline" in
     emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
   else
     emit "{\"id\":$sid,\"error\":{\"code\":-32600,\"message\":\"bad steer\"}}"
-    emit '{"method":"turn/failed","params":{"turn":{"id":"t-1","error":{"message":"steer verification failed"}}}}'
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"failed","error":{"message":"steer verification failed"}}}}'
   fi
   ;;
 
@@ -932,11 +1058,11 @@ case "$turnline" in
   emit '{"id":101,"method":"item/commandExecution/requestApproval","params":{"itemId":"c1","command":"rm -rf /tmp/x"}}'
   read -r a1 || exit 1
   { has "$a1" '"id":101' && has "$a1" '"decision":"accept"'; } ||
-    { emit '{"method":"turn/failed","params":{"turn":{"id":"t-1","error":{"message":"command approval not accepted"}}}}'; exit 0; }
+    { emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"failed","error":{"message":"command approval not accepted"}}}}'; exit 0; }
   emit '{"id":102,"method":"item/fileChange/requestApproval","params":{"itemId":"f1","changes":[{"path":"/tmp/a.rs","kind":"update"}]}}'
   read -r a2 || exit 1
   { has "$a2" '"id":102' && has "$a2" '"decision":"accept"'; } ||
-    { emit '{"method":"turn/failed","params":{"turn":{"id":"t-1","error":{"message":"file approval not accepted"}}}}'; exit 0; }
+    { emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"failed","error":{"message":"file approval not accepted"}}}}'; exit 0; }
   emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
   ;;
 
@@ -946,7 +1072,7 @@ case "$turnline" in
   emit '{"id":201,"method":"item/commandExecution/requestApproval","params":{"itemId":"c1","command":"rm -rf /"}}'
   read -r a1 || exit 1
   { has "$a1" '"id":201' && has "$a1" '"decision":"decline"'; } ||
-    { emit '{"method":"turn/failed","params":{"turn":{"id":"t-1","error":{"message":"expected decline"}}}}'; exit 0; }
+    { emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"failed","error":{"message":"expected decline"}}}}'; exit 0; }
   emit '{"method":"turn/completed","params":{"turn":{"id":"t-1"}}}'
   ;;
 
@@ -958,10 +1084,10 @@ case "$turnline" in
   iid=$(rid "$intline")
   if has "$intline" '"method":"turn/interrupt"' && has "$intline" '"turnId":"t-1"'; then
     emit "{\"id\":$iid,\"result\":{}}"
-    emit '{"method":"turn/aborted","params":{"turn":{"id":"t-1"}}}'
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"interrupted"}}}'
   else
     emit "{\"id\":$iid,\"result\":{}}"
-    emit '{"method":"turn/failed","params":{"turn":{"id":"t-1","error":{"message":"expected turn/interrupt"}}}}'
+    emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"failed","error":{"message":"expected turn/interrupt"}}}}'
   fi
   ;;
 
@@ -976,7 +1102,7 @@ case "$turnline" in
 *scenario:fail*)
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
   emit '{"method":"turn/started","params":{"turn":{"id":"t-1"}}}'
-  emit '{"method":"turn/failed","params":{"turn":{"id":"t-1","error":{"message":"boom"}}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"failed","error":{"message":"boom"}}}}'
   ;;
 
 *scenario:resumed-child*)
@@ -986,6 +1112,29 @@ case "$turnline" in
   emit '{"method":"item/completed","params":{"threadId":"child-alpha","item":{"type":"agentMessage","id":"resumed-answer","text":"resumed alpha"}}}'
   emit '{"method":"turn/completed","params":{"threadId":"child-alpha","turn":{"id":"alpha-resumed","status":"completed"}}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-resumed","turn":{"id":"t-2","status":"completed"}}}'
+  ;;
+
+*scenario:goal-warm*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"type":"agentMessage","id":"warm-msg","text":"ready"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+  # Metadata reads may share the warm connection between turns; answer them
+  # as unsupported. A turn/start or turn/steer here is the bug under test.
+  while read -r clearline; do
+    has "$clearline" '"method":"thread/goal/clear"' && break
+    [ -z "$CODEX_HOME" ] || printf '%s\n' "$clearline" >> "$CODEX_HOME/goal-warm-skipped"
+    if has "$clearline" '"method":"turn/start"' || has "$clearline" '"method":"turn/steer"'; then
+      emit '{"method":"error","params":{"threadId":"th-1","message":"warm goal must clear first, not turn/start or turn/steer"}}'
+      exit 0
+    fi
+    if has "$clearline" '"id":'; then
+      emit "{\"id\":$(rid "$clearline"),\"error\":{\"code\":-32601,\"message\":\"fake goal-warm: unsupported\"}}"
+    fi
+  done
+  [ -n "$clearline" ] || exit 0
+  goal_start "$clearline" || exit 0
+  goal_turn th-1 goal-turn-2 'warm goal done'
   ;;
 
 *scenario:resumed*)

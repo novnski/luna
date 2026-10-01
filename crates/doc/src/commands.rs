@@ -343,6 +343,7 @@ mod tests {
     fn run_request() -> RunRequest {
         RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: "hello".into(),
             harness: None,

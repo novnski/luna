@@ -1023,6 +1023,7 @@ fn l11_fixture_project(root: &Path) -> PathBuf {
 fn l11_run_request(project: &Path) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: "L11 synthetic history seed with visible context usage".into(),
         harness: Some(HarnessId::Mock),
@@ -1355,6 +1356,7 @@ fn turn_recovery_project(root: &Path) -> PathBuf {
 fn turn_recovery_request(project: &Path, attachment: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: "L10 frozen request with one attachment".into(),
         harness: Some(HarnessId::Mock),
@@ -2694,6 +2696,7 @@ mod tests {
         };
         let request = RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: "fixture control test".into(),
             harness: Some(HarnessId::Mock),

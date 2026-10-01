@@ -541,6 +541,7 @@ impl TurnWire {
                     message_id: None,
                     delivery: crate::SteerDelivery::AllowFollowUpTurn,
                     acceptance: None,
+                    goal: None,
                 })
                 .await
                 .unwrap();

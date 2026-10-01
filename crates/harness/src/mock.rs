@@ -31,6 +31,7 @@ fn question_script() -> Vec<UserInputQuestion> {
             multi_select: false,
             mcp: None,
             approval: None,
+            input: None,
         },
         UserInputQuestion {
             id: "q-gates".into(),
@@ -44,6 +45,7 @@ fn question_script() -> Vec<UserInputQuestion> {
             multi_select: true,
             mcp: None,
             approval: None,
+            input: None,
         },
     ]
 }

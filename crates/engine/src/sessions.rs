@@ -230,6 +230,7 @@ impl LunaSendProposal {
                     supports_task_allowance: false,
                     details: None,
                 }),
+                input: None,
             };
         }
         UserInputQuestion {
@@ -259,6 +260,7 @@ impl LunaSendProposal {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 }
@@ -319,6 +321,7 @@ impl LunaSyntheticArchiveProposal {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 
@@ -413,6 +416,30 @@ struct LunaInterruptDispatchResult {
     settled: bool,
 }
 
+/// Result of the in-memory secret answer path ([`SessionsEngine::respond_secret_input`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretInputOutcome {
+    /// Handed to the live provider resolver for exactly this request.
+    Delivered,
+    /// The request had no live resolver (turn ended, restart): its card was
+    /// closed as cancelled and the answer was dropped, never stored.
+    Closed,
+    /// The request is not a pending secret question; nothing was sent.
+    NotSecret,
+    /// No such open request for this task.
+    Unavailable,
+}
+
+fn has_secret_question(questions: &[UserInputQuestion]) -> bool {
+    questions.iter().any(UserInputQuestion::is_secret)
+}
+
+fn has_answer_text(answers: &[UserInputAnswer]) -> bool {
+    answers
+        .iter()
+        .any(|answer| answer.labels.iter().any(|label| !label.is_empty()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LunaApprovalOutcome {
     AllowedOnce,
@@ -479,11 +506,14 @@ fn schedule_approval_expiry(
     else {
         return;
     };
+    // A request with native choices, or a Codex request that waits without a
+    // provider deadline (v2 sends none), is retired as soon as the adapter
+    // closes it (`serverRequest/resolved`, Stop or the end of its turn).
     let native_choices = questions.iter().any(|question| {
-        question
-            .approval
-            .as_ref()
-            .is_some_and(|approval| approval.details.is_some())
+        question.approval.as_ref().is_some_and(|approval| {
+            approval.details.is_some()
+                || (approval.provider == HarnessId::Codex && approval.expires().is_none())
+        })
     });
     tokio::spawn(async move {
         let delay_ms = expires_at_ms.saturating_sub(now_ms()).max(0) as u64;
@@ -545,24 +575,6 @@ fn schedule_luna_prospective_cleanup(
             }
         }
     });
-}
-
-/// How long a LUNA tool approval card may wait for the user. It equals the
-/// `tool_timeout_sec` the Codex adapter gives the `luna` MCP server.
-const LUNA_TOOL_APPROVAL_WAIT_MS: i64 = 86_400_000;
-
-/// Retires one parked approval card however its waiter ends, including when
-/// the provider abandons the call and the waiting future is dropped.
-struct PendingApprovalGuard {
-    pending: PendingInputs,
-    engine_tx: mpsc::UnboundedSender<AgentEvent>,
-    request_id: String,
-}
-
-impl Drop for PendingApprovalGuard {
-    fn drop(&mut self) {
-        expire_pending_approval(&self.pending, &self.engine_tx, &self.request_id);
-    }
 }
 
 fn expire_pending_approval(
@@ -678,10 +690,18 @@ impl RuntimeConfig {
             provider_account_id: request.provider_account_id.clone(),
             model: request.model.clone(),
             reasoning: request.reasoning,
+            // Per-message correlation is not runtime configuration: a stored
+            // first-message id must never force a warm runtime to restart.
             model_options: request
                 .model_options
                 .iter()
-                .filter(|(key, _)| key.as_str() != luna_harness::codex::LUNA_STEER_RECONCILE_OPTION)
+                .filter(|(key, _)| {
+                    !matches!(
+                        key.as_str(),
+                        luna_harness::codex::LUNA_STEER_RECONCILE_OPTION
+                            | luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION
+                    )
+                })
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
             cwd: request.cwd.clone(),
@@ -690,6 +710,28 @@ impl RuntimeConfig {
             permission_policy: request.permission_policy.clone(),
             worktree: request.worktree.clone(),
         }
+    }
+
+    /// A Codex goal start runs on the loaded runtime when its execution
+    /// configuration matches, including the runtime contract (a changed
+    /// contract still needs a fresh runtime at this safe boundary). Only the
+    /// native thread-name and strict-resume options are ignored: they describe
+    /// how a COLD runtime binds its thread and are added after routing.
+    fn can_route_goal(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
+        let execution = |config: &Self| {
+            let mut config = config.clone();
+            for key in [
+                luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION,
+                luna_harness::codex::LUNA_STRICT_RESUME_OPTION,
+            ] {
+                config.model_options.remove(key);
+            }
+            config
+        };
+        harness_id == HarnessId::Codex
+            && request.review.is_none()
+            && request.goal.is_some()
+            && execution(self) == execution(&Self::from_request(harness_id, request))
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
@@ -847,6 +889,7 @@ impl LunaProspectiveInterruptProposal {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         }
     }
 
@@ -1677,11 +1720,11 @@ impl SessionsEngine {
                     evidence.source_environment_id,
                 )
             };
-        // The card waits for the user, not a timer: it ends on an answer,
-        // Stop, the provider turn leaving Ready, run replacement, or the
-        // provider abandoning the call. The bound matches the Codex MCP
-        // `tool_timeout_sec`; the commit window is restamped at approval.
-        let expires_at_ms = now_ms().saturating_add(LUNA_TOOL_APPROVAL_WAIT_MS);
+        // Like Codex-native approvals, the card has no deadline: it ends on
+        // an answer or Stop here, and the shared resolver watch retires it
+        // when the adapter abandons the call (MCP cancel or disconnect, turn
+        // or session end). The commit window is stamped at approval.
+        let expires_at_ms = luna_proto::APPROVAL_NO_EXPIRY;
         let fence = ApprovedSendFence {
             source_task_id: claim.source_task_id.clone(),
             source_run_id: claim.source_run_id.clone(),
@@ -1707,7 +1750,7 @@ impl SessionsEngine {
         let (resolver, _answer_rx) = oneshot::channel();
         let (grant_tx, grant_rx) = oneshot::channel();
         let binding = self.inner.current_codex_binding_key(chat_id);
-        let (guard, mut readiness, mut run_cancel) = {
+        let (pending, engine_tx) = {
             let runs = lock(&self.inner.runs);
             let run = runs
                 .get(chat_id)
@@ -1726,41 +1769,31 @@ impl SessionsEngine {
                     resolver,
                 },
             );
-            (
-                PendingApprovalGuard {
-                    pending,
-                    engine_tx: run.engine_tx.clone(),
-                    request_id: request_id.clone(),
-                },
-                run.provider_turn_readiness.subscribe(),
-                run.cancel.subscribe(),
-            )
+            (pending, run.engine_tx.clone())
         };
-        if guard
-            .engine_tx
+        // The same watch as Codex-native no-expiry approvals: once this
+        // waiter is dropped (`_answer_rx` closes), the card is retired.
+        schedule_approval_expiry(
+            pending.clone(),
+            engine_tx.clone(),
+            request_id.clone(),
+            std::slice::from_ref(&question),
+        );
+        if engine_tx
             .send(AgentEvent::InputRequested {
                 request_id: request_id.clone(),
                 questions: vec![question],
             })
             .is_err()
         {
+            expire_pending_approval(&pending, &engine_tx, &request_id);
             return Err(fail(CrossTaskError::Unavailable));
         }
-        let mut grant_rx = grant_rx;
-        let grant = loop {
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => break Err(CrossTaskError::Cancelled),
-                _ = run_cancel.wait_for(|cancelled| *cancelled) => break Err(CrossTaskError::Cancelled),
-                changed = readiness.changed() => {
-                    if changed.is_err() || *readiness.borrow() != ProviderTurnReadiness::Ready {
-                        break Err(CrossTaskError::Cancelled);
-                    }
-                }
-                result = &mut grant_rx => break result.map_err(|_| CrossTaskError::UserRequest),
-            }
+        let grant = tokio::select! {
+            _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
+            result = grant_rx => result.map_err(|_| CrossTaskError::UserRequest),
         };
-        drop(guard);
+        expire_pending_approval(&pending, &engine_tx, &request_id);
         let mut fence = grant.map_err(fail)?;
         // Approval opens the bounded commit window checked at the durable write.
         fence.expires_at_ms = now_ms().saturating_add(30_000);
@@ -3179,6 +3212,78 @@ impl SessionsEngine {
         .await
     }
 
+    fn mark_goal_sent(&self, chat_id: &str, user_id: &str) {
+        let Some(host) = self.inner.doc_host() else {
+            return;
+        };
+        let id = user_id.to_owned();
+        if let Err(error) =
+            host.persist_goal_mark(chat_id, &new_id(), move |marks| marks.mark_sent(&id))
+        {
+            tracing::warn!(chat = %chat_id, %error, "goal sent mark persistence failed");
+        }
+    }
+
+    /// Warm "send as goal": the loaded Codex runtime runs Codex's clear+set on
+    /// its own connection and starts (or extends) the turn itself; its
+    /// `turn/started` arrives as an autonomous turn. `Ok(false)` means the
+    /// mailbox is gone and the caller replaces the runtime. A correlated
+    /// rejection removes the echo; an unknown outcome is never retried.
+    async fn start_goal_on_live_runtime(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        steer_tx: &mpsc::Sender<SteerMessage>,
+        user_id: &str,
+        request: &RunRequest,
+        goal: luna_proto::GoalStartRequest,
+    ) -> Result<bool, EngineError> {
+        let handle = self.doc_handle(chat_id)?;
+        // The message precedes the turn Codex starts within milliseconds.
+        handle.write_user_message(user_id, &request.prompt, now_ms())?;
+        let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
+        let message = SteerMessage {
+            prompt: request.prompt.clone(),
+            attachments: Vec::new(),
+            input_items: Vec::new(),
+            message_id: Some(user_id.to_owned()),
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: Some(acceptance_tx),
+            goal: Some(goal),
+        };
+        if steer_tx.try_send(message).is_err() {
+            handle
+                .doc()
+                .remove_rejected_user_message(user_id, &request.prompt)?;
+            return Ok(false);
+        }
+        self.mark_goal_sent(chat_id, user_id);
+        let acceptance =
+            tokio::time::timeout(std::time::Duration::from_secs(15), acceptance_rx).await;
+        match acceptance {
+            Ok(Ok(SteerAcceptance::Accepted)) => {
+                self.inner.note_message(chat_id, &request.prompt);
+                if self.is_live(chat_id, run_id) {
+                    tracing::debug!(chat = %chat_id, "goal started on the loaded Codex runtime");
+                }
+                Ok(true)
+            }
+            Ok(Ok(SteerAcceptance::Rejected(message))) => {
+                handle
+                    .doc()
+                    .remove_rejected_user_message(user_id, &request.prompt)?;
+                Err(EngineError::Other(format!("Codex rejected the goal: {message}")))
+            }
+            Ok(Ok(SteerAcceptance::Unknown(message))) => Err(EngineError::Other(format!(
+                "Codex goal start is unconfirmed and was not retried: {message}. Refresh the goal before changing it."
+            ))),
+            Ok(Err(_)) | Err(_) => Err(EngineError::Other(
+                "Codex goal start is unconfirmed and was not retried. Refresh the goal before changing it."
+                    .into(),
+            )),
+        }
+    }
+
     fn dispatch_with_context<'a>(
         &'a self,
         chat_id: &'a str,
@@ -3224,6 +3329,24 @@ impl SessionsEngine {
             return Err(EngineError::Other(
                 "Side chat recovery never replays a send".into(),
             ));
+        }
+        if let Some(goal) = request.goal.as_ref() {
+            if harness_id != HarnessId::Codex {
+                return Err(EngineError::Other("Goals require a Codex task".into()));
+            }
+            goal.validate()
+                .map_err(|error| EngineError::Other(error.into()))?;
+            if request.review.is_some()
+                || !request.attachments.is_empty()
+                || !request.input_items.is_empty()
+            {
+                return Err(EngineError::Other(
+                    "A goal is text only. Remove attachments, mentions and comments, then send it again."
+                        .into(),
+                ));
+            }
+            // The transcript message is exactly the objective Codex received.
+            request.prompt = goal.objective.clone();
         }
         if let Some(review) = request.review.as_ref() {
             if harness_id != HarnessId::Codex {
@@ -3328,6 +3451,12 @@ impl SessionsEngine {
         if request.review.is_some() && context_control.pending_handoff.is_some() {
             return Err(EngineError::Other("Send the pending context handoff in an ordinary turn before starting a native review".into()));
         }
+        if request.goal.is_some() && context_control.pending_handoff.is_some() {
+            return Err(EngineError::Other(
+                "Send the pending context handoff in an ordinary turn before starting a goal"
+                    .into(),
+            ));
+        }
         if let Some(handoff) = context_control.pending_handoff.as_ref()
             && !request
                 .prompt
@@ -3343,7 +3472,10 @@ impl SessionsEngine {
                 handoff.text, request.prompt
             );
         }
-        let frozen_request = request.clone();
+        // Recovery and replays never re-run a goal start (an uncertain
+        // provider mutation); they continue the provider session instead.
+        let mut frozen_request = request.clone();
+        frozen_request.goal = None;
         if let Some(recovery) = recovery.as_ref() {
             let Some(claimed) = self.inner.recovery.latest(chat_id)? else {
                 return Err(EngineError::Other(
@@ -3558,6 +3690,11 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
+        let goal_runtime = request.goal.is_some()
+            && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
+                h.workspace_repair_revision == workspace_repair_revision
+                    && h.runtime_config.can_route_goal(harness_id, &request)
+            });
         if routed.as_ref().is_some_and(|(_, _, _, _, ledger)| {
             lock(ledger)
                 .iter()
@@ -3574,7 +3711,18 @@ impl SessionsEngine {
         self.note_turn_start(chat_id, &request.cwd);
         if let Some((run_id, steerable, same_runtime, steer_tx, ledger)) = routed {
             let user_id = message_id.clone().unwrap_or_else(new_id);
-            let accepted = if steerable && same_runtime {
+            if let Some(goal) = request.goal.clone()
+                && steerable
+                && goal_runtime
+                && self
+                    .start_goal_on_live_runtime(
+                        chat_id, &run_id, &steer_tx, &user_id, &request, goal,
+                    )
+                    .await?
+            {
+                return Ok(run_id);
+            }
+            let accepted = if steerable && same_runtime && request.goal.is_none() {
                 // Warm dispatch uses the same mailbox as explicit steering.
                 // Register acceptance before a fast boundary can retire it.
                 let mut pending = lock(&ledger);
@@ -3585,6 +3733,7 @@ impl SessionsEngine {
                     message_id: Some(user_id.clone()),
                     delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                     acceptance: None,
+                    goal: None,
                 };
                 if steer_tx.try_send(message).is_ok() {
                     pending.push_back(RoutedSteer {
@@ -3657,6 +3806,17 @@ impl SessionsEngine {
         let handle = self.doc_handle(chat_id)?;
         let user_id = message_id.unwrap_or_else(new_id);
         handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+        if request.goal.is_some() {
+            self.mark_goal_sent(chat_id, &user_id);
+        }
+        if harness_id == HarnessId::Codex {
+            // The first turn/start carries the same correlation id as every
+            // steer, so native readback can prove this message's delivery.
+            request.model_options.insert(
+                luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION.into(),
+                user_id.clone().into(),
+            );
+        }
 
         // Engine-owned resume (luna sessions.ts:736 — every dispatch read the
         // chat's stored harness session): callers always send `resume: None`;
@@ -3732,7 +3892,9 @@ impl SessionsEngine {
                 );
             }
         }
-        lock(&self.inner.last_requests).insert(chat_id.to_string(), request.clone());
+        let mut remembered = request.clone();
+        remembered.goal = None;
+        lock(&self.inner.last_requests).insert(chat_id.to_string(), remembered);
 
         let run_id = new_id();
         let (steer_tx, steer_rx) = mpsc::channel::<SteerMessage>(32);
@@ -4035,6 +4197,7 @@ impl SessionsEngine {
             message_id: Some(user_id.clone()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(acceptance_tx),
+            goal: None,
         };
         {
             // Serialize mailbox acceptance with confirmation and Done-time
@@ -4129,6 +4292,79 @@ impl SessionsEngine {
         Ok(true)
     }
 
+    /// Deliver an answer to a provider question flagged secret (Codex
+    /// `isSecret`) in memory only: no session command, journal row, receipt,
+    /// transcript part or log carries it. Only the in-process local UI calls
+    /// this. Without a live resolver (the turn ended or LUNA restarted) the
+    /// request is closed as cancelled and the answer is dropped; it is never
+    /// replayed as a new turn.
+    pub fn respond_secret_input(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        answers: Vec<UserInputAnswer>,
+    ) -> SecretInputOutcome {
+        {
+            let runs = lock(&self.inner.runs);
+            if let Some(handle) = runs.get(chat_id) {
+                let live = lock(&handle.pending_inputs)
+                    .get(request_id)
+                    .map(|input| has_secret_question(&input.questions));
+                match live {
+                    Some(false) => return SecretInputOutcome::NotSecret,
+                    Some(true) => {
+                        let Some(pending) =
+                            take_pending_ordinary_input(&handle.pending_inputs, request_id)
+                        else {
+                            return SecretInputOutcome::NotSecret;
+                        };
+                        let valid = answers.iter().all(|answer| {
+                            pending.questions.iter().any(|q| q.id == answer.question_id)
+                        });
+                        let delivered = valid && pending.resolver.send(answers).is_ok();
+                        let _ = handle.engine_tx.send(AgentEvent::InputResolved {
+                            request_id: request_id.to_string(),
+                        });
+                        return if delivered {
+                            SecretInputOutcome::Delivered
+                        } else {
+                            SecretInputOutcome::Closed
+                        };
+                    }
+                    None => {}
+                }
+            }
+        }
+        drop(answers);
+        // No live resolver: close the open projection without the answer.
+        let Some(handle) = self
+            .inner
+            .doc_host()
+            .and_then(|host| host.open(chat_id).ok())
+        else {
+            return SecretInputOutcome::Unavailable;
+        };
+        let open_secret = handle.doc().read_entries().is_ok_and(|entries| {
+            entries.iter().any(|entry| {
+                entry.parts.iter().any(|part| {
+                    matches!(part, MessagePart::Input { request_id: id, questions, resolved: false, .. }
+                        if id == request_id && has_secret_question(questions))
+                })
+            })
+        });
+        if !open_secret {
+            return SecretInputOutcome::Unavailable;
+        }
+        match handle.doc().resolve_input(request_id) {
+            Ok(_) => SecretInputOutcome::Closed,
+            Err(error) => {
+                tracing::warn!(chat = %chat_id, request = %request_id, %error,
+                    "secret request close failed");
+                SecretInputOutcome::Unavailable
+            }
+        }
+    }
+
     /// Resolve a pending `request_input` question set. Returns `false` when no such
     /// request is pending (unknown id, or the run already settled).
     pub fn respond_input(
@@ -4148,6 +4384,14 @@ impl SessionsEngine {
             let Some(input) = pending.get(request_id) else {
                 return Ok(false);
             };
+            // A secret answer never travels through this path: its callers
+            // are durable commands and replicated panels.
+            if has_secret_question(&input.questions) && has_answer_text(&answers) {
+                return Err(EngineError::Other(
+                    "Secret answers are sent from the LUNA window running this task and are never stored"
+                        .into(),
+                ));
+            }
             if input.questions.iter().any(|q| q.mcp.is_some()) {
                 if handle.interrupt_token.is_cancelled()
                     || *handle.cancel.subscribe().borrow()
@@ -4986,6 +5230,7 @@ impl SessionsEngine {
                 );
             }
             request.review = None;
+            request.goal = None;
             request.prompt = "Continue from the preserved provider session. Do not repeat completed tool or external effects; first inspect the current state and resume only unfinished work.".into();
             request.attachments.clear();
             request.input_items.clear();
@@ -6939,6 +7184,12 @@ async fn drive_run(
     // a session nobody comes back to (luna SESSION_IDLE_MS).
     const SESSION_IDLE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
     let mut idle_since: Option<tokio::time::Instant> = None;
+    // The kind of the transient provider notice currently on the doc, if any.
+    // A notice left by a run that died mid-retry is stale for this run.
+    let mut provider_notice: Option<luna_proto::ProviderNoticeKind> = None;
+    if let Err(err) = doc_ref.set_provider_notice(None) {
+        tracing::warn!(%chat_id, error = %err, "stale provider notice clear failed");
+    }
     let steerable = harness.supports_steering();
     // TURN-QUIESCE WATCHDOG (2026-08-12 stuck-Working incident): a harness
     // that loses a turn's Done — the adapter never settles `session/prompt`
@@ -7187,6 +7438,42 @@ async fn drive_run(
             event
         };
 
+        // ── transient provider status ─────────────────────────────────
+        // Retry/warning notices (root or sub-agent) are task metadata for the
+        // working indicator: never a transcript part, never a turn failure.
+        // A retry notice ends when output resumes; every notice ends with the
+        // root turn.
+        let notice = match &event {
+            AgentEvent::ProviderNotice { notice } => Some(notice),
+            AgentEvent::Subagent { event, .. } => match event.as_ref() {
+                AgentEvent::ProviderNotice { notice } => Some(notice),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(notice) = notice {
+            if let Err(err) = doc_ref.set_provider_notice(Some(notice)) {
+                tracing::warn!(%chat_id, error = %err, "provider notice write failed");
+            }
+            provider_notice = Some(notice.kind);
+            continue;
+        }
+        if let Some(kind) = provider_notice {
+            let output_resumed = matches!(
+                &event,
+                AgentEvent::TextDelta { text } | AgentEvent::ReasoningDelta { text }
+                    if !text.is_empty()
+            ) || matches!(&event, AgentEvent::ToolCall { .. });
+            if matches!(&event, AgentEvent::Done { .. })
+                || (kind == luna_proto::ProviderNoticeKind::Retrying && output_resumed)
+            {
+                if let Err(err) = doc_ref.set_provider_notice(None) {
+                    tracing::warn!(%chat_id, error = %err, "provider notice clear failed");
+                }
+                provider_notice = None;
+            }
+        }
+
         // ── subagent routing ───────────────────────────────────────────
         // Tagged events NEVER fold into the parent transcript: they stream
         // into the subagent's own doc, and the parent keeps only the spawn
@@ -7430,12 +7717,36 @@ async fn drive_run(
         }
         // Goal status is provider control state, including updates while warm
         // and parked. It never synthesizes a user message or a terminal turn.
-        if let AgentEvent::GoalChanged { thread_id, goal } = &event {
+        if let AgentEvent::GoalChanged {
+            thread_id,
+            goal,
+            turn_id,
+        } = &event
+        {
             if harness_id == HarnessId::Codex
                 && let (Some(binding), Some(host)) =
                     (inner.current_codex_binding_key(&chat_id), inner.doc_host())
                 && binding.provider_thread_id == *thread_id
             {
+                // "Goal achieved" belongs to the provider turn whose own
+                // update completed the goal (the model's `update_goal`), never
+                // to a client control or a resume snapshot (turnId null).
+                let achieved = goal.as_ref().filter(|goal| {
+                    goal.status == luna_proto::GoalStatus::Complete
+                        && turn_id.is_some()
+                        && provider_checkpoint_id.as_deref() == turn_id.as_deref()
+                });
+                let previously_complete = host.context_control(&chat_id).ok().and_then(|state| {
+                    state
+                        .goal
+                        .and_then(|readback| readback.goal)
+                        .filter(|previous| {
+                            achieved.is_some_and(|goal| {
+                                previous.created_at == goal.created_at
+                                    && previous.status == luna_proto::GoalStatus::Complete
+                            })
+                        })
+                });
                 let readback = luna_proto::GoalReadback {
                     thread_id: thread_id.clone(),
                     binding_generation: binding.generation,
@@ -7445,6 +7756,14 @@ async fn drive_run(
                 };
                 if let Err(error) = host.persist_goal_readback(&chat_id, &new_id(), &readback) {
                     tracing::warn!(chat = %chat_id, %error, "goal snapshot persistence failed");
+                }
+                if let Some(goal) = achieved
+                    && previously_complete.is_none()
+                    && let Err(error) = host.persist_goal_mark(&chat_id, &new_id(), |marks| {
+                        marks.mark_achieved(&entry_id, goal.time_used_seconds)
+                    })
+                {
+                    tracing::warn!(chat = %chat_id, %error, "goal achieved mark persistence failed");
                 }
             }
             continue;
@@ -8534,6 +8853,7 @@ async fn drive_run(
                     break;
                 };
                 request.review = None;
+                request.goal = None;
                 request.prompt = steer.prompt.clone();
                 request.resume = None;
                 request.attachments = steer.attachments.clone();
@@ -9472,6 +9792,7 @@ mod tests {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         };
         let answer = approval_answer(&question, luna_proto::ApprovalDecision::AllowTask).unwrap();
         assert_eq!(answer.labels, vec!["Deny"]);
@@ -9608,6 +9929,7 @@ mod tests {
                         supports_task_allowance: true,
                         details: None,
                     }),
+                    input: None,
                 }],
                 resolver,
             },
@@ -9645,6 +9967,7 @@ mod tests {
                 supports_task_allowance: false,
                 details: None,
             }),
+            input: None,
         };
         let pending = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let (luna_tx, mut luna_rx) = tokio::sync::oneshot::channel();
@@ -9709,6 +10032,7 @@ mod tests {
                     multi_select: false,
                     mcp: None,
                     approval: None,
+                    input: None,
                 }],
                 resolver: ordinary_tx,
             },
@@ -12866,6 +13190,7 @@ mod tests {
                         supports_task_allowance: false,
                         details: None,
                     }),
+                    input: None,
                 }],
                 resolver: forged_tx,
             },
@@ -13823,6 +14148,7 @@ mod tests {
     fn request() -> RunRequest {
         RunRequest {
             review: None,
+            goal: None,
             input_items: Vec::new(),
             prompt: "first".into(),
             harness: None,

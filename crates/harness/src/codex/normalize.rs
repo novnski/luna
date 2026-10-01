@@ -186,7 +186,63 @@ pub(crate) fn tool_activity(method: &str, params: &Value) -> Vec<AgentEvent> {
             }
             events
         }
+        // `McpToolCallProgressNotification {threadId, turnId, itemId, message}`
+        // (`v2/mcp.rs:333-338`): the latest status line of a running MCP call.
+        "item/mcpToolCall/progress" => params
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(|text| AgentEvent::ToolActivity {
+                id,
+                kind: ToolActivityKind::Progress,
+                text: bounded_notice(text),
+            })
+            .into_iter()
+            .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn bounded_notice(text: &str) -> String {
+    const MAX_CHARS: usize = 500;
+    if text.chars().count() <= MAX_CHARS {
+        return text.to_owned();
+    }
+    let mut bounded: String = text.chars().take(MAX_CHARS).collect();
+    bounded.push('…');
+    bounded
+}
+
+/// A transient provider status. `error {willRetry:true}` "will not interrupt
+/// a turn" (`v2/notification.rs:64-66`), so it must never become an Error part.
+pub(crate) fn provider_notice(kind: luna_proto::ProviderNoticeKind, message: &str) -> AgentEvent {
+    AgentEvent::ProviderNotice {
+        notice: luna_proto::ProviderNotice {
+            kind,
+            message: bounded_notice(message.trim()),
+            at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64,
+        },
+    }
+}
+
+/// `ErrorNotification {error:{message,..}, willRetry, threadId, turnId}`. Old
+/// builds were flat (`params.message`). A retrying error is a notice.
+pub(crate) fn error_event(params: &Value, fallback: &str) -> AgentEvent {
+    let message = params
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| params.get("message").and_then(Value::as_str))
+        .unwrap_or(fallback);
+    if params.get("willRetry").and_then(Value::as_bool) == Some(true) {
+        provider_notice(luna_proto::ProviderNoticeKind::Retrying, message)
+    } else {
+        AgentEvent::Error {
+            message: message.to_owned(),
+        }
     }
 }
 
@@ -1036,8 +1092,8 @@ pub(crate) fn turn_id(params: &Value) -> String {
         .unwrap_or_default()
 }
 
-/// `params.turn.error.message` (turn/completed carries an optional error;
-/// turn/failed always should).
+/// `params.turn.error.message`: `turn/completed` carries an optional error,
+/// set when `turn.status` is `failed`.
 pub(crate) fn turn_error_message(params: &Value) -> Option<String> {
     params
         .get("turn")
@@ -1596,7 +1652,8 @@ impl ChildStream {
             "item/commandExecution/outputDelta"
             | "item/commandExecution/terminalInteraction"
             | "item/fileChange/outputDelta"
-            | "item/fileChange/patchUpdated" => tool_activity(method, params),
+            | "item/fileChange/patchUpdated"
+            | "item/mcpToolCall/progress" => tool_activity(method, params),
             "thread/tokenUsage/updated" => usage_event(params).into_iter().collect(),
             "item/agentMessage/delta" => {
                 let id = item_id(params);
@@ -1612,7 +1669,9 @@ impl ChildStream {
             "item/reasoning/textDelta"
             | "item/reasoning/summaryTextDelta"
             | "item/reasoning/summaryPartAdded" => self.reasoning.map(method, params),
-            "turn/completed" | "turn/failed" | "turn/aborted" | "thread/closed" => {
+            // v2 has no turn/failed or turn/aborted: the outcome is
+            // `turn/completed {turn:{status}}` (`v2/turn.rs:33-38`).
+            "turn/completed" | "thread/closed" => {
                 if method != "thread/closed"
                     && !remember(&mut self.completed_turns, turn_id(params))
                 {
@@ -1621,13 +1680,12 @@ impl ChildStream {
                 self.settled = true;
                 self.streamed_text.clear();
                 let error = turn_error_message(params);
-                let status = if method == "turn/failed"
-                    || error.is_some()
+                let status = if error.is_some()
                     || params.pointer("/turn/status").and_then(Value::as_str) == Some("failed")
                 {
                     DoneStatus::Errored
-                } else if method == "turn/aborted"
-                    || params.pointer("/turn/status").and_then(Value::as_str) == Some("interrupted")
+                } else if params.pointer("/turn/status").and_then(Value::as_str)
+                    == Some("interrupted")
                 {
                     DoneStatus::Interrupted
                 } else {
@@ -1640,14 +1698,7 @@ impl ChildStream {
                     session_id: Some(child.to_owned()),
                 }]
             }
-            "error" => vec![AgentEvent::Error {
-                message: params
-                    .pointer("/error/message")
-                    .and_then(Value::as_str)
-                    .or_else(|| params.get("message").and_then(Value::as_str))
-                    .unwrap_or("Codex subagent error")
-                    .to_owned(),
-            }],
+            "error" => vec![error_event(params, "Codex subagent error")],
             _ => Vec::new(),
         }
     }
@@ -1711,10 +1762,9 @@ pub(crate) fn route_child_notification(method: &str) -> ChildRoute {
         | "item/commandExecution/terminalInteraction"
         | "item/fileChange/outputDelta"
         | "item/fileChange/patchUpdated"
+        | "item/mcpToolCall/progress"
         | "turn/started"
         | "turn/completed"
-        | "turn/failed"
-        | "turn/aborted"
         | "thread/tokenUsage/updated"
         | "thread/status/changed"
         | "error"
@@ -2052,10 +2102,12 @@ mod tests {
         ] {
             assert_eq!(route_child_notification(m), ChildRoute::Subagent, "{m}");
         }
-        // Child TURN ENDS are the subagent's terminal signal…
-        for m in ["turn/completed", "turn/aborted", "turn/failed"] {
-            assert_eq!(route_child_notification(m), ChildRoute::Subagent, "{m}");
-        }
+        // Child TURN ENDS are the subagent's terminal signal (v2 has only
+        // turn/completed with a status; turn/failed|aborted do not exist).
+        assert_eq!(
+            route_child_notification("turn/completed"),
+            ChildRoute::Subagent
+        );
         // A child turn start can reopen a completed assignment. It must never
         // reach the parent turn router.
         assert_eq!(

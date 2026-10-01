@@ -34,8 +34,8 @@ use crate::{HarnessError, LunaToolExecutor, LunaToolInvocation, LunaToolInvocati
 pub(crate) const SERVER_NAME: &str = "luna";
 /// Child environment variable read by Codex `bearer_token_env_var`.
 pub(crate) const TOKEN_ENV: &str = "LUNA_MCP_BEARER_TOKEN";
-/// A parked LUNA approval waits for the user, not a transport deadline. The
-/// engine bounds the same card by `LUNA_TOOL_APPROVAL_WAIT_MS`.
+/// A parked LUNA approval waits for the user (its card has no expiry), not a
+/// transport deadline: Codex's 300 s MCP default would cut it short.
 pub(crate) const TOOL_TIMEOUT_SEC: u64 = 86_400;
 const MAX_BODY_BYTES: usize = 1 << 20;
 const MAX_CONNECTIONS: usize = 32;
@@ -451,6 +451,8 @@ pub(crate) struct LunaToolScope<'a> {
     pub invoke_luna_tool: Option<&'a LunaToolExecutor>,
     pub call_ids: &'a mut LunaCallIds,
     pub interrupt: &'a CancellationToken,
+    /// Cancelled when the session ends (turn and process gone).
+    pub closed: &'a CancellationToken,
 }
 
 /// The one adapter fence for both transports: exact root thread and active
@@ -488,6 +490,7 @@ pub(crate) fn dispatch(
     };
     let executor = Arc::clone(executor);
     let interrupt = scope.interrupt.clone();
+    let closed = scope.closed.clone();
     let invocation = LunaToolInvocation {
         name: request.name.to_owned(),
         arguments: request.arguments,
@@ -498,9 +501,10 @@ pub(crate) fn dispatch(
         let outcome = tokio::select! {
             biased;
             _ = interrupt.cancelled() => Err(HarnessError::Protocol("LUNA tool call cancelled".into())),
-            // The provider gave up (MCP cancel or disconnect): drop the
-            // executor so a parked approval card is retired, not left live.
+            // The provider gave up (MCP cancel or disconnect) or the session
+            // ended: drop the executor so the engine retires a parked card.
             _ = reply.abandoned() => return,
+            _ = closed.cancelled() => return,
             result = executor(invocation) => result,
         };
         let (success, text) = match outcome {

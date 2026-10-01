@@ -111,6 +111,7 @@ fn request(cwd: &str, prompt: &str, model: &str, resume: Option<String>) -> RunR
     );
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
