@@ -1568,14 +1568,22 @@ pub fn rows_for_entry(
                         resolved,
                         ..
                     } => {
-                        // Model-generated header onto the one-line chip.
-                        let header: SharedString = single_line(
+                        // Model-generated header onto the one-line chip. A
+                        // secret answer is never in the transcript; the chip
+                        // says so instead of showing any value.
+                        let mut header = single_line(
                             &questions
                                 .first()
                                 .map(|q| q.header.clone())
                                 .unwrap_or_else(|| "Question".to_string()),
-                        )
-                        .into();
+                        );
+                        if questions
+                            .iter()
+                            .any(luna_proto::UserInputQuestion::is_secret)
+                        {
+                            header.push_str(" · secret answer hidden");
+                        }
+                        let header: SharedString = header.into();
                         rows.push(Row {
                             id: format!("{}#{}", entry.id, part_id).into(),
                             version: fnv1a(header.as_bytes()) << 1 | *resolved as u64,

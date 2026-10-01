@@ -190,6 +190,7 @@ if has "$line" '"method":"model/list"'; then
   exec sleep 30
 fi
 history=''
+history_mode=''
 if has "$line" '"method":"thread/resume"'; then
   # Cold resume is metadata-only: full-history hydration is deprecated
   # (thread_processor.rs:39); history is paged with thread/turns/list.
@@ -233,6 +234,12 @@ if has "$line" '"method":"thread/resume"'; then
     # excludeTurns: no turns here; ownership comes from the history pages.
     history='[{"id":"old-turn","status":"completed","itemsView":"full","error":null,"items":[{"type":"collabAgentToolCall","id":"spawn-alpha","tool":"spawnAgent","status":"completed","senderThreadId":"th-resumed","receiverThreadIds":["child-alpha"],"prompt":null,"model":null,"reasoningEffort":null,"agentsStates":{}}]}]'
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"paginated\",\"turns\":[]}}}"
+  elif has "$line" '"threadId":"resume-with-child-legacy"'; then
+    # A legacy (non-paginated) thread: thread/turns/list would replay the
+    # rollout once per page, so the adapter must read the history once.
+    history_mode=legacy
+    history='[{"id":"old-turn","status":"completed","items":[{"type":"collabAgentToolCall","id":"spawn-alpha","tool":"spawnAgent","status":"completed","senderThreadId":"th-resumed","receiverThreadIds":["child-alpha"],"prompt":null,"model":null,"reasoningEffort":null,"agentsStates":{}}]}]'
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"legacy\",\"turns\":[]}}}"
   elif has "$line" '"threadId":"resume-with-child-v2"'; then
     history='[{"id":"old-turn","status":"completed","itemsView":"full","error":null,"items":[{"type":"subAgentActivity","id":"spawn-alpha","kind":"started","agentThreadId":"child-alpha","agentPath":"/root/alpha"},{"type":"subAgentActivity","id":"subagent-completed-old","kind":"completed","agentThreadId":"child-alpha","agentPath":"/root/alpha"}]}]'
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"paginated\",\"turns\":[]}}}"
@@ -262,7 +269,13 @@ if has "$turnline" '"method":"thread/name/set"'; then
   read -r turnline || exit 1
 fi
 # A cold resume rebuilds sub-agent ownership from ascending full history.
+if [ "$history_mode" = legacy ]; then
+  has "$turnline" '"method":"thread/read"' && has "$turnline" '"includeTurns":true' || exit 1
+  emit "{\"id\":$(rid "$turnline"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"historyMode\":\"legacy\",\"turns\":$history}}}"
+  read -r turnline || exit 1
+fi
 while has "$turnline" '"method":"thread/turns/list"' && has "$turnline" '"sortDirection":"asc"'; do
+  [ "$history_mode" = legacy ] && exit 1
   has "$turnline" '"itemsView":"full"' || exit 1
   turn_page "$turnline" "${history:-[]}"
   read -r turnline || exit 1

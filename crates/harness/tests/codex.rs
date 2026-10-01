@@ -2224,7 +2224,9 @@ async fn models_discovers_visible_catalog_with_pagination() {
 
 #[tokio::test]
 async fn resumed_parent_recovers_v1_and_v2_child_owners_without_replaying_chips() {
-    for mode in ["v1", "v2"] {
+    // "legacy": a non-paginated thread reads its history once (thread/read)
+    // instead of one rollout replay per thread/turns/list page.
+    for mode in ["v1", "v2", "legacy"] {
         let mut req = request("scenario:resumed-child");
         req.resume = Some(format!("resume-with-child-{mode}"));
         let (controls, _steer, _token) = controls("Yes");

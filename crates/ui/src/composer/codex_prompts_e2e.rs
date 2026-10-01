@@ -289,5 +289,25 @@ pub async fn run_codex_prompts_e2e(
         "secret page: {readback}"
     );
     evidence.insert("requestInputSecret".into(), readback);
+
+    // 6. Answered: the transcript keeps only a masked placeholder.
+    let answered = adapter_questions(artifacts, "request-input")?;
+    seed(
+        &state,
+        cx,
+        session(SessionStatus::Working, 55),
+        entries(
+            "Thanks, deploying with the provided token.",
+            MessageStatus::Streaming,
+            vec![MessagePart::Input {
+                id: "ask-request-part".into(),
+                request_id: "ask-request".into(),
+                questions: answered.into_iter().rev().collect(),
+                resolved: true,
+            }],
+        ),
+        None,
+    )?;
+    capture(window, cx, &output.join("06-secret-answered.png")).await?;
     Ok(Value::Object(evidence))
 }

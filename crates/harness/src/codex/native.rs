@@ -882,6 +882,33 @@ fn parse_mcp_config(response: &Value) -> Result<Vec<CodexMcpConfigEntry>, Harnes
     Ok(entries)
 }
 
+/// Whole history of a LEGACY (non-paginated) thread in one read. For legacy
+/// threads `thread/read includeTurns:true` is not deprecated (the notice is
+/// paginated-only, `thread_processor.rs:868-879`), and it replays the rollout
+/// once, where `thread/turns/list` replays it for every page (`:3118-3122`).
+pub(super) async fn read_legacy_turns(
+    client: &RpcClient,
+    thread_id: &str,
+) -> Result<Vec<Value>, HarnessError> {
+    let value = client
+        .request(
+            "thread/read",
+            json!({"threadId": thread_id, "includeTurns": true}),
+        )
+        .await?;
+    let thread = value.get("thread").unwrap_or(&value);
+    if thread.get("id").and_then(Value::as_str) != Some(thread_id) {
+        return Err(HarnessError::Protocol(
+            "thread/read returned a different Codex thread".into(),
+        ));
+    }
+    Ok(thread
+        .get("turns")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
 /// Page `thread/turns/list` with full items: the non-deprecated history read
 /// for paginated and legacy threads (`thread_processor.rs:3073-3140`).
 /// `keep_paging` sees each page in request order and may stop early.

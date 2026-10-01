@@ -416,6 +416,30 @@ struct LunaInterruptDispatchResult {
     settled: bool,
 }
 
+/// Result of the in-memory secret answer path ([`SessionsEngine::respond_secret_input`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretInputOutcome {
+    /// Handed to the live provider resolver for exactly this request.
+    Delivered,
+    /// The request had no live resolver (turn ended, restart): its card was
+    /// closed as cancelled and the answer was dropped, never stored.
+    Closed,
+    /// The request is not a pending secret question; nothing was sent.
+    NotSecret,
+    /// No such open request for this task.
+    Unavailable,
+}
+
+fn has_secret_question(questions: &[UserInputQuestion]) -> bool {
+    questions.iter().any(UserInputQuestion::is_secret)
+}
+
+fn has_answer_text(answers: &[UserInputAnswer]) -> bool {
+    answers
+        .iter()
+        .any(|answer| answer.labels.iter().any(|label| !label.is_empty()))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LunaApprovalOutcome {
     AllowedOnce,
@@ -4113,6 +4137,79 @@ impl SessionsEngine {
         Ok(true)
     }
 
+    /// Deliver an answer to a provider question flagged secret (Codex
+    /// `isSecret`) in memory only: no session command, journal row, receipt,
+    /// transcript part or log carries it. Only the in-process local UI calls
+    /// this. Without a live resolver (the turn ended or LUNA restarted) the
+    /// request is closed as cancelled and the answer is dropped; it is never
+    /// replayed as a new turn.
+    pub fn respond_secret_input(
+        &self,
+        chat_id: &str,
+        request_id: &str,
+        answers: Vec<UserInputAnswer>,
+    ) -> SecretInputOutcome {
+        {
+            let runs = lock(&self.inner.runs);
+            if let Some(handle) = runs.get(chat_id) {
+                let live = lock(&handle.pending_inputs)
+                    .get(request_id)
+                    .map(|input| has_secret_question(&input.questions));
+                match live {
+                    Some(false) => return SecretInputOutcome::NotSecret,
+                    Some(true) => {
+                        let Some(pending) =
+                            take_pending_ordinary_input(&handle.pending_inputs, request_id)
+                        else {
+                            return SecretInputOutcome::NotSecret;
+                        };
+                        let valid = answers.iter().all(|answer| {
+                            pending.questions.iter().any(|q| q.id == answer.question_id)
+                        });
+                        let delivered = valid && pending.resolver.send(answers).is_ok();
+                        let _ = handle.engine_tx.send(AgentEvent::InputResolved {
+                            request_id: request_id.to_string(),
+                        });
+                        return if delivered {
+                            SecretInputOutcome::Delivered
+                        } else {
+                            SecretInputOutcome::Closed
+                        };
+                    }
+                    None => {}
+                }
+            }
+        }
+        drop(answers);
+        // No live resolver: close the open projection without the answer.
+        let Some(handle) = self
+            .inner
+            .doc_host()
+            .and_then(|host| host.open(chat_id).ok())
+        else {
+            return SecretInputOutcome::Unavailable;
+        };
+        let open_secret = handle.doc().read_entries().is_ok_and(|entries| {
+            entries.iter().any(|entry| {
+                entry.parts.iter().any(|part| {
+                    matches!(part, MessagePart::Input { request_id: id, questions, resolved: false, .. }
+                        if id == request_id && has_secret_question(questions))
+                })
+            })
+        });
+        if !open_secret {
+            return SecretInputOutcome::Unavailable;
+        }
+        match handle.doc().resolve_input(request_id) {
+            Ok(_) => SecretInputOutcome::Closed,
+            Err(error) => {
+                tracing::warn!(chat = %chat_id, request = %request_id, %error,
+                    "secret request close failed");
+                SecretInputOutcome::Unavailable
+            }
+        }
+    }
+
     /// Resolve a pending `request_input` question set. Returns `false` when no such
     /// request is pending (unknown id, or the run already settled).
     pub fn respond_input(
@@ -4132,6 +4229,14 @@ impl SessionsEngine {
             let Some(input) = pending.get(request_id) else {
                 return Ok(false);
             };
+            // A secret answer never travels through this path: its callers
+            // are durable commands and replicated panels.
+            if has_secret_question(&input.questions) && has_answer_text(&answers) {
+                return Err(EngineError::Other(
+                    "Secret answers are sent from the LUNA window running this task and are never stored"
+                        .into(),
+                ));
+            }
             if input.questions.iter().any(|q| q.mcp.is_some()) {
                 if handle.interrupt_token.is_cancelled()
                     || *handle.cancel.subscribe().borrow()
