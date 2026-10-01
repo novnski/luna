@@ -268,14 +268,15 @@ async fn completed_turns_report_native_prompt_uuids_as_checkpoints() {
             ("scenario:no-uuid", 1),
             ("scenario:foreign-uuid", 1),
             ("scenario:error", 1),
-            ("scenario:dup-result", 2),
+            // CC-02 drops a repeated result uuid: one Done, one checkpoint.
+            ("scenario:dup-result", 1),
             ("scenario:autonomous", 2),
         ],
         &[],
     )
     .await;
     let checkpoints: Vec<Option<&str>> = run.dones.iter().map(|(_, id)| id.as_deref()).collect();
-    assert_eq!(run.dones.len(), 9, "{:?}", run.dones);
+    assert_eq!(run.dones.len(), 8, "{:?}", run.dones);
     assert!(checkpoints[0].is_some() && checkpoints[1].is_some());
     assert_eq!(
         checkpoints[2], None,
@@ -284,12 +285,9 @@ async fn completed_turns_report_native_prompt_uuids_as_checkpoints() {
     assert_eq!(checkpoints[3], None, "A4: a foreign uuid never checkpoints");
     assert_eq!(checkpoints[4], None, "A5: errored turn");
     assert_eq!(run.dones[4].0, DoneStatus::Errored);
+    assert!(checkpoints[5].is_some(), "A6: duplicate result");
     assert!(
-        checkpoints[5].is_some() && checkpoints[6].is_none(),
-        "A6: duplicate result"
-    );
-    assert!(
-        checkpoints[7].is_some() && checkpoints[8].is_none(),
+        checkpoints[6].is_some() && checkpoints[7].is_none(),
         "A4: native wake turn"
     );
     assert_eq!(run.checkpoint_events, 4);

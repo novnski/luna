@@ -760,11 +760,13 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
     let world = world();
     world.canned();
     let png = world._root.path().join("shot.png");
+    // A complete 1x1 PNG: CC-04 decodes every attachment before dispatch.
+    use base64::Engine as _;
     std::fs::write(
         &png,
-        [
-            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R',
-        ],
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+            .unwrap(),
     )
     .unwrap();
     let mut req = request("summarize the parser", &world.project, PermissionMode::Full);
