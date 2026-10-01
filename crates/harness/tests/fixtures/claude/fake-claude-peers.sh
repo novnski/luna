@@ -11,10 +11,12 @@
 # "socket"); a live socket capture needs a second authenticated session.
 #
 # Each invocation logs `ARGV <pid> <args>` and `LINE <pid> <stdin line>` to
-# $PWD/.cc09-fake.log, so tests can assert resume ids and stdin origins.
+# <physical cwd>/.cc09-fake.log, so tests can assert resume ids and stdin origins.
 # Session ids come from `--resume=` or from a `sid:NAME` token in the first line.
 
-log="$PWD/.cc09-fake.log"
+# Like the real CLI, report the physical cwd (LUNA validates it on binding).
+cwd=$(pwd -P)
+log="$cwd/.cc09-fake.log"
 printf 'ARGV %s %s\n' "$$" "$*" >> "$log"
 
 resume=""
@@ -37,7 +39,7 @@ error_result() {
   emit "{\"type\":\"result\",\"subtype\":\"error_during_execution\",\"is_error\":true,\"errors\":[\"$1\"],\"usage\":{\"input_tokens\":1,\"output_tokens\":1},\"session_id\":\"$sid\"}"
 }
 init() {
-  emit "{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/synthetic\",\"session_id\":\"$sid\",\"tools\":[\"Task\",\"Read\",\"ListAgents\",\"SendMessage\"],\"model\":\"claude-haiku-4-5-20251001\",\"permissionMode\":\"acceptEdits\"}"
+  emit "{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"$cwd\",\"session_id\":\"$sid\",\"tools\":[\"Task\",\"Read\",\"ListAgents\",\"SendMessage\"],\"model\":\"claude-haiku-4-5-20251001\",\"permissionMode\":\"acceptEdits\"}"
 }
 say() {
   emit "{\"type\":\"stream_event\",\"parent_tool_use_id\":null,\"session_id\":\"$sid\",\"event\":{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"$1\"}}}"

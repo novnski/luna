@@ -229,7 +229,7 @@ fn binding_session(core: &EngineCore, chat: &str) -> Option<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart() {
     let root = tempfile::tempdir().unwrap();
-    let project = root.path().join("project");
+    let project = root.path().canonicalize().unwrap().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let parent = uuid::Uuid::new_v4().to_string();
 
@@ -418,7 +418,7 @@ async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart()
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
     let root = tempfile::tempdir().unwrap();
-    let project = root.path().join("project");
+    let project = root.path().canonicalize().unwrap().join("project");
     std::fs::create_dir_all(&project).unwrap();
     let parent = uuid::Uuid::new_v4().to_string();
     let core = engine(root.path());
