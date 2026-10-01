@@ -618,6 +618,19 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(text.contains(MOCK_ANSWER), "child never answered the reply: {replied}");
                     record.insert("reply".into(), replied);
 
+                    // 5b. A child waiting on approval offers the main view.
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_child_chat_open(APPROVAL.into(), cx)
+                    })?;
+                    settle(cx, 700).await;
+                    capture(window, cx, output.join("05b-child-needs-approval.png"))?;
+                    let approval = readback(window, cx)?;
+                    anyhow::ensure!(
+                        approval["openChild"] == APPROVAL && ids(&approval["watchedDocs"]) == [APPROVAL],
+                        "approval child must replace the previous watch: {approval}"
+                    );
+                    record.insert("approval".into(), approval);
+
                     // 6. Closing the pane releases the panel and its watch.
                     window.update(cx, |shell, _, cx| shell.fixture_close_right_pane(cx))?;
                     settle(cx, 400).await;

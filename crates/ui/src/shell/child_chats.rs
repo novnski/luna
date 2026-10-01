@@ -884,6 +884,7 @@ impl ChildChatPanel {
             _ => None,
         };
         let attention_id = id.clone();
+        let attention_key_id = id.clone();
         let mut root = div()
             .size_full()
             .flex()
@@ -912,6 +913,19 @@ impl ChildChatPanel {
                                 .on_click(cx.listener(move |_, _, _, cx| {
                                     cx.emit(ChildChatEvent::OpenAsMain(attention_id.clone()))
                                 }))
+                                .on_key_down(cx.listener(
+                                    move |_, event: &gpui::KeyDownEvent, _, cx| {
+                                        if is_settings_nav_activation(
+                                            &event.keystroke.key,
+                                            event.is_held,
+                                        ) {
+                                            cx.emit(ChildChatEvent::OpenAsMain(
+                                                attention_key_id.clone(),
+                                            ));
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ))
                                 .child("Open to respond"),
                         ),
                 )
