@@ -2408,6 +2408,7 @@ async fn run_session(session: Session) {
                             })
                         })
                         .await;
+                    let stopped = reply.is_none();
                     let outcome = match reply {
                         None => SteerAcceptance::Unknown(
                             "Codex session stopped before the goal reply arrived".into(),
@@ -2420,7 +2421,6 @@ async fn run_session(session: Session) {
                             SteerAcceptance::Unknown(message)
                         }
                     };
-                    let stopped = reply.is_none();
                     if let Some(tx) = msg.acceptance {
                         let _ = tx.send(outcome);
                     }
