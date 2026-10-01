@@ -305,7 +305,16 @@ fn starts(fixture: &Fixture) -> Vec<serde_json::Value> {
     std::fs::read_to_string(fixture.claude_dir().join("starts.jsonl"))
         .unwrap_or_default()
         .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        // LUNA's isolated title run (asynchronous) is not a task process.
+        .filter(|start| {
+            !start["argv"].as_array().is_some_and(|argv| {
+                argv.iter().any(|arg| {
+                    arg.as_str()
+                        .is_some_and(|arg| arg.starts_with("You generate session titles."))
+                })
+            })
+        })
         .collect()
 }
 

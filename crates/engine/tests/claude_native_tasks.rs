@@ -35,6 +35,12 @@ fn assemble(dir: &Path) -> EngineCore {
         codex_home: dir.join("synthetic-codex"),
     };
     accounts.disable_claude_keychain_fallback().unwrap();
+    // Dispatch resolves Claude's provider-native account from this file.
+    std::fs::write(
+        &accounts.claude_config_file,
+        r#"{"oauthAccount":{"accountUuid":"synthetic-claude-account","emailAddress":"synthetic@example.invalid"}}"#,
+    )
+    .unwrap();
     EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
         profile,
         registry,
