@@ -4720,3 +4720,87 @@ async fn mcp_form_url_validation_concurrency_and_secret_boundaries_e2e() {
     }
     restarted.shutdown().await;
 }
+
+/// codex-adapter fix 5 (failure cases in evidence/codex-adapter/failure-cases.md):
+/// a Codex `error {willRetry:true}` and a `warning` reach the engine through
+/// the real adapter as a transient task notice (doc metadata), are cleared
+/// when the turn ends, and never become transcript Error parts. A
+/// non-retrying error still does.
+#[tokio::test]
+async fn codex_retry_and_warning_are_transient_notices_not_error_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let peer = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../harness/tests/fixtures/codex-adapter-peer.py");
+    let accounts = luna_engine::AgentAccountsConfig {
+        data_dir: dir.path().join("synthetic-provider-state"),
+        claude_config_dir: dir.path().join("synthetic-claude"),
+        claude_config_file: dir.path().join("synthetic-claude.json"),
+        codex_home: dir.path().join("synthetic-codex"),
+    };
+    accounts.disable_claude_keychain_fallback().unwrap();
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        luna_engine::EngineProfile::development(
+            &dir.path().join("engine"),
+            "synthetic-org",
+            "synthetic-user",
+        ),
+        registry_with(Arc::new(
+            luna_harness::CodexHarness::new().with_executable(peer),
+        )),
+        HarnessId::Codex,
+        None,
+        accounts,
+    )
+    .unwrap();
+    let handle = core.doc_host.open(CHAT).unwrap();
+    let mut request = run_request("notices");
+    request.harness = Some(HarnessId::Codex);
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "notice-run",
+        SessionCommandPayload::Run {
+            request,
+            message_id: "notice-user".into(),
+        },
+    );
+    wait_for(
+        || {
+            handle.doc().provider_notice().is_some_and(|notice| {
+                notice.kind == luna_proto::ProviderNoticeKind::Retrying
+                    && notice.message == "Reconnecting... 1/5"
+            })
+        },
+        "retry notice on task metadata",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|entry| {
+                entry.role == MessageRole::Assistant
+                    && entry
+                        .parts
+                        .iter()
+                        .any(|part| matches!(part, MessagePart::Text { text, .. } if text.contains("peer-verified")))
+                    && entry.status == Some(MessageStatus::Complete)
+            })
+        },
+        "completed Codex turn",
+    )
+    .await;
+    wait_for(
+        || handle.doc().provider_notice().is_none(),
+        "notice cleared at turn end",
+    )
+    .await;
+    let errors: Vec<_> = entries(&core)
+        .iter()
+        .flat_map(|entry| entry.parts.clone())
+        .filter_map(|part| match part {
+            MessagePart::Error { message, .. } => Some(message),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(errors, ["quota exhausted"], "retries are not errors");
+    core.shutdown().await;
+}

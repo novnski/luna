@@ -15,7 +15,8 @@ schema = {'type': 'object', 'required': ['name', 'count', 'enabled', 'color', 't
     'tags': {'type': 'array', 'minItems': 1, 'items': {'anyOf': [{'const': 'a', 'title': 'Alpha'}, {'const': 'b', 'title': 'Beta'}]}},
 }}
 params = {'serverName': 'fixture', 'threadId': 'th-1', 'turnId': 't-mcp', 'mode': 'form', 'message': 'Fixture form', 'requestedSchema': schema}
-declined = {'decline', 'foreign', 'bad-schema', 'foreign-thread', 'null-turn', 'bad-default', 'bad-required', 'too-many', 'unsupported-mode', 'url-bad-scheme', 'url-credentials'}
+# A null turnId binds to the active turn (v2/mcp.rs:422-428); a foreign one declines.
+declined = {'decline', 'foreign', 'bad-schema', 'foreign-thread', 'bad-default', 'bad-required', 'too-many', 'unsupported-mode', 'url-bad-scheme', 'url-credentials'}
 if scenario == 'foreign': params['turnId'] = 'foreign'
 if scenario == 'foreign-thread': params['threadId'] = 'foreign'
 if scenario == 'null-turn': params['turnId'] = None
