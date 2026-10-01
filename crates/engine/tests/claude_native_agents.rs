@@ -132,7 +132,7 @@ async fn nested_native_agents_land_in_their_owning_transcripts() {
         .await
         .unwrap();
     // Wait for the wake turn (second root result) and every child settling.
-    tokio::time::timeout(Duration::from_secs(20), async {
+    let settled = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let root = entries(&core, CHAT);
             let settled = ["toolu_C", "toolu_D"].iter().all(|id| {
@@ -155,8 +155,35 @@ async fn nested_native_agents_land_in_their_owning_transcripts() {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
-    .await
-    .expect("root, wake turn and background children settle");
+    .await;
+    if settled.is_err() {
+        let dump: Vec<String> = entries(&core, CHAT)
+            .iter()
+            .map(|e| {
+                let parts: Vec<String> = e
+                    .parts
+                    .iter()
+                    .map(|p| match p {
+                        MessagePart::Text { text, .. } => format!("text:{text:?}"),
+                        MessagePart::Tool {
+                            id,
+                            subagent_status,
+                            subagent_ref,
+                            resolved,
+                            ..
+                        } => format!("tool:{id}:{subagent_status:?}:{subagent_ref:?}:{resolved}"),
+                        other => format!("{other:?}").chars().take(60).collect(),
+                    })
+                    .collect();
+                format!("{:?}/{:?}: {}", e.role, e.status, parts.join(" | "))
+            })
+            .collect();
+        panic!(
+            "did not settle; session={:?}\n{}",
+            core.sessions.session_status(CHAT).map(|s| s.status),
+            dump.join("\n")
+        );
+    }
 
     let root = entries(&core, CHAT);
     let root_text = text(&root, MessageRole::Assistant);
