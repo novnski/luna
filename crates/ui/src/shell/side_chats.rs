@@ -896,7 +896,8 @@ impl SideChatPanel {
             Some(luna_proto::SessionStatus::AwaitingInput) => "Waiting for input",
             Some(luna_proto::SessionStatus::AwaitingApproval) => "Approval needed",
             Some(luna_proto::SessionStatus::Errored) => "Provider error",
-            _ if self.busy => "Sending…",
+            // Only user-visible operations; the 2 s history poll stays quiet.
+            _ if self.operation_label.is_some() => self.operation_label.unwrap_or_default(),
             _ if working => "Working…",
             _ => "",
         };
