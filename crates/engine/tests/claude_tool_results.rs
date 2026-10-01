@@ -86,7 +86,7 @@ fn tool<'a>(entries: &'a [SessionMessageEntry], id: &str) -> &'a MessagePart {
     found[0]
 }
 
-fn output_summary<'a>(part: &'a MessagePart) -> Option<&'a str> {
+fn output_summary(part: &MessagePart) -> Option<&str> {
     match part {
         MessagePart::Tool { output, .. } => output.as_deref(),
         _ => panic!("not a tool part"),
