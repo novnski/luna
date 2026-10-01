@@ -240,6 +240,8 @@ pub(crate) struct Normalizer {
     /// CC-02: native turn identity, lifecycle evidence and frame retention
     /// (see `super::turns`; driven by `normalize_native`).
     pub(crate) native: super::turns::NativeTracker,
+    /// Cross-session peer arrivals and receive-side holds.
+    peer: super::peer::PeerState,
 }
 
 impl Normalizer {
@@ -253,6 +255,7 @@ impl Normalizer {
             assistant_message_id: new_message_id(),
             session_id: None,
             native: Default::default(),
+            peer: Default::default(),
         }
     }
 
@@ -278,7 +281,9 @@ impl Normalizer {
     /// Normalize one stdout frame into 0+ unified events. `interrupted` folds
     /// a post-interrupt `result` into `Done { status: Interrupted }`.
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
+        self.peer.observe(&frame);
         match frame {
+            Frame::System(f) if f.subtype == "peer_message_hold" => self.peer.hold_events(&f),
             Frame::System(f) => {
                 // Agent/shell/workflow task lifecycle (started, progress,
                 // updated, notification): attributed to its owning spawn or
@@ -463,6 +468,9 @@ impl Normalizer {
             }
 
             Frame::User(f) => {
+                if let Some(events) = self.peer.arrival_events(&f) {
+                    return events;
+                }
                 if let Some(parent) = &f.parent_tool_use_id {
                     // A subagent's tool results echo on the main channel too;
                     // they belong to its transcript, attributed like its calls.

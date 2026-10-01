@@ -482,6 +482,11 @@ impl ControlChannel {
         }
     }
 
+    /// Whether `uuid` is a native uuid this run stamped on a stdin line.
+    pub(crate) fn is_own_input(&self, uuid: &str) -> bool {
+        self.inputs.contains_key(uuid)
+    }
+
     /// `--replay-user-messages` echo of one of this run's own lines (CC-06
     /// receipt, folded here): the CLI recorded the exact input in history.
     /// An explicit steer settles once, whichever of replay or lifecycle

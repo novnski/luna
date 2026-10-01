@@ -122,6 +122,8 @@ pub mod change_requests;
 pub mod chat2_host;
 mod claude_mcp;
 mod command_scope;
+mod claude_child_reports;
+mod claude_peers;
 pub mod context_controls;
 pub mod credentials;
 pub mod cross_task_tools;

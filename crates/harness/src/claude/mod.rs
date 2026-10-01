@@ -43,6 +43,7 @@ mod mcp;
 mod native_stop;
 mod native_tasks;
 mod normalize;
+pub mod peer;
 pub mod profile;
 mod runtime_controls;
 mod tool_results;
@@ -205,9 +206,10 @@ impl ClaudeHarness {
             // summary is asked for (raw reasoning stays provider-private).
             "--thinking-display",
             "summarized",
-            // CC-06: re-emit each stdin user line with its `uuid` once the CLI
-            // records it — the native delivery receipt (folded into the
-            // transport's single uuid mechanism).
+            // CC-06/CC-09: re-emit each stdin user line with its `uuid` and
+            // provenance once the CLI records it — the native delivery receipt
+            // (folded into the transport's single uuid mechanism) and the
+            // attribution of native peer arrivals (see `peer`).
             "--replay-user-messages",
         ]);
         // The 1M context window is selected via a model-id suffix
@@ -879,13 +881,19 @@ async fn run_session(session: Session) {
                             continue;
                         }
                         live_session::LineOutcome::Replay(uuid) => {
+                            let own = transport.is_own_input(&uuid);
                             let effects = transport.on_replay(&uuid);
                             for ev in receipt_events(&mut norm, effects, &mut explicit_steer_unconfirmed) {
                                 if event_tx.send(Ok(ev)).await.is_err() {
                                     break 'main;
                                 }
                             }
-                            continue;
+                            if own {
+                                continue;
+                            }
+                            // A replay LUNA never sent (a native peer arrival,
+                            // CLI-originated input): CC-09 attributes it below.
+                            Vec::new()
                         }
                     };
                     if let transport::Intercept::Consumed(effects) = transport.intercept(line) {

@@ -7832,6 +7832,36 @@ async fn drive_run(
             }
             continue;
         }
+        // Native peer (cross-session) observations become attributed System
+        // entries, never user turns, and are recorded even while parked. A
+        // mid-turn arrival closes the streaming segment first so the reply
+        // that follows lands below it.
+        if matches!(event, AgentEvent::PeerMessage { .. }) {
+            if idle_since.is_none() && !folded.is_empty() {
+                if let Err(err) = finish_segment(
+                    doc_ref,
+                    writer.take(),
+                    &entry_id,
+                    &device_id,
+                    segment_started,
+                    &folded,
+                    MessageStatus::Complete,
+                ) {
+                    tracing::warn!(chat = %chat_id, error = %err, "segment finish failed");
+                }
+                inner.note_message(&chat_id, &folded_text(&folded));
+                folded.clear();
+                dirty = false;
+                entry_id = new_id();
+                segment_started = now_ms();
+            }
+            if let Err(error) =
+                crate::claude_peers::record_peer_message(doc_ref, &device_id, &event, now_ms())
+            {
+                tracing::warn!(chat = %chat_id, %error, "peer message record failed");
+            }
+            continue;
+        }
         // Native autonomous turns can begin immediately after Done. The
         // one-second parked-output gate is for unowned ACP noise, not an
         // authoritative Codex turn boundary.

@@ -1150,6 +1150,36 @@ pub enum AgentEvent {
     UserMessage {
         text: String,
     },
+    /// A native cross-session ("peer") message observed on the provider wire:
+    /// another session's message that reached the model (`delivered`), or a
+    /// receive-side hold and how it resolved (`held`/`released`/`dropped`).
+    /// `from` and `name` are sender-asserted labels, not identity or authority;
+    /// `verified_peer_pid` is the kernel-verified connecting process, when
+    /// known. Never a user turn: the engine records it as a system entry.
+    #[serde(rename_all = "camelCase")]
+    PeerMessage {
+        state: String,
+        lane: String,
+        from: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from_session: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verified_peer_pid: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        outcome: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message_uuid: Option<String>,
+        /// The host's own stdin injection (a LUNA child report), not a native
+        /// arrival from another session.
+        #[serde(default)]
+        host_injected: bool,
+    },
     /// An event belonging to a SUBAGENT's nested transcript, attributed to
     /// the spawning tool call (`parent_tool_use_id` = the parent-feed
     /// `ToolCall::id` that launched it). Never folded into the parent chat

@@ -78,6 +78,9 @@ pub(crate) struct SystemFrame {
     /// leniently by `native_tasks`; nothing else is retained.
     #[serde(flatten)]
     pub native_task_fields: super::native_tasks::TaskFields,
+    /// `peer_message_hold` fields (state/lane/from/cause/outcome…).
+    #[serde(flatten)]
+    pub peer_hold: Box<super::peer::PeerHoldFields>,
 }
 
 /// Allowlisted names and status words from one `system:init` frame. Unknown
@@ -210,6 +213,11 @@ pub(crate) struct MessageFrame {
     /// User frames: `[{id, non_execution_kind?, user_feedback?, remedy?}]`.
     #[serde(default)]
     pub tool_result_meta: Option<Value>,
+    /// User-replay provenance (`--replay-user-messages`): human, peer, …
+    #[serde(default)]
+    pub origin: Option<Value>,
+    #[serde(default)]
+    pub uuid: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -379,12 +387,16 @@ pub(crate) fn parse_frame(line: &str) -> Result<Frame, serde_json::Error> {
 /// A stdin user turn: `{"type":"user","message":{...},"parent_tool_use_id":null}`.
 /// Steering = another such line mid-run (consumed at a step boundary).
 pub(crate) fn user_message_line(text: &str) -> String {
-    json!({
+    let mut line = json!({
         "type": "user",
         "message": { "role": "user", "content": text },
         "parent_tool_use_id": null,
-    })
-    .to_string()
+    });
+    // LUNA's own peer envelope declares the sender class (peer origin only).
+    if let Some(origin) = super::peer::host_declared_origin(text) {
+        line["origin"] = origin;
+    }
+    line.to_string()
 }
 
 /// Success reply to a CLI control request (`can_use_tool` allow/deny payloads).
