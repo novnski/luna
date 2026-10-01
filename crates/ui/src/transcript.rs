@@ -6568,7 +6568,7 @@ impl Transcript {
                 let eligible = matches!(
                     (history_provider, history_role),
                     (
-                        Some(luna_proto::HarnessId::Codex),
+                        Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode),
                         MessageRole::User | MessageRole::Assistant
                     ) | (
                         Some(luna_proto::HarnessId::Opencode),
@@ -6605,8 +6605,10 @@ impl Transcript {
                 })
             });
             let edit = history_task_id.clone().and_then(|task_id| {
-                (history_provider == Some(luna_proto::HarnessId::Codex)
-                    && history_role == MessageRole::User)
+                (matches!(
+                    history_provider,
+                    Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode)
+                ) && history_role == MessageRole::User)
                     .then(|| {
                         let message_id = copy_entry_id.to_string();
                         let text = copy_text.clone().unwrap_or_default().to_string();
@@ -6633,8 +6635,10 @@ impl Transcript {
                     })
             });
             let rewind = history_task_id.clone().and_then(|task_id| {
-                (history_provider == Some(luna_proto::HarnessId::Codex)
-                    && history_role == MessageRole::User)
+                (matches!(
+                    history_provider,
+                    Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode)
+                ) && history_role == MessageRole::User)
                     .then(|| {
                         let message_id = copy_entry_id.to_string();
                         let text = copy_text.clone().unwrap_or_default().to_string();

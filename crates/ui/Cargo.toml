@@ -46,6 +46,10 @@ name = "child-chats-pane-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "claude-history-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "appearance-fixture"
 required-features = ["appshots-fixture"]
 
