@@ -85,6 +85,7 @@ async fn received_tool_payloads_and_live_activity_survive_steer_and_reopen() {
                 worktree: None,
                 resume: None,
                 review: None,
+                goal: None,
             },
             Some("fixture-user".into()),
         )

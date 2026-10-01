@@ -424,6 +424,11 @@ pub struct RunRequest {
     /// the adapter always runs inline in that chat's own provider binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<NativeReviewRequest>,
+    /// "Send as goal" (Codex only): start a native goal instead of an ordinary
+    /// turn. The adapter loads the thread, runs Codex's clear+set sequence and
+    /// adopts the turn Codex starts itself. Never replayed by recovery.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<crate::GoalStartRequest>,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub input_items: Vec<ComposerInput>,
@@ -914,6 +919,11 @@ pub enum AgentEvent {
     GoalChanged {
         thread_id: String,
         goal: Option<crate::ThreadGoal>,
+        /// Codex's `turnId`: set when the change happened inside a provider
+        /// turn (accounting, or the model's `update_goal`), null for client
+        /// controls and resume snapshots.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
     },
     /// Internal supported-provider notification that asks the engine to
     /// refresh task metadata. It is consumed before journal/doc publication.

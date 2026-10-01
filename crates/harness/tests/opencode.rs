@@ -245,6 +245,7 @@ impl FakeOpencode {
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
@@ -568,6 +569,7 @@ async fn steer_queues_mid_turn_and_delivers_at_idle() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .unwrap();

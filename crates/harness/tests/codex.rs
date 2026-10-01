@@ -46,6 +46,7 @@ fn native_client() -> CodexNativeClient {
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
@@ -1160,6 +1161,7 @@ async fn steering_uses_turn_steer_with_expected_turn_id() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1209,6 +1211,7 @@ async fn explicit_steer_native_record_emits_one_correlated_boundary() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1244,6 +1247,7 @@ async fn explicit_steer_ignores_stale_and_duplicate_echoes() {
                 message_id: Some(message_id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(acceptance),
+                goal: None,
             })
             .await
             .expect("steer queued");
@@ -1291,6 +1295,7 @@ async fn explicit_steer_uncorrelated_ack_stays_unknown_without_replay() {
                 message_id: Some("uncorrelated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(accepted_tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -1327,6 +1332,7 @@ async fn explicit_steer_rejection_never_falls_back_to_turn_start() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1362,6 +1368,7 @@ async fn explicit_steer_lost_response_is_unknown_and_never_replayed() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1404,6 +1411,7 @@ async fn explicit_steer_ack_only_remains_pending_without_boundary() {
             message_id: Some("queued-steer".into()),
             delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             acceptance: Some(accepted_tx),
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1440,6 +1448,7 @@ async fn rejected_steer_falls_back_to_a_follow_up_turn() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .expect("steer queued");
@@ -1891,6 +1900,7 @@ async fn next_turn_response_owns_approval_before_started_notification() {
             message_id: None,
             delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
             acceptance: None,
+            goal: None,
         })
         .await
         .unwrap();
@@ -2569,6 +2579,7 @@ async fn live_subagent_spawn_and_followup_keep_one_transcript() {
                 message_id: None,
                 delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
                 acceptance: None,
+                goal: None,
             }).await.unwrap();
         }
         if turn == 2 {
@@ -2757,6 +2768,7 @@ async fn live_real_app_server_tool_and_steer() {
                     message_id: Some("luna-audit-live-steer".into()),
                     delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                     acceptance: Some(tx),
+                    goal: None,
                 }).await.unwrap();
                 acceptance = Some(rx);
                 sent = true;
@@ -3166,6 +3178,7 @@ async fn native_steering_reconciles_lost_ack_and_terminal_readback() {
                 message_id: Some("native-correlated-steer".into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -3212,6 +3225,7 @@ async fn native_steering_records_multiple_ids_once_in_order() {
                 message_id: Some(id.into()),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
                 acceptance: Some(tx),
+                goal: None,
             })
             .await
             .unwrap();
@@ -3461,4 +3475,255 @@ async fn generic_mcp_elicitation_roundtrips_typed_fields_and_actions() {
         )
         .unwrap();
     }
+}
+
+// ---- send as goal (frames: evidence/goal-parity/probes, installed 0.159.0) ----
+
+fn goal_request(objective: &str) -> RunRequest {
+    let mut req = request(objective);
+    req.goal = Some(luna_proto::GoalStartRequest {
+        objective: objective.into(),
+        token_budget: None,
+    });
+    req
+}
+
+fn goal_event(
+    events: &[AgentEvent],
+    status: luna_proto::GoalStatus,
+    turn: Option<&str>,
+) -> Option<usize> {
+    events.iter().position(|event| {
+        matches!(event, AgentEvent::GoalChanged { goal: Some(goal), turn_id, .. }
+            if goal.status == status && turn_id.as_deref() == turn)
+    })
+}
+
+fn no_peer_errors(events: &[AgentEvent]) {
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Error { .. })),
+        "the fake Codex reported a protocol violation: {events:?}"
+    );
+}
+
+/// Cold "send as goal": no turn/start; Codex's own `turn/started` is adopted
+/// as the run's turn, and the model's completion arrives with its turn id.
+#[tokio::test]
+async fn goal_start_adopts_the_turn_codex_starts_itself() {
+    let (controls, _steer, _token) = controls("Yes");
+    let objective = "scenario:goal-start count to three";
+    let events = run_to_end(&harness(), goal_request(objective), controls).await;
+    no_peer_errors(&events);
+    let set = goal_event(&events, luna_proto::GoalStatus::Active, None).expect("goal set");
+    let started = events
+        .iter()
+        .position(|event| {
+            matches!(event, AgentEvent::ProviderTurnStarted { thread_id, turn_id }
+                if thread_id == "th-1" && turn_id == "goal-turn-1")
+        })
+        .expect("the server-started goal turn is adopted");
+    let complete = goal_event(
+        &events,
+        luna_proto::GoalStatus::Complete,
+        Some("goal-turn-1"),
+    )
+    .expect("completion carries the goal turn id");
+    assert!(set < started && started < complete, "{events:?}");
+    match &events[complete] {
+        AgentEvent::GoalChanged {
+            goal: Some(goal), ..
+        } => {
+            assert_eq!(goal.objective, objective);
+            assert_eq!(goal.time_used_seconds, 14);
+        }
+        other => panic!("{other:?}"),
+    }
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text.trim_end(), "1\n2\n3");
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Done {
+            status: DoneStatus::Completed,
+            result: None,
+            error: None,
+            session_id: Some("th-1".into()),
+        })
+    );
+}
+
+/// A cold goal on an existing thread clears the stale goal before
+/// `thread/resume` (else resume auto-starts the OLD goal's continuation) and
+/// freezes reasoning summaries into the thread (no turn/start carries them).
+#[tokio::test]
+async fn goal_start_on_a_resumed_thread_clears_before_loading_it() {
+    let (controls, _steer, _token) = controls("Yes");
+    let mut req = goal_request("scenario:goal-start after resume");
+    req.resume = Some("goal-resume".into());
+    let events = run_to_end(&harness(), req, controls).await;
+    no_peer_errors(&events);
+    assert!(
+        events.iter().any(|event| matches!(event, AgentEvent::SessionStarted { session_id, .. } if session_id == "goal-resume")),
+        "{events:?}"
+    );
+    assert!(
+        goal_event(
+            &events,
+            luna_proto::GoalStatus::Complete,
+            Some("goal-turn-1")
+        )
+        .is_some()
+    );
+    assert!(matches!(
+        events.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
+}
+
+/// Codex accepts the goal but never starts a turn (Plan mode refuses
+/// automatic input): the run settles with an explanation, never Working.
+#[tokio::test]
+async fn goal_start_without_a_server_turn_settles_with_an_error() {
+    // SAFETY: only goal starts read this knob; no other test sets it.
+    unsafe { std::env::set_var("LUNA_CODEX_GOAL_TURN_START_MS", "300") };
+    let (controls, _steer, _token) = controls("Yes");
+    let events = run_to_end(
+        &harness(),
+        goal_request("scenario:goal-no-turn idle"),
+        controls,
+    )
+    .await;
+    assert!(goal_event(&events, luna_proto::GoalStatus::Active, None).is_some());
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ProviderTurnStarted { .. })),
+        "{events:?}"
+    );
+    match events
+        .iter()
+        .find(|event| matches!(event, AgentEvent::Done { .. }))
+    {
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            error: Some(error),
+            ..
+        }) => assert!(error.contains("did not start working"), "{error}"),
+        other => panic!("expected an errored Done: {other:?} in {events:?}"),
+    }
+}
+
+/// A correlated rejection reports Codex's message and never falls back to an
+/// ordinary turn.
+#[tokio::test]
+async fn rejected_goal_start_reports_the_provider_message() {
+    let (controls, _steer, _token) = controls("Yes");
+    let events = run_to_end(
+        &harness(),
+        goal_request("scenario:goal-rejected please"),
+        controls,
+    )
+    .await;
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::ProviderTurnStarted { .. })),
+        "{events:?}"
+    );
+    match events.last() {
+        Some(AgentEvent::Done {
+            status: DoneStatus::Errored,
+            error: Some(error),
+            ..
+        }) => assert!(
+            error.contains("Codex rejected the goal: goals feature is disabled"),
+            "{error}"
+        ),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Warm "send as goal": the loaded runtime runs clear+set on its own
+/// connection (no turn/start or turn/steer); acceptance reports the set, and
+/// the turn Codex starts arrives as an autonomous turn after the first Done.
+#[tokio::test]
+async fn warm_goal_starts_on_the_loaded_runtime() {
+    let (controls, steer, _token) = controls("Yes");
+    let mut stream = harness()
+        .run(request("scenario:goal-warm"), controls)
+        .await
+        .expect("run starts");
+    let mut events = Vec::new();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            let first_done = matches!(event, AgentEvent::Done { .. });
+            events.push(event);
+            if first_done {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("first turn ends");
+    let (accepted_tx, accepted_rx) = oneshot::channel();
+    steer
+        .send(SteerMessage {
+            prompt: "Ship the warm goal".into(),
+            attachments: Vec::new(),
+            input_items: Vec::new(),
+            message_id: Some("goal-message".into()),
+            delivery: luna_harness::SteerDelivery::AllowFollowUpTurn,
+            acceptance: Some(accepted_tx),
+            goal: Some(luna_proto::GoalStartRequest {
+                objective: "Ship the warm goal".into(),
+                token_budget: None,
+            }),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), accepted_rx)
+            .await
+            .expect("acceptance in time")
+            .expect("acceptance sent"),
+        luna_harness::SteerAcceptance::Accepted
+    );
+    let rest = tokio::time::timeout(
+        Duration::from_secs(10),
+        stream.map(|r| r.expect("stream event")).collect::<Vec<_>>(),
+    )
+    .await
+    .expect("run finished in time");
+    no_peer_errors(&rest);
+    assert!(
+        !rest
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Steered { .. })),
+        "a goal is not a steer: {rest:?}"
+    );
+    let started = rest
+        .iter()
+        .position(|event| matches!(event, AgentEvent::ProviderTurnStarted { turn_id, .. } if turn_id == "goal-turn-2"))
+        .expect("Codex's goal turn after the first Done");
+    let complete =
+        goal_event(&rest, luna_proto::GoalStatus::Complete, Some("goal-turn-2")).unwrap();
+    assert!(started < complete);
+    assert!(matches!(
+        rest.last(),
+        Some(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            ..
+        })
+    ));
 }

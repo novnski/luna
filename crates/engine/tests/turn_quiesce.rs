@@ -50,6 +50,7 @@ fn init_quiesce_env() {
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,

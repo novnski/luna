@@ -4159,6 +4159,7 @@ impl EngineRpc {
                 crate::EngineError::Other("task execution settings are unavailable".into())
             })?;
         request.review = None;
+        request.goal = None;
         request.prompt = prompt.to_string();
         request.harness = Some(config.harness);
         request.provider_account_id = config.provider_account_id.clone();
@@ -4796,6 +4797,10 @@ impl EngineRpc {
                     &[],
                     move |doc| {
                         doc.clear_context_usage()?;
+                        // LUNA history survives the boundary, and so do its
+                        // "Sent as goal" / "Goal achieved" marks.
+                        let mut state = state.clone();
+                        state.goal_marks = doc.context_control().goal_marks;
                         doc.set_context_control(&state)?;
                         if !doc
                             .read_entries()?
@@ -5856,7 +5861,10 @@ impl EngineRpc {
                                         &plan_checkpoints,
                                     )?;
                                     doc.push_message(&marker)?;
-                                    let mut context = ContextControlState::default();
+                                    let mut context = ContextControlState {
+                                        goal_marks: doc.context_control().goal_marks,
+                                        ..Default::default()
+                                    };
                                     context.binding_generation = Some(new_binding.generation);
                                     context.notice = Some(
                                         "Context controls reset for the forked provider binding."
@@ -6085,7 +6093,10 @@ impl EngineRpc {
                                         &plan_checkpoints,
                                     )?;
                                     doc.push_message(&marker)?;
-                                    let mut context = ContextControlState::default();
+                                    let mut context = ContextControlState {
+                                        goal_marks: doc.context_control().goal_marks,
+                                        ..Default::default()
+                                    };
                                     context.binding_generation = Some(new_binding.generation);
                                     context.notice = Some(
                                         "Context controls reset for the restored provider binding."

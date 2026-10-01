@@ -30,6 +30,16 @@ has "$line" '"method":"initialized"' || exit 1
 
 # ---- thread start / resume -------------------------------------------------
 read -r line || exit 1
+# A cold "send as goal" clears the previous goal BEFORE loading the thread, so
+# thread/resume cannot auto-start the stale goal's continuation (real 0.159,
+# evidence/goal-parity/probes/p4-cold-metadata). Codex always notifies.
+pre_cleared=''
+if has "$line" '"method":"thread/goal/clear"'; then
+  pre_cleared=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  emit "{\"method\":\"thread/goal/cleared\",\"params\":{\"threadId\":\"$pre_cleared\"}}"
+  emit "{\"id\":$(rid "$line"),\"result\":{\"cleared\":true}}"
+  read -r line || exit 1
+fi
 if has "$line" '"method":"thread/read"'; then
   thread_id=$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
   case "$thread_id" in
@@ -212,6 +222,16 @@ if has "$line" '"method":"thread/resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-fresh\"}}}"
   elif has "$line" '"threadId":"context-resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"context-resume\"}}}"
+  elif has "$line" 'goal-warm-workspace'; then
+    # The goal E2E's later sends resume the same native thread.
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"$(printf '%s' "$line" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')\"}}}"
+  elif has "$line" '"threadId":"goal-resume"'; then
+    if [ "$pre_cleared" != 'goal-resume' ]; then
+      emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32600,\"message\":\"resume before the stale goal was cleared\"}}"
+      exit 0
+    fi
+    has "$line" '"model_reasoning_summary":"auto"' || { emit "{\"id\":$(rid "$line"),\"error\":{\"code\":-32600,\"message\":\"goal resume without reasoning summaries\"}}"; exit 0; }
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"goal-resume\"}}}"
   else
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\"}}}"
   fi
@@ -239,6 +259,59 @@ if has "$turnline" '"method":"thread/read"' && has "$turnline" '"threadId":"th-r
   emit "{\"id\":$(rid "$turnline"),\"result\":{\"thread\":{\"id\":\"th-resumed\",\"turns\":[{\"id\":\"prior-turn\",\"items\":[{\"type\":\"userMessage\",\"clientId\":\"prior-steer\"},{\"type\":\"userMessage\",\"clientId\":\"unrelated-input\"}]}]}}}"
   read -r turnline || exit 1
 fi
+# ---- send as goal ----------------------------------------------------------
+# Codex's own sequence on the loaded thread: clear, then set active. The server
+# starts the goal turn itself (no turn/start, no userMessage item); the model's
+# update_goal surfaces only as thread/goal/updated with turnId. Frames mirror
+# evidence/goal-parity/probes/p1-start (installed 0.159.0, gpt-6.1-sol).
+goal_json() { # $1 thread, $2 status, $3 time used, $4 tokens used
+  printf '{"threadId":"%s","objective":"%s","status":"%s","tokenBudget":null,"tokensUsed":%s,"timeUsedSeconds":%s,"createdAt":1790858093,"updatedAt":1790858108}' "$1" "$goal_objective" "$2" "$4" "$3"
+}
+goal_turn() { # $1 thread, $2 turn id, $3 answer
+  emit "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"$1\",\"turn\":{\"id\":\"$2\",\"items\":[],\"status\":\"inProgress\"}}}"
+  emit "{\"method\":\"item/started\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"item\":{\"type\":\"agentMessage\",\"id\":\"$2-msg\",\"text\":\"\"}}}"
+  emit "{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"itemId\":\"$2-msg\",\"delta\":\"$3\"}}"
+  emit "{\"method\":\"thread/goal/updated\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"goal\":$(goal_json "$1" active 14 21440)}}"
+  emit "{\"method\":\"thread/goal/updated\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"goal\":$(goal_json "$1" complete 14 21440)}}"
+  emit "{\"method\":\"item/completed\",\"params\":{\"threadId\":\"$1\",\"turnId\":\"$2\",\"item\":{\"type\":\"agentMessage\",\"id\":\"$2-msg\",\"text\":\"$3\"}}}"
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"$1\",\"turn\":{\"id\":\"$2\",\"items\":[],\"status\":\"completed\"}}}"
+}
+goal_start() { # $1 = the thread/goal/clear line; answers through the set
+  gthread=$(printf '%s' "$1" | sed 's/.*"threadId":"\([^"]*\)".*/\1/')
+  emit "{\"method\":\"thread/goal/cleared\",\"params\":{\"threadId\":\"$gthread\"}}"
+  emit "{\"id\":$(rid "$1"),\"result\":{\"cleared\":false}}"
+  read -r setline || exit 1
+  if ! has "$setline" '"method":"thread/goal/set"' || ! has "$setline" '"status":"active"'; then
+    emit "{\"method\":\"error\",\"params\":{\"threadId\":\"$gthread\",\"message\":\"expected thread/goal/set active after clear\"}}"
+    exit 0
+  fi
+  goal_objective=$(printf '%s' "$setline" | sed 's/.*"objective":"\([^"]*\)".*/\1/')
+  if has "$setline" 'scenario:goal-rejected'; then
+    emit "{\"id\":$(rid "$setline"),\"error\":{\"code\":-32600,\"message\":\"goals feature is disabled\"}}"
+    return 1
+  fi
+  emit "{\"id\":$(rid "$setline"),\"result\":{\"goal\":$(goal_json "$gthread" active 0 0)}}"
+  emit "{\"method\":\"thread/goal/updated\",\"params\":{\"threadId\":\"$gthread\",\"turnId\":null,\"goal\":$(goal_json "$gthread" active 0 0)}}"
+}
+if has "$turnline" '"method":"thread/goal/clear"'; then
+  goal_start "$turnline" || { exec sleep 2; }
+  case "$setline" in
+  *scenario:goal-no-turn*)
+    # Codex accepted the goal but never started a turn (e.g. Plan mode).
+    exec sleep 5
+    ;;
+  *)
+    goal_turn "$gthread" goal-turn-1 '1\n2\n3'
+    ;;
+  esac
+  # A turn/start here would be a second turn: the goal turn is Codex's own.
+  # (`read -t` where the shell has it; otherwise skip the probe.)
+  if read -t 1 -r extra 2>/dev/null && has "$extra" '"method":"turn/start"'; then
+    emit "{\"method\":\"error\",\"params\":{\"threadId\":\"$gthread\",\"message\":\"unexpected turn/start after a goal start\"}}"
+  fi
+  exit 0
+fi
+
 tid=$(rid "$turnline")
 
 case "$turnline" in
@@ -925,6 +998,29 @@ case "$turnline" in
   emit '{"method":"item/completed","params":{"threadId":"child-alpha","item":{"type":"agentMessage","id":"resumed-answer","text":"resumed alpha"}}}'
   emit '{"method":"turn/completed","params":{"threadId":"child-alpha","turn":{"id":"alpha-resumed","status":"completed"}}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-resumed","turn":{"id":"t-2","status":"completed"}}}'
+  ;;
+
+*scenario:goal-warm*)
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-1\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-1"}}}'
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-1","item":{"type":"agentMessage","id":"warm-msg","text":"ready"}}}'
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-1","status":"completed"}}}'
+  # Metadata reads may share the warm connection between turns; answer them
+  # as unsupported. A turn/start or turn/steer here is the bug under test.
+  while read -r clearline; do
+    has "$clearline" '"method":"thread/goal/clear"' && break
+    [ -z "$CODEX_HOME" ] || printf '%s\n' "$clearline" >> "$CODEX_HOME/goal-warm-skipped"
+    if has "$clearline" '"method":"turn/start"' || has "$clearline" '"method":"turn/steer"'; then
+      emit '{"method":"error","params":{"threadId":"th-1","message":"warm goal must clear first, not turn/start or turn/steer"}}'
+      exit 0
+    fi
+    if has "$clearline" '"id":'; then
+      emit "{\"id\":$(rid "$clearline"),\"error\":{\"code\":-32601,\"message\":\"fake goal-warm: unsupported\"}}"
+    fi
+  done
+  [ -n "$clearline" ] || exit 0
+  goal_start "$clearline" || exit 0
+  goal_turn th-1 goal-turn-2 'warm goal done'
   ;;
 
 *scenario:resumed*)

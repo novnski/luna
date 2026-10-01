@@ -76,6 +76,7 @@ async fn permission_detail_wire_choices_and_scope() {
             worktree: None,
             resume: None,
             review: None,
+            goal: None,
         };
         let harness = CodexHarness::new().with_executable(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -183,6 +184,7 @@ async fn permission_detail_remote_resolution_closes_parked_answer() {
         worktree: None,
         resume: None,
         review: None,
+        goal: None,
     };
     let harness = CodexHarness::new().with_executable(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

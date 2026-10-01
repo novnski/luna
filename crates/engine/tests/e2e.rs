@@ -27,6 +27,7 @@ const CHAT: &str = "chat-e2e";
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt: prompt.into(),
         harness: None,
@@ -3420,6 +3421,7 @@ async fn real_claude_sees_uploaded_image_inline() {
     );
     let request = RunRequest {
         review: None,
+        goal: None,
         input_items: Vec::new(),
         prompt,
         harness: None,
