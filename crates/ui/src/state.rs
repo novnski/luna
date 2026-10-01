@@ -1500,7 +1500,11 @@ impl AppState {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.sub_watch_tasks.remove(doc_id);
         self.sub_transcripts.remove(doc_id);
-        self.transcript_baselines.remove(doc_id);
+        // A right-pane child chat is watched by its chat id, which is also
+        // the main transcript's baseline key once that child is selected.
+        if self.selected_chat.as_deref() != Some(doc_id) {
+            self.transcript_baselines.remove(doc_id);
+        }
     }
 
     /// Frozen-blob path: the finished subagent's uploaded transcript, no
@@ -4796,5 +4800,13 @@ impl AppState {
     /// fixture has populated its selected chat and static workspace rows.
     pub fn fixture_attach_engine(&mut self, engine: EngineHandle, cx: &mut Context<Self>) {
         self.attach_engine(engine, cx);
+    }
+
+    /// Doc ids with a live `WatchDocMessages` subscription (subagent tabs and
+    /// right-pane child chats), sorted for stable readback.
+    pub fn fixture_sub_watch_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.sub_watch_tasks.keys().cloned().collect();
+        ids.sort();
+        ids
     }
 }

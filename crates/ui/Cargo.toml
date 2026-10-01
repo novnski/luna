@@ -42,6 +42,10 @@ name = "goal-card-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "child-chats-pane-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "appearance-fixture"
 required-features = ["appshots-fixture"]
 
