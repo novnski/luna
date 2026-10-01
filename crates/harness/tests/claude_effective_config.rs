@@ -447,10 +447,11 @@ async fn discovery_cache_tracks_project_policy_account_and_config_changes() {
         .with_config_dir(&home);
     let full = PermissionMode::Full;
 
-    let (in_a, in_b) = tokio::join!(
-        harness.commands_in(&scope(&a, full, Some("acct-1"))),
-        harness.commands_in(&scope(&b, full, Some("acct-1")))
+    let (scope_a, scope_b) = (
+        scope(&a, full, Some("acct-1")),
+        scope(&b, full, Some("acct-1")),
     );
+    let (in_a, in_b) = tokio::join!(harness.commands_in(&scope_a), harness.commands_in(&scope_b));
     let (in_a, in_b) = (in_a.unwrap(), in_b.unwrap());
     assert!(names(&in_a).contains(&"luna-project-canary".to_owned()));
     assert!(!names(&in_b).contains(&"luna-project-canary".to_owned()));
