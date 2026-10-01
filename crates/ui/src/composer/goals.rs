@@ -21,6 +21,7 @@ const HEADER_HEIGHT: f32 = 36.0;
 const GLYPH: f32 = 14.0;
 const META_GLYPH: f32 = 12.0;
 const BUDGET_METER_WIDTH: f32 = 56.0;
+/// LUNA's working glyph (3×3 accent cells), ~10px at this cell size.
 const SPINNER_CELL: f32 = 2.5;
 const BUSY_REASON: &str = "Unavailable while a goal change is in progress.";
 
@@ -502,10 +503,10 @@ impl Composer {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(crate::loaders::mini_mono_spinner(
-                    SharedString::from(format!("{id}-spinner")),
+                .child(crate::loaders::gradient_spinner(
+                    "goal-control-spinner",
+                    theme,
                     SPINNER_CELL,
-                    hover,
                     cx.entity_id(),
                     cx,
                 ))
@@ -554,8 +555,11 @@ impl Composer {
                     .hover(move |style| style.bg(wash).text_color(hover))
                     .focus_visible(move |style| style.bg(accent.opacity(0.18)).text_color(accent))
             })
+            // The control that is working keeps full strength for its spinner.
             .when(!enabled, |button| {
-                button.opacity(0.45).aria_description(BUSY_REASON)
+                button
+                    .when(!spinning, |button| button.opacity(0.45))
+                    .aria_description(BUSY_REASON)
             })
             .when(icon_only, |button| {
                 button
@@ -793,10 +797,10 @@ impl Composer {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(crate::loaders::mini_mono_spinner(
+                    .child(crate::loaders::gradient_spinner(
                         "goal-create-spinner",
+                        &theme,
                         SPINNER_CELL,
-                        theme.text,
                         cx.entity_id(),
                         cx,
                     ))
@@ -1147,7 +1151,7 @@ impl Composer {
             })
             .px(px(14.0))
             .pt(px(if has_goal { 10.0 } else { 2.0 }))
-            .pb(px(10.0))
+            .pb(px(12.0))
             .flex()
             .flex_col()
             .gap(px(10.0))
