@@ -1906,7 +1906,7 @@ impl AppState {
         self.attach_engine(handle, cx);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "appshots-fixture"))]
     pub(crate) fn set_test_engine(&mut self, handle: EngineHandle) {
         self.engine = Some(handle);
         self.engine_generation = self.engine_generation.wrapping_add(1);

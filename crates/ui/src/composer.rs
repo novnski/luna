@@ -47,6 +47,8 @@ use crate::theme::Theme;
 
 mod integrations;
 #[cfg(feature = "appshots-fixture")]
+pub use goals::run_goal_card_e2e;
+#[cfg(feature = "appshots-fixture")]
 pub use integrations::run_integrations_picker_e2e;
 
 // ---------------------------------------------------------------------------
@@ -8874,6 +8876,29 @@ impl Composer {
         cx.notify();
     }
 
+    /// The popup's command list: LUNA's own `/goal` first on Codex chats, then
+    /// the harness's cached commands (minus any that `/goal` shadows).
+    fn slash_commands(&self, cx: &App) -> Vec<SlashCommand> {
+        let cached = self
+            .slash
+            .harness
+            .and_then(|h| self.slash_cache.get(&h))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let goal = self.slash.harness == Some(HarnessId::Codex) && self.goal_command_available(cx);
+        let mut commands = Vec::with_capacity(cached.len() + usize::from(goal));
+        if goal {
+            commands.push(goals::goal_slash_command());
+        }
+        commands.extend(
+            cached
+                .iter()
+                .filter(|command| !goal || command.name != goals::GOAL_COMMAND)
+                .cloned(),
+        );
+        commands
+    }
+
     /// Re-rank the cached list for the current query (pure local filter).
     fn refilter_slash(&mut self, cx: &mut Context<Self>) {
         let query = self
@@ -8882,12 +8907,7 @@ impl Composer {
             .as_ref()
             .map(|t| t.query.clone())
             .unwrap_or_default();
-        let commands = self
-            .slash
-            .harness
-            .and_then(|h| self.slash_cache.get(&h))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        let commands = self.slash_commands(cx);
         let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
         self.slash.filtered = crate::popover::filter_indices(&query, &names);
         self.slash.active = (!self.slash.filtered.is_empty()).then_some(0);
@@ -8928,13 +8948,7 @@ impl Composer {
             .slash
             .active
             .and_then(|active| self.slash.filtered.get(active))
-            .and_then(|&ix| {
-                self.slash
-                    .harness
-                    .and_then(|h| self.slash_cache.get(&h))
-                    .and_then(|c| c.get(ix))
-            })
-            .cloned()
+            .and_then(|&ix| self.slash_commands(cx).get(ix).cloned())
         else {
             return;
         };
@@ -8966,12 +8980,7 @@ impl Composer {
         let theme = &theme.for_popup();
         // Only while a slash token is active.
         self.slash.token.as_ref()?;
-        let commands = self
-            .slash
-            .harness
-            .and_then(|h| self.slash_cache.get(&h))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
+        let commands = self.slash_commands(cx);
         // Full pill width at the mention card's height budget — both composer
         // completions share the same surface shape.
         let mut card = crate::popover::popover_card(theme)
@@ -8993,7 +9002,12 @@ impl Composer {
                 cx.entity_id(),
                 cx,
             ));
-        } else if let Some(error) = self.slash.error.clone() {
+        } else if let Some(error) = self
+            .slash
+            .error
+            .clone()
+            .filter(|_| self.slash.filtered.is_empty())
+        {
             card = card.child(
                 div()
                     .px(px(12.0))
@@ -9046,9 +9060,13 @@ impl Composer {
                                 .items_center()
                                 .gap(px(8.0))
                                 .child(
-                                    crate::icons::icon(crate::icons::COMMAND)
-                                        .size(px(14.0))
-                                        .text_color(theme.text_muted),
+                                    crate::icons::icon(if command.name == goals::GOAL_COMMAND {
+                                        crate::icons::TARGET
+                                    } else {
+                                        crate::icons::COMMAND
+                                    })
+                                    .size(px(14.0))
+                                    .text_color(theme.text_muted),
                                 )
                                 .child(
                                     div()
@@ -9092,6 +9110,17 @@ impl Composer {
                     )
                     .children(crate::popover::rail(self, "slash-scrollbar", theme, cx)),
             );
+            // LUNA's own `/goal` still lists when the agent's discovery fails.
+            if let Some(error) = self.slash.error.clone() {
+                card = card.child(
+                    div()
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_color(theme.danger_muted)
+                        .child(error),
+                );
+            }
         }
         // Full pill width above the composer, matching the file-mention popup.
         Some(crate::popover::full_width_menu_above(
@@ -9498,6 +9527,10 @@ impl Composer {
         follow_up_behavior: Option<luna_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
+        // `/goal [objective]` is an explicit goal change, never a message.
+        if self.try_goal_command(&text, cx) {
+            return;
+        }
         if self.defer_native_send(&text, follow_up_behavior, cx) {
             return;
         }
@@ -12069,6 +12102,18 @@ impl Render for Composer {
             container
         };
 
+        // The chat's goal rides on top of the stack (BB's goal card): a tray
+        // tucked behind the queue tray or the composer, present only while a
+        // goal exists or is being created.
+        let container = container.when_some(self.render_goal_card(window, cx), |el, card| {
+            el.child(motion::fade_quick(
+                "composer-goal",
+                div()
+                    .mx(px(QUEUE_SIDE_INSET))
+                    .mb(px(-(Theme::SPACE_SM + QUEUE_COMPOSER_OVERLAP)))
+                    .child(card),
+            ))
+        });
         // What is waiting to be sent, stacked directly above the box it was
         // typed in — the queue is a property of this composer, not a panel
         // somewhere else.
@@ -12641,7 +12686,6 @@ impl Render for Composer {
         } else {
             container
         };
-        let container = container.children(self.render_goal_controls(cx));
         // Full-size preview of a staged thumbnail (AttachmentPreviewDialog).
         if let Some(preview) = self.preview.clone() {
             if std::mem::take(&mut self.preview_focus_pending) {
