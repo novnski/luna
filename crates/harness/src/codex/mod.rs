@@ -1006,6 +1006,53 @@ struct TurnRouter {
     completed: VecDeque<String>,
 }
 
+/// Real Codex inline review (0.159): `review/start` returns the root turn,
+/// one `turn/started` announces a review sub-turn with a different id, and
+/// every item plus the final `turn/completed` carry the root id. The sub-turn
+/// is an alias of the root: it must not retire the root or receive Stop.
+#[derive(Default)]
+struct ReviewTurn {
+    root: Option<String>,
+    aliases: HashSet<String>,
+}
+
+impl ReviewTurn {
+    fn start(&mut self, root: String) {
+        self.root = (!root.is_empty()).then_some(root);
+        self.aliases.clear();
+    }
+
+    /// Canonical id for a `turn/started`: a different id announced while the
+    /// review root is the active turn is the review sub-turn.
+    fn started(&mut self, id: String, active: Option<&str>) -> String {
+        match self.root.as_deref() {
+            Some(root) if !id.is_empty() && id != root && active == Some(root) => {
+                self.aliases.insert(id);
+                root.to_owned()
+            }
+            _ => id,
+        }
+    }
+
+    fn is_alias(&self, id: &str) -> bool {
+        self.aliases.contains(id)
+    }
+
+    fn canonical(&self, id: String) -> String {
+        match self.root.as_ref() {
+            Some(root) if self.aliases.contains(&id) => root.clone(),
+            _ => id,
+        }
+    }
+
+    fn settle(&mut self, id: &str) {
+        if self.root.as_deref() == Some(id) {
+            self.root = None;
+            self.aliases.clear();
+        }
+    }
+}
+
 /// A provider call ID may be delivered more than once. Keep one bounded set
 /// for the active turn; an old turn cannot pass the router's active-turn check.
 #[derive(Default)]
@@ -1678,6 +1725,7 @@ async fn run_session(session: Session) {
     }
 
     let mut router = TurnRouter::default();
+    let mut review_turn = ReviewTurn::default();
     let mut luna_call_ids = LunaCallIds::default();
     let initial_turn = async {
         match request.review.as_ref() {
@@ -1703,6 +1751,9 @@ async fn run_session(session: Session) {
     };
     match started {
         Ok(id) => {
+            if request.review.is_some() {
+                review_turn.start(id.clone());
+            }
             router.adopt_started(id.clone());
             if !send(
                 &event_tx,
@@ -1732,6 +1783,9 @@ async fn run_session(session: Session) {
     // Deltas seen per agent-message item, so a model that never streams
     // (item/completed only) still emits its text exactly once.
     let mut review_output_pending = request.review.is_some();
+    // Codex repeats the exitedReviewMode text as a final agent message; the
+    // findings part already carries it.
+    let mut review_output: Option<String> = None;
     let mut streamed_text: HashSet<String> = HashSet::new();
     let mut async_questions_seen: HashSet<String> = HashSet::new();
     let mut reasoning_streams: HashMap<String, ReasoningStream> = HashMap::new();
@@ -1808,7 +1862,7 @@ async fn run_session(session: Session) {
                         }
                     }
                     "turn/started" => {
-                        let id = turn_id(&params);
+                        let id = review_turn.started(turn_id(&params), router.active_id());
                         let previous = router.active_id().map(str::to_owned);
                         router.note_started(id.clone());
                         // A late start for a completed turn must not rotate
@@ -1880,6 +1934,18 @@ async fn run_session(session: Session) {
                         let item = params.get("item").unwrap_or(&Value::Null);
                         if phase == Phase::Completed && matches!(item_type(item), "exitedReviewMode" | "exited_review_mode") {
                             review_output_pending = false;
+                            review_output = item
+                                .get("review")
+                                .and_then(Value::as_str)
+                                .map(|text| text.trim().to_owned())
+                                .filter(|text| !text.is_empty());
+                        }
+                        if request.review.is_some()
+                            && matches!(item_type(item), "agentMessage" | "agent_message")
+                            && let Some(review) = review_output.as_deref()
+                            && item.get("text").and_then(Value::as_str).map(str::trim) == Some(review)
+                        {
+                            continue;
                         }
                         // Item notifications carry the root `turnId`, not `turn.id`.
                         let item_turn = item_turn_id(&params);
@@ -2005,11 +2071,19 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/completed" => {
-                        let id = turn_id(&params);
+                        let raw = turn_id(&params);
+                        // A review sub-turn completion ends the review only
+                        // once reviewer output arrived; the root completes it.
+                        if review_turn.is_alias(&raw) && review_output_pending {
+                            router.note_completed(&raw);
+                            continue;
+                        }
+                        let id = review_turn.canonical(raw);
                         if router.active_id() != Some(id.as_str()) {
                             router.note_completed(&id);
                             continue;
                         }
+                        review_turn.settle(&id);
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -2047,6 +2121,7 @@ async fn run_session(session: Session) {
                                 .then(|| "Native review ended without reviewer output".to_string())
                         });
                         review_output_pending = false;
+                        review_output = None;
                         let status = match params.pointer("/turn/status").and_then(Value::as_str) {
                             Some("interrupted") => DoneStatus::Interrupted,
                             Some("failed") => DoneStatus::Errored,
@@ -2100,11 +2175,12 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/failed" => {
-                        let id = turn_id(&params);
+                        let id = review_turn.canonical(turn_id(&params));
                         if router.active_id() != Some(id.as_str()) {
                             router.note_completed(&id);
                             continue;
                         }
+                        review_turn.settle(&id);
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
@@ -2148,11 +2224,12 @@ async fn run_session(session: Session) {
                     }
 
                     "turn/aborted" => {
-                        let id = turn_id(&params);
+                        let id = review_turn.canonical(turn_id(&params));
                         if router.active_id() != Some(id.as_str()) {
                             router.note_completed(&id);
                             continue;
                         }
+                        review_turn.settle(&id);
                         computer_use_turn_cancel.cancel();
                         for event in computer_use.unknown_for_turn(&thread_id, &id) {
                             if !send(&event_tx, event).await { break 'main; }
