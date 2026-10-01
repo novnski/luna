@@ -384,6 +384,9 @@ pub(super) struct PaneChatView {
     /// Composer slot width measured at paint, fed back as the composer's
     /// available width so its chips adapt to the pane.
     composer_width: Rc<Cell<f32>>,
+    /// Owner-supplied status for chats without a session-derived one (a side
+    /// chat's lease lifetime).
+    status_override: Option<(SharedString, gpui::Hsla)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -436,7 +439,15 @@ impl PaneChatView {
             transcript,
             composer,
             composer_width: Rc::new(Cell::new(0.0)),
+            status_override: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    pub(super) fn set_status(&mut self, status: Option<(SharedString, gpui::Hsla)>, cx: &mut Context<Self>) {
+        if self.status_override != status {
+            self.status_override = status;
+            cx.notify();
         }
     }
 
@@ -476,7 +487,12 @@ impl PaneChatView {
                     chat.archived,
                 )
             }
-            _ => (None, chat.is_some_and(|chat| chat.archived)),
+            _ => (
+                self.status_override
+                    .clone()
+                    .map(|(label, color)| (label, color, false)),
+                chat.is_some_and(|chat| chat.archived),
+            ),
         };
         let meta = chat.and_then(|chat| chat.config.as_ref()).map(|config| {
             let provider = super::child_chats::provider_label(config.harness);
@@ -515,10 +531,14 @@ impl Render for PaneChatView {
             &chrome,
             PaneHeaderActions {
                 back_label: self.back_label,
+                // (Side chats: Back unloads the side chat; see SideChatPanel.)
                 back: Rc::new(|_, cx| cx.emit(PaneChatEvent::Back)),
-                open_main: Some(Rc::new(move |_, cx| {
-                    cx.emit(PaneChatEvent::OpenAsMain(open_id.clone()))
-                })),
+                // A side chat is never a main chat; a child can be promoted.
+                open_main: (self.identity == PaneIdentity::Child).then(|| {
+                    Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
+                        cx.emit(PaneChatEvent::OpenAsMain(open_id.clone()))
+                    }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
+                }),
                 show_parent: Some(Rc::new(move |_, cx| {
                     cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
                 })),

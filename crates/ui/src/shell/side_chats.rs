@@ -1,4 +1,6 @@
-use super::pane_chat::{PaneChatChrome, PaneHeaderActions, PaneIdentity};
+use super::pane_chat::{
+    PaneChatChrome, PaneChatEvent, PaneChatView, PaneComposers, PaneHeaderActions, PaneIdentity,
+};
 use super::*;
 use crate::state::EngineHandle;
 use std::rc::Rc;
@@ -56,8 +58,28 @@ pub(super) enum SideChatEvent {
 
 impl gpui::EventEmitter<SideChatEvent> for SideChatPanel {}
 
+/// Advertised by an engine whose side chats accept the ordinary chat paths
+/// (task commands, `WatchQueue`, `WatchDocMessages`, drafts) and whose
+/// `WatchChats` delivers side chat rows (without a project, so they stay out
+/// of the sidebar and can't become the main chat). Until then side chats use
+/// the leased side-chat RPCs and the composer says what they support.
+pub(super) const SIDE_CHAT_TASK_COMMANDS_V1: &str = "side-chat-task-commands-v1";
+
+/// Whether this side chat can use the full bound composer.
+pub(super) fn side_chat_first_class(state: &AppState, side_id: &str) -> bool {
+    state
+        .engine()
+        .is_some_and(|engine| engine.engine_info().supports(SIDE_CHAT_TASK_COMMANDS_V1))
+        && state.chats.iter().any(|chat| chat.id == side_id)
+}
+
 pub(super) struct SideChatPanel {
     state: Entity<AppState>,
+    /// Shared per-chat composers (first-class side chats bind one).
+    composers: Entity<PaneComposers>,
+    /// The shared full chat view, when this side chat is first-class.
+    full_view: Option<(Entity<PaneChatView>, Subscription)>,
+    links: crate::markdown::render::LinkUi,
     engine: Option<EngineHandle>,
     parent: String,
     engine_generation: u64,
@@ -84,6 +106,8 @@ pub(super) struct SideChatPanel {
 impl SideChatPanel {
     pub(super) fn new(
         state: Entity<AppState>,
+        composers: Entity<PaneComposers>,
+        links: crate::markdown::render::LinkUi,
         parent: String,
         origin: Option<(String, String)>,
         cx: &mut Context<Self>,
@@ -130,6 +154,9 @@ impl SideChatPanel {
         });
         let mut this = Self {
             state,
+            composers,
+            full_view: None,
+            links,
             engine,
             parent,
             engine_generation,
@@ -591,6 +618,10 @@ impl SideChatPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let writable = page.meta.state == "active" && self.lease.is_some();
+        if writable && side_chat_first_class(self.state.read(cx), &page.meta.id) {
+            return self.render_full_view(&page, theme, cx);
+        }
+        self.full_view = None;
         if writable && self.focus_pending {
             window.focus(&self.input.focus_handle(cx), cx);
             self.focus_pending = false;
@@ -790,6 +821,61 @@ impl SideChatPanel {
                 notices, transcript, false, composer, theme,
             ))
             .into_any_element()
+    }
+
+    /// A first-class side chat: the same full view as a child chat (main
+    /// transcript + main composer bound to the side chat), with the side
+    /// chat's lifetime as its status and Back unloading it.
+    fn render_full_view(
+        &mut self,
+        page: &SideChatPage,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let stale = self
+            .full_view
+            .as_ref()
+            .is_none_or(|(view, _)| view.read(cx).composer().read(cx).readback(cx)["boundChat"] != page.meta.id.as_str());
+        if stale {
+            let composer = self
+                .composers
+                .update(cx, |composers, cx| composers.composer(&page.meta.id, cx));
+            let state = self.state.clone();
+            let side = page.meta.id.clone();
+            let parent = self.parent.clone();
+            let links = self.links.clone();
+            let view = cx.new(|cx| {
+                PaneChatView::new(
+                    state,
+                    side,
+                    PaneIdentity::Side,
+                    parent,
+                    "Side chats",
+                    composer,
+                    links,
+                    cx,
+                )
+            });
+            let events = cx.subscribe(&view, |panel, _, event, cx| match event {
+                PaneChatEvent::Back => panel.action(PanelAction::Back, cx),
+                PaneChatEvent::ShowParent(_) => panel.action(PanelAction::RevealOrigin, cx),
+                PaneChatEvent::OpenAsMain(_) => {}
+            });
+            self.full_view = Some((view, events));
+        }
+        let minutes =
+            ((page.meta.expires_at_ms - Utc::now().timestamp_millis()).max(0) + 59_999) / 60_000;
+        let status = (
+            SharedString::from(match self.operation_label {
+                Some(label) => label.to_string(),
+                None => format!("Writable · {minutes} min left"),
+            }),
+            theme.success,
+        );
+        let (view, _) = self.full_view.as_ref().expect("full view just created");
+        let view = view.clone();
+        view.update(cx, |view, cx| view.set_status(Some(status), cx));
+        view.into_any_element()
     }
 
     /// The side chat's input in the main composer's pill chrome. Text and
@@ -1215,8 +1301,18 @@ impl Shell {
         origin: Option<(String, String)>,
         cx: &mut Context<Self>,
     ) {
+        let links = Self::session_links(Some(self.active_chat.clone()), cx);
         let panel = cx
-            .new(|cx| SideChatPanel::new(self.state.clone(), self.active_chat.clone(), origin, cx));
+            .new(|cx| {
+                SideChatPanel::new(
+                    self.state.clone(),
+                    self.pane_composers.clone(),
+                    links,
+                    self.active_chat.clone(),
+                    origin,
+                    cx,
+                )
+            });
         self.side_chat_events = Some(cx.subscribe(&panel, |shell, _, event, cx| {
             let (parent, engine_generation, text) = match event {
                 SideChatEvent::RevealOrigin {
@@ -1336,6 +1432,8 @@ impl Shell {
             }).collect::<Vec<_>>()),
             "parentTranscriptRows": self.state.read(cx).transcript.len(),
             "mainComposer": self.composer.read(cx).readback(cx),
+            "firstClass": page.is_some_and(|page| side_chat_first_class(self.state.read(cx), &page.meta.id)),
+            "fullComposer": panel.full_view.as_ref().map(|(view, _)| view.read(cx).composer().read(cx).readback(cx)),
         })
     }
 }
