@@ -21,6 +21,7 @@ const HEADER_HEIGHT: f32 = 36.0;
 const GLYPH: f32 = 14.0;
 const META_GLYPH: f32 = 12.0;
 const BUDGET_METER_WIDTH: f32 = 56.0;
+const SPINNER_CELL: f32 = 2.5;
 const BUSY_REASON: &str = "Unavailable while a goal change is in progress.";
 
 #[derive(Default)]
@@ -317,7 +318,6 @@ impl Composer {
         {
             self.goal_ui.error = None;
         }
-        self.goal_ui.expanded.insert(chat_id.clone());
         self.goal_ui.editor = Some(GoalEditor {
             chat_id,
             objective,
@@ -504,8 +504,8 @@ impl Composer {
                 .justify_center()
                 .child(crate::loaders::mini_mono_spinner(
                     SharedString::from(format!("{id}-spinner")),
-                    2.0,
-                    rest,
+                    SPINNER_CELL,
+                    hover,
                     cx.entity_id(),
                     cx,
                 ))
@@ -795,8 +795,8 @@ impl Composer {
                     .justify_center()
                     .child(crate::loaders::mini_mono_spinner(
                         "goal-create-spinner",
-                        2.0,
-                        theme.readable_muted(0.85),
+                        SPINNER_CELL,
+                        theme.text,
                         cx.entity_id(),
                         cx,
                     ))
@@ -988,7 +988,7 @@ impl Composer {
                     .border_color(theme.border.opacity(0.6))
                     .px(px(14.0))
                     .pt(px(10.0))
-                    .pb(px(8.0))
+                    .pb(px(10.0))
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
