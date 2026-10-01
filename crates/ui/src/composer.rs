@@ -4637,8 +4637,12 @@ struct PendingDraftOwnerStage {
 }
 
 #[cfg(feature = "appshots-fixture")]
+mod claude_prompts_e2e;
+#[cfg(feature = "appshots-fixture")]
 mod codex_prompts_e2e;
 mod goals;
+#[cfg(feature = "appshots-fixture")]
+pub use claude_prompts_e2e::run_claude_prompts_e2e;
 #[cfg(feature = "appshots-fixture")]
 pub use codex_prompts_e2e::run_codex_prompts_e2e;
 
