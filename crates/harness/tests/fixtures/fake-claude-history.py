@@ -57,6 +57,16 @@ CWD = os.getcwd()
 _env = os.environ.get("CLAUDE_CONFIG_DIR", "")
 CONFIG = _env if ".fake-claude-config" in _env else os.path.join(CWD, ".fake-claude-config")
 os.makedirs(CONFIG, exist_ok=True)
+
+
+def _record_crash(kind, value, trace):
+    import traceback
+    with open(os.path.join(CONFIG, "fake-claude-error.log"), "a") as handle:
+        handle.write("".join(traceback.format_exception(kind, value, trace)))
+    sys.__excepthook__(kind, value, trace)
+
+
+sys.excepthook = _record_crash
 with open(os.path.join(CONFIG, "fake-claude-argv.jsonl"), "a") as log:
     log.write(json.dumps({"argv": sys.argv[1:], "cwd": CWD,
                           "checkpointing": os.environ.get(CHECKPOINT_ENV) == "1"}) + "\n")

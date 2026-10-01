@@ -54,6 +54,11 @@ fn assemble(root: &Path, workspace: &Path) -> EngineCore {
     accounts
         .disable_claude_keychain_fallback()
         .expect("synthetic accounts");
+    std::fs::write(
+        claude_home(workspace).join(".credentials.json"),
+        r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#,
+    )
+    .unwrap();
     EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
         EngineProfile::development(&root.join("data"), "cc10-org", "cc10-user"),
         Arc::new(registry),
@@ -207,7 +212,13 @@ fn sha(path: &Path) -> String {
 }
 
 /// Wait until the task is idle and every assistant row is settled.
-async fn settle(client: &RpcClient, core: &EngineCore, task_id: &str, assistants: usize) {
+async fn settle(
+    client: &RpcClient,
+    core: &EngineCore,
+    workspace: &Path,
+    task_id: &str,
+    assistants: usize,
+) {
     tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let rows = entries(core, task_id);
@@ -232,7 +243,16 @@ async fn settle(client: &RpcClient, core: &EngineCore, task_id: &str, assistants
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("task {task_id} settled: {:#?}", entries(core, task_id)));
+    .unwrap_or_else(|_| {
+        let home = claude_home(workspace);
+        panic!(
+            "task {task_id} did not settle\nentries: {:#?}\nsessions: {:#?}\nfake argv: {}\nfake errors: {}",
+            entries(core, task_id),
+            core.workspace.read_sessions().ok(),
+            std::fs::read_to_string(home.join("fake-claude-argv.jsonl")).unwrap_or_default(),
+            std::fs::read_to_string(home.join("fake-claude-error.log")).unwrap_or_default(),
+        )
+    });
 }
 
 async fn send(
@@ -271,7 +291,7 @@ async fn send(
         ),
         "{receipt:?}"
     );
-    settle(client, core, task_id, before + 1).await;
+    settle(client, core, workspace, task_id, before + 1).await;
     let rows = entries(core, task_id);
     let assistant = rows
         .iter()
@@ -637,7 +657,7 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     )
     .await;
     assert_eq!(edited.status, CommandReceiptStatus::Applied, "{edited:?}");
-    settle(&client, &core, &forked_task, 1).await;
+    settle(&client, &core, &workspace, &forked_task, 1).await;
     let edited_session = session(&core, &forked_task);
     assert_ne!(edited_session, fork_session);
     let edited_rows = entries(&core, &forked_task);

@@ -139,7 +139,15 @@ async fn send(
         }
     })
     .await
-    .map_err(|_| anyhow::anyhow!("turn {message_id} did not settle"))?
+    .map_err(|_| {
+        let home = workspace.join(".fake-claude-config");
+        anyhow::anyhow!(
+            "turn {message_id} did not settle; sessions: {:?}; fake argv: {}; fake errors: {}",
+            core.workspace.read_sessions().ok(),
+            std::fs::read_to_string(home.join("fake-claude-argv.jsonl")).unwrap_or_default(),
+            std::fs::read_to_string(home.join("fake-claude-error.log")).unwrap_or_default(),
+        )
+    })?
 }
 
 fn capture(
@@ -224,6 +232,10 @@ fn main() -> anyhow::Result<()> {
         codex_home: root.path().join("providers/codex"),
     };
     accounts.disable_claude_keychain_fallback()?;
+    std::fs::write(
+        workspace.join(".fake-claude-config/.credentials.json"),
+        r#"{"claudeAiOauth":{"accessToken":"synthetic"}}"#,
+    )?;
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
             EngineProfile::development(&engine_data, "cc10-ui-fixture", "cc10-ui-fixture"),
