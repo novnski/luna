@@ -209,6 +209,9 @@ async fn claude_luna_tools_fence_matrix_over_shared_mcp_endpoint() {
             .starts_with("http://127.0.0.1:")
     );
     assert_eq!(attachment["allowedTools"], "mcp__luna__luna_status");
+    // Human local approvals must outlive the HTTP transport's 60s default.
+    // Keep this scoped to LUNA instead of changing unrelated MCP connections.
+    assert_eq!(attachment["timeout"], 86_400_000);
     assert_eq!(attachment["strict"], false);
     assert_eq!(attachment["headersHelper"], true);
     assert_eq!(attachment["tokenInEnv"], true);

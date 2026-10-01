@@ -911,6 +911,23 @@ pub struct UploadProgress {
 /// Root application state. Reducer methods (`apply_*`, [`Self::session_for`], …)
 /// are plain `&mut self` functions so tests construct the struct directly; gpui
 /// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
+/// Child reply ownership is independent of the pane that displays it.
+pub(crate) struct ChildReplyState {
+    pub input: Entity<crate::composer::ComposerInput>,
+    pub sending: bool,
+    pub notice: Option<(bool, String)>,
+    pub submission: Option<ChildReplySubmission>,
+    pub task: Option<Task<()>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ChildReplySubmission {
+    pub command_id: String,
+    pub text: String,
+    pub host: String,
+    pub queued: bool,
+}
+
 pub struct AppState {
     pub connection: ConnectionStatus,
     /// Fixed data boundary of the attached engine. Authentication may change
@@ -1020,6 +1037,8 @@ pub struct AppState {
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
     /// feed must survive chat switches — the tab itself is what scopes it.
     sub_transcripts: HashMap<String, Vec<SessionMessageEntry>>,
+    /// Drafts and pending delivery survive pane navigation together.
+    pub(crate) child_reply_states: HashMap<String, Entity<ChildReplyState>>,
     /// One watch task per live subagent doc (single-flight per key).
     /// Dropping a task cancels the engine-side watch and unpins the doc from
     /// the engine LRU — closing a tab MUST go through
@@ -1094,6 +1113,7 @@ impl AppState {
             native_tasks_task: None,
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
+            child_reply_states: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
             auto_selected: false,
             chats_synced: false,

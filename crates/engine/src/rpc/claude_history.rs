@@ -73,20 +73,37 @@ struct FileRewindParams {
 fn file_view(
     params: &FileRewindParams,
     checkpoint: &str,
+    cwd: &str,
     result: &NativeFileRewindResult,
     dry_run: bool,
-) -> NativeFileRewindView {
+) -> Result<NativeFileRewindView, RpcError> {
     let mut files = result.files_changed.clone();
     files.sort();
+    // Native dry-run counts describe the shape of a diff, not the current
+    // bytes. Bind approval to those bytes so an equal-sized external edit
+    // cannot be overwritten using an older preview.
+    let contents = files
+        .iter()
+        .map(|name| {
+            let path = std::path::Path::new(name);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::path::Path::new(cwd).join(path)
+            };
+            checkpoint_file_digest(&path).map(|digest| (name, digest))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let digest = Sha256::digest(
         serde_json::json!({
             "checkpoint": checkpoint, "canRewind": result.can_rewind, "error": result.error,
             "files": files, "insertions": result.insertions, "deletions": result.deletions,
+            "contents": contents,
         })
         .to_string()
         .as_bytes(),
     );
-    NativeFileRewindView {
+    Ok(NativeFileRewindView {
         task_id: params.task_id.clone(),
         message_id: params.message_id.clone(),
         provider: Some(HarnessId::ClaudeCode),
@@ -98,7 +115,48 @@ fn file_view(
         deletions: result.deletions,
         digest: format!("{digest:x}"),
         limitations: NATIVE_FILE_LIMITATIONS.into(),
+    })
+}
+
+fn checkpoint_file_digest(path: &std::path::Path) -> Result<Option<String>, RpcError> {
+    use std::io::Read as _;
+    let fail = |error: &dyn std::fmt::Display| {
+        RpcError::Failed(format!(
+            "Cannot verify checkpoint file {}: {error}",
+            path.display()
+        ))
+    };
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(fail(&error)),
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(fail(&"the path must be a regular file, without a symlink"));
     }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(path).map_err(|error| fail(&error))?;
+    let before = file.metadata().map_err(|error| fail(&error))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| fail(&error))?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    let after = file.metadata().map_err(|error| fail(&error))?;
+    if before.len() != after.len() || before.modified().ok() != after.modified().ok() {
+        return Err(fail(&"the file changed while checking it; preview again"));
+    }
+    Ok(Some(format!("{:x}", digest.finalize())))
 }
 
 impl EngineRpc {
@@ -630,12 +688,12 @@ impl EngineRpc {
             checkpoint: checkpoint.clone(),
             dry_run,
         };
-        let preview =
+        let native_preview =
             tokio::time::timeout(NATIVE_TIMEOUT, harness.rewind_native_files(request(true)))
                 .await
                 .map_err(|_| RpcError::Failed("Claude file checkpoint preview timed out".into()))?
                 .map_err(|error| fail(&error))?;
-        let preview = file_view(&params, &checkpoint, &preview, true);
+        let preview = file_view(&params, &checkpoint, &scope.cwd, &native_preview, true)?;
         if method == methods::PREVIEW_NATIVE_FILE_REWIND {
             return RpcReply::value(&preview);
         }
@@ -657,6 +715,20 @@ impl EngineRpc {
             .prepare_native_rewind(&params.task_id)
             .await
             .map_err(|error| fail(&error))?;
+        // Retiring a session may run hooks. Refresh the native scope as well
+        // as file bytes so a newly changed tracked file requires new approval.
+        let final_preview =
+            tokio::time::timeout(NATIVE_TIMEOUT, harness.rewind_native_files(request(true)))
+                .await
+                .map_err(|_| RpcError::Failed("Claude file checkpoint preview timed out".into()))?
+                .map_err(|error| fail(&error))?;
+        if file_view(&params, &checkpoint, &scope.cwd, &final_preview, true)?.digest
+            != preview.digest
+        {
+            return Err(RpcError::Failed(
+                "Files changed since the preview. Review the new preview before restoring.".into(),
+            ));
+        }
         let applied = tokio::time::timeout(NATIVE_TIMEOUT, harness.rewind_native_files(request(false)))
             .await
             .map_err(|_| {
@@ -665,6 +737,12 @@ impl EngineRpc {
                 )
             })?
             .map_err(|error| fail(&error))?;
-        RpcReply::value(&file_view(&params, &checkpoint, &applied, false))
+        RpcReply::value(&file_view(
+            &params,
+            &checkpoint,
+            &scope.cwd,
+            &applied,
+            false,
+        )?)
     }
 }

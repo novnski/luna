@@ -444,6 +444,23 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
         .await;
     assert!(stale.unwrap_err().to_string().contains("since the preview"));
     assert_eq!(std::fs::read_to_string(&notes).unwrap(), "gamma\n");
+    // A real external edit can keep the provider's aggregate diff counts
+    // unchanged. Its bytes, rather than just the counts, must retire approval.
+    std::fs::write(&notes, "USER_NEW\n").unwrap();
+    let changed = client
+        .call_as::<NativeFileRewindView>(
+            methods::APPLY_NATIVE_FILE_REWIND,
+            serde_json::json!({ "taskId": task, "messageId": "u2", "digest": preview.digest }),
+        )
+        .await;
+    assert!(
+        changed
+            .unwrap_err()
+            .to_string()
+            .contains("since the preview")
+    );
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), "USER_NEW\n");
+    std::fs::write(&notes, "gamma\n").unwrap();
     let restored: NativeFileRewindView = client
         .call_as(
             methods::APPLY_NATIVE_FILE_REWIND,
