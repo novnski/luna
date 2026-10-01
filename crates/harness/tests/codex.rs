@@ -177,12 +177,14 @@ fn synthetic_runtime_contract() -> luna_proto::LunaAgentRuntimeContract {
             activity_classification: "status".into(),
         }],
         omitted_tools: Vec::new(),
-        delivery: RuntimeDelivery::CodexDynamicTools,
+        delivery: RuntimeDelivery::CodexMcpTools,
     }
 }
 
+/// The fake peer is the MCP client here, as Codex is: it reads the endpoint
+/// from `-c mcp_servers.luna.url` and the token from its environment.
 #[tokio::test]
-async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
+async fn synthetic_luna_mcp_tool_is_scoped_to_exact_thread_turn_and_call() {
     let home = tempfile::tempdir().unwrap();
     let mut req = request("scenario:runtime-contract");
     req.model_options.insert(
@@ -238,6 +240,7 @@ async fn synthetic_luna_dynamic_tool_is_scoped_to_new_thread_and_exact_turn() {
         *invocations.lock().unwrap(),
         vec![("th-1".into(), "t-runtime".into(), "call-runtime".into())]
     );
+    assert!(!home.path().join("late-call-accepted").exists());
 
     let mut resume = request("scenario:runtime-contract-resume");
     resume.resume = Some("synthetic-resume".into());

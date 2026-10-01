@@ -547,6 +547,20 @@ fn schedule_luna_prospective_cleanup(
     });
 }
 
+/// Retires one parked approval card however its waiter ends, including when
+/// the provider abandons the call and the waiting future is dropped.
+struct PendingApprovalGuard {
+    pending: PendingInputs,
+    engine_tx: mpsc::UnboundedSender<AgentEvent>,
+    request_id: String,
+}
+
+impl Drop for PendingApprovalGuard {
+    fn drop(&mut self) {
+        expire_pending_approval(&self.pending, &self.engine_tx, &self.request_id);
+    }
+}
+
 fn expire_pending_approval(
     pending: &PendingInputs,
     engine_tx: &mpsc::UnboundedSender<AgentEvent>,
@@ -778,7 +792,7 @@ impl PreparedControlEvidence {
             allow_projectless: false,
             granted_scopes: HashSet::from(["threads.read".into()]),
             explicit_user_request: false,
-            delivery: luna_proto::RuntimeDelivery::CodexDynamicTools,
+            delivery: luna_proto::RuntimeDelivery::CodexMcpTools,
         }
     }
 }
@@ -1551,7 +1565,7 @@ impl SessionsEngine {
         use crate::cross_task_tools::{
             ApprovedSendFence, CrossTaskAuthority, CrossTaskError, CrossTaskTools,
         };
-        use luna_proto::{CrossTaskSendMode, CrossTaskSendRequest, RuntimeDelivery};
+        use luna_proto::{CrossTaskSendMode, CrossTaskSendRequest};
         let fail = |error: CrossTaskError| EngineError::Other(error.to_string());
         let Some(tool) = contract
             .tools
@@ -1561,7 +1575,7 @@ impl SessionsEngine {
             return Err(fail(CrossTaskError::Unavailable));
         };
         if contract.context.thread_id != chat_id
-            || contract.delivery != RuntimeDelivery::CodexDynamicTools
+            || !contract.delivery.attaches_luna_tools()
             || !tool
                 .required_scopes
                 .iter()
@@ -1671,7 +1685,7 @@ impl SessionsEngine {
         let (resolver, _answer_rx) = oneshot::channel();
         let (grant_tx, grant_rx) = oneshot::channel();
         let binding = self.inner.current_codex_binding_key(chat_id);
-        let (pending, engine_tx) = {
+        let guard = {
             let runs = lock(&self.inner.runs);
             let run = runs
                 .get(chat_id)
@@ -1690,16 +1704,20 @@ impl SessionsEngine {
                     resolver,
                 },
             );
-            (pending, run.engine_tx.clone())
+            PendingApprovalGuard {
+                pending,
+                engine_tx: run.engine_tx.clone(),
+                request_id: request_id.clone(),
+            }
         };
-        if engine_tx
+        if guard
+            .engine_tx
             .send(AgentEvent::InputRequested {
                 request_id: request_id.clone(),
                 questions: vec![question],
             })
             .is_err()
         {
-            expire_pending_approval(&pending, &engine_tx, &request_id);
             return Err(fail(CrossTaskError::Unavailable));
         }
         let grant = tokio::select! {
@@ -1712,7 +1730,7 @@ impl SessionsEngine {
                 }
             }
         };
-        expire_pending_approval(&pending, &engine_tx, &request_id);
+        drop(guard);
         let fence = grant.map_err(fail)?;
         self.with_live_approved_send(&fence, || Ok(()))?;
         if let Some(child) = child_request {
@@ -1822,7 +1840,7 @@ impl SessionsEngine {
         use crate::cross_task_tools::{CrossTaskError, CrossTaskTools};
         if authority.caller_task_id != claim.source_task_id
             || authority.local_environment_id != self.inner.device_id
-            || authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools
+            || !authority.delivery.attaches_luna_tools()
             || authority.explicit_user_request
             || authority.allow_projectless
             || authority.granted_scopes.len() != 1
@@ -3643,27 +3661,8 @@ impl SessionsEngine {
         } else if request.resume.is_none() {
             request.resume = self.inner.resume_for(chat_id, &request.cwd);
         }
-        // The compiler's no-tools legacy resume decision is valid only for
-        // the exact provider session inspected before warm routing.
-        if let Some(contract) = request
-            .model_options
-            .get(luna_proto::LUNA_RUNTIME_CONTRACT_OPTION)
-            .and_then(|value| {
-                serde_json::from_value::<luna_proto::LunaAgentRuntimeContract>(value.clone()).ok()
-            })
-            && contract.delivery == luna_proto::RuntimeDelivery::CodexDynamicTools
-            && request.resume.is_some()
-            && self
-                .inner
-                .journal
-                .runtime_contract(chat_id, request.resume.as_deref().unwrap())?
-                .is_none()
-        {
-            return Err(EngineError::Other(
-                "Codex resume has no verified LUNA tool contract; start a fresh provider binding"
-                    .into(),
-            ));
-        }
+        // Codex LUNA tools ride the per-process MCP endpoint, so any resume
+        // target (including a pre-L23 thread) gets the compiled tool set.
         if harness_id == HarnessId::Codex
             && let Some(workspace) = self.inner.workspace()
             && let Ok(Some(chat)) = workspace.chat(chat_id)

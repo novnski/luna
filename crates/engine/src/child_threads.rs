@@ -87,7 +87,7 @@ impl EngineRpc {
         authority: &CrossTaskAuthority,
     ) -> Result<(), CrossTaskError> {
         validate_child_request(request)?;
-        if authority.delivery != luna_proto::RuntimeDelivery::CodexDynamicTools
+        if !authority.delivery.attaches_luna_tools()
             || authority.local_environment_id != self.engine_info.device_id
             || !authority.granted_scopes.contains("threads.read")
             || authority.allow_projectless

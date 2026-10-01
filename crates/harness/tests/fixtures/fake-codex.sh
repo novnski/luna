@@ -11,6 +11,22 @@ rid() { printf '%s' "$1" | sed 's/.*"id":\([0-9]*\).*/\1/'; }
 has() { case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac; }
 [ -z "$CODEX_HOME" ] || mkdir -p "$CODEX_HOME"
 
+# ---- LUNA MCP client (what Codex does with `-c mcp_servers.luna.*`) ---------
+mcp_url=''
+for arg in "$@"; do
+  case "$arg" in
+    mcp_servers.luna.url=*) mcp_url=${arg#mcp_servers.luna.url=}; mcp_url=${mcp_url#\"}; mcp_url=${mcp_url%\"} ;;
+  esac
+done
+argv="$*"
+mcp() { # $1 = JSON-RPC body; prints the HTTP response body
+  curl -sS -m 30 -X POST "$mcp_url" -H "Authorization: Bearer $LUNA_MCP_BEARER_TOKEN" \
+    -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' --data "$1"
+}
+mcp_tool() { # $1 id, $2 tool, $3 arguments JSON, $4 thread, $5 turn, $6 call id
+  mcp "{\"jsonrpc\":\"2.0\",\"id\":$1,\"method\":\"tools/call\",\"params\":{\"name\":\"$2\",\"arguments\":$3,\"_meta\":{\"threadId\":\"$4\",\"callId\":\"$6\",\"x-codex-turn-metadata\":{\"turn_id\":\"$5\"}}}}"
+}
+
 fail_turn() { # $1 = request id, $2 = message
   emit "{\"id\":$1,\"result\":{\"turn\":{\"id\":\"t-bad\"}}}"
   emit "{\"method\":\"turn/failed\",\"params\":{\"turn\":{\"id\":\"t-bad\",\"error\":{\"message\":\"$2\"}}}}"
@@ -216,7 +232,12 @@ if has "$line" '"method":"thread/resume"'; then
     emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-resumed\"}}}"
   fi
 elif has "$line" '"method":"thread/start"'; then
-  emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-1\"}}}"
+  if [ -f ./.luna-fake-thread-per-task ] && [ -n "$LUNA_THREAD_ID" ]; then
+    # Several concurrent LUNA tasks need distinct provider threads.
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-$LUNA_THREAD_ID\"}}}"
+  else
+    emit "{\"id\":$(rid "$line"),\"result\":{\"thread\":{\"id\":\"th-1\"}}}"
+  fi
 else
   exit 1
 fi
@@ -363,9 +384,8 @@ case "$turnline" in
   [ -n "$target" ] || { fail_turn "$tid" "missing storage-failure target"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-l25-storage-fail\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-l25-storage-fail"}}}'
-  emit "{\"method\":\"item/tool/call\",\"id\":89,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-storage-fail\",\"callId\":\"call-storage-fail\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Storage failure follow-up\",\"idempotencyKey\":\"l25-storage-fail\"}}}"
-  read -r response || exit 1
-  has "$response" '"success":false' || { fail_turn "$tid" "SQL failure returned queued success"; exit 0; }
+  response=$(mcp_tool 89 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Storage failure follow-up\",\"idempotencyKey\":\"l25-storage-fail\"}" th-1 t-l25-storage-fail call-storage-fail)
+  has "$response" '"isError":true' || { fail_turn "$tid" "SQL failure returned queued success"; exit 0; }
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-storage-fail","status":"completed"}}}'
   ;;
 
@@ -374,9 +394,8 @@ case "$turnline" in
   [ -n "$target" ] || { fail_turn "$tid" "missing stale target"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-l25-stale\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-l25-stale"}}}'
-  emit "{\"method\":\"item/tool/call\",\"id\":86,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-stale\",\"callId\":\"call-stale-target\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Stale target follow-up\",\"idempotencyKey\":\"l25-stale-target\"}}}"
-  read -r response || exit 1
-  has "$response" '"success":false' || { fail_turn "$tid" "stale target accepted"; exit 0; }
+  response=$(mcp_tool 86 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Stale target follow-up\",\"idempotencyKey\":\"l25-stale-target\"}" th-1 t-l25-stale call-stale-target)
+  has "$response" '"isError":true' || { fail_turn "$tid" "stale target accepted"; exit 0; }
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-stale","status":"completed"}}}'
   ;;
 
@@ -384,36 +403,64 @@ case "$turnline" in
   target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send:\([0-9a-f-]*\).*/\1/p')
   foreign=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send:[0-9a-f-]*:\([0-9a-f-]*\).*/\1/p')
   [ -n "$target" ] || { fail_turn "$tid" "missing synthetic L25 target"; exit 0; }
-  has "$thread_line" '"name":"send_message_to_thread"' || { fail_turn "$tid" "L25 send tool missing"; exit 0; }
+  listed=$(mcp '{"jsonrpc":"2.0","id":80,"method":"tools/list","params":{}}')
+  has "$listed" '"name":"send_message_to_thread"' || { fail_turn "$tid" "L25 send tool missing"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-l25-send\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-l25-send"}}}'
-  emit "{\"method\":\"item/tool/call\",\"id\":81,\"params\":{\"threadId\":\"foreign-thread\",\"turnId\":\"t-l25-send\",\"callId\":\"call-wrong-task\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"foreign\",\"idempotencyKey\":\"l25-foreign\"}}}"
-  read -r response || exit 1
-  has "$response" '"success":false' || { fail_turn "$tid" "foreign source accepted"; exit 0; }
+  response=$(mcp_tool 81 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"foreign\",\"idempotencyKey\":\"l25-foreign\"}" foreign-thread t-l25-send call-wrong-task)
+  has "$response" '"isError":true' || { fail_turn "$tid" "foreign source accepted"; exit 0; }
   if [ -n "$foreign" ]; then
-    emit "{\"method\":\"item/tool/call\",\"id\":85,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-wrong-target\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$foreign\",\"message\":\"wrong project\",\"idempotencyKey\":\"l25-wrong-target\"}}}"
-    read -r response || exit 1
-    has "$response" '"success":false' || { fail_turn "$tid" "wrong-project target accepted"; exit 0; }
+    response=$(mcp_tool 85 send_message_to_thread "{\"taskId\":\"$foreign\",\"message\":\"wrong project\",\"idempotencyKey\":\"l25-wrong-target\"}" th-1 t-l25-send call-wrong-target)
+    has "$response" '"isError":true' || { fail_turn "$tid" "wrong-project target accepted"; exit 0; }
   fi
-  emit "{\"method\":\"item/tool/call\",\"id\":82,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-1\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Synthetic L25 queued follow-up\",\"idempotencyKey\":\"l25-send-1\"}}}"
-  read -r response || exit 1
-  has "$response" '"success":true' && has "$response" 'queued' || { fail_turn "$tid" "approved send did not return queued receipt"; exit 0; }
-  emit "{\"method\":\"item/tool/call\",\"id\":83,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-1\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Synthetic L25 queued follow-up\",\"idempotencyKey\":\"l25-send-1\"}}}"
-  read -r response || exit 1
-  has "$response" '"success":false' || { fail_turn "$tid" "replayed provider call accepted"; exit 0; }
-  emit "{\"method\":\"item/tool/call\",\"id\":87,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-collision\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Different synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-1\"}}}"
-  read -r response || exit 1
-  has "$response" '"success":false' || { fail_turn "$tid" "changed-payload command ID accepted"; exit 0; }
-  emit "{\"method\":\"item/tool/call\",\"id\":84,\"params\":{\"threadId\":\"th-1\",\"turnId\":\"t-l25-send\",\"callId\":\"call-send-deny\",\"tool\":\"send_message_to_thread\",\"arguments\":{\"taskId\":\"$target\",\"message\":\"Denied synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-deny\"}}}"
-  read -r response || exit 1
-  has "$response" '"success":false' || { fail_turn "$tid" "denied send accepted"; exit 0; }
+  response=$(mcp_tool 82 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Synthetic L25 queued follow-up\",\"idempotencyKey\":\"l25-send-1\"}" th-1 t-l25-send call-send-1)
+  has "$response" '"isError":false' && has "$response" 'queued' || { fail_turn "$tid" "approved send did not return queued receipt"; exit 0; }
+  response=$(mcp_tool 83 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Synthetic L25 queued follow-up\",\"idempotencyKey\":\"l25-send-1\"}" th-1 t-l25-send call-send-1)
+  has "$response" '"isError":true' || { fail_turn "$tid" "replayed provider call accepted"; exit 0; }
+  response=$(mcp_tool 87 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Different synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-1\"}" th-1 t-l25-send call-send-collision)
+  has "$response" '"isError":true' || { fail_turn "$tid" "changed-payload command ID accepted"; exit 0; }
+  response=$(mcp_tool 84 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Denied synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-deny\"}" th-1 t-l25-send call-send-deny)
+  has "$response" '"isError":true' || { fail_turn "$tid" "denied send accepted"; exit 0; }
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-send","status":"completed"}}}'
   ;;
 
+*scenario:mcp-hold*)
+  # The engine E2E is the MCP client: publish this process's endpoint under
+  # the run's cwd (the test's project dir, never CODEX_HOME), keep the turn
+  # active until the test releases it, then finish the turn. Runs without a
+  # LUNA endpoint (title generation) end at once.
+  if [ -z "$mcp_url" ] || [ -z "$LUNA_THREAD_ID" ]; then fail_turn "$tid" "no LUNA MCP endpoint"; exit 0; fi
+  thread=th-1
+  if [ -f ./.luna-fake-thread-per-task ]; then thread="th-$LUNA_THREAD_ID"; fi
+  if has "$thread_line" '"method":"thread/resume"'; then thread=th-resumed; fi
+  turn="t-hold-$LUNA_THREAD_ID"
+  hold_dir="$(pwd)/.luna-mcp-hold"
+  mkdir -p "$hold_dir"
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"$turn\"}}}"
+  emit "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"$turn\"}}}"
+  printf '%s\n%s\n%s\n%s\n' "$mcp_url" "$LUNA_MCP_BEARER_TOKEN" "$thread" "$turn" > "$hold_dir/$LUNA_THREAD_ID.tmp"
+  mv "$hold_dir/$LUNA_THREAD_ID.tmp" "$hold_dir/$LUNA_THREAD_ID"
+  waited=0
+  while [ ! -f "$hold_dir/release-$LUNA_THREAD_ID" ] && [ "$waited" -lt 1200 ]; do
+    sleep 0.05; waited=$((waited + 1))
+  done
+  rm -f "$hold_dir/$LUNA_THREAD_ID" "$hold_dir/release-$LUNA_THREAD_ID"
+  emit "{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"$turn\",\"status\":\"completed\"}}}"
+  ;;
+
 *scenario:runtime-contract-resume*)
+  # A resumed thread gets the per-process endpoint too: no dynamicTools are
+  # (re)registered, yet the current tool set is listed and callable.
+  has "$thread_line" '"method":"thread/resume"' || { fail_turn "$tid" "expected a resumed thread"; exit 0; }
   has "$thread_line" '"developerInstructions"' || { fail_turn "$tid" "LUNA instructions missing on resume"; exit 0; }
   if has "$thread_line" '"dynamicTools"'; then fail_turn "$tid" "resume must not replace dynamic tools"; exit 0; fi
+  [ -n "$mcp_url" ] || { fail_turn "$tid" "LUNA MCP endpoint missing on resume"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-runtime-resume\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-resumed","turn":{"id":"t-runtime-resume"}}}'
+  listed=$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+  has "$listed" '"name":"luna_status"' || { fail_turn "$tid" "resumed MCP tools/list missing status tool"; exit 0; }
+  response=$(mcp_tool 2 luna_status '{}' th-resumed t-runtime-resume call-resume)
+  has "$response" '"isError":false' || { fail_turn "$tid" "resumed MCP tool call failed: $response"; exit 0; }
   emit '{"method":"turn/completed","params":{"threadId":"th-resumed","turn":{"id":"t-runtime-resume","status":"completed"}}}'
   ;;
 
@@ -422,7 +469,9 @@ case "$turnline" in
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-runtime-cancelled"}}}'
   read -r interrupt_line || exit 1
   has "$interrupt_line" '"method":"turn/interrupt"' || { fail_turn "$tid" "expected interrupt"; exit 0; }
-  emit '{"method":"item/tool/call","id":70,"params":{"threadId":"th-1","turnId":"t-runtime-cancelled","callId":"call-cancelled","tool":"luna_status","arguments":{}}}'
+  denied_response=$(mcp_tool 70 luna_status '{}' th-1 t-runtime-cancelled call-cancelled)
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "cancelled MCP tool call was not denied"; exit 0; }
+  emit '{"method":"item/tool/call","id":70,"params":{"threadId":"th-1","turnId":"t-runtime-cancelled","callId":"call-cancelled-legacy","tool":"luna_status","arguments":{}}}'
   read -r denied_response || exit 1
   has "$denied_response" '"success":false' || { fail_turn "$tid" "cancelled tool call was not denied"; exit 0; }
   emit "{\"id\":$(rid "$interrupt_line"),\"result\":{}}"
@@ -432,41 +481,53 @@ case "$turnline" in
 *scenario:runtime-contract*)
   [ "$LUNA_THREAD_ID" = 'thread-a' ] || { fail_turn "$tid" "LUNA thread environment missing"; exit 0; }
   has "$thread_line" '"developerInstructions"' || { fail_turn "$tid" "LUNA instructions missing"; exit 0; }
-  has "$thread_line" '"dynamicTools"' || { fail_turn "$tid" "LUNA dynamic tools missing"; exit 0; }
-  has "$thread_line" '"name":"luna_status"' || { fail_turn "$tid" "status tool missing"; exit 0; }
+  if has "$thread_line" '"dynamicTools"'; then fail_turn "$tid" "LUNA tools must not be frozen as dynamicTools"; exit 0; fi
+  # Spawn wiring: loopback URL, token only in the environment, and Codex's own
+  # MCP approval pre-approved for this server alone.
+  case "$mcp_url" in http://127.0.0.1:*/mcp) ;; *) fail_turn "$tid" "LUNA MCP endpoint missing: $mcp_url"; exit 0 ;; esac
+  [ -n "$LUNA_MCP_BEARER_TOKEN" ] || { fail_turn "$tid" "MCP token missing"; exit 0; }
+  if has "$argv" "$LUNA_MCP_BEARER_TOKEN"; then fail_turn "$tid" "MCP token leaked into argv"; exit 0; fi
+  has "$argv" 'mcp_servers.luna.bearer_token_env_var="LUNA_MCP_BEARER_TOKEN"' || { fail_turn "$tid" "bearer env var not configured"; exit 0; }
+  has "$argv" 'mcp_servers.luna.default_tools_approval_mode="approve"' || { fail_turn "$tid" "Codex approval not scoped to luna"; exit 0; }
+  has "$argv" 'mcp_servers.luna.tool_timeout_sec=86400' || { fail_turn "$tid" "LUNA tool timeout not raised"; exit 0; }
+  unauthorized=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$mcp_url" -H 'Authorization: Bearer wrong' -H 'Content-Type: application/json' --data '{"jsonrpc":"2.0","id":0,"method":"tools/list"}')
+  [ "$unauthorized" = 401 ] || { fail_turn "$tid" "wrong MCP token was accepted: $unauthorized"; exit 0; }
+  init=$(mcp '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fake-codex","version":"0"}}}')
+  has "$init" '"protocolVersion":"2025-06-18"' || { fail_turn "$tid" "MCP initialize failed: $init"; exit 0; }
+  listed=$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')
+  has "$listed" '"name":"luna_status"' || { fail_turn "$tid" "status tool missing"; exit 0; }
+  has "$listed" '"readOnlyHint":true' || { fail_turn "$tid" "status tool not read-only"; exit 0; }
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-runtime\"}}}"
   emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-runtime"}}}'
-  emit '{"method":"item/tool/call","id":59,"params":{"threadId":"foreign-thread","turnId":"t-runtime","callId":"call-foreign","tool":"luna_status","arguments":{}}}'
-  read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "foreign task tool call was not denied"; exit 0; }
-  emit '{"method":"item/tool/call","id":61,"params":{"threadId":"th-1","turnId":"t-stale","callId":"call-stale","tool":"luna_status","arguments":{}}}'
-  read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "stale turn tool call was not denied"; exit 0; }
-  emit '{"method":"item/tool/call","id":62,"params":{"threadId":"th-1","turnId":"t-runtime","tool":"luna_status","arguments":{}}}'
-  read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "missing call ID was not denied"; exit 0; }
-  emit '{"method":"item/tool/call","id":63,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"","tool":"luna_status","arguments":{}}}'
-  read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "empty call ID was not denied"; exit 0; }
-  emit '{"method":"item/tool/call","id":64,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-namespaced","namespace":"foreign","tool":"luna_status","arguments":{}}}'
-  read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "foreign namespace was not denied"; exit 0; }
-  emit '{"method":"item/tool/call","id":65,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-unattached","tool":"luna_archive","arguments":{}}}'
-  read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "unattached tool was not denied"; exit 0; }
-  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"dynamicToolCall","tool":"luna_status","arguments":{},"status":"inProgress"}}}'
-  emit '{"method":"item/tool/call","id":60,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-runtime","tool":"luna_status","arguments":{}}}'
-  read -r tool_response || exit 1
-  has "$tool_response" '"success":true' || { fail_turn "$tid" "LUNA status call failed"; exit 0; }
+  denied_response=$(mcp_tool 59 luna_status '{}' foreign-thread t-runtime call-foreign)
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "foreign task tool call was not denied"; exit 0; }
+  denied_response=$(mcp_tool 61 luna_status '{}' th-1 t-stale call-stale)
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "stale turn tool call was not denied"; exit 0; }
+  denied_response=$(mcp '{"jsonrpc":"2.0","id":62,"method":"tools/call","params":{"name":"luna_status","arguments":{},"_meta":{"threadId":"th-1","x-codex-turn-metadata":{"turn_id":"t-runtime"}}}}')
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "missing call ID was not denied"; exit 0; }
+  denied_response=$(mcp_tool 63 luna_status '{}' th-1 t-runtime '')
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "empty call ID was not denied"; exit 0; }
+  denied_response=$(mcp '{"jsonrpc":"2.0","id":64,"method":"tools/call","params":{"name":"luna_status","arguments":{},"_meta":{"callId":"call-no-turn","threadId":"th-1"}}}')
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "missing turn metadata was not denied"; exit 0; }
+  denied_response=$(mcp_tool 65 luna_archive '{}' th-1 t-runtime call-unattached)
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "unattached tool was not denied"; exit 0; }
+  emit '{"method":"item/started","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"mcpToolCall","server":"luna","tool":"luna_status","arguments":{},"status":"inProgress"}}}'
+  tool_response=$(mcp_tool 60 luna_status '{}' th-1 t-runtime call-runtime)
+  has "$tool_response" '"isError":false' || { fail_turn "$tid" "LUNA status call failed"; exit 0; }
   has "$tool_response" 'thread-a' || { fail_turn "$tid" "LUNA status response wrong"; exit 0; }
-  emit '{"method":"item/tool/call","id":66,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-runtime","tool":"luna_status","arguments":{}}}'
+  denied_response=$(mcp_tool 66 luna_status '{}' th-1 t-runtime call-runtime)
+  has "$denied_response" '"isError":true' || { fail_turn "$tid" "repeated call ID was not denied"; exit 0; }
+  # The legacy dynamic-tool path shares the same per-turn call-ID ledger.
+  emit '{"method":"item/tool/call","id":67,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-runtime","tool":"luna_status","arguments":{}}}'
   read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "repeated call ID was not denied"; exit 0; }
-  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"dynamicToolCall","tool":"luna_status","arguments":{},"status":"completed","success":true}}}'
+  has "$denied_response" '"success":false' || { fail_turn "$tid" "call ID replayed over item/tool/call was not denied"; exit 0; }
+  emit '{"method":"item/completed","params":{"threadId":"th-1","turnId":"t-runtime","item":{"id":"item-runtime","type":"mcpToolCall","server":"luna","tool":"luna_status","arguments":{},"status":"completed","result":{"content":[{"type":"text","text":"{}"}],"isError":false}}}}'
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-runtime","status":"completed"}}}'
-  emit '{"method":"item/tool/call","id":67,"params":{"threadId":"th-1","turnId":"t-runtime","callId":"call-late","tool":"luna_status","arguments":{}}}'
-  read -r denied_response || exit 1
-  has "$denied_response" '"success":false' || { fail_turn "$tid" "late tool call was not denied"; exit 0; }
+  # HTTP and stdout are separate channels: let the turn end land first. A
+  # late call is denied, or refused once the session retired its endpoint.
+  sleep 0.3
+  late_response=$(mcp_tool 68 luna_status '{}' th-1 t-runtime call-late 2>/dev/null)
+  if has "$late_response" '"isError":false'; then printf '%s\n' 'late call accepted' > "$CODEX_HOME/late-call-accepted"; fi
   ;;
 
 *scenario:context-config-start*)
