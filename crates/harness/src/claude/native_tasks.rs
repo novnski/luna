@@ -19,6 +19,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use luna_proto::{AgentEvent, DoneStatus};
 use serde_json::{Map, Value};
 
+use super::native_stop::{self, SharedStoppable};
 use super::normalize::decode_tool_use;
 use super::wire::{MessageBody, SystemFrame};
 
@@ -152,9 +153,15 @@ pub(crate) struct NativeTasks {
     /// Calls launched with `run_in_background: true` (bounded like owners).
     background_calls: HashSet<String>,
     background_order: VecDeque<String>,
+    /// Live, addressable agent spawns of this run (`stop_task` authority).
+    stoppable: SharedStoppable,
 }
 
 impl NativeTasks {
+    pub fn stoppable(&self) -> SharedStoppable {
+        self.stoppable.clone()
+    }
+
     /// Agent id → spawn tool_use id, for `SendMessage` steer re-keying.
     pub fn spawn_for_agent(&self, agent: &str) -> Option<&str> {
         self.agent_spawns.get(agent).map(String::as_str)
@@ -377,6 +384,9 @@ impl NativeTasks {
             }
             spawn.hidden |= hidden;
             spawn.background = backgrounded.or(spawn.background);
+            if !spawn.settled {
+                native_stop::track(&self.stoppable, tool, task_id);
+            }
             self.agent_spawns
                 .insert(task_id.to_owned(), tool.to_owned());
             return self.announce_background(tool).into_iter().collect();
@@ -537,6 +547,7 @@ impl NativeTasks {
                 return Vec::new();
             }
             spawn.settled = true;
+            native_stop::untrack(&self.stoppable, &spawn_id);
             // The CLI falls back to the task description as the summary;
             // that is not an outcome.
             let summary = summary.filter(|s| Some(s) != spawn.description.as_ref());

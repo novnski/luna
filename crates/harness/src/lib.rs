@@ -45,6 +45,18 @@ pub enum HarnessError {
     Io(#[from] std::io::Error),
 }
 
+/// What the provider wire proved about a native child stop request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeTaskStop {
+    /// The provider acknowledged the request. Not proof that the child
+    /// stopped: its own terminal lifecycle event settles it.
+    Requested,
+    /// Refused, locally (not a live child of that run) or by the provider.
+    Rejected(String),
+    /// Sent, but the provider's answer was not observed.
+    Unknown(String),
+}
+
 /// Progress boundary for a provider-native history fork. `MutationStarted`
 /// is emitted immediately before the native mutation request; `Acknowledged`
 /// is emitted as soon as that response yields a distinct provider session id,
@@ -263,6 +275,18 @@ pub trait Harness: Send + Sync {
     async fn compact_context(&self, _request: ContextCompactRequest) -> Result<(), HarnessError> {
         Err(HarnessError::Protocol(
             "context compaction is not supported by this harness".into(),
+        ))
+    }
+    /// Ask the provider to stop one native child (the spawn call
+    /// `spawn_tool_use_id`) of the live run bound to `native_session_id`.
+    /// Adapters must opt in; the default is honest unsupported behavior.
+    async fn stop_native_child(
+        &self,
+        _native_session_id: &str,
+        _spawn_tool_use_id: &str,
+    ) -> Result<NativeTaskStop, HarnessError> {
+        Err(HarnessError::Protocol(
+            "stopping a native child is not supported by this harness".into(),
         ))
     }
     /// Run an isolated title request. Drivers must opt in with title-specific

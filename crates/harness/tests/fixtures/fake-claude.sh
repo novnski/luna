@@ -102,6 +102,34 @@ case "$first" in
   cat "$(dirname "$0")/claude/native-agents-2.1.286.jsonl"
   ;;
 
+*scenario:native-stop*)
+  # CC-08: stop one background native child through `stop_task` (2.1.286
+  # control request shape). Only that request may reach stdin; the child then
+  # settles from its own task frames, like the real CLI.
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Agent"],"cwd":"/tmp","session_id":"sess-stop"}'
+  emit '{"type":"assistant","parent_tool_use_id":null,"message":{"model":"claude-fable-5","content":[{"type":"tool_use","id":"toolu_S","name":"Agent","input":{"description":"Watch the build","prompt":"Watch CI until it finishes.","run_in_background":true}}]}}'
+  emit '{"type":"system","subtype":"task_started","task_id":"agent-s","tool_use_id":"toolu_S","description":"Watch the build","subagent_type":"general-purpose","is_backgrounded":true,"spawn_depth":1,"task_type":"local_agent","session_id":"sess-stop"}'
+  emit '{"type":"user","parent_tool_use_id":null,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_S","content":"Async agent launched successfully. agentId: agent-s","is_error":false}]}}'
+  emit '{"type":"result","subtype":"success","result":"Watcher launched.","errors":[],"usage":{"input_tokens":5,"output_tokens":5},"session_id":"sess-stop"}'
+  emit '{"type":"assistant","parent_tool_use_id":"toolu_S","message":{"model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"Watching the build."}]},"session_id":"sess-stop"}'
+  read -r req || exit 1
+  case "$req" in
+    *'"subtype":"stop_task"'*'"task_id":"agent-s"'*) ;;
+    *) exit 1 ;;
+  esac
+  rid=$(printf '%s\n' "$req" | sed -n 's/.*"request_id":"\([^"]*\)".*/\1/p')
+  emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{}}}"
+  emit '{"type":"system","subtype":"task_updated","task_id":"agent-s","patch":{"status":"killed","end_time":1790000000000},"session_id":"sess-stop"}'
+  emit '{"type":"system","subtype":"task_notification","task_id":"agent-s","tool_use_id":"toolu_S","status":"stopped","output_file":"","summary":"Watch the build","session_id":"sess-stop"}'
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Agent"],"cwd":"/tmp","session_id":"sess-stop"}'
+  emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Watcher stopped."}}}'
+  emit '{"type":"result","subtype":"success","result":"Watcher stopped.","errors":[],"usage":{"input_tokens":3,"output_tokens":3},"session_id":"sess-stop"}'
+  # Anything else written before stdin closes is a refused stop that leaked.
+  if read -r extra; then
+    emit '{"type":"result","subtype":"error_during_execution","errors":["unexpected stdin after stop"],"usage":{"input_tokens":0,"output_tokens":0},"session_id":"sess-stop"}'
+  fi
+  ;;
+
 *scenario:askuser*)
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Bash"],"cwd":"/tmp","session_id":"sess-ask"}'
   # A plain tool permission request: must be auto-allowed.

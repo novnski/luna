@@ -31,6 +31,7 @@
 //!   interrupt control request, then escalates to SIGTERM and SIGKILL.
 
 pub mod catalog;
+mod native_stop;
 mod native_tasks;
 mod normalize;
 mod wire;
@@ -94,6 +95,8 @@ pub struct ClaudeHarness {
     /// Command discovery cache: only a successful probe is cached, so a
     /// broken CLI retries on the next picker open (ACP-harness parity).
     commands: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    /// Live runs addressable by `stop_native_child` (CC-08).
+    live_children: native_stop::LiveChildren,
 }
 
 impl Default for ClaudeHarness {
@@ -103,6 +106,7 @@ impl Default for ClaudeHarness {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             commands: tokio::sync::OnceCell::new(),
+            live_children: native_stop::LiveChildren::default(),
         }
     }
 }
@@ -465,6 +469,17 @@ impl Harness for ClaudeHarness {
         self.run_with_mode(request, controls, false).await
     }
 
+    async fn stop_native_child(
+        &self,
+        native_session_id: &str,
+        spawn_tool_use_id: &str,
+    ) -> Result<crate::NativeTaskStop, HarnessError> {
+        Ok(self
+            .live_children
+            .stop(native_session_id, spawn_tool_use_id)
+            .await)
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
@@ -591,6 +606,7 @@ impl ClaudeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             stderr_tail,
+            live_children: self.live_children.clone(),
         }));
 
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
@@ -740,6 +756,7 @@ struct Session {
     kill_grace: Duration,
     /// Rolling stderr tail for the crash message on an unexpected exit.
     stderr_tail: crate::StderrTail,
+    live_children: native_stop::LiveChildren,
 }
 
 /// The per-run event loop: one task multiplexing stdout frames, the steering
@@ -758,6 +775,7 @@ async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         stderr_tail,
+        live_children,
     } = session;
     let RunControls {
         request_input,
@@ -768,6 +786,10 @@ async fn run_session(session: Session) {
     let request_input = Arc::new(request_input);
 
     let mut norm = Normalizer::new();
+    // Native children of this run become addressable by `stop_task` once
+    // its session id is known (CC-08).
+    let stoppable = norm.stoppable();
+    let mut live_registration: Option<native_stop::Registration> = None;
     // Claude's root user echo carries no correlation id. Explicit steering is
     // single-flight and a successful stdin write remains unconfirmed; text
     // equality alone must never settle a durable queue row.
@@ -785,6 +807,9 @@ async fn run_session(session: Session) {
                 Ok(Some(line)) => {
                     let line = line.trim();
                     if line.is_empty() {
+                        continue;
+                    }
+                    if native_stop::resolve_control_response(&stoppable, line) {
                         continue;
                     }
                     let frame = match wire::parse_frame(line) {
@@ -830,6 +855,16 @@ async fn run_session(session: Session) {
                                 break 'main;
                             }
                         }
+                    }
+                    if live_registration.is_none()
+                        && !title_only
+                        && let Some(session_id) = norm.session_id.as_deref()
+                    {
+                        live_registration = Some(live_children.register(
+                            session_id,
+                            stdin_tx.clone(),
+                            stoppable.clone(),
+                        ));
                     }
                 }
                 Ok(None) => break 'main, // stdout EOF: the CLI exited
@@ -973,6 +1008,9 @@ async fn run_session(session: Session) {
         }
     }
 
+    if let Some(registration) = &live_registration {
+        live_children.deregister(registration);
+    }
     shutdown_child(&mut child, kill_grace).await;
     if let Some(handle) = escalation {
         handle.abort();

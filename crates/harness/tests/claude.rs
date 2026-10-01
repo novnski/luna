@@ -1117,3 +1117,133 @@ async fn native_nested_agents_keep_ownership_model_usage_and_completion() {
         ["toolu_A", "toolu_B", "toolu_C", "toolu_D", "toolu_E"]
     );
 }
+
+/// CC-08 task cancellation: `stop_native_child` writes the 2.1.286
+/// `stop_task` control request only for a running native child of the live
+/// run; everything else is refused locally (the fake CLI fails on any other
+/// stdin line). An acknowledgement is only a request receipt (2.1.286 also
+/// acknowledges unknown task ids — init probe): the child settles from its
+/// own `task_updated`/`task_notification` (F15/F16).
+#[tokio::test]
+async fn native_child_stop_is_authority_checked_and_settles_from_task_events() {
+    use luna_harness::NativeTaskStop;
+
+    let harness = harness();
+    let (controls, steer, _token) = controls("A");
+    let mut stream = harness
+        .run(request("scenario:native-stop"), controls)
+        .await
+        .expect("run starts");
+    let mut events = Vec::new();
+    let child_text = |event: &AgentEvent| {
+        matches!(event, AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_S" && matches!(event.as_ref(), AgentEvent::TextDelta { .. }))
+    };
+    assert!(next_until(&mut stream, &mut events, child_text).await);
+    let session = events
+        .iter()
+        .find_map(|e| match e {
+            AgentEvent::SessionStarted { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .expect("session started");
+
+    // Refused locally: unknown spawn, another session.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_unknown")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    assert!(matches!(
+        harness
+            .stop_native_child("sess-other", "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    // The real stop: acknowledged, but the child is not settled by that.
+    assert_eq!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Requested
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Subagent { event, .. }
+        if matches!(event.as_ref(), AgentEvent::Done { .. })))
+    );
+    let child_done = |event: &AgentEvent| {
+        matches!(event, AgentEvent::Subagent { parent_tool_use_id, event }
+            if parent_tool_use_id == "toolu_S" && matches!(event.as_ref(), AgentEvent::Done { .. }))
+    };
+    assert!(next_until(&mut stream, &mut events, child_done).await);
+    assert_eq!(
+        events.last(),
+        Some(&AgentEvent::Subagent {
+            parent_tool_use_id: "toolu_S".into(),
+            event: Box::new(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                result: None,
+                error: None,
+                session_id: None,
+            }),
+        })
+    );
+    // Settled: a second stop is refused without reaching the CLI.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+    // Close the mailbox (stdin EOF); the rest of the run plays out.
+    drop(steer);
+    assert!(!next_until(&mut stream, &mut events, |_| false).await);
+    let root: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::Done { status, error, .. } => Some((*status, error.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        root,
+        [(DoneStatus::Completed, None), (DoneStatus::Completed, None)],
+        "a refused stop leaked to stdin, or the child's stop ended the root: {events:?}"
+    );
+    // The run is gone: nothing is addressable any more.
+    assert!(matches!(
+        harness
+            .stop_native_child(&session, "toolu_S")
+            .await
+            .unwrap(),
+        NativeTaskStop::Rejected(_)
+    ));
+}
+
+/// Consume `stream` into `events` until `stop` matches (true) or it ends.
+async fn next_until(
+    stream: &mut futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+    events: &mut Vec<AgentEvent>,
+    stop: impl Fn(&AgentEvent) -> bool,
+) -> bool {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            let event = event.expect("stream event");
+            let found = stop(&event);
+            events.push(event);
+            if found {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .expect("stream progressed in time")
+}

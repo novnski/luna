@@ -242,6 +242,11 @@ impl Normalizer {
         }
     }
 
+    /// This run's live, addressable native children (`stop_task`).
+    pub fn stoppable(&self) -> super::native_stop::SharedStoppable {
+        self.tasks.stoppable()
+    }
+
     /// Rotate the assistant message id for a steer boundary; returns
     /// (previous, next) for the `Steered` event.
     pub fn rotate_for_steer(&mut self) -> (String, String) {
