@@ -920,6 +920,23 @@ pub(crate) struct ChildReplyState {
     pub task: Option<Task<()>>,
 }
 
+/// Live projections of one chat shown in the right pane with the shared chat
+/// view. The selected chat keeps its own fields on [`AppState`]; a pane chat
+/// gets the same projections here, fed by its own watches, so a pane-bound
+/// composer never reads the selected chat's queue, goal or usage.
+#[derive(Default)]
+pub(crate) struct PaneChatProjection {
+    pub queue: Vec<luna_doc::QueuedMessage>,
+    pub context_usage: Option<luna_proto::ContextUsage>,
+    pub context_control: luna_proto::ContextControlState,
+    pub provider_notice: Option<luna_proto::ProviderNotice>,
+    pub native_tasks: luna_proto::NativeTaskLedger,
+    /// The opening `WatchDocMessages` frame has landed.
+    pub replayed: bool,
+    queue_task: Option<Task<()>>,
+    native_tasks_task: Option<Task<()>>,
+}
+
 #[derive(Clone)]
 pub(crate) struct ChildReplySubmission {
     pub command_id: String,
@@ -1039,6 +1056,8 @@ pub struct AppState {
     sub_transcripts: HashMap<String, Vec<SessionMessageEntry>>,
     /// Drafts and pending delivery survive pane navigation together.
     pub(crate) child_reply_states: HashMap<String, Entity<ChildReplyState>>,
+    /// Chats open in the right pane's shared chat view, keyed by chat id.
+    pane_chats: HashMap<String, PaneChatProjection>,
     /// One watch task per live subagent doc (single-flight per key).
     /// Dropping a task cancels the engine-side watch and unpins the doc from
     /// the engine LRU — closing a tab MUST go through
@@ -1114,6 +1133,7 @@ impl AppState {
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
             child_reply_states: HashMap::new(),
+            pane_chats: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
             auto_selected: false,
             chats_synced: false,
@@ -1611,6 +1631,105 @@ impl AppState {
         }
     }
 
+    pub(crate) fn pane_chat(&self, chat_id: &str) -> Option<&PaneChatProjection> {
+        self.pane_chats.get(chat_id)
+    }
+
+    pub(crate) fn pane_chat_mut(&mut self, chat_id: &str) -> Option<&mut PaneChatProjection> {
+        self.pane_chats.get_mut(chat_id)
+    }
+
+    /// Open `chat_id` in the right pane's shared chat view: its transcript
+    /// (the same keyed doc watch child chats always used), plus the queue and
+    /// native-task watches the selected chat gets. Single-flight per chat.
+    pub(crate) fn watch_pane_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        self.watch_subagent_doc(chat_id.clone(), cx);
+        if self.pane_chats.contains_key(&chat_id) {
+            return;
+        }
+        let mut projection = PaneChatProjection::default();
+        if let Some(handle) = self.engine.clone() {
+            if handle
+                .engine_info()
+                .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
+            {
+                projection.queue_task = Some(spawn_queue_watch(
+                    cx,
+                    handle.clone(),
+                    chat_id.clone(),
+                    WatchTarget::Pane,
+                ));
+            }
+            projection.native_tasks_task = Some(spawn_native_tasks_watch(
+                cx,
+                handle,
+                chat_id.clone(),
+                WatchTarget::Pane,
+            ));
+        }
+        self.pane_chats.insert(chat_id, projection);
+    }
+
+    /// Back, close or release: drop every pane watch for this chat.
+    pub(crate) fn unwatch_pane_chat(&mut self, chat_id: &str) {
+        self.pane_chats.remove(chat_id);
+        self.unwatch_subagent_doc(chat_id);
+    }
+
+    pub(crate) fn refresh_pane_queue(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+        let Some(handle) = self.engine.clone() else {
+            return;
+        };
+        if !handle
+            .engine_info()
+            .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
+        {
+            return;
+        }
+        if let Some(pane) = self.pane_chats.get_mut(chat_id) {
+            pane.queue_task = None;
+            pane.queue_task = Some(spawn_queue_watch(
+                cx,
+                handle,
+                chat_id.to_string(),
+                WatchTarget::Pane,
+            ));
+        }
+    }
+
+    /// Chats currently open in the shared pane view (fixture readback).
+    pub fn pane_chat_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.pane_chats.keys().cloned().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Unconfirmed echoes for any chat, in send order.
+    pub fn echoes_for(&self, chat_id: &str) -> &[SessionMessageEntry] {
+        self.echoes
+            .get(chat_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// A pane chat's doc frame landed: reconcile its optimistic echoes and
+    /// pending-send overlay exactly as the selected chat's frames do.
+    fn reconcile_pane_echoes(&mut self, chat_id: &str) {
+        let Some(rows) = self.sub_transcripts.get(chat_id) else {
+            return;
+        };
+        if let Some(echoes) = self.echoes.get_mut(chat_id) {
+            echoes.retain(|echo| !rows.iter().any(|entry| entry.id == echo.id));
+        }
+        if self
+            .pending_sends
+            .get(chat_id)
+            .is_some_and(|pending| rows.iter().any(|entry| entry.id == pending.message_id))
+        {
+            self.pending_sends.remove(chat_id);
+        }
+    }
+
     /// Frozen-blob path: the finished subagent's uploaded transcript, no
     /// watch needed (and any in-flight watch is superseded).
     pub fn set_subagent_snapshot(&mut self, doc_id: String, entries: Vec<SessionMessageEntry>) {
@@ -2054,6 +2173,7 @@ impl AppState {
         self.native_tasks = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
+        self.pane_chats.clear();
         self.echoes.clear();
         self.pending_sends.clear();
         self.upload_progress = None;
@@ -2213,12 +2333,13 @@ impl AppState {
                 cx,
                 handle.clone(),
                 chat_id.clone(),
+                WatchTarget::Selected,
             ));
             if handle
                 .engine_info()
                 .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
             {
-                self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id));
+                self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id, WatchTarget::Selected));
             }
         }
         cx.notify();
@@ -2394,12 +2515,13 @@ impl AppState {
                 cx,
                 handle.clone(),
                 chat_id.clone(),
+                WatchTarget::Selected,
             ));
             if handle
                 .engine_info()
                 .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
             {
-                self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id));
+                self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id, WatchTarget::Selected));
             }
         }
         cx.notify();
@@ -2419,7 +2541,7 @@ impl AppState {
             .engine_info()
             .supports(luna_proto::capabilities::MESSAGE_QUEUE_V1)
         {
-            self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id));
+            self.queue_task = Some(spawn_queue_watch(cx, handle, chat_id, WatchTarget::Selected));
         }
     }
 
@@ -2842,10 +2964,19 @@ fn spawn_transcript_watch(
 /// frames (the queue is a handful of rows at most), retried like the transcript
 /// watch — a queue that silently stopped updating would show messages the host
 /// has already sent.
+/// Where a per-chat watch writes: the selected chat's fields, or the pane
+/// projection of the same chat id.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WatchTarget {
+    Selected,
+    Pane,
+}
+
 fn spawn_queue_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     chat_id: String,
+    target: WatchTarget,
 ) -> Task<()> {
     #[derive(serde::Deserialize)]
     struct QueueFrame {
@@ -2879,11 +3010,20 @@ fn spawn_queue_watch(
                         continue;
                     }
                 };
-                let alive = this.update(cx, |state, cx| {
+                let alive = this.update(cx, |state, cx| match target {
                     // Guard against a stale pump racing a newer selection.
-                    if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
-                        state.queue = frame.items;
-                        cx.notify();
+                    WatchTarget::Selected => {
+                        if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
+                            state.queue = frame.items;
+                            cx.notify();
+                        }
+                    }
+                    // A released pane finds no projection.
+                    WatchTarget::Pane => {
+                        if let Some(pane) = state.pane_chats.get_mut(&chat_id) {
+                            pane.queue = frame.items;
+                            cx.notify();
+                        }
                     }
                 });
                 if alive.is_err() {
@@ -2905,6 +3045,7 @@ fn spawn_native_tasks_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     chat_id: String,
+    target: WatchTarget,
 ) -> Task<()> {
     cx.spawn(async move |this, cx| {
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
@@ -2924,12 +3065,22 @@ fn spawn_native_tasks_watch(
                     tracing::warn!(%chat_id, "dropping malformed native task frame");
                     continue;
                 };
-                let alive = this.update(cx, |state, cx| {
-                    if state.selected_chat.as_deref() == Some(chat_id.as_str())
-                        && state.native_tasks != ledger
-                    {
-                        state.native_tasks = ledger;
-                        cx.notify();
+                let alive = this.update(cx, |state, cx| match target {
+                    WatchTarget::Selected => {
+                        if state.selected_chat.as_deref() == Some(chat_id.as_str())
+                            && state.native_tasks != ledger
+                        {
+                            state.native_tasks = ledger;
+                            cx.notify();
+                        }
+                    }
+                    WatchTarget::Pane => {
+                        if let Some(pane) = state.pane_chats.get_mut(&chat_id)
+                            && pane.native_tasks != ledger
+                        {
+                            pane.native_tasks = ledger;
+                            cx.notify();
+                        }
                     }
                 });
                 if alive.is_err() {
@@ -2996,7 +3147,21 @@ fn spawn_subagent_watch(
                                 .transcript_baselines
                                 .insert(doc_id.clone(), Arc::new(baseline));
                         }
-                        if text_only && !desync {
+                        // A pane-bound chat also carries the selected chat's
+                        // per-frame controls (usage, goal, provider notice).
+                        let mut pane_changed = false;
+                        if !desync && let Some(pane) = state.pane_chats.get_mut(&doc_id) {
+                            pane_changed = !pane.replayed
+                                || pane.context_usage != update.context_usage
+                                || pane.context_control != update.context_control
+                                || pane.provider_notice != update.provider_notice;
+                            pane.replayed = true;
+                            pane.context_usage = update.context_usage;
+                            pane.context_control = update.context_control;
+                            pane.provider_notice = update.provider_notice;
+                            state.reconcile_pane_echoes(&doc_id);
+                        }
+                        if text_only && !desync && !pane_changed {
                             cx.emit(TranscriptTextChanged {
                                 doc_id: doc_id.clone(),
                             });

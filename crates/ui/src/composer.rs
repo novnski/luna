@@ -4653,6 +4653,9 @@ pub use codex_prompts_e2e::run_codex_prompts_e2e;
 pub struct Composer {
     goal_ui: goals::GoalUi,
     pub(crate) state: Entity<AppState>,
+    /// Which chat this composer drives: the selected chat (main view) or a
+    /// fixed pane chat. Every "own chat" read goes through it.
+    pub(crate) binding: crate::chat_binding::ChatBinding,
     pub(crate) input: Entity<ComposerInput>,
     answer_input: Entity<ComposerInput>,
     /// Draft displaced while a queued message occupies the composer.
@@ -4970,6 +4973,16 @@ impl Composer {
     }
 
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        Self::new_bound(state, crate::chat_binding::ChatBinding::Selected, cx)
+    }
+
+    /// A composer bound to `binding`. The main view uses `Selected`; the
+    /// right pane's shared chat view binds one fixed chat.
+    pub fn new_bound(
+        state: Entity<AppState>,
+        binding: crate::chat_binding::ChatBinding,
+        cx: &mut Context<Self>,
+    ) -> Self {
         cx.on_release(|this, cx| this.release_queue_previews(cx))
             .detach();
         let input = cx.new(|cx| {
@@ -4985,7 +4998,7 @@ impl Composer {
                 cx,
             )
         });
-        let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+        let pickers = cx.new(|cx| Pickers::new_bound(state.clone(), binding.clone(), cx));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
         // loaded, popover toggled, pick made) must repaint the composer too.
@@ -5079,10 +5092,11 @@ impl Composer {
                 ComposerInputEvent::Edited | ComposerInputEvent::ViewportChanged => cx.notify(),
                 _ => {}
             });
-        let current_key = state.read(cx).selected_chat.clone().unwrap_or_default();
+        let current_key = binding.key(state.read(cx));
         let mut composer = Self {
             goal_ui: goals::GoalUi::default(),
             state,
+            binding,
             input,
             answer_input,
             queue_edit_draft: None,
@@ -5271,7 +5285,7 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> bool {
         if self.current_key != parent
-            || self.state.read(cx).selected_chat.as_deref() != Some(parent)
+            || self.binding.chat_id(self.state.read(cx)) != Some(parent)
             || self.state.read(cx).engine_generation() != engine_generation
             || !self.draft_loaded.contains(parent)
             || self.editing_queued.is_some()
@@ -5343,7 +5357,7 @@ impl Composer {
             return;
         }
         let mut entries: Vec<(String, String)> = Vec::new();
-        for message in &self.state.read(cx).transcript {
+        for message in self.binding.transcript(self.state.read(cx)) {
             if message.role != MessageRole::User {
                 continue;
             }
@@ -5882,6 +5896,7 @@ impl Composer {
         let state = self.state.read(cx);
         if self.pending_draft_owner_stage.is_some()
             || self.current_key != origin_key
+            || self.binding.is_pane()
             || state.selected_chat.as_deref() != Some(origin_key)
             || state.engine_generation() != engine_generation
         {
@@ -6957,10 +6972,7 @@ impl Composer {
     fn sync_draft_engine_generation(&mut self, cx: &mut Context<Self>) {
         let (generation, key) = {
             let state = self.state.read(cx);
-            (
-                state.engine_generation(),
-                state.selected_chat.clone().unwrap_or_default(),
-            )
+            (state.engine_generation(), self.binding.key(state))
         };
         let Some(previous) = self.draft_engine_generation.replace(generation) else {
             return;
@@ -8441,7 +8453,7 @@ impl Composer {
             let state = self.state.read(cx);
             let mut params = serde_json::Map::new();
             params.insert("query".into(), token.query.clone().into());
-            let target = if let Some(chat) = state.selected_chat_row() {
+            let target = if let Some(chat) = self.binding.chat_row(state) {
                 params.insert("chatId".into(), chat.id.clone().into());
                 Some(chat.device_id.clone())
             } else if let Some(space) = state.selected_space_row() {
@@ -8879,7 +8891,7 @@ impl Composer {
         let (scope_params, scope) = {
             let state = self.state.read(cx);
             let mode = resolved.effective_permission_mode;
-            match (state.selected_chat_row(), state.selected_space_row()) {
+            match (self.binding.chat_row(state), state.selected_space_row()) {
                 (Some(chat), _) => (
                     serde_json::json!({ "chatId": chat.id, "permissionMode": mode }),
                     format!("chat:{}:{mode:?}", chat.id),
@@ -8937,8 +8949,8 @@ impl Composer {
         };
         let target = {
             let state = self.state.read(cx);
-            state
-                .selected_chat_row()
+            self.binding
+                .chat_row(state)
                 .map(|chat| chat.device_id.clone())
                 .or_else(|| state.selected_space_row().map(|s| s.device_id.clone()))
         };
@@ -9273,8 +9285,9 @@ impl Composer {
                     Indicator::Working | Indicator::AwaitingApproval | Indicator::AwaitingInput
                 )
             });
+            let queue = self.binding.queue(state);
             self.queue_removing
-                .retain(|id| state.queue.iter().any(|item| item.id == *id));
+                .retain(|id| queue.iter().any(|item| item.id == *id));
         }
         self.interrupt_tasks
             .retain(|chat_id, _| self.interrupting.contains(chat_id));
@@ -9282,17 +9295,19 @@ impl Composer {
         let editing_id = self.editing_queued.clone();
         let (key, pending, edited_row_exists) = {
             let s = self.state.read(cx);
+            let transcript = self.binding.transcript(s);
+            let queue = self.binding.queue(s);
             (
-                s.selected_chat.clone().unwrap_or_default(),
-                pending_input_request(&s.transcript)
+                self.binding.key(s),
+                pending_input_request(transcript)
                     .map(|(id, questions)| Wizard::new(id, questions))
                     .or_else(|| {
-                        pending_async_question(&s.transcript)
+                        pending_async_question(transcript)
                             .map(|(id, questions)| Wizard::new_async(id, questions))
                     }),
                 editing_id
                     .as_ref()
-                    .is_none_or(|id| s.queue.iter().any(|item| item.id == *id)),
+                    .is_none_or(|id| queue.iter().any(|item| item.id == *id)),
             )
         };
         self.observe_pending_draft_owner(&key, cx);
@@ -9403,7 +9418,7 @@ impl Composer {
         self.load_draft(self.current_key.clone(), cx);
         self.finish_pending_draft_owner_stage(cx);
 
-        let transcript = self.state.read(cx).transcript.clone();
+        let transcript = self.binding.transcript(self.state.read(cx)).to_vec();
         let settled: Vec<_> = self
             .async_submissions
             .keys()
@@ -9443,7 +9458,7 @@ impl Composer {
             }
             _ => {
                 if let Some(wizard) = self.wizard.clone() {
-                    let transcript = self.state.read(cx).transcript.clone();
+                    let transcript = self.binding.transcript(self.state.read(cx)).to_vec();
                     let released = match wizard.source {
                         QuestionSource::Blocking => {
                             input_request_resolved(&transcript, &wizard.request_id)
@@ -9478,7 +9493,7 @@ impl Composer {
 
     pub(crate) fn run_live(&self, cx: &App) -> bool {
         let s = self.state.read(cx);
-        let Some(chat_id) = s.selected_chat.as_deref() else {
+        let Some(chat_id) = self.binding.chat_id(s) else {
             return false;
         };
         matches!(
@@ -9497,7 +9512,7 @@ impl Composer {
         if state.review_comment_flush_pending(&self.current_key) {
             return true;
         }
-        if state.selected_chat.is_some() {
+        if self.binding.chat_id(state).is_some() {
             return false;
         }
         if state.selected_space_row().is_none() {
@@ -9512,7 +9527,8 @@ impl Composer {
 
     fn require_project_for_new_session(&mut self, cx: &mut Context<Self>) -> bool {
         let state = self.state.read(cx);
-        let missing_project = state.selected_chat.is_none() && state.selected_space_row().is_none();
+        let missing_project =
+            self.binding.chat_id(state).is_none() && state.selected_space_row().is_none();
         if missing_project {
             self.failure = Some("Select a project before starting a session.".into());
             self.failure_key = Some(self.current_key.clone());
@@ -9522,7 +9538,12 @@ impl Composer {
     }
 
     fn context_send_block_reason(&self, cx: &App) -> Option<&'static str> {
-        match self.state.read(cx).context_control.compact.status {
+        match self
+            .binding
+            .context_control(self.state.read(cx))
+            .compact
+            .status
+        {
             luna_proto::ContextOperationStatus::Running => {
                 Some("Context compaction is still running. Your draft was not changed or sent.")
             }
@@ -9671,8 +9692,8 @@ impl Composer {
         }
         // Chat id: existing selection, or client-minted for the new-chat canvas
         // (the chat then appears from the doc host once the doc materializes).
-        let (chat_id, is_new) = match self.state.read(cx).selected_chat.clone() {
-            Some(id) => (id, false),
+        let (chat_id, is_new) = match self.binding.chat_id(self.state.read(cx)) {
+            Some(id) => (id.to_string(), false),
             None => (uuid::Uuid::new_v4().to_string(), true),
         };
         // Where the new session runs (Current checkout / reuse an existing
@@ -9683,9 +9704,8 @@ impl Composer {
         // or defaults), so the engine never has to guess a "default".
         let resolved = self.pickers.read(cx).resolved(cx);
         let existing_cwd = self
-            .state
-            .read(cx)
-            .selected_chat_row()
+            .binding
+            .chat_row(self.state.read(cx))
             .and_then(|c| c.cwd.clone());
         // The project fixes the new session's device and base folder.
         let space = self.state.read(cx).selected_space_row().cloned();
@@ -9696,9 +9716,8 @@ impl Composer {
                 .clone()
                 .unwrap_or_else(|| "local".to_string())
         } else {
-            self.state
-                .read(cx)
-                .selected_chat_row()
+            self.binding
+                .chat_row(self.state.read(cx))
                 .map(|c| c.device_id.clone())
                 .or_else(|| local_device_id.clone())
                 .unwrap_or_else(|| "local".to_string())
@@ -9710,9 +9729,8 @@ impl Composer {
                 .clone()
                 .filter(|id| local_device_id.as_deref() != Some(id.as_str()))
         } else {
-            self.state
-                .read(cx)
-                .selected_chat_row()
+            self.binding
+                .chat_row(self.state.read(cx))
                 .map(|c| c.device_id.clone())
         };
         let space_id = space.as_ref().map(|s| s.id.clone());
@@ -10648,7 +10666,11 @@ impl Composer {
     }
 
     pub(crate) fn interrupt_selected(&mut self, cx: &mut Context<Self>) {
-        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         self.interrupt_chat(chat_id, cx);
@@ -10844,9 +10866,8 @@ impl Composer {
             return;
         };
         let target = self
-            .state
-            .read(cx)
-            .selected_chat_row()
+            .binding
+            .chat_row(self.state.read(cx))
             .map(|chat| chat.device_id.clone());
         if let Some(wizard) = self.wizard.as_mut() {
             wizard.url_opening = true;
@@ -10985,7 +11006,7 @@ impl Composer {
                             cx.background_executor().timer(Duration::from_secs(3)).await;
                             this.update(cx, |composer, cx| {
                                 let unresolved = composer.current_key != check_key.0
-                                    || async_question_open(&composer.state.read(cx).transcript, &check_key.1);
+                                    || async_question_open(composer.binding.transcript(composer.state.read(cx)), &check_key.1);
                                 if unresolved && let Some(submission) = composer.async_submissions.get_mut(&check_key)
                                     && submission.state == AsyncDeliveryState::Applied {
                                         submission.state = AsyncDeliveryState::Uncertain;
@@ -11038,7 +11059,11 @@ impl Composer {
             cx.notify();
             return;
         };
-        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         let async_question = wizard.source == QuestionSource::Async;
@@ -11092,7 +11117,7 @@ impl Composer {
                     .respond_luna_local_ui_approval(&chat_id, &request_id, decision)
                     .await;
                 this.update(cx, |composer, cx| {
-                    if composer.state.read(cx).selected_chat.as_deref() != Some(chat_id.as_str()) {
+                    if composer.binding.chat_id(composer.state.read(cx)) != Some(chat_id.as_str()) {
                         composer.answered_requests.remove(&request_id);
                         return;
                     }
@@ -11187,8 +11212,8 @@ impl Composer {
             // un-hide the panel instead of leaving the question unanswerable.
             cx.background_executor().timer(Duration::from_secs(2)).await;
             this.update(cx, |composer, cx| {
-                let transcript = composer.state.read(cx).transcript.clone();
-                let still_pending = pending_input_request(&transcript)
+                let transcript = composer.binding.transcript(composer.state.read(cx));
+                let still_pending = pending_input_request(transcript)
                     .is_some_and(|(pending_id, _)| pending_id == request_id);
                 if still_pending && composer.answered_requests.remove(&request_id) {
                     cx.notify();
@@ -11978,7 +12003,7 @@ impl Render for Composer {
         }
         // New chats render expanded regardless of `expanded_mode` (see below),
         // so a mode flip there changes nothing visible — never morph it.
-        let new_chat = self.state.read(cx).selected_chat.is_none();
+        let new_chat = self.binding.chat_id(self.state.read(cx)).is_none();
         // Morph clock in ms; dividing by the measurement knob stretches the
         // timeline exactly like shell.rs eval_tween's scaled duration.
         let now_ms = self.morph_clock.elapsed().as_secs_f32() * 1000.0 / motion::speed_scale();
@@ -12045,7 +12070,7 @@ impl Render for Composer {
         let queue_notice: Option<(SharedString, bool)> = {
             use luna_proto::ConnectivityState as S;
             let state = self.state.read(cx);
-            let degraded = match state.selected_chat.as_deref() {
+            let degraded = match self.binding.chat_id(state) {
                 Some(id) => state.chat_delivery_degraded(id),
                 None => {
                     // New-chat canvas: judge by the picked target device.
@@ -12826,8 +12851,12 @@ impl Render for Composer {
                 self.pickers
                     .update(cx, |pickers, cx| pickers.render_footer(cx))
             });
-            let usage = self.state.read(cx).context_usage;
-            let compact_status = self.state.read(cx).context_control.compact.status;
+            let usage = self.binding.context_usage(self.state.read(cx));
+            let compact_status = self
+                .binding
+                .context_control(self.state.read(cx))
+                .compact
+                .status;
             container.child(
                 div()
                     .w_full()
@@ -12864,6 +12893,7 @@ impl Render for Composer {
                                             usage,
                                             compact_status,
                                             self.state.clone(),
+                                            self.binding.clone(),
                                             &theme,
                                         ),
                                     ))

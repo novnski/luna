@@ -398,7 +398,7 @@ impl Composer {
         }
         let state = self.state.read(cx);
         let mut params = serde_json::Map::new();
-        if let Some(chat) = state.selected_chat_row() {
+        if let Some(chat) = self.binding.chat_row(state) {
             params.insert("chatId".into(), chat.id.clone().into());
             params.insert("targetDeviceId".into(), chat.device_id.clone().into());
         } else {

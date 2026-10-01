@@ -443,9 +443,9 @@ impl Composer {
     pub(crate) fn activate_latest_queued_primary(&mut self, cx: &mut Context<Self>) -> bool {
         let Some((chat_id, item, host_supports_actions)) = ({
             let state = self.state.read(cx);
-            state.selected_chat.clone().and_then(|chat_id| {
-                state
-                    .queue
+            let queue = self.binding.queue(state);
+            self.binding.chat_id(state).map(str::to_string).and_then(|chat_id| {
+                queue
                     .iter()
                     .max_by_key(|item| item.issued_at)
                     .cloned()
@@ -491,10 +491,10 @@ impl Composer {
         }
         let (items, chat_id, host_supports_actions) = {
             let state = self.state.read(cx);
-            let chat_id = state.selected_chat.clone()?;
+            let chat_id = self.binding.chat_id(state)?.to_string();
             let host_supports_actions = state
                 .chat_host_supports(&chat_id, luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1);
-            (state.queue.clone(), chat_id, host_supports_actions)
+            (self.binding.queue(state).to_vec(), chat_id, host_supports_actions)
         };
         self.prepare_queue_previews(&items, window, cx);
         if items.is_empty() {
@@ -914,8 +914,9 @@ impl Composer {
     ) {
         use crate::attachments;
         let state = self.state.read(cx);
-        let device = state
-            .selected_chat_row()
+        let device = self
+            .binding
+            .chat_row(state)
             .map(|chat| chat.device_id.clone())
             .unwrap_or_default();
         let engine = state.engine().cloned();
@@ -1020,7 +1021,7 @@ impl Composer {
             return;
         };
         let target = (state.local_device_id.as_deref() != Some(device.as_str())).then_some(device);
-        let chat = state.selected_chat.clone();
+        let chat = self.binding.chat_id(state).map(str::to_string);
         self.queue_full_preview = Some(cx.spawn(async move |this, cx| {
             let image = attachments::read_attachment_image(
                 &engine,
@@ -1032,7 +1033,7 @@ impl Composer {
             .await;
             this.update(cx, |this, cx| {
                 this.queue_full_preview = None;
-                if this.state.read(cx).selected_chat != chat {
+                if this.binding.chat_id(this.state.read(cx)) != chat.as_deref() {
                     return;
                 }
                 if let Some(image) = image {
@@ -1060,9 +1061,8 @@ impl Composer {
     ) -> AnyElement {
         use crate::attachments;
         let device = self
-            .state
-            .read(cx)
-            .selected_chat_row()
+            .binding
+            .chat_row(self.state.read(cx))
             .map(|chat| chat.device_id.clone())
             .unwrap_or_default();
         let cache_key = (device.clone(), path.to_string());
@@ -1291,18 +1291,20 @@ impl Composer {
             return;
         }
         let Some(id) = self
-            .state
-            .read(cx)
-            .queue
+            .binding
+            .queue(self.state.read(cx))
             .get(from)
             .map(|item| item.id.clone())
         else {
             return;
         };
+        let binding = self.binding.clone();
         self.state.update(cx, |state, cx| {
-            if from < state.queue.len() {
-                let item = state.queue.remove(from);
-                state.queue.insert(to.min(state.queue.len()), item);
+            if let Some(queue) = binding.queue_mut(state)
+                && from < queue.len()
+            {
+                let item = queue.remove(from);
+                queue.insert(to.min(queue.len()), item);
                 cx.notify();
             }
         });
@@ -1325,17 +1327,21 @@ impl Composer {
         };
         let (chat_id, host_device_id, revision, supported) = {
             let state = self.state.read(cx);
-            let Some(chat_id) = state.selected_chat.clone() else {
+            let Some(chat_id) = self.binding.chat_id(state).map(str::to_string) else {
                 return;
             };
-            let Some(host_device_id) = state.selected_chat_row().map(|chat| chat.device_id.clone())
+            let Some(host_device_id) = self
+                .binding
+                .chat_row(state)
+                .map(|chat| chat.device_id.clone())
             else {
                 return;
             };
             let supported = state
                 .chat_host_supports(&chat_id, luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1);
-            let Some(revision) = state
-                .queue
+            let Some(revision) = self
+                .binding
+                .queue(state)
                 .iter()
                 .find(|item| item.id == id)
                 .map(|item| item.revision)
@@ -1373,13 +1379,16 @@ impl Composer {
             .await;
             this.update(cx, |composer, cx| {
                 composer.queue_removing.remove(&id);
-                let selected_matches =
-                    composer.state.read(cx).selected_chat.as_deref() == Some(chat_id.as_str());
+                let selected_matches = composer.binding.chat_id(composer.state.read(cx))
+                    == Some(chat_id.as_str());
                 match result {
                     Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
                         if selected_matches {
+                            let binding = composer.binding.clone();
                             composer.state.update(cx, |state, cx| {
-                                state.queue.retain(|item| item.id != id);
+                                if let Some(queue) = binding.queue_mut(state) {
+                                    queue.retain(|item| item.id != id);
+                                }
                                 cx.notify();
                             });
                         }
@@ -1399,18 +1408,20 @@ impl Composer {
                                     })
                                     .into(),
                             );
+                            let binding = composer.binding.clone();
                             composer
                                 .state
-                                .update(cx, |state, cx| state.refresh_selected_queue(cx));
+                                .update(cx, |state, cx| binding.refresh_queue(state, cx));
                         }
                     }
                     Err(err) => {
                         tracing::warn!(error = %err, "host-authoritative queue removal failed");
                         if selected_matches {
                             composer.failure = Some("Couldn't remove the message".into());
+                            let binding = composer.binding.clone();
                             composer
                                 .state
-                                .update(cx, |state, cx| state.refresh_selected_queue(cx));
+                                .update(cx, |state, cx| binding.refresh_queue(state, cx));
                         }
                     }
                 }
@@ -1476,10 +1487,13 @@ impl Composer {
         };
         let (chat_id, host_device_id, supported) = {
             let state = self.state.read(cx);
-            let Some(chat_id) = state.selected_chat.clone() else {
+            let Some(chat_id) = self.binding.chat_id(state).map(str::to_string) else {
                 return;
             };
-            let Some(host_device_id) = state.selected_chat_row().map(|chat| chat.device_id.clone())
+            let Some(host_device_id) = self
+                .binding
+                .chat_row(state)
+                .map(|chat| chat.device_id.clone())
             else {
                 return;
             };
@@ -1493,7 +1507,7 @@ impl Composer {
             cx.notify();
             return;
         }
-        if !self.state.read(cx).queue.iter().any(|item| item.id == id) {
+        if !self.binding.queue(self.state.read(cx)).iter().any(|item| item.id == id) {
             return;
         }
         let owner_device_id = engine.engine_info().device_id.clone();
@@ -1592,7 +1606,7 @@ impl Composer {
                         let text = if !attachments.is_empty() && text == crate::attachments::ATTACHMENT_ONLY_TEXT {
                             String::new()
                         } else { text };
-                        let selected_matches = composer.state.read(cx).selected_chat.as_deref()
+                        let selected_matches = composer.binding.chat_id(composer.state.read(cx))
                             == Some(chat_id.as_str());
                         if !selected_matches || !composer.can_edit_queue_in_composer() {
                             // Navigation or another composer action won acquisition. Release
@@ -1992,11 +2006,15 @@ impl Composer {
         };
         let (chat_id, host_device_id, host_supports_action) = {
             let state = self.state.read(cx);
-            let Some(chat_id) = state.selected_chat.clone() else {
+            let Some(chat_id) = self.binding.chat_id(state).map(str::to_string) else {
                 return;
             };
             let host = queue_action_needs_host(method)
-                .then(|| state.selected_chat_row().map(|chat| chat.device_id.clone()))
+                .then(|| {
+                    self.binding
+                        .chat_row(state)
+                        .map(|chat| chat.device_id.clone())
+                })
                 .flatten();
             let supported = !queue_action_needs_host(method)
                 || state.chat_host_supports(
@@ -2028,9 +2046,8 @@ impl Composer {
             });
         }
         let queue_revision = pending_message.as_ref().and_then(|id| {
-            self.state
-                .read(cx)
-                .queue
+            self.binding
+                .queue(self.state.read(cx))
                 .iter()
                 .find(|item| item.id == *id)
                 .map(|item| item.revision)
@@ -2110,9 +2127,10 @@ impl Composer {
                                 cx.notify();
                             });
                         }
+                        let binding = composer.binding.clone();
                         composer
                             .state
-                            .update(cx, |state, cx| state.refresh_selected_queue(cx));
+                            .update(cx, |state, cx| binding.refresh_queue(state, cx));
                     })
                     .ok();
                 }
@@ -2126,9 +2144,10 @@ impl Composer {
                             });
                         }
                         composer.failure = Some(failure.into());
+                        let binding = composer.binding.clone();
                         composer
                             .state
-                            .update(cx, |state, cx| state.refresh_selected_queue(cx));
+                            .update(cx, |state, cx| binding.refresh_queue(state, cx));
                         cx.notify();
                     })
                     .ok();

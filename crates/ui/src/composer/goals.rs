@@ -363,16 +363,15 @@ fn render_schedules(schedules: &[NativeSchedule], below_goal: bool, theme: &Them
 impl Composer {
     /// The selected chat's goal provider (Codex or Claude Code).
     fn chat_goal_provider(&self, cx: &App) -> Option<GoalProvider> {
-        self.state
-            .read(cx)
-            .selected_chat_row()
+        self.binding
+            .chat_row(self.state.read(cx))
             .and_then(|chat| chat.config.as_ref())
             .and_then(|config| GoalProvider::of(config.harness))
     }
 
     /// The goal provider for this composer: the chat's, or the new-chat picker's.
     pub(super) fn goal_provider(&self, cx: &App) -> Option<GoalProvider> {
-        if self.state.read(cx).selected_chat.is_some() {
+        if self.binding.chat_id(self.state.read(cx)).is_some() {
             return self.chat_goal_provider(cx);
         }
         self.pickers
@@ -461,7 +460,10 @@ impl Composer {
         // Like Codex's toggle, goal mode ends once the goal is handed off; a
         // rejected send restores it with the draft.
         self.goal_ui.mode.remove(&self.current_key);
-        if let Some(chat) = self.state.read(cx).selected_chat.clone()
+        if let Some(chat) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
             && self
                 .goal_ui
                 .error
@@ -479,9 +481,8 @@ impl Composer {
     }
 
     fn current_goal(&self, cx: &App) -> Option<ThreadGoal> {
-        self.state
-            .read(cx)
-            .context_control
+        self.binding
+            .context_control(self.state.read(cx))
             .goal
             .as_ref()
             .and_then(|readback| readback.goal.clone())
@@ -491,7 +492,11 @@ impl Composer {
         if self.goal_ui.pending.is_some() {
             return;
         }
-        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
             return;
         };
         let Some(goal) = self.current_goal(cx) else {
@@ -597,7 +602,7 @@ impl Composer {
             return;
         };
         if self.goal_ui.pending.is_some()
-            || self.state.read(cx).selected_chat.as_deref() != Some(editor.chat_id.as_str())
+            || self.binding.chat_id(self.state.read(cx)) != Some(editor.chat_id.as_str())
         {
             return;
         }
@@ -655,7 +660,7 @@ impl Composer {
             return;
         }
         let state = self.state.read(cx);
-        let Some(chat_id) = state.selected_chat.clone() else {
+        let Some(chat_id) = self.binding.chat_id(state).map(str::to_string) else {
             return;
         };
         let Some(engine) = state.engine().cloned() else {
@@ -729,7 +734,10 @@ impl Composer {
             disabled_reason,
             action,
         } = control;
-        let owner = self.state.read(cx).selected_chat.clone();
+        let owner = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string);
         let icon_only = text.is_none();
         let group = SharedString::from(format!("{id}-group"));
         let (rest, hover) = if primary {
@@ -814,7 +822,7 @@ impl Composer {
                     .tooltip_show_delay(Duration::from_millis(350))
             })
             .on_click(cx.listener(move |this, _, _, cx| {
-                if this.state.read(cx).selected_chat != owner {
+                if this.binding.chat_id(this.state.read(cx)) != owner.as_deref() {
                     return;
                 }
                 if this.goal_ui.pending.is_some() {
@@ -916,7 +924,8 @@ impl Composer {
         let now_ms = chrono::Utc::now().timestamp_millis();
         let selected = {
             let state = self.state.read(cx);
-            state.selected_chat_row().and_then(|chat| {
+            let control = self.binding.context_control(state);
+            self.binding.chat_row(state).and_then(|chat| {
                 let provider = chat
                     .config
                     .as_ref()
@@ -927,8 +936,7 @@ impl Composer {
                 );
                 // Claude's own schedules that it still reports live.
                 let schedules: Vec<NativeSchedule> = if provider == GoalProvider::Claude {
-                    state
-                        .context_control
+                    control
                         .native_schedules
                         .iter()
                         .filter(|schedule| schedule.is_live(now_ms))
@@ -940,7 +948,7 @@ impl Composer {
                 Some((
                     chat.id.clone(),
                     provider,
-                    state.context_control.goal.clone(),
+                    control.goal.clone(),
                     working,
                     schedules,
                 ))
