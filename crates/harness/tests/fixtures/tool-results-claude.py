@@ -15,6 +15,7 @@ Scenarios (picked from the first stdin user line):
 Title runs (`--tools ""`) get a one-line title.
 """
 import json
+import os
 import sys
 import uuid
 
@@ -255,6 +256,15 @@ def main():
     if "--tools" in argv and argv[argv.index("--tools") + 1:argv.index("--tools") + 2] == [""]:
         emit({"type": "result", "subtype": "success", "result": "Fixture Title",
               "usage": {"input_tokens": 1, "output_tokens": 1}})
+        return 0
+    replay = os.environ.get("CC05_REPLAY_FRAMES")
+    if replay:
+        # Live acceptance: replay a captured real-CLI stream (control traffic
+        # excluded; the capture script already answered it).
+        with open(replay) as frames:
+            for line in frames:
+                if line.strip() and json.loads(line).get("type") not in ("control_request", "control_response"):
+                    print(line.rstrip("\n"), flush=True)
         return 0
     if "scenario:structured-only" in first:
         structured_only()

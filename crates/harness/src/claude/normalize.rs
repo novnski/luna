@@ -406,7 +406,8 @@ impl Normalizer {
                     // assistant frames — emit them, in block order with the
                     // tool calls, or subagent transcripts are tool-chips-only.
                     for b in f.message.blocks().filter(|b| b.kind == "tool_use") {
-                        self.tools.record(Some(parent), &b.id, &b.name, &b.input);
+                        self.tools
+                            .record(Some(parent.as_str()), &b.id, &b.name, &b.input);
                     }
                     let mut out: Vec<AgentEvent> = f
                         .message
@@ -546,7 +547,7 @@ impl Normalizer {
                     let mut out: Vec<AgentEvent> = self
                         .tools
                         .results(
-                            Some(parent),
+                            Some(parent.as_str()),
                             &f.message.content,
                             f.tool_use_result.as_ref(),
                             f.tool_result_meta.as_ref(),

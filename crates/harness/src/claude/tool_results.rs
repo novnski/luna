@@ -222,6 +222,13 @@ fn canonical_json(value: &Value) -> Option<String> {
     serde_json::to_string(value).ok()
 }
 
+/// What the envelope deliberately did not copy again, and why.
+#[derive(Default)]
+struct Notes {
+    deduplicated: Vec<String>,
+    omitted: Map<String, Value>,
+}
+
 struct Projection {
     output: Option<String>,
     diff: Option<ToolDiff>,
@@ -245,14 +252,13 @@ fn project_result(
         };
     }
     let private_images = is_computer_use_server(name);
-    let mut deduplicated: Vec<String> = Vec::new();
-    let mut omitted = Map::new();
+    let mut notes = Notes::default();
 
     // MCP calls carry protocol metadata beside the content they returned.
     let (envelope_content, mcp_meta) = split_mcp_envelope(envelope);
     let content_source = match (block_content, envelope_content) {
         (Some(content), Some(_)) => {
-            deduplicated.push("content".into());
+            notes.deduplicated.push("content".into());
             Some(content)
         }
         (Some(content), None) => Some(content),
@@ -282,14 +288,13 @@ fn project_result(
                 &text,
                 content_source,
                 diff.as_ref(),
-                &mut deduplicated,
-                &mut omitted,
+                &mut notes,
             );
         } else if native == Value::String(text.clone())
             || native.as_str().is_some_and(|s| contained(s, &text))
             || content_source.is_some_and(|c| *c == native)
         {
-            deduplicated.push("result".into());
+            notes.deduplicated.push("result".into());
             native = Value::Null;
         }
         if private_images {
@@ -307,7 +312,7 @@ fn project_result(
         retained_input(&call, input)
     };
     if let Some(note) = input_note {
-        deduplicated.push(note);
+        notes.deduplicated.push(note);
     }
 
     let mut payload = Map::new();
@@ -346,11 +351,11 @@ fn project_result(
     if let Some(meta) = meta.and_then(non_execution) {
         payload.insert("nonExecution".into(), meta);
     }
-    if !deduplicated.is_empty() {
-        payload.insert("deduplicated".into(), json!(deduplicated));
+    if !notes.deduplicated.is_empty() {
+        payload.insert("deduplicated".into(), json!(notes.deduplicated));
     }
-    if !omitted.is_empty() {
-        payload.insert("omitted".into(), Value::Object(omitted));
+    if !notes.omitted.is_empty() {
+        payload.insert("omitted".into(), Value::Object(notes.omitted));
     }
     Projection {
         output: Some(json!({ "lunaToolOutput": Value::Object(payload) }).to_string()),
@@ -686,8 +691,7 @@ fn prune_native_result(
     text: &str,
     content: Option<&Value>,
     diff: Option<&ToolDiff>,
-    deduplicated: &mut Vec<String>,
-    omitted: &mut Map<String, Value>,
+    notes: &mut Notes,
 ) {
     fn drop_field(
         fields: &mut Map<String, Value>,
@@ -700,18 +704,20 @@ fn prune_native_result(
         }
     }
     if let Some(diff) = diff {
-        drop_field(fields, deduplicated, "structuredPatch", "diff");
+        drop_field(fields, &mut notes.deduplicated, "structuredPatch", "diff");
         if name == "Write" && diff.unified_diff.is_none() {
             // create content / full before-after pair live in the diff.
-            drop_field(fields, deduplicated, "content", "diff");
-            drop_field(fields, deduplicated, "originalFile", "diff");
+            drop_field(fields, &mut notes.deduplicated, "content", "diff");
+            drop_field(fields, &mut notes.deduplicated, "originalFile", "diff");
         }
     }
     if let Some(original) = fields.remove("originalFile")
         && let Some(original) = original.as_str()
     {
         // The pre-image can be a whole file; the native patch is its evidence.
-        omitted.insert("originalFile".into(), json!({ "bytes": original.len() }));
+        notes
+            .omitted
+            .insert("originalFile".into(), json!({ "bytes": original.len() }));
     }
     if name == "Read"
         && let Some(file) = fields.get_mut("file").and_then(Value::as_object_mut)
@@ -720,18 +726,18 @@ fn prune_native_result(
             && let Some(content) = file.remove("content")
         {
             let bytes = content.as_str().map_or(0, str::len);
-            omitted.insert(
+            notes.omitted.insert(
                 "file.content".into(),
                 json!({ "bytes": bytes, "canonical": "content" }),
             );
         }
         if file.remove("base64").is_some() {
-            deduplicated.push("file.base64:content".into());
+            notes.deduplicated.push("file.base64:content".into());
         }
     }
     // A native report repeating the block content (Agent `content`).
     if content.is_some() && fields.get("content") == content {
-        drop_field(fields, deduplicated, "content", "content");
+        drop_field(fields, &mut notes.deduplicated, "content", "content");
     }
     // Arguments echoed back by the tool (Edit oldString/newString, Write content).
     for (key, arg) in [
@@ -740,7 +746,7 @@ fn prune_native_result(
         ("content", "content"),
     ] {
         if fields.get(key).is_some_and(|v| Some(v) == input.get(arg)) {
-            drop_field(fields, deduplicated, key, "input");
+            drop_field(fields, &mut notes.deduplicated, key, "input");
         }
     }
     // Generic: long strings already present verbatim in the canonical text.
@@ -750,7 +756,7 @@ fn prune_native_result(
         .map(|(k, _)| k.clone())
         .collect();
     for key in echoed {
-        drop_field(fields, deduplicated, &key, "content");
+        drop_field(fields, &mut notes.deduplicated, &key, "content");
     }
 }
 

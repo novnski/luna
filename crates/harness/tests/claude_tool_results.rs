@@ -442,3 +442,89 @@ async fn result_frame_structured_output_without_a_call_becomes_its_own_part() {
         Some(AgentEvent::Done { result: Some(prose), .. }) if prose == "Fixture prose result."
     ));
 }
+
+/// Live acceptance (lead, QA time): replay frames captured from the real CLI by
+/// `evidence/cc05-tools/live/live-capture.py` through the production adapter.
+/// `CC05_REPLAY_FRAMES=/abs/frames.jsonl … -- --ignored live_capture`
+#[tokio::test]
+#[ignore = "needs CC05_REPLAY_FRAMES from a live capture"]
+async fn live_capture_replay_projects_every_received_result() {
+    let path = std::env::var("CC05_REPLAY_FRAMES").expect("CC05_REPLAY_FRAMES");
+    let captured: Vec<Value> = std::fs::read_to_string(&path)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    // Native tool names by id, and every result block that carried content.
+    let mut names = std::collections::HashMap::new();
+    let mut with_content = Vec::new();
+    for frame in &captured {
+        let blocks = frame["message"]["content"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        for block in blocks {
+            match (frame["type"].as_str(), block["type"].as_str()) {
+                (Some("assistant"), Some("tool_use")) => {
+                    names.insert(
+                        block["id"].as_str().unwrap().to_owned(),
+                        block["name"].as_str().unwrap().to_owned(),
+                    );
+                }
+                (Some("user"), Some("tool_result")) if !block["content"].is_null() => {
+                    with_content.push(block["tool_use_id"].as_str().unwrap().to_owned());
+                }
+                _ => {}
+            }
+        }
+    }
+    let events = run("live replay").await;
+    let mut projected = std::collections::HashMap::new();
+    for event in &events {
+        let leaf = match event {
+            AgentEvent::Subagent { event, .. } => event.as_ref(),
+            other => other,
+        };
+        if let AgentEvent::ToolResult {
+            id, output, diff, ..
+        } = leaf
+        {
+            projected.insert(id.clone(), (output.clone(), diff.clone()));
+        }
+    }
+    for id in &with_content {
+        let (output, _) = projected
+            .get(id)
+            .expect("every received result is projected");
+        let body = payload(output.as_deref());
+        assert_eq!(body["tool"], names[id].as_str(), "{id}");
+    }
+    for (id, name) in &names {
+        let Some((output, diff)) = projected.get(id) else {
+            continue;
+        };
+        match name.as_str() {
+            "Edit" => assert!(
+                diff.as_ref()
+                    .and_then(|d| d.unified_diff.as_ref())
+                    .is_some()
+            ),
+            "mcp__cc05-fixture__rich" => {
+                let rich = payload(output.as_deref());
+                assert!(types(&rich).contains(&"image"));
+                assert_eq!(rich["structuredContent"]["marker"], "LIVE_STRUCTURED");
+                assert_eq!(rich["resourceLinks"][0]["name"], "live-report");
+            }
+            _ => {}
+        }
+    }
+    if let Some(dir) = std::env::var_os("LUNA_CC05_HARNESS_EVIDENCE") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            PathBuf::from(dir).join("live-replay-events.json"),
+            serde_json::to_vec_pretty(&events).unwrap(),
+        )
+        .unwrap();
+    }
+}
