@@ -70,6 +70,12 @@ icon_assets![
     (QUEUE_CLOSE, "queue-close"),
     (QUEUE_PAPERCLIP, "queue-paperclip"),
     (CLOCK_CIRCLE, "clock-circle"),
+    // Goal card glyphs, drawn in the Solar Linear weight (24px canvas,
+    // 1.5px strokes): the goal target, token usage, pause and resume.
+    (TARGET, "target"),
+    (BOLT, "bolt"),
+    (PAUSE, "pause"),
+    (PLAY, "play"),
     (CALENDAR, "calendar"),
     (LIST, "list"),
     (CHART, "chart"),
