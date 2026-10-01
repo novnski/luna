@@ -35,7 +35,7 @@ use tokio_util::sync::CancellationToken;
 
 use luna_proto::{AgentEvent, LunaAgentRuntimeContract};
 
-use super::wire::{ControlRequestFrame, Frame};
+use super::wire::{ControlRequestFrame, Frame, ObservedMcpStatus};
 use crate::LunaToolExecutor;
 use crate::codex::LunaCallIds;
 use crate::codex::luna_mcp::{
@@ -130,6 +130,19 @@ impl ClaudeLunaBridge {
                 {
                     self.end_turn();
                     self.session_id = Some(system.session_id.clone());
+                }
+                // A managed policy can refuse dynamic servers; then the model
+                // has no LUNA tools even though the contract attached them.
+                if let Some(observation) = &system.integration_observation
+                    && !observation.mcp_servers.iter().any(|server| {
+                        server.name == luna_mcp::SERVER_NAME
+                            && server.status == ObservedMcpStatus::Connected
+                    })
+                {
+                    tracing::warn!(
+                        target: "luna_harness::claude",
+                        "Claude reports the luna MCP server as not connected; LUNA tools are unavailable in this session"
+                    );
                 }
                 // A re-emitted init inside an open turn is not a new turn.
                 if self.turn.is_some() {

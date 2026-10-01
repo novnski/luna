@@ -17,7 +17,7 @@ use std::sync::Arc;
 use futures::StreamExt;
 use luna_harness::{CancellationToken, ClaudeHarness, Harness, RunControls};
 use luna_proto::{
-    AgentEvent, HarnessId, LunaAgentRuntimeContract, PermissionMode, RunRequest, RuntimeContext,
+    HarnessId, LunaAgentRuntimeContract, PermissionMode, RunRequest, RuntimeContext,
     RuntimeDelivery, RuntimeInstructionSection, RuntimeInstructionSource, RuntimeToolDefinition,
     SandboxLevel,
 };

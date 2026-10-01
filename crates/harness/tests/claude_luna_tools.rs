@@ -115,9 +115,14 @@ fn request(cwd: &std::path::Path) -> RunRequest {
 
 type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
 
-fn controls(seen: Seen, prompts: Arc<Mutex<usize>>) -> RunControls {
-    let (_steer_tx, steer_rx) = mpsc::channel(1);
-    RunControls {
+/// The steering sender is returned so the caller keeps stdin open, as the
+/// engine does for a warm Claude session.
+fn controls(
+    seen: Seen,
+    prompts: Arc<Mutex<usize>>,
+) -> (RunControls, mpsc::Sender<luna_harness::SteerMessage>) {
+    let (steer_tx, steer_rx) = mpsc::channel(1);
+    let controls = RunControls {
         request_input: Box::new(move |_| {
             // A LUNA tool must never reach the human approval bridge here.
             *prompts.lock().unwrap() += 1;
@@ -142,7 +147,8 @@ fn controls(seen: Seen, prompts: Arc<Mutex<usize>>) -> RunControls {
                 Ok(serde_json::json!({"threadId": "thread-a", "via": "engine-executor"}))
             })
         })),
-    }
+    };
+    (controls, steer_tx)
 }
 
 /// F1, F3, F5 (shape), F7–F14, F20, F22 from evidence/cc07-bridge/failure-cases.md.
@@ -156,11 +162,9 @@ async fn claude_luna_tools_fence_matrix_over_shared_mcp_endpoint() {
         harness.luna_runtime_delivery(),
         RuntimeDelivery::ClaudeMcpTools
     );
+    let (run_controls, _steering) = controls(Arc::clone(&seen), Arc::clone(&prompts));
     let stream = harness
-        .run(
-            request(root.path()),
-            controls(Arc::clone(&seen), Arc::clone(&prompts)),
-        )
+        .run(request(root.path()), run_controls)
         .await
         .expect("run starts");
     let events = tokio::time::timeout(
@@ -172,7 +176,8 @@ async fn claude_luna_tools_fence_matrix_over_shared_mcp_endpoint() {
     .await
     .expect("fence matrix finished");
     let steps: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(root.path().join("luna-steps.json")).expect("fake wrote steps"),
+        &std::fs::read_to_string(root.path().join("luna-steps.json"))
+            .unwrap_or_else(|error| panic!("fake wrote no steps ({error}); events: {events:#?}")),
     )
     .unwrap();
     std::fs::write(
@@ -344,7 +349,7 @@ async fn claude_luna_tools_fence_matrix_over_shared_mcp_endpoint() {
 #[tokio::test]
 async fn claude_contract_with_tools_but_no_executor_is_refused() {
     let root = tempfile::tempdir().unwrap();
-    let mut controls = controls(Arc::default(), Arc::default());
+    let (mut controls, _steering) = controls(Arc::default(), Arc::default());
     controls.invoke_luna_tool = None;
     let error = ClaudeHarness::new()
         .with_executable(fake())

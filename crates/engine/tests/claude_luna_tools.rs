@@ -27,6 +27,21 @@ fn account_config(root: &Path) -> AgentAccountsConfig {
         codex_home: root.join("synthetic-codex"),
     };
     config.disable_claude_keychain_fallback().unwrap();
+    // A synthetic provider-native identity so Claude dispatch is admitted.
+    std::fs::create_dir_all(&config.claude_config_dir).unwrap();
+    std::fs::write(
+        &config.claude_config_file,
+        serde_json::json!({
+            "oauthAccount": {"accountUuid": "claude-fixture", "emailAddress": "claude@example.test"}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(
+        config.claude_config_dir.join(".credentials.json"),
+        serde_json::json!({"claudeAiOauth": {"accessToken": "synthetic"}}).to_string(),
+    )
+    .unwrap();
     config
 }
 
@@ -90,7 +105,7 @@ async fn wait_refused(url: &str) {
     .expect("retired endpoint stops serving");
 }
 
-fn step<'a>(results: &'a serde_json::Value, index: usize) -> (bool, &'a str) {
+fn step(results: &serde_json::Value, index: usize) -> (bool, &str) {
     let step = &results[index.to_string()];
     assert_eq!(step["status"], 200, "step {index}: {results:#}");
     (
