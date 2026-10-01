@@ -433,6 +433,8 @@ pub(super) struct PaneChatView {
     /// Height of the composer stack (approval card, goal bar, queue, pill)
     /// overlaying the transcript bottom; the transcript clears it.
     composer_height: Rc<Cell<f32>>,
+    /// The pane width and stack height the transcript last laid out for.
+    last_layout: (f32, f32),
     /// Owner-supplied status for chats without a session-derived one (a side
     /// chat's lease lifetime).
     status_override: Option<(SharedString, gpui::Hsla)>,
@@ -488,6 +490,7 @@ impl PaneChatView {
             composer,
             composer_width: Rc::new(Cell::new(0.0)),
             composer_height: Rc::new(Cell::new(0.0)),
+            last_layout: (0.0, 0.0),
             status_override: None,
             _subscriptions: subscriptions,
         }
@@ -658,8 +661,17 @@ impl Render for PaneChatView {
         } else {
             self.composer_height.get()
         };
+        let layout = (width, clearance);
+        let relayout = (self.last_layout.0 - layout.0).abs() > 0.5
+            || (self.last_layout.1 - layout.1).abs() > 0.5;
+        self.last_layout = layout;
         self.transcript.update(cx, |transcript, cx| {
-            transcript.set_bottom_clearance(clearance, cx)
+            transcript.set_bottom_clearance(clearance, cx);
+            // Rewrapping at a new width or a taller stack (approval card)
+            // must not leave a pinned view short of its latest message.
+            if relayout {
+                transcript.snap_to_end_if_pinned(cx);
+            }
         });
         let measured = self.composer_width.clone();
         let measured_height = self.composer_height.clone();

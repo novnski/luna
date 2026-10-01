@@ -3634,6 +3634,17 @@ impl Transcript {
         }
     }
 
+    /// A pane chat's layout changed (pane width or the composer stack):
+    /// a pinned view lands on its end instead of drifting above it. The
+    /// item-anchored `scroll_to_end` resolves against the next layout.
+    pub(crate) fn snap_to_end_if_pinned(&mut self, cx: &mut Context<Self>) {
+        if self.pane_chat && self.pinned && !self.rows.is_empty() {
+            self.list.scroll_to_end();
+            self.last_scroll_distance = 0.0;
+            cx.notify();
+        }
+    }
+
     /// Pin/clearance state for headless fixtures.
     pub(crate) fn scroll_readback(&self) -> serde_json::Value {
         serde_json::json!({
