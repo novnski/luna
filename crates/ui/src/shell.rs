@@ -77,6 +77,7 @@ mod child_chats;
 mod command_palette;
 mod native_file_rewind;
 mod native_review;
+mod pane_chat;
 mod side_chats;
 mod spaces;
 mod tabs;
@@ -1924,6 +1925,14 @@ pub struct Shell {
     side_chat_events: Option<Subscription>,
     child_chat_panel: Option<Entity<child_chats::ChildChatPanel>>,
     child_chat_events: Option<Subscription>,
+    /// Composers of chats shown in the right pane's shared chat view, cached
+    /// per chat so drafts and sends in flight outlive the pane.
+    pane_composers: Entity<pane_chat::PaneComposers>,
+    _pane_composers_observe: Subscription,
+    /// History/subagent events from the open pane chat's transcript.
+    pane_transcript_events: Option<Subscription>,
+    /// "Open as main chat" waiting for the pane composer's draft to save.
+    pending_open_main: Option<Subscription>,
     browsers: std::collections::HashMap<u64, Entity<crate::browser::BrowserSurface>>,
     browser_subs: std::collections::HashMap<u64, Subscription>,
     browser_seq: u64,
@@ -2207,6 +2216,8 @@ impl Shell {
         let transcript = cx.new(|cx| Transcript::new(state.clone(), cx));
         transcript.update(cx, |transcript, _| transcript.retain_for_route_exit());
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        let pane_composers = cx.new(|cx| pane_chat::PaneComposers::new(state.clone(), cx));
+        let pane_composers_observe = cx.observe(&pane_composers, |_, _, cx| cx.notify());
         let links = Self::session_links(None, cx);
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
@@ -2416,6 +2427,10 @@ impl Shell {
             side_chat_events: None,
             child_chat_panel: None,
             child_chat_events: None,
+            pane_composers,
+            _pane_composers_observe: pane_composers_observe,
+            pane_transcript_events: None,
+            pending_open_main: None,
             browsers: std::collections::HashMap::new(),
             browser_subs: std::collections::HashMap::new(),
             browser_seq: 0,
@@ -4144,9 +4159,13 @@ impl Shell {
 
     fn prepare_exit(&mut self, action: PendingExit, cx: &mut Context<Self>) -> bool {
         let _ = self.keep_awake.reconcile(None);
-        let composer_ready = self
+        let main_ready = self
             .composer
             .update(cx, |composer, cx| composer.prepare_close(cx));
+        let pane_ready = self
+            .pane_composers
+            .update(cx, |composers, cx| composers.prepare_close(cx));
+        let composer_ready = main_ready && pane_ready;
         let surfaces = self
             .files
             .values()
@@ -5357,7 +5376,7 @@ impl Shell {
                 .cloned();
             let message_text = message_id.as_ref().and_then(|id| {
                 state
-                    .transcript
+                    .chat_entries(&source_task_id)
                     .iter()
                     .find(|entry| &entry.id == id)
                     .map(|entry| {
@@ -5599,7 +5618,7 @@ impl Shell {
                 HistoryEngineOrigin::capture(state),
                 state.chats.iter().find(|chat| chat.id == task_id).cloned(),
                 state
-                    .transcript
+                    .chat_entries(&task_id)
                     .iter()
                     .find(|entry| entry.id == message_id)
                     .map(|entry| {
@@ -13604,6 +13623,7 @@ impl Render for Shell {
         self.render_time = Some(std::time::Instant::now());
         if self.all_file_edits_flushed(cx)
             && self.composer.read(cx).draft_flush_complete()
+            && self.pane_composers.read(cx).flush_complete(cx)
             && let Some(action) = self.pending_exit.take()
         {
             let shell = cx.weak_entity();

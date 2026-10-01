@@ -5275,6 +5275,66 @@ impl Composer {
         }
     }
 
+    /// Move focus into this composer's input on its next render (a pane
+    /// view reopening a cached composer).
+    pub(crate) fn request_focus(&mut self, cx: &mut Context<Self>) {
+        self.focus_pending = true;
+        cx.notify();
+    }
+
+    /// A send, receipt check or Stop still owned by this composer. Dropping
+    /// the composer would cancel it.
+    pub(crate) fn has_work_in_flight(&self) -> bool {
+        self.sending
+            || !self.draft_submitting.is_empty()
+            || !self.draft_receipt_tasks.is_empty()
+            || !self.interrupt_tasks.is_empty()
+    }
+
+    pub(crate) fn binding(&self) -> &crate::chat_binding::ChatBinding {
+        &self.binding
+    }
+
+    /// Drop this composer's in-memory copy of `key`'s draft so the next
+    /// navigation reloads the durable record. Used when another composer (a
+    /// pane composer handing its chat to the main view) saved newer text.
+    /// Refused while that draft has unsaved or submitting state here.
+    pub(crate) fn forget_cached_draft(&mut self, key: &str) -> bool {
+        if key.is_empty()
+            || key == self.current_key
+            || !self.draft_is_saved(key)
+            || self.draft_submitting.contains_key(key)
+            || self.draft_load_tasks.contains_key(key)
+        {
+            return false;
+        }
+        self.drafts.remove(key);
+        self.draft_loaded.remove(key);
+        true
+    }
+
+    /// Text-level readback for headless fixtures and diagnostics.
+    pub(crate) fn readback(&self, cx: &App) -> serde_json::Value {
+        let state = self.state.read(cx);
+        serde_json::json!({
+            "binding": self.binding.pane_chat(),
+            "boundChat": self.binding.chat_id(state),
+            "currentKey": self.current_key,
+            "input": self.input.read(cx).text().to_string(),
+            "sending": self.sending,
+            "failure": self.failure.as_ref().map(|failure| failure.to_string()),
+            "failureKey": self.failure_key,
+            "deliveryFailure": self.delivery_failure.as_ref().map(|(id, text)| serde_json::json!({"commandId": id, "text": text.to_string()})),
+            "submitting": self.draft_submitting.keys().cloned().collect::<Vec<_>>(),
+            "receiptWatches": self.draft_receipt_tasks.keys().cloned().collect::<Vec<_>>(),
+            "wizard": self.wizard.as_ref().map(|wizard| wizard.request_id.clone()),
+            "queue": self.binding.queue(state).iter().map(|item| item.id.clone()).collect::<Vec<_>>(),
+            "goal": self.binding.context_control(state).goal.as_ref().and_then(|goal| goal.goal.as_ref()).map(|goal| goal.objective.clone()),
+            "contextUsage": self.binding.context_usage(state).map(|usage| serde_json::json!({"tokens": usage.tokens, "window": usage.window})),
+            "draftLoaded": self.draft_loaded.contains(&self.current_key),
+        })
+    }
+
     /// Explicit result handoff only stages the current parent's durable draft.
     /// It never queues a command, changes attachments, or submits a provider turn.
     pub(crate) fn insert_side_chat_result(

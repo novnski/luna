@@ -908,18 +908,6 @@ pub struct UploadProgress {
     total: u64,
 }
 
-/// Root application state. Reducer methods (`apply_*`, [`Self::session_for`], …)
-/// are plain `&mut self` functions so tests construct the struct directly; gpui
-/// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
-/// Child reply ownership is independent of the pane that displays it.
-pub(crate) struct ChildReplyState {
-    pub input: Entity<crate::composer::ComposerInput>,
-    pub sending: bool,
-    pub notice: Option<(bool, String)>,
-    pub submission: Option<ChildReplySubmission>,
-    pub task: Option<Task<()>>,
-}
-
 /// Live projections of one chat shown in the right pane with the shared chat
 /// view. The selected chat keeps its own fields on [`AppState`]; a pane chat
 /// gets the same projections here, fed by its own watches, so a pane-bound
@@ -937,14 +925,9 @@ pub(crate) struct PaneChatProjection {
     native_tasks_task: Option<Task<()>>,
 }
 
-#[derive(Clone)]
-pub(crate) struct ChildReplySubmission {
-    pub command_id: String,
-    pub text: String,
-    pub host: String,
-    pub queued: bool,
-}
-
+/// Root application state. Reducer methods (`apply_*`, [`Self::session_for`], …)
+/// are plain `&mut self` functions so tests construct the struct directly; gpui
+/// glue ([`Self::bootstrap`], [`Self::select_chat`]) layers subscriptions on top.
 pub struct AppState {
     pub connection: ConnectionStatus,
     /// Fixed data boundary of the attached engine. Authentication may change
@@ -1054,8 +1037,6 @@ pub struct AppState {
     /// subagent tabs read these). Independent of `selected_chat`: a tab's
     /// feed must survive chat switches — the tab itself is what scopes it.
     sub_transcripts: HashMap<String, Vec<SessionMessageEntry>>,
-    /// Drafts and pending delivery survive pane navigation together.
-    pub(crate) child_reply_states: HashMap<String, Entity<ChildReplyState>>,
     /// Chats open in the right pane's shared chat view, keyed by chat id.
     pane_chats: HashMap<String, PaneChatProjection>,
     /// One watch task per live subagent doc (single-flight per key).
@@ -1132,7 +1113,6 @@ impl AppState {
             native_tasks_task: None,
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
-            child_reply_states: HashMap::new(),
             pane_chats: HashMap::new(),
             sub_watch_tasks: HashMap::new(),
             auto_selected: false,
@@ -1702,6 +1682,16 @@ impl AppState {
         let mut ids: Vec<String> = self.pane_chats.keys().cloned().collect();
         ids.sort();
         ids
+    }
+
+    /// A chat's transcript wherever it is shown: the selected chat's joined
+    /// transcript, or a pane chat's keyed doc copy.
+    pub fn chat_entries(&self, chat_id: &str) -> &[SessionMessageEntry] {
+        if self.selected_chat.as_deref() == Some(chat_id) {
+            &self.transcript
+        } else {
+            self.sub_transcript(chat_id)
+        }
     }
 
     /// Unconfirmed echoes for any chat, in send order.

@@ -2970,6 +2970,12 @@ pub struct Transcript {
     /// attachment protection (that set is shared with the primary transcript
     /// and overwritten wholesale).
     doc_override: Option<String>,
+    /// An override instance showing a FULL chat in the right pane's shared
+    /// chat view (side or child chat with its own composer): echoes, the
+    /// session-driven working trailer, provider notice, goal marks, history
+    /// actions and attachment devices all come from that chat, exactly as the
+    /// primary transcript reads them for the selected chat.
+    pane_chat: bool,
     side_chat_handoff: bool,
     /// Whether an override instance watches a LIVE doc (`for_doc(follow)`):
     /// only then may the working trailer render — a frozen snapshot must
@@ -3244,6 +3250,17 @@ impl Transcript {
         Self::build(state, Some(doc_id), follow, cx)
     }
 
+    /// The main transcript bound to one full chat in the right pane.
+    pub fn for_pane_chat(state: Entity<AppState>, chat_id: String, cx: &mut Context<Self>) -> Self {
+        let mut this = Self::build(state, Some(chat_id), true, cx);
+        this.pane_chat = true;
+        this
+    }
+
+    pub(crate) fn is_pane_chat(&self) -> bool {
+        self.pane_chat
+    }
+
     fn build(
         state: Entity<AppState>,
         doc_override: Option<String>,
@@ -3313,6 +3330,7 @@ impl Transcript {
             land_end_pending: doc_override.is_some() && !follow,
             doc_live: doc_override.is_some() && follow,
             doc_override,
+            pane_chat: false,
             side_chat_handoff: false,
             saved_viewports: SavedViewportCache::default(),
             pending_viewport: None,
@@ -4445,6 +4463,10 @@ impl Transcript {
         };
 
         let goal_marks = match &self.doc_override {
+            Some(doc_id) if self.pane_chat => crate::chat_binding::ChatBinding::Chat(doc_id.clone())
+                .context_control(self.state.read(cx))
+                .goal_marks
+                .clone(),
             Some(_) => luna_proto::GoalMarks::default(),
             None => self.state.read(cx).context_control.goal_marks.clone(),
         };
@@ -4580,11 +4602,14 @@ impl Transcript {
                 let rows = self.rows_for(entry, false);
                 new_rows.extend(apply_goal_marks(entry, &self.goal_marks, rows));
             }
-            if self.doc_override.is_none() {
-                for echo in state.pending_echoes() {
-                    let rows = self.rows_for(echo, true);
-                    new_rows.extend(apply_goal_marks(echo, &self.goal_marks, rows));
-                }
+            let echoes = match &self.doc_override {
+                None => state.pending_echoes(),
+                Some(doc_id) if self.pane_chat => state.echoes_for(doc_id),
+                Some(_) => &[],
+            };
+            for echo in echoes {
+                let rows = self.rows_for(echo, true);
+                new_rows.extend(apply_goal_marks(echo, &self.goal_marks, rows));
             }
             (
                 entries.is_empty(),
@@ -5232,12 +5257,16 @@ impl Transcript {
         // `selected_chat_row` belongs to the PRIMARY transcript's chat — an
         // override instance has no chat row, so it claims no devices (its
         // thumbnails degrade to placeholders instead of guessing).
-        if self.doc_override.is_some() {
+        if self.doc_override.is_some() && !self.pane_chat {
             return Vec::new();
         }
         let state = self.state.read(cx);
         let mut ids = Vec::new();
-        if let Some(chat) = state.selected_chat_row() {
+        let chat = match &self.doc_override {
+            Some(doc_id) => state.chats.iter().find(|chat| chat.id == *doc_id),
+            None => state.selected_chat_row(),
+        };
+        if let Some(chat) = chat {
             ids.push(chat.device_id.clone());
         }
         if let Some(local) = state.local_device_id.clone()
@@ -6182,7 +6211,8 @@ impl Transcript {
 
     fn render_working_trailer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let now = chrono::Utc::now();
-        let (sending, queued, elapsed_secs, seed) = if let Some(doc_id) = &self.doc_override {
+        let subagent_doc = self.doc_override.as_ref().filter(|_| !self.pane_chat);
+        let (sending, queued, elapsed_secs, seed) = if let Some(doc_id) = subagent_doc {
             // A subagent doc has no Session row — `indicator_for` would read
             // the PARENT chat's live state into this tab. Liveness rides the
             // doc itself instead: the sink's assistant entry streams until
@@ -6254,8 +6284,13 @@ impl Transcript {
         };
         // A transient provider status (Codex stream retry or warning) takes
         // the flavour word's place: retries while they last, warnings briefly.
-        let notice = (self.doc_override.is_none() && !sending)
-            .then(|| self.state.read(cx).provider_notice.clone())
+        let notice = ((self.doc_override.is_none() || self.pane_chat) && !sending)
+            .then(|| match &self.doc_override {
+                Some(doc_id) => crate::chat_binding::ChatBinding::Chat(doc_id.clone())
+                    .provider_notice(self.state.read(cx))
+                    .cloned(),
+                None => self.state.read(cx).provider_notice.clone(),
+            })
             .flatten()
             .filter(|notice| {
                 notice.kind == luna_proto::ProviderNoticeKind::Retrying
@@ -6584,7 +6619,7 @@ impl Transcript {
             .chat_id
             .clone()
             .or_else(|| self.state.read(cx).selected_chat.clone())
-            .filter(|_| self.doc_override.is_none());
+            .filter(|_| self.doc_override.is_none() || self.pane_chat);
         let history_provider = history_task_id.as_ref().and_then(|task_id| {
             self.state
                 .read(cx)
