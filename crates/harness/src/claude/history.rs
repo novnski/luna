@@ -234,7 +234,6 @@ enum ForkCut {
 
 #[derive(Debug, Clone)]
 pub(crate) struct Transcript {
-    path: PathBuf,
     entries: Vec<Value>,
     /// Indexes into `entries`, from the root to the active leaf.
     chain: Vec<usize>,
@@ -334,7 +333,6 @@ impl Transcript {
         }
         chain.reverse();
         Ok(Self {
-            path: path.to_owned(),
             entries,
             chain,
             compacted,
