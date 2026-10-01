@@ -12,6 +12,20 @@ use tokio_util::sync::CancellationToken;
 
 pub(super) type PendingApprovals = HashMap<String, CancellationToken>;
 
+/// A server request addressed to a native sub-agent (child provider thread)
+/// that this connection observed starting a turn. Codex sends the child's
+/// own `threadId`/`turnId` (`bespoke_event_handling.rs:785`); the request is
+/// answered on the same JSON-RPC id like a root request.
+#[derive(Clone)]
+pub(super) struct SubagentRequest {
+    pub(super) thread_id: String,
+    pub(super) turn_id: String,
+    /// Display label (agent path leaf, e.g. `alpha`).
+    pub(super) label: String,
+    /// Cancelled when the child turn completes or the child thread closes.
+    pub(super) cancel: CancellationToken,
+}
+
 struct Choice {
     display: ApprovalChoice,
     response: Value,
@@ -208,6 +222,8 @@ fn details(params: &Value) -> ApprovalDetails {
             .cloned()
             .unwrap_or_default(),
         choices: Vec::new(),
+        subagent: None,
+        tool: None,
     }
 }
 fn valid_permission_profile(value: &Value) -> bool {
@@ -264,20 +280,16 @@ fn valid_permission_profile(value: &Value) -> bool {
     }
     true
 }
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
 fn question(
     method: &str,
     params: &Value,
     id: &Value,
     policy: &luna_proto::PermissionPolicy,
     choices: &[Choice],
+    subagent: Option<&str>,
 ) -> UserInputQuestion {
     let mut details = details(params);
+    details.subagent = subagent.map(str::to_owned);
     let (header, summary, action_kind) = match method {
         "item/permissions/requestApproval" => (
             "Approve provider permissions",
@@ -356,9 +368,19 @@ fn question(
     } else {
         &policy.machine_name
     };
+    let (header, summary) = match subagent {
+        Some(label) => (
+            format!("{header} · sub-agent {label}"),
+            format!(
+                "Codex sub-agent {label} {}",
+                summary.trim_start_matches("Codex ")
+            ),
+        ),
+        None => (header.to_owned(), summary.to_owned()),
+    };
     UserInputQuestion {
         id: new_message_id(),
-        header: header.into(),
+        header,
         question: format!("{summary} {legacy_context} Target: {target}."),
         options: choices
             .iter()
@@ -375,14 +397,17 @@ fn question(
                 .map(str::to_owned),
             machine_name: policy.machine_name.clone(),
             action_kind,
-            summary: summary.into(),
+            summary,
             requested_scope: policy.scope,
-            expires_at_ms: now_ms().saturating_add(120_000),
+            // Codex v2 approvals carry no expiry: wait for the user, Codex's
+            // `serverRequest/resolved`, turn end/interrupt or session close.
+            expires_at_ms: luna_proto::APPROVAL_NO_EXPIRY,
             supports_task_allowance: choices
                 .iter()
                 .any(|choice| choice.display.scope == "session"),
             details: Some(details),
         }),
+        input: None,
     }
 }
 
@@ -393,27 +418,49 @@ pub(super) fn legacy_question(
     id: &Value,
     policy: &luna_proto::PermissionPolicy,
 ) -> UserInputQuestion {
-    question(method, params, id, policy, &command_choices(params))
+    question(method, params, id, policy, &command_choices(params), None)
 }
 
 /// Strict for permissions; old command/file peers may omit routing fields.
-/// A supplied foreign/stale ID is always rejected, including Full mode.
+/// A supplied foreign/stale ID is always rejected, including Full mode. A
+/// sub-agent request must name its child thread and that child's live turn.
 fn exact_context(params: &Value, context: &ServerRequestContext<'_>, strict: bool) -> bool {
+    let thread = params.get("threadId").and_then(Value::as_str);
+    let turn = params.get("turnId").and_then(Value::as_str);
+    let routed = match &context.subagent {
+        Some(child) => {
+            !child.cancel.is_cancelled()
+                && thread == Some(child.thread_id.as_str())
+                && turn == Some(child.turn_id.as_str())
+        }
+        None => {
+            !context.computer_use_turn_cancel.is_cancelled()
+                && context.active_turn_id.is_some()
+                && (thread == Some(context.thread_id)
+                    || (!strict && params.get("threadId").is_none()))
+                && (turn == context.active_turn_id || (!strict && params.get("turnId").is_none()))
+        }
+    };
     !context.interrupt.is_cancelled()
-        && !context.computer_use_turn_cancel.is_cancelled()
-        && context.active_turn_id.is_some()
+        && routed
         && (!strict
             || context.runtime_contract.is_some_and(|contract| {
                 !contract.context.thread_id.is_empty() && !contract.context.machine_id.is_empty()
             }))
-        && (params.get("threadId").and_then(Value::as_str) == Some(context.thread_id)
-            || (!strict && params.get("threadId").is_none()))
-        && (params.get("turnId").and_then(Value::as_str) == context.active_turn_id
-            || (!strict && params.get("turnId").is_none()))
         && params
             .get("itemId")
             .and_then(Value::as_str)
             .is_some_and(|id| !id.is_empty())
+}
+
+/// The cancellation that closes a parked answer when its turn is over: the
+/// child's turn for a sub-agent request, otherwise the root turn.
+fn turn_cancel(context: &ServerRequestContext<'_>) -> CancellationToken {
+    context
+        .subagent
+        .as_ref()
+        .map(|child| child.cancel.clone())
+        .unwrap_or_else(|| context.computer_use_turn_cancel.clone())
 }
 
 pub(super) fn handle(
@@ -482,19 +529,51 @@ pub(super) fn handle(
         );
         return;
     }
-    let mut question = question(method, params, &id, &context.permission_policy, &choices);
+    let mut question = question(
+        method,
+        params,
+        &id,
+        &context.permission_policy,
+        &choices,
+        context.subagent.as_ref().map(|child| child.label.as_str()),
+    );
     if permissions && let Some(contract) = context.runtime_contract {
         question.question = format!(
             "LUNA task {}. {}",
             contract.context.thread_id, question.question
         );
     }
+    park(
+        client,
+        id,
+        question,
+        choices,
+        denied,
+        context,
+        turn_cancel(context),
+        pending,
+    );
+}
+
+/// Park one approval until the user answers. Codex expresses no deadline, so
+/// none is invented here: the answer receiver closes (no response is sent) on
+/// `serverRequest/resolved`, Stop, or the end of the owning turn.
+#[allow(clippy::too_many_arguments)]
+fn park(
+    client: &RpcClient,
+    id: Value,
+    question: UserInputQuestion,
+    choices: Vec<Choice>,
+    denied: Value,
+    context: &ServerRequestContext<'_>,
+    turn_cancel: CancellationToken,
+    pending: &mut PendingApprovals,
+) {
     let cancel = CancellationToken::new();
     pending.insert(id.to_string(), cancel.clone());
     let client = client.clone();
     let request_input: Arc<RequestInputFn> = Arc::clone(context.request_input);
     let interrupt = context.interrupt.clone();
-    let turn_cancel = context.computer_use_turn_cancel.clone();
     tokio::spawn(async move {
         let receiver = (request_input)(vec![question.clone()]);
         let answers = tokio::select! {
@@ -502,27 +581,141 @@ pub(super) fn handle(
             _ = cancel.cancelled() => return,
             _ = interrupt.cancelled() => {cancel.cancel(); return;},
             _ = turn_cancel.cancelled() => {cancel.cancel(); return;},
-            result = tokio::time::timeout(std::time::Duration::from_secs(120), receiver) => result.ok().and_then(Result::ok),
+            result = receiver => result.ok(),
         };
-        let response = if !interrupt.is_cancelled()
-            && !turn_cancel.is_cancelled()
-            && !cancel.is_cancelled()
-            && now_ms() < question.approval.as_ref().unwrap().expires_at_ms
-        {
-            answers
-                .as_ref()
-                .filter(|answers| answers.len() == 1)
-                .and_then(|answers| exact_answer(&question, answers))
-                .and_then(|label| choices.iter().find(|choice| choice.display.label == label))
-                .map(|choice| choice.response.clone())
-                .unwrap_or(denied)
-        } else {
-            denied
-        };
+        let response =
+            if !interrupt.is_cancelled() && !turn_cancel.is_cancelled() && !cancel.is_cancelled() {
+                answers
+                    .as_ref()
+                    .filter(|answers| answers.len() == 1)
+                    .and_then(|answers| exact_answer(&question, answers))
+                    .and_then(|label| choices.iter().find(|choice| choice.display.label == label))
+                    .map(|choice| choice.response.clone())
+                    .unwrap_or(denied)
+            } else {
+                denied
+            };
         client.respond(&id, response);
         cancel.cancel();
     });
 }
+
+/// Codex MCP/app tool-call approval (`_meta.codex_approval_kind:
+/// "mcp_tool_call"`, `core/src/mcp_tool_call.rs`). Choices and responses
+/// mirror the Codex TUI (`tui/src/bottom_pane/mcp_server_elicitation.rs`):
+/// persistence is offered only when `_meta.persist` advertises it.
+pub(super) fn handle_tool_approval(
+    client: &RpcClient,
+    id: Value,
+    params: &Value,
+    turn_id: &str,
+    approval: super::elicitation::ToolApproval,
+    context: &ServerRequestContext<'_>,
+    pending: &mut PendingApprovals,
+) {
+    let declined = json!({"action":"decline"});
+    let accept = |persist: Option<&str>| match persist {
+        Some(persist) => json!({"action":"accept","content":null,"_meta":{"persist":persist}}),
+        None => json!({"action":"accept","content":null}),
+    };
+    let mut choices = vec![choice(
+        "Allow once",
+        "request",
+        "Run the tool and continue.",
+        accept(None),
+    )];
+    if approval.persist_session {
+        choices.push(choice(
+            "Allow for session",
+            "session",
+            "Run the tool and remember this choice for this session.",
+            accept(Some("session")),
+        ));
+    }
+    if approval.persist_always {
+        choices.push(choice(
+            "Always allow",
+            "persistent policy",
+            "Run the tool and remember this choice for future tool calls.",
+            accept(Some("always")),
+        ));
+    }
+    choices.push(choice(
+        "Deny",
+        "none",
+        "Decline this tool call; the agent may continue.",
+        declined.clone(),
+    ));
+    choices.push(choice(
+        "Cancel",
+        "none",
+        "Cancel this tool call.",
+        json!({"action":"cancel"}),
+    ));
+    let subagent = context.subagent.as_ref().map(|child| child.label.clone());
+    let actor = approval
+        .context
+        .connector
+        .clone()
+        .unwrap_or_else(|| approval.context.server.clone());
+    let tool = approval
+        .context
+        .tool
+        .clone()
+        .unwrap_or_else(|| "a tool".into());
+    let mut header = "Approve MCP tool".to_owned();
+    if let Some(label) = &subagent {
+        header.push_str(&format!(" · sub-agent {label}"));
+    }
+    let question = UserInputQuestion {
+        id: new_message_id(),
+        header,
+        question: approval.message.clone(),
+        options: choices
+            .iter()
+            .map(|choice| choice.display.label.clone())
+            .collect(),
+        multi_select: false,
+        mcp: None,
+        input: None,
+        approval: Some(ApprovalRequest {
+            provider_request_id: id.to_string(),
+            provider: HarnessId::Codex,
+            turn_id: Some(turn_id.to_owned()),
+            machine_name: context.permission_policy.machine_name.clone(),
+            action_kind: ApprovalActionKind::Tool,
+            summary: format!("{actor} wants to run {tool}"),
+            requested_scope: context.permission_policy.scope,
+            expires_at_ms: luna_proto::APPROVAL_NO_EXPIRY,
+            supports_task_allowance: approval.persist_session,
+            details: Some(ApprovalDetails {
+                provider_thread_id: params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                kind: Some("mcp_tool_call".into()),
+                choices: choices
+                    .iter()
+                    .map(|choice| choice.display.clone())
+                    .collect(),
+                subagent,
+                tool: Some(approval.context),
+                ..Default::default()
+            }),
+        }),
+    };
+    park(
+        client,
+        id,
+        question,
+        choices,
+        declined,
+        context,
+        turn_cancel(context),
+        pending,
+    );
+}
+
 fn exact_answer<'a>(
     question: &UserInputQuestion,
     answers: &'a [UserInputAnswer],

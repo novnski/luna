@@ -220,7 +220,34 @@ async fn draft_restart_queue_edit_and_native_image_steer_preserve_inputs() {
         for selection in &selections {
             assert!(input.contains(&serde_json::to_value(selection).unwrap()));
         }
+        // Natively attached images are not also described as files to "open"
+        // (a redundant viewImage); only the user's own text is sent.
+        assert!(!input.iter().any(|item| {
+            item["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("open them to view"))
+        }));
     }
+    let steer_text: Vec<_> = log
+        .iter()
+        .find(|request| request["method"] == "turn/steer")
+        .unwrap()["params"]["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|item| item["text"].as_str().map(str::to_owned))
+        .collect();
+    assert_eq!(steer_text, ["edited queued image"]);
+    // The transcript keeps the attachment trailer for display and restore.
+    let handle = core.doc_host.open(CHAT).unwrap();
+    wait_for(|| {
+        handle.doc().read_entries().unwrap().iter().any(|entry| {
+            serde_json::to_string(&entry.parts).unwrap().contains(
+                "edited queued image\\n\\nAttached images (local files — open them to view):",
+            )
+        })
+    })
+    .await;
     core.sessions.interrupt(CHAT).await.unwrap();
     if let Ok(output) = std::env::var("LUNA_NATIVE_INPUTS_EVIDENCE") {
         let output = Path::new(&output);

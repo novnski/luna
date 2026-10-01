@@ -1670,14 +1670,22 @@ pub fn rows_for_entry(
                         resolved,
                         ..
                     } => {
-                        // Model-generated header onto the one-line chip.
-                        let header: SharedString = single_line(
+                        // Model-generated header onto the one-line chip. A
+                        // secret answer is never in the transcript; the chip
+                        // says so instead of showing any value.
+                        let mut header = single_line(
                             &questions
                                 .first()
                                 .map(|q| q.header.clone())
                                 .unwrap_or_else(|| "Question".to_string()),
-                        )
-                        .into();
+                        );
+                        if questions
+                            .iter()
+                            .any(luna_proto::UserInputQuestion::is_secret)
+                        {
+                            header.push_str(" · secret answer hidden");
+                        }
+                        let header: SharedString = header.into();
                         rows.push(Row {
                             id: format!("{}#{}", entry.id, part_id).into(),
                             version: fnv1a(header.as_bytes()) << 1 | *resolved as u64,
@@ -2328,6 +2336,9 @@ pub fn flavour_word(seed: u64, elapsed_secs: i64) -> &'static str {
 pub fn flavour_seed(chat_id: &str) -> u64 {
     fnv1a(chat_id.as_bytes())
 }
+
+/// How long a provider warning (not a retry) replaces the flavour word.
+const PROVIDER_WARNING_MS: i64 = 10_000;
 
 /// The working trailer's "Sending…" bridge: true while an in-flight send is
 /// fresher than the session row's turn start — the row still carries the
@@ -6238,6 +6249,16 @@ impl Transcript {
             };
             (sending, queued, elapsed, flavour_seed(&chat_id))
         };
+        // A transient provider status (Codex stream retry or warning) takes
+        // the flavour word's place: retries while they last, warnings briefly.
+        let notice = (self.doc_override.is_none() && !sending)
+            .then(|| self.state.read(cx).provider_notice.clone())
+            .flatten()
+            .filter(|notice| {
+                notice.kind == luna_proto::ProviderNoticeKind::Retrying
+                    || now.timestamp_millis().saturating_sub(notice.at_ms) < PROVIDER_WARNING_MS
+            })
+            .map(|notice| notice.message);
         let word = if queued {
             "Queued — will send automatically"
         } else if sending {
@@ -6263,14 +6284,18 @@ impl Transcript {
                 ))
                 .child(
                     div()
+                        .id("working-status")
+                        .role(gpui::Role::Status)
                         .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(if queued {
+                        .text_color(if queued || notice.is_some() {
                             theme.warning
                         } else {
                             theme.text_muted
                         })
                         .child(SharedString::from(if queued {
                             word.to_string()
+                        } else if let Some(notice) = &notice {
+                            notice.clone()
                         } else {
                             format!("{word}…")
                         })),
@@ -9407,6 +9432,7 @@ mod tests {
                                 replay_baseline,
                                 context_usage: None,
                                 context_control: Default::default(),
+                                provider_notice: None,
                             },
                             cx,
                         )
@@ -9517,6 +9543,7 @@ mod tests {
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: Some(luna_doc::TranscriptBaseline::capture(&history)),
+                            provider_notice: None,
                         },
                         cx,
                     )
@@ -9529,6 +9556,7 @@ mod tests {
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: None,
+                            provider_notice: None,
                         },
                         cx,
                     )
@@ -9565,6 +9593,7 @@ mod tests {
                                 replay_baseline: baseline,
                                 context_usage: None,
                                 context_control: Default::default(),
+                                provider_notice: None,
                             },
                             cx,
                         )
@@ -9623,6 +9652,7 @@ mod tests {
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: Some(Default::default()),
+                            provider_notice: None,
                         },
                         cx,
                     )
@@ -9642,6 +9672,7 @@ mod tests {
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: None,
+                            provider_notice: None,
                         },
                         cx,
                     )
@@ -9677,6 +9708,7 @@ mod tests {
                             context_usage: None,
                             context_control: Default::default(),
                             replay_baseline: None,
+                            provider_notice: None,
                         },
                         cx,
                     )
@@ -11392,6 +11424,7 @@ mod tests {
                                     replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &history,
                                     )),
+                                    provider_notice: None,
                                 },
                                 cx,
                             )
@@ -11423,6 +11456,7 @@ mod tests {
                                     replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &cutoff,
                                     )),
+                                    provider_notice: None,
                                 },
                                 cx,
                             )
@@ -11477,6 +11511,7 @@ mod tests {
                                     replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &history,
                                     )),
+                                    provider_notice: None,
                                 },
                                 cx,
                             )
@@ -11488,6 +11523,7 @@ mod tests {
                                     context_usage: None,
                                     context_control: Default::default(),
                                     replay_baseline: None,
+                                    provider_notice: None,
                                 },
                                 cx,
                             )
@@ -11541,6 +11577,7 @@ mod tests {
                                     replay_baseline: Some(luna_doc::TranscriptBaseline::capture(
                                         &next_history,
                                     )),
+                                    provider_notice: None,
                                 },
                                 cx,
                             )
@@ -11582,6 +11619,7 @@ mod tests {
                                         replay_baseline: Some(
                                             luna_doc::TranscriptBaseline::capture(&updated),
                                         ),
+                                        provider_notice: None,
                                     },
                                     cx,
                                 )

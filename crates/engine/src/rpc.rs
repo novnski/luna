@@ -7429,6 +7429,7 @@ fn doc_messages_stream(
             None,
             luna_proto::ContextControlState::default(),
             luna_doc::TranscriptBaseline::default(),
+            None::<luna_proto::ProviderNotice>,
         ),
         |(
             mut rx,
@@ -7437,6 +7438,7 @@ fn doc_messages_stream(
             mut previous_usage,
             mut previous_context,
             mut opening_baseline,
+            mut previous_notice,
         )| async move {
             loop {
                 if prev.is_some() {
@@ -7482,20 +7484,24 @@ fn doc_messages_stream(
                 // changes) produce empty deltas — skip the frame entirely.
                 let usage = doc.context_usage();
                 let context_control = doc.context_control();
+                let provider_notice = doc.provider_notice();
                 if frame.is_empty_delta()
                     && usage == previous_usage
                     && context_control == previous_context
+                    && provider_notice == previous_notice
                     && replay_baseline.is_none()
                 {
                     continue;
                 }
                 previous_usage = usage;
                 previous_context = context_control.clone();
+                previous_notice = provider_notice.clone();
                 let value = serde_json::to_value(luna_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
                     context_control,
                     replay_baseline,
+                    provider_notice,
                 })
                 .ok()?;
                 return Some((
@@ -7507,6 +7513,7 @@ fn doc_messages_stream(
                         previous_usage,
                         previous_context,
                         opening_baseline,
+                        previous_notice,
                     ),
                 ));
             }
