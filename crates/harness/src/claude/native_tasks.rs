@@ -82,8 +82,6 @@ impl TaskUsage {
 /// One Agent/Task spawn call, keyed by its tool_use id.
 #[derive(Default)]
 struct Spawn {
-    /// The spawn whose transcript holds this call; `None` = the root chat.
-    owner: Option<String>,
     description: Option<String>,
     /// Last model the child's own snapshots reported.
     model: Option<String>,
@@ -180,11 +178,10 @@ impl NativeTasks {
         }
     }
 
-    fn register_spawn(&mut self, id: &str, owner: Option<&str>, input: &Value) {
+    /// Register an Agent/Task call. Which transcript holds its chip is the
+    /// engine's to derive from the (tagged or root) call event itself.
+    fn register_spawn(&mut self, id: &str, input: &Value) {
         let spawn = self.spawns.entry(id.to_owned()).or_default();
-        if spawn.owner.is_none() {
-            spawn.owner = owner.map(str::to_owned);
-        }
         if spawn.description.is_none() {
             spawn.description = input
                 .get("description")
@@ -217,7 +214,7 @@ impl NativeTasks {
                 .and_then(Value::as_str)
                 .is_some_and(is_spawn_tool)
             {
-                self.register_spawn(id, None, input);
+                self.register_spawn(id, input);
             }
         }
     }
@@ -287,7 +284,7 @@ impl NativeTasks {
                     self.tool_owner.insert(id, parent, MAX_TOOL_OWNERS);
                     self.note_background_call(id, input);
                     if is_spawn_tool(name) && id != parent {
-                        self.register_spawn(id, Some(parent), input);
+                        self.register_spawn(id, input);
                         if let Some(prompt) = input
                             .get("prompt")
                             .and_then(Value::as_str)
@@ -374,11 +371,7 @@ impl NativeTasks {
         // Subagent-owned shell tasks share the subtype without either.
         let is_agent = frame.subagent_type.is_some() || task_type == Some("local_agent");
         if is_agent && let Some(tool) = tool {
-            let owner = self.tool_owner.get(tool).map(str::to_owned);
             let spawn = self.spawns.entry(tool.to_owned()).or_default();
-            if spawn.owner.is_none() {
-                spawn.owner = owner;
-            }
             if spawn.description.is_none() {
                 spawn.description = text_field(rest, "description");
             }
