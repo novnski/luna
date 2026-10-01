@@ -788,10 +788,13 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
         .find(|l| l.starts_with("ARGV:"))
         .unwrap();
     assert!(!readback_argv.contains("dangerously"), "{readback_argv}");
-    assert!(
-        readback_argv.contains(r#"[--settings] [{"disableAllHooks":true,"fastMode":true}]"#),
-        "{readback_argv}"
-    );
+    let layer = readback_argv
+        .split("[--settings] [")
+        .nth(1)
+        .and_then(|rest| rest.split("]").next())
+        .unwrap_or_default();
+    let layer: Value = serde_json::from_str(layer).unwrap_or_default();
+    assert_eq!(layer, json!({"fastMode": true, "disableAllHooks": true}), "{readback_argv}");
     assert_eq!(readback_argv.matches("[--settings]").count(), 1, "{readback_argv}");
     assert!(
         readback_argv.contains("[--permission-mode] [default]"),
