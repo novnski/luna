@@ -926,17 +926,17 @@ impl Composer {
                     crate::state::Indicator::Working
                 );
                 // Claude's own schedules that it still reports live.
-                let schedules: Vec<NativeSchedule> = (provider == GoalProvider::Claude)
-                    .then(|| {
-                        state
-                            .context_control
-                            .native_schedules
-                            .iter()
-                            .filter(|schedule| schedule.is_live(now_ms))
-                            .cloned()
-                            .collect()
-                    })
-                    .unwrap_or_default();
+                let schedules: Vec<NativeSchedule> = if provider == GoalProvider::Claude {
+                    state
+                        .context_control
+                        .native_schedules
+                        .iter()
+                        .filter(|schedule| schedule.is_live(now_ms))
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 Some((
                     chat.id.clone(),
                     provider,

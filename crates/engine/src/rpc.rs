@@ -3164,6 +3164,31 @@ impl EngineRpc {
                 "Stop the expected active turn, wait for settlement, then retry with a new command id.",
             );
         }
+        // CC-14: Claude runs a `/goal` sent mid-turn later as an unannounced
+        // prompt, so a Claude goal start is refused here, never queued.
+        if let TaskCommandIntent::Session {
+            command: SessionCommandPayload::Run { request, .. },
+            ..
+        } = &command.intent
+            && request.goal.is_some()
+            && self.sessions.turn_in_flight(&command.task_id)
+            && self
+                .workspace
+                .chat(&command.task_id)
+                .ok()
+                .flatten()
+                .and_then(|chat| chat.config)
+                .is_some_and(|config| config.harness == HarnessId::ClaudeCode)
+        {
+            return self.finish_task_command(
+                &command.command_id,
+                CommandReceiptStatus::Rejected,
+                false,
+                CommandReasonCode::ActiveTurnConflict,
+                "Claude starts a goal between turns. Wait for the current turn to finish, or stop it, then send the goal.",
+                "Send the goal again once Claude is idle.",
+            );
+        }
         if matches!(command.intent, TaskCommandIntent::Delete {}) {
             if let Some(service) = &self.side_chats {
                 service
