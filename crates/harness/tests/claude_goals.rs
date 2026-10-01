@@ -461,6 +461,40 @@ async fn native_goal_read_and_clear_use_claudes_own_record_and_command() {
     ));
 }
 
+/// G17: a goal Claude restores on resume is seeded from its record, so the
+/// loop end in the resumed run is read back (met → Complete).
+#[tokio::test]
+async fn resumed_session_seeds_claudes_restored_goal() {
+    let fixture = fixture();
+    let condition = "scenario:goal-stuck the build passes";
+    let first = run_once(&fixture, request(&fixture, condition, true)).await;
+    let session = match first
+        .iter()
+        .find(|e| matches!(e, AgentEvent::SessionStarted { .. }))
+    {
+        Some(AgentEvent::SessionStarted { session_id, .. }) => session_id.clone(),
+        _ => panic!("no session"),
+    };
+    let mut resumed = request(&fixture, "scenario:goal-continue keep going", false);
+    resumed.resume = Some(session);
+    let events = run_once(&fixture, resumed).await;
+    evidence("goal-resume-seed", &events, &fixture);
+    let changes = goals(&events);
+    assert_eq!(changes.len(), 2, "{changes:#?}");
+    let seeded = changes[0].0.as_ref().expect("seeded from the record");
+    assert_eq!(seeded.status, GoalStatus::Active);
+    assert_eq!(seeded.objective, condition);
+    assert_eq!(seeded.evaluation.as_ref().unwrap().checks, 2);
+    let done = changes[1].0.as_ref().unwrap();
+    assert_eq!(done.status, GoalStatus::Complete);
+    assert_eq!(done.time_used_seconds, 9);
+    assert_eq!(
+        stdin_texts(&fixture)[1],
+        "scenario:goal-continue keep going",
+        "an ordinary message; LUNA never re-sends the goal"
+    );
+}
+
 fn git(cwd: &Path, args: &[&str]) {
     let status = std::process::Command::new("git")
         .arg("-C")

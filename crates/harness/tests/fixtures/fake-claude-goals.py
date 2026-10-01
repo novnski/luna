@@ -347,6 +347,15 @@ def handle(frame):
         findings_turn(text)
     elif "scenario:schedules" in text:
         schedules_turn()
+    elif "scenario:goal-continue" in text:
+        # A resumed session with a restored goal: Claude keeps evaluating it.
+        condition = active_goal()
+        say("Continuing toward the goal. ")
+        if condition:
+            row({"type": "goal_status", "met": True, "condition": condition,
+                 "reason": "The build passed", "iterations": 3, "durationMs": 9000,
+                 "tokens": 400})
+        model_result("Continued.", 1)
     elif "scenario:slow" in text:
         say("thinking ")
         time.sleep(3)
