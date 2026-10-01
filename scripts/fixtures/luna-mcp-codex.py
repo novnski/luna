@@ -123,6 +123,9 @@ def scenario(text, turn):
         tool(f"{turn}-create", "create_thread",
              {"prompt": "MCP QA child brief", "idempotencyKey": "mcp-qa-child", "title": "MCP QA child"})
     finish(turn)
+    # Like fake-codex.sh, one turn per process: the chat's next run is a cold
+    # spawn that resumes the thread (and gets a fresh endpoint and token).
+    os._exit(0)
 
 
 for line in sys.stdin:
