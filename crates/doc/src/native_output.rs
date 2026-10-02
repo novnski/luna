@@ -131,10 +131,24 @@ fn pretty(value: &Value) -> String {
 /// Full, readable rendering of a fetched native envelope (detail view).
 pub fn native_display(text: &str) -> Option<String> {
     let payload = native_payload(text)?;
+    // Keep the SDK/model preview in the receipt while preferring separately
+    // collected bytes in the detail view. Failure evidence stays visible.
+    let saved = (payload["tool"] == "Bash"
+        && payload["savedOutput"]["state"] == "loaded"
+        && payload["savedOutput"]["source"] == "claude-saved-bash-output")
+        .then(|| payload["savedOutput"]["text"].as_str())
+        .flatten()
+        .filter(|text| payload["savedOutput"]["byteLength"].as_u64() == Some(text.len() as u64));
     let content = blocks(&payload);
     let is_error = payload.get("isError").and_then(Value::as_bool) == Some(true);
     let only_text = content.iter().all(|b| block_type(b) == "text");
     let mut sections = Vec::new();
+    if payload["savedOutput"]["state"] == "unavailable" {
+        sections.push(format!(
+            "Saved Bash output not loaded: {}",
+            field(&payload["savedOutput"], "reason")
+        ));
+    }
     if !only_text
         || is_error
         || payload.get("nonExecution").is_some()
@@ -153,6 +167,13 @@ pub fn native_display(text: &str) -> Option<String> {
         }
         sections.push(line);
     }
+    if let Some(saved) = saved {
+        sections.push(format!(
+            "Full saved Bash output ({} bytes)\n{}",
+            saved.len(),
+            saved
+        ));
+    }
     for block in content {
         let media = |block: &Value| {
             if block.get("dataOmitted").is_some() {
@@ -166,6 +187,7 @@ pub fn native_display(text: &str) -> Option<String> {
             }
         };
         match block_type(block) {
+            "text" if saved.is_some() => {}
             "text" => sections.push(field(block, "text").to_owned()),
             "image" => sections.push(format!(
                 "Image ({}) · {}",
@@ -219,7 +241,15 @@ pub fn native_display(text: &str) -> Option<String> {
         sections.push(format!("Arguments\n{}", pretty(input)));
     }
     if let Some(result) = payload.get("result").filter(|v| !v.is_null()) {
-        sections.push(format!("Native result\n{}", pretty(result)));
+        let mut result = result.clone();
+        if saved.is_some()
+            && let Some(fields) = result.as_object_mut()
+        {
+            // The retained receipt still has stdout; suppress only its
+            // duplicated partial preview in the display, never stderr/flags.
+            fields.remove("stdout");
+        }
+        sections.push(format!("Native result\n{}", pretty(&result)));
     }
     if let Some(meta) = payload.get("meta").filter(|v| !v.is_null()) {
         sections.push(format!("Protocol metadata\n{}", pretty(meta)));

@@ -83,6 +83,15 @@ impl ToolLedger {
             return;
         }
         let key = scope_key(parent, id);
+        // Replayed assistant snapshots are the same invocation. Keep its
+        // delivered digest, including a host-enriched saved output receipt.
+        if self
+            .calls
+            .get(&key)
+            .is_some_and(|call| call.name == name && call.input == *input)
+        {
+            return;
+        }
         if !self.calls.contains_key(&key) {
             self.order.push_back(key.clone());
         }
@@ -752,6 +761,9 @@ fn prune_native_result(
     // Generic: long strings already present verbatim in the canonical text.
     let echoed: Vec<String> = fields
         .iter()
+        // A structured Bash artifact reference is host read authority; text
+        // merely mentioning the same path must never replace it.
+        .filter(|(key, _)| !(name == "Bash" && key.as_str() == "persistedOutputPath"))
         .filter(|(_, v)| v.as_str().is_some_and(|s| contained(s, text)))
         .map(|(k, _)| k.clone())
         .collect();

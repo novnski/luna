@@ -55,6 +55,7 @@ mod ongoing;
 pub mod peer;
 pub mod profile;
 mod runtime_controls;
+mod saved_output;
 mod schedules;
 mod tool_results;
 mod transport;
@@ -721,6 +722,11 @@ impl ClaudeHarness {
         // mode). Ultrathink rides every user message — steers included.
         // CC-14: a goal start is Claude's own `/goal <condition>` line; it
         // still takes the single native uuid below.
+        let saved_output = saved_output::SavedOutputReader::new(
+            self.goal_config_dir(),
+            &request.cwd,
+            request.resume.as_deref(),
+        );
         let mut ongoing = ongoing::Ongoing::new(!title_only, self.goal_config_dir(), &request.cwd);
         let mut first_line = first.line;
         if let Some(goal) = request.goal.as_ref().filter(|_| !title_only) {
@@ -788,6 +794,7 @@ impl ClaudeHarness {
             identities,
             live_children: self.live_children.clone(),
             ongoing,
+            saved_output,
             luna_endpoint,
             luna,
         }));
@@ -874,6 +881,7 @@ struct Session {
     luna: Option<luna_tools::ClaudeLunaBridge>,
     /// CC-14/15 observers: native goals, findings and schedules.
     ongoing: ongoing::Ongoing,
+    saved_output: saved_output::SavedOutputReader,
     live_children: native_stop::LiveChildren,
     /// CC-10 client uuids and per-turn provider checkpoints.
     identities: history::TurnIdentities,
@@ -911,6 +919,7 @@ async fn run_session(session: Session) {
         mut identities,
         live_children,
         mut ongoing,
+        mut saved_output,
         mut luna_endpoint,
         mut luna,
     } = session;
@@ -1087,12 +1096,15 @@ async fn run_session(session: Session) {
                             stop.cancel();
                         }
                     }
+                    saved_output.observe(&frame);
+                    let saved_admission = saved_output.admission(&frame);
                     let luna_turn = luna.as_mut().and_then(|luna| luna.observe(&frame));
-                    for ev in norm
+                    for mut ev in norm
                         .normalize_native(frame, interrupted)
                         .into_iter()
                         .chain(luna_turn)
                     {
+                        saved_output.enrich(&mut ev, saved_admission, &stop).await;
                         if let Some(checkpoint) = identities.checkpoint_before(&ev)
                             && event_tx.send(Ok(checkpoint)).await.is_err()
                         {

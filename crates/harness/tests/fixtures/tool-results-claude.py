@@ -18,6 +18,8 @@ import json
 import os
 import sys
 import uuid
+import time
+from pathlib import Path
 
 SESSION = "sess-tool-results"
 PNG = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEUlEQVR4nGPQqLiDFTEMLQkA8eRfATA3bycAAAAASUVORK5CYII="
@@ -41,7 +43,7 @@ def call(tool_id, name, tool_input, parent=None):
 
 
 def result(tool_id, content=None, tool_use_result=None, is_error=False, parent=None, meta=None,
-           extra_blocks=None):
+           extra_blocks=None, frame_session=None):
     block = {"type": "tool_result", "tool_use_id": tool_id, "is_error": is_error}
     if content is not None:
         block["content"] = content
@@ -52,6 +54,8 @@ def result(tool_id, content=None, tool_use_result=None, is_error=False, parent=N
         frame["tool_use_result"] = tool_use_result
     if meta is not None:
         frame["tool_result_meta"] = meta
+    if frame_session is not None:
+        frame["session_id"] = frame_session
     emit(frame)
     return frame
 
@@ -61,8 +65,8 @@ def bash_output(stdout, stderr=""):
             "noOutputExpected": False}
 
 
-def init():
-    emit({"type": "system", "subtype": "init", "cwd": "/fixture", "model": "claude-haiku-4-5-20251001",
+def init(cwd="/fixture"):
+    emit({"type": "system", "subtype": "init", "cwd": cwd, "model": "claude-haiku-4-5-20251001",
           "permissionMode": "acceptEdits", "apiKeySource": "none", "claude_code_version": "2.1.286",
           "tools": ["Bash", "Read", "Edit", "Write", "Glob", "Grep", "NotebookEdit", "Agent",
                     "StructuredOutput", "mcp__fixture__rich", "mcp__fixture__noop",
@@ -239,6 +243,65 @@ def structured_only():
     finish({"answer": "SYNTHETIC_STRUCTURED_MARKER"})
 
 
+def saved_output(case):
+    global SESSION
+    SESSION = "b0a88700-f11e-4b23-bd3e-ff5c240eb0b2"
+    home = Path(os.environ["CLAUDE_CONFIG_DIR"])
+    cwd = os.getcwd()
+    encoded = "".join(c if c.isascii() and c.isalnum() else "-" for c in cwd)
+    directory = home / "projects" / encoded / SESSION / "tool-results"
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / "capture.txt"
+    data = ("COPY_HEAD_61\n" + "".join("line-%04d " % i + "x"*60 + "\n" for i in range(1200)) + "COPY_TAIL_61\n").encode()
+    if case == "oversized": data = data[:60000] + b"x"*(1024*1024)
+    if case == "serialized-limit": data = b"\0"*(900*1024)
+    original = data
+    if case == "wrong-prefix": data = b"DIFFERENT_61" + data[12:]
+    if case == "invalid-utf8": data = data[:-1] + b"\xff"
+    if case == "wrong-session":
+        target = home / "projects" / encoded / "another-session" / "tool-results" / "capture.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+    if case == "wrong-project":
+        target = home / "projects" / "different-project" / SESSION / "tool-results" / "capture.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+    if case == "symlink-directory":
+        directory.rmdir()
+        foreign = home / "foreign-results"; foreign.mkdir()
+        directory.symlink_to(foreign, target_is_directory=True)
+    if case == "fifo": os.mkfifo(target)
+    elif case == "symlink-file":
+        foreign = home / "foreign.txt"; foreign.write_bytes(data); target.symlink_to(foreign)
+    elif case == "hardlink":
+        foreign = home / "foreign-hardlink.txt"; foreign.write_bytes(data); os.link(foreign, target)
+    elif case != "missing": target.write_bytes(data)
+    (Path(cwd) / "expected-saved-output.txt").write_bytes(original)
+    init(cwd)
+    if case == "scope-change":
+        SESSION = "changed-session"; init(cwd); SESSION = "b0a88700-f11e-4b23-bd3e-ff5c240eb0b2"
+    name = "mcp__fixture__rich" if case == "mcp-call" else "Bash"
+    parent = "toolu_saved_agent" if case == "child" else None
+    if parent: call(parent, "Agent", {"prompt":"fixture child"})
+    if case != "unknown-call": call("toolu_saved", name, {"command":"printf fixture"}, parent)
+    preview = ("<persisted-output>\nOutput too large. Full output saved to: " + str(target) + "\nPreview (first 2KB):\n" + original[:2000].decode() + "\n</persisted-output>")
+    metadata = {**bash_output(original[:60000].decode()), "persistedOutputPath":str(target), "persistedOutputSize":len(data)+(1 if case=="wrong-size" else 0)}
+    if case == "error":
+        metadata["stderr"] = "SAVED_STDERR_61 failure details"; metadata["interrupted"] = True
+    if case == "text-only": metadata = None
+    extra = [{"type":"tool_result","tool_use_id":"other-result","content":"second result"}] if case == "multi-result" else None
+    frame = result("toolu_saved", preview, metadata, is_error=(case=="error"), parent=parent, extra_blocks=extra,
+                   frame_session="foreign-frame-session" if case=="frame-session" else None)
+    if case == "success": emit(dict(frame, uuid=str(uuid.uuid4())))
+    if case == "replay-removed":
+        deadline=time.time()+5
+        while not (Path(cwd)/"saved-output-first-received").exists():
+            if time.time()>deadline: raise RuntimeError("test receipt handshake timed out")
+            time.sleep(0.01)
+        target.unlink()
+        call("toolu_saved", name, {"command":"printf fixture"}, parent)
+        emit(dict(frame, uuid=str(uuid.uuid4())))
+    assistant([{"type":"text","text":"SAVED_OUTPUT_FIXTURE_DONE"}]); finish()
+
+
 def main():
     argv = sys.argv[1:]
     first = sys.stdin.readline()
@@ -266,7 +329,11 @@ def main():
                 if line.strip() and json.loads(line).get("type") not in ("control_request", "control_response"):
                     print(line.rstrip("\n"), flush=True)
         return 0
-    if "scenario:structured-only" in first:
+    if "scenario:saved-output:" in first:
+        marker = first.split("scenario:saved-output:",1)[1]
+        case = marker.split('"',1)[0].split('\\',1)[0].split()[0]
+        saved_output(case)
+    elif "scenario:structured-only" in first:
         structured_only()
     else:
         rich_results()

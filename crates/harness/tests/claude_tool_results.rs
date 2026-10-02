@@ -529,3 +529,175 @@ async fn live_capture_replay_projects_every_received_result() {
         .unwrap();
     }
 }
+
+#[tokio::test]
+async fn saved_bash_artifact_is_complete_and_model_preview_is_preserved() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut req = request("scenario:saved-output:success");
+    req.cwd = work.path().display().to_string();
+    let (_tx, steering) = mpsc::channel(8);
+    let controls = RunControls {
+        request_input: Box::new(|_| {
+            let (_tx, rx) = oneshot::channel();
+            rx
+        }),
+        steering,
+        interrupt: CancellationToken::new(),
+        invoke_luna_tool: None,
+    };
+    let events = harness()
+        .with_config_dir(home.path())
+        .run(req, controls)
+        .await
+        .unwrap()
+        .map(|e| e.unwrap())
+        .collect::<Vec<_>>()
+        .await;
+    let (_, output, _) = result_for(&events, "toolu_saved");
+    let p: Value = serde_json::from_str(output.unwrap()).unwrap();
+    let p = &p["lunaToolOutput"];
+    let expected = std::fs::read_to_string(work.path().join("expected-saved-output.txt")).unwrap();
+    assert!(
+        p["savedOutput"]["text"].as_str() == Some(expected.as_str()),
+        "full saved output must include the real tail"
+    );
+    assert_eq!(p["savedOutput"]["state"], "loaded");
+    assert_eq!(
+        p["result"]["stdout"].as_str().unwrap().len(),
+        60000,
+        "native metadata is unchanged"
+    );
+    assert!(
+        p["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("<persisted-output>")
+    );
+}
+
+#[tokio::test]
+async fn saved_bash_artifact_refusals_preserve_the_native_receipt_and_settle() {
+    for case in [
+        "missing",
+        "wrong-size",
+        "wrong-prefix",
+        "wrong-session",
+        "wrong-project",
+        "hardlink",
+        "symlink-file",
+        "symlink-directory",
+        "fifo",
+        "oversized",
+        "invalid-utf8",
+        "text-only",
+        "unknown-call",
+        "mcp-call",
+        "multi-result",
+        "child",
+        "frame-session",
+        "scope-change",
+        "serialized-limit",
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let mut req = request(&format!("scenario:saved-output:{case}"));
+        req.cwd = work.path().display().to_string();
+        let (_tx, steering) = mpsc::channel(8);
+        let controls = RunControls {
+            request_input: Box::new(|_| {
+                let (_tx, rx) = oneshot::channel();
+                rx
+            }),
+            steering,
+            interrupt: CancellationToken::new(),
+            invoke_luna_tool: None,
+        };
+        let events = tokio::time::timeout(Duration::from_secs(5), async {
+            harness()
+                .with_config_dir(home.path())
+                .run(req, controls)
+                .await
+                .unwrap()
+                .map(|e| e.unwrap())
+                .collect::<Vec<_>>()
+                .await
+        })
+        .await
+        .unwrap_or_else(|_| panic!("{case} must not block"));
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            )),
+            "{case}: lifecycle must settle"
+        );
+        fn check(e: &AgentEvent, case: &str) {
+            match e {
+                AgentEvent::ToolResult {
+                    output: Some(o), ..
+                } => {
+                    let p: Value = serde_json::from_str(o).unwrap();
+                    assert_ne!(
+                        p["lunaToolOutput"]["savedOutput"]["state"], "loaded",
+                        "{case}: must not expose the artifact"
+                    );
+                }
+                AgentEvent::Subagent { event, .. } => check(event, case),
+                _ => {}
+            }
+        }
+        for e in &events {
+            check(e, case);
+        }
+    }
+}
+
+#[tokio::test]
+async fn saved_bash_output_call_replay_retains_loaded_bytes_after_artifact_removal() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut req = request("scenario:saved-output:replay-removed");
+    req.cwd = work.path().display().to_string();
+    let (_tx, steering) = mpsc::channel(8);
+    let controls = RunControls {
+        request_input: Box::new(|_| {
+            let (_tx, rx) = oneshot::channel();
+            rx
+        }),
+        steering,
+        interrupt: CancellationToken::new(),
+        invoke_luna_tool: None,
+    };
+    let mut stream = harness()
+        .with_config_dir(home.path())
+        .run(req, controls)
+        .await
+        .unwrap();
+    let events = tokio::time::timeout(Duration::from_secs(8), async {
+        let mut events = Vec::new();
+        while let Some(e) = stream.next().await {
+            let e = e.unwrap();
+            if matches!(&e,AgentEvent::ToolResult{id,..} if id=="toolu_saved") {
+                std::fs::write(work.path().join("saved-output-first-received"), "received")
+                    .unwrap();
+            }
+            events.push(e);
+        }
+        events
+    })
+    .await
+    .unwrap();
+    let (_, output, _) = result_for(&events, "toolu_saved");
+    let p: Value = serde_json::from_str(output.unwrap()).unwrap();
+    assert_eq!(p["lunaToolOutput"]["savedOutput"]["state"], "loaded");
+    assert!(
+        p["lunaToolOutput"]["savedOutput"]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("COPY_TAIL_61\n")
+    );
+}

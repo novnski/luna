@@ -32,6 +32,8 @@ pub(crate) enum Frame {
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct SystemFrame {
     #[serde(default)]
+    pub parent_tool_use_id: Option<String>,
+    #[serde(default)]
     pub subtype: String,
     #[serde(default)]
     pub model: String,
@@ -223,6 +225,8 @@ pub(crate) struct Delta {
 /// An `assistant` or `user` frame (an Anthropic API message envelope).
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct MessageFrame {
+    #[serde(default)]
+    pub session_id: String,
     #[serde(default)]
     pub parent_tool_use_id: Option<String>,
     #[serde(default)]

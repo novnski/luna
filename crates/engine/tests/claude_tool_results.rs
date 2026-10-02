@@ -44,7 +44,11 @@ fn assemble(dir: &Path) -> EngineCore {
         let _ = std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o755));
     }
     let registry = Arc::new(HarnessRegistry::new());
-    registry.register(Arc::new(ClaudeHarness::new().with_executable(fixture)));
+    registry.register(Arc::new(
+        ClaudeHarness::new()
+            .with_executable(fixture)
+            .with_config_dir(dir.join("synthetic-claude")),
+    ));
     let accounts = AgentAccountsConfig {
         data_dir: dir.join("synthetic-state"),
         claude_config_dir: dir.join("synthetic-claude"),
@@ -439,4 +443,156 @@ async fn claude_rich_results_survive_journal_lazy_fetch_and_restart() {
         );
     }
     reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_bash_output_survives_lazy_fetch_and_restart_without_the_provider_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(dir.path());
+    let chat = "saved-bash-qa";
+    core.sessions
+        .dispatch(
+            chat,
+            HarnessId::ClaudeCode,
+            RunRequest {
+                goal: None,
+                prompt: "scenario:saved-output:success".into(),
+                harness: None,
+                provider_account_id: None,
+                model: None,
+                reasoning: None,
+                model_options: Default::default(),
+                cwd: dir.path().display().to_string(),
+                sandbox: SandboxLevel::ReadOnly,
+                auto_approve: false,
+                permission_mode: luna_proto::PermissionMode::Ask,
+                parent_permission_ceiling: None,
+                environment_permission_ceiling: None,
+                permission_policy: None,
+                attachments: vec![],
+                input_items: vec![],
+                worktree: None,
+                resume: None,
+                review: None,
+            },
+            Some("saved-output-user".into()),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if core
+                .sessions
+                .session_status(chat)
+                .is_some_and(|s| s.status == SessionStatus::Idle)
+                && entries(&core, chat)
+                    .iter()
+                    .flat_map(|e| &e.parts)
+                    .any(|p| p.id() == "toolu_saved")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let expected = std::fs::read_to_string(dir.path().join("expected-saved-output.txt")).unwrap();
+    let before = fetch(&core, &format!("{chat}/toolu_saved")).await;
+    let p: serde_json::Value = serde_json::from_str(&before).unwrap();
+    assert!(
+        p["lunaToolOutput"]["savedOutput"]["text"].as_str() == Some(expected.as_str()),
+        "journaled full bytes must survive private lazy fetch"
+    );
+    assert!(
+        luna_doc::native_output::native_display(&before)
+            .unwrap()
+            .contains("COPY_TAIL_61")
+    );
+    assert!(
+        !luna_doc::native_output::native_text(&before)
+            .unwrap()
+            .contains("COPY_TAIL_61"),
+        "synced preview must stay model-canonical"
+    );
+    let projected = entries(&core, chat);
+    assert!(
+        !output_summary(tool(&projected, "toolu_saved"))
+            .unwrap()
+            .contains("COPY_TAIL_61")
+    );
+    core.doc_host.flush_all();
+    core.shutdown().await;
+    drop(core);
+    std::fs::remove_dir_all(dir.path().join("synthetic-claude/projects")).unwrap();
+    let restored = assemble(dir.path());
+    let after = fetch(&restored, &format!("{chat}/toolu_saved")).await;
+    assert_eq!(after, before);
+    restored.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn saved_bash_error_detail_keeps_failure_stderr_and_interrupt_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(dir.path());
+    let chat = "saved-bash-error";
+    core.sessions
+        .dispatch(
+            chat,
+            HarnessId::ClaudeCode,
+            RunRequest {
+                goal: None,
+                prompt: "scenario:saved-output:error".into(),
+                harness: None,
+                provider_account_id: None,
+                model: None,
+                reasoning: None,
+                model_options: Default::default(),
+                cwd: dir.path().display().to_string(),
+                sandbox: SandboxLevel::ReadOnly,
+                auto_approve: false,
+                permission_mode: luna_proto::PermissionMode::Ask,
+                parent_permission_ceiling: None,
+                environment_permission_ceiling: None,
+                permission_policy: None,
+                attachments: vec![],
+                input_items: vec![],
+                worktree: None,
+                resume: None,
+                review: None,
+            },
+            Some("saved-error-user".into()),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if core
+                .sessions
+                .session_status(chat)
+                .is_some_and(|s| s.status == SessionStatus::Idle)
+                && entries(&core, chat)
+                    .iter()
+                    .flat_map(|e| &e.parts)
+                    .any(|p| p.id() == "toolu_saved")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let output = fetch(&core, &format!("{chat}/toolu_saved")).await;
+    let display = luna_doc::native_output::native_display(&output).unwrap();
+    assert!(display.contains("COPY_TAIL_61"));
+    assert!(
+        display.contains("SAVED_STDERR_61"),
+        "stderr must remain visible beside saved stdout"
+    );
+    assert!(
+        display.contains("Failed") && display.contains("interrupted") && display.contains("true"),
+        "failure/interrupt evidence must remain visible"
+    );
+    core.shutdown().await;
 }
