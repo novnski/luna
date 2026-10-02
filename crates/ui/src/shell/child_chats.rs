@@ -12,7 +12,7 @@
 
 use super::*;
 use crate::markdown::render::LinkUi;
-use crate::state::EngineHandle;
+use crate::state::{ChildReplyState, ChildReplySubmission, EngineHandle};
 use chrono::DateTime;
 use luna_proto::{Chat, ChatIndicator, CommandReceiptStatus};
 
@@ -231,7 +231,10 @@ fn prepare_reply(
             "Update this child chat's engine to reply from here, or open it as the main chat.",
         ));
     }
-    let running = child_chat_status(state, chat, now) == ChildChatStatus::Running;
+    let running = matches!(
+        child_chat_status(state, chat, now),
+        ChildChatStatus::Running | ChildChatStatus::NeedsApproval | ChildChatStatus::NeedsInput
+    );
     Ok((engine, chat.device_id.clone(), running))
 }
 
@@ -245,13 +248,10 @@ impl gpui::EventEmitter<ChildChatEvent> for ChildChatPanel {}
 struct OpenChild {
     id: String,
     transcript: Entity<Transcript>,
-    input: Entity<ComposerInput>,
+    reply: Entity<ChildReplyState>,
     _input_events: Subscription,
-    sending: bool,
-    /// `(is_error, text)` for the composer's status line.
-    notice: Option<(bool, String)>,
+    _reply_events: Subscription,
     focus_pending: bool,
-    _send: Option<Task<()>>,
 }
 
 pub(super) struct ChildChatPanel {
@@ -279,9 +279,9 @@ impl ChildChatPanel {
         let observe = cx.observe(&state, |_, _, cx| cx.notify());
         cx.on_release(|panel, cx| {
             if let Some(open) = panel.open.take() {
-                panel
-                    .state
-                    .update(cx, |state, _| state.unwatch_subagent_doc(&open.id));
+                panel.state.update(cx, |state, _| {
+                    state.unwatch_subagent_doc(&open.id);
+                });
             }
         })
         .detach();
@@ -324,7 +324,22 @@ impl ChildChatPanel {
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
         });
-        let input = cx.new(|cx| ComposerInput::new("Reply to this child chat…", cx));
+        let cached = self.state.read(cx).child_reply_states.get(&id).cloned();
+        let reply = cached.unwrap_or_else(|| {
+            let input = cx.new(|cx| ComposerInput::new("Reply to this child chat…", cx));
+            let reply = cx.new(|_| ChildReplyState {
+                input,
+                sending: false,
+                notice: None,
+                submission: None,
+                task: None,
+            });
+            self.state.update(cx, |state, _| {
+                state.child_reply_states.insert(id.clone(), reply.clone());
+            });
+            reply
+        });
+        let input = reply.read(cx).input.clone();
         let input_events = cx.subscribe(&input, |panel, _, event, cx| {
             if matches!(
                 event,
@@ -333,15 +348,14 @@ impl ChildChatPanel {
                 panel.send(cx);
             }
         });
+        let reply_events = cx.observe(&reply, |_, _, cx| cx.notify());
         self.open = Some(OpenChild {
             id,
             transcript,
-            input,
+            reply,
             _input_events: input_events,
-            sending: false,
-            notice: None,
+            _reply_events: reply_events,
             focus_pending: true,
-            _send: None,
         });
         cx.notify();
     }
@@ -372,49 +386,68 @@ impl ChildChatPanel {
         if !self.is_current(cx) {
             return;
         }
-        let Some((id, text)) = self.open.as_ref().and_then(|open| {
-            let text = open.input.read(cx).text().trim().to_string();
-            (!open.sending && !text.is_empty()).then(|| (open.id.clone(), text))
+        let Some((id, reply)) = self.open.as_ref().and_then(|open| {
+            let reply = open.reply.read(cx);
+            (!reply.sending
+                && (reply.submission.is_some() || !reply.input.read(cx).text().trim().is_empty()))
+            .then(|| (open.id.clone(), open.reply.clone()))
         }) else {
             return;
         };
         let prepared = prepare_reply(self.state.read(cx), &id, Utc::now());
-        let Some(open) = self.open.as_mut() else {
-            return;
-        };
         let (engine, host, running) = match prepared {
             Ok(prepared) => prepared,
             Err(None) => return,
             Err(Some(error)) => {
-                open.notice = Some((true, error.into()));
-                cx.notify();
+                reply.update(cx, |reply, cx| {
+                    reply.notice = Some((true, error.into()));
+                    cx.notify();
+                });
                 return;
             }
         };
-        let chat_id = id;
-        let message_id = uuid::Uuid::new_v4().to_string();
+        let previous = reply.read(cx).submission.clone();
+        let checking = previous.is_some();
+        let submission = previous.unwrap_or_else(|| ChildReplySubmission {
+            command_id: uuid::Uuid::new_v4().to_string(),
+            text: reply.read(cx).input.read(cx).text().trim().to_string(),
+            host,
+            queued: running,
+        });
+        let text = submission.text.clone();
         let intent = serde_json::json!({
             "kind": "queueMessage",
-            "messageId": message_id,
+            "messageId": submission.command_id,
             "text": text,
             "attachments": [],
             "inputItems": [],
             "holdForTurnEnd": true,
         });
-        open.sending = true;
-        open.notice = None;
-        let task_chat = chat_id.clone();
-        open._send = Some(cx.spawn(async move |this, cx| {
-            let result = Tokio::spawn(cx, async move {
+        reply.update(cx, |reply, cx| {
+            reply.sending = true;
+            reply.notice = None;
+            reply.submission = Some(submission.clone());
+            // The task belongs to the cached reply, not its current pane.
+            reply.task = Some(cx.spawn(async move |this, cx| {
+                let request = submission.clone();
+                let result = Tokio::spawn(cx, async move {
                 tokio::time::timeout(
                     Duration::from_secs(45),
-                    crate::task_commands::execute_receipt_on_with_id(
-                        &engine,
-                        &task_chat,
-                        Some(&host),
-                        message_id,
-                        intent,
-                    ),
+                    async {
+                        if checking {
+                            engine.client().call_as::<Option<luna_proto::CommandReceipt>>(
+                                luna_rpc::methods::GET_TASK_COMMAND_RECEIPT,
+                                serde_json::json!({
+                                    "commandId": request.command_id,
+                                    "targetDeviceId": request.host,
+                                }),
+                            ).await
+                        } else {
+                            crate::task_commands::execute_receipt_on_with_id(
+                                &engine, &id, Some(&request.host), request.command_id, intent,
+                            ).await.map(Some)
+                        }
+                    },
                 )
                 .await
                 .map_err(|_| {
@@ -425,45 +458,48 @@ impl ChildChatPanel {
                 })?
             })
             .await;
-            this.update(cx, |panel, cx| {
-                if !panel.is_current(cx) {
-                    return;
-                }
-                let Some(open) = panel.open.as_mut().filter(|open| open.id == chat_id) else {
-                    return;
-                };
-                open.sending = false;
+            this.update(cx, |reply, cx| {
+                reply.sending = false;
                 let delivered = match result {
-                    Ok(Ok(receipt)) => match receipt.status {
-                        CommandReceiptStatus::Applied => Ok(if running {
+                    Ok(Ok(Some(receipt))) => match receipt.status {
+                        CommandReceiptStatus::Applied => {
+                            reply.submission = None;
+                            Ok(if submission.queued {
                             "Queued. It is delivered when the current turn ends."
                         } else {
                             "Sent."
-                        }),
-                        CommandReceiptStatus::Pending => {
-                            Ok("Sent. Waiting for the host to confirm delivery.")
+                        })
                         }
-                        _ => Err(crate::task_commands::failure_message(
+                        CommandReceiptStatus::Pending => Err(
+                            "Waiting for the host to confirm delivery. Check delivery before sending again.".into(),
+                        ),
+                        _ => {
+                            reply.submission = None;
+                            Err(crate::task_commands::failure_message(
                             &receipt,
                             "The child chat rejected this reply.",
-                        )),
+                        ))
+                        }
                     },
+                    Ok(Ok(None)) => Err("Delivery is still unknown. Check the transcript or check delivery again.".into()),
                     Ok(Err(error)) => Err(format!("Delivery is unknown: {error}")),
                     Err(error) => Err(format!("Delivery is unknown: {error}")),
                 };
                 match delivered {
                     Ok(notice) => {
-                        if open.input.read(cx).text().trim() == text {
-                            open.input.update(cx, |input, cx| input.set_text("", cx));
+                        if reply.input.read(cx).text().trim() == text {
+                            reply.input.update(cx, |input, cx| input.set_text("", cx));
                         }
-                        open.notice = Some((false, notice.into()));
+                        reply.notice = Some((false, notice.into()));
                     }
-                    Err(error) => open.notice = Some((true, error)),
+                    Err(error) => reply.notice = Some((true, error)),
                 }
                 cx.notify();
             })
             .ok();
         }));
+            cx.notify();
+        });
         cx.notify();
     }
 
@@ -748,14 +784,20 @@ impl ChildChatPanel {
         let Some(open) = self.open.as_mut() else {
             return div();
         };
-        if std::mem::take(&mut open.focus_pending) {
-            window.focus(&open.input.focus_handle(cx), cx);
-        }
         let id = open.id.clone();
         let transcript = open.transcript.clone();
-        let input = open.input.clone();
-        let sending = open.sending;
-        let notice = open.notice.clone();
+        let (input, sending, notice, checking) = {
+            let reply = open.reply.read(cx);
+            (
+                reply.input.clone(),
+                reply.sending,
+                reply.notice.clone(),
+                reply.submission.is_some(),
+            )
+        };
+        if std::mem::take(&mut open.focus_pending) {
+            window.focus(&input.focus_handle(cx), cx);
+        }
         let (row, loading) = {
             let state = self.state.read(cx);
             let row = child_chat_rows(state, &self.parent, Utc::now())
@@ -960,7 +1002,12 @@ impl ChildChatPanel {
                     false,
                     if sending {
                         "Sending…".into()
-                    } else if status == ChildChatStatus::Running {
+                    } else if matches!(
+                        status,
+                        ChildChatStatus::Running
+                            | ChildChatStatus::NeedsApproval
+                            | ChildChatStatus::NeedsInput
+                    ) {
                         "Replies queue until the current turn ends".into()
                     } else {
                         "Replies go to this child chat, not the parent".into()
@@ -1009,7 +1056,11 @@ impl ChildChatPanel {
                                 div()
                                     .id("child-chat-send")
                                     .role(gpui::Role::Button)
-                                    .aria_label("Send reply to child chat")
+                                    .aria_label(if checking {
+                                        "Check child reply delivery"
+                                    } else {
+                                        "Send reply to child chat"
+                                    })
                                     .tab_index(0)
                                     .flex_none()
                                     .px(px(10.0))
@@ -1022,7 +1073,9 @@ impl ChildChatPanel {
                                     .text_size(crate::typography::ui_rems(12.0))
                                     .hover(move |style| style.border_color(border_strong))
                                     .focus_visible(move |style| style.border_color(border_strong))
-                                    .when(sending || !has_text, |style| style.opacity(0.5))
+                                    .when(sending || (!has_text && !checking), |style| {
+                                        style.opacity(0.5)
+                                    })
                                     .on_click(cx.listener(|panel, _, _, cx| panel.send(cx)))
                                     .on_key_down(cx.listener(
                                         |panel, event: &gpui::KeyDownEvent, _, cx| {
@@ -1035,7 +1088,13 @@ impl ChildChatPanel {
                                             }
                                         },
                                     ))
-                                    .child(if sending { "Sending…" } else { "Send" }),
+                                    .child(if sending {
+                                        "Sending…"
+                                    } else if checking {
+                                        "Check delivery"
+                                    } else {
+                                        "Send"
+                                    }),
                             ),
                     ),
             );
@@ -1195,7 +1254,11 @@ impl Shell {
         if let Some(panel) = self.child_chat_panel.clone() {
             panel.update(cx, |panel, cx| {
                 if let Some(open) = &panel.open {
-                    open.input.update(cx, |input, cx| input.set_text(text, cx));
+                    open.reply
+                        .read(cx)
+                        .input
+                        .clone()
+                        .update(cx, |input, cx| input.set_text(text, cx));
                 }
                 panel.send(cx);
             });
@@ -1222,9 +1285,9 @@ impl Shell {
             "pickerCardVisible": any,
             "panelParent": panel.map(|panel| panel.parent().to_string()),
             "openChild": open.map(|open| open.id.clone()),
-            "openNotice": open.and_then(|open| open.notice.as_ref().map(|(error, text)| serde_json::json!({"error": error, "text": text}))),
-            "openSending": open.map(|open| open.sending),
-            "openInput": open.map(|open| open.input.read(cx).text().to_string()),
+            "openNotice": open.and_then(|open| open.reply.read(cx).notice.as_ref().map(|(error, text)| serde_json::json!({"error": error, "text": text}))),
+            "openSending": open.map(|open| open.reply.read(cx).sending),
+            "openInput": open.map(|open| open.reply.read(cx).input.read(cx).text().to_string()),
             "watchedDocs": state.fixture_sub_watch_ids(),
             "openTranscriptRows": open.map(|open| state.sub_transcript(&open.id).len()),
             "openTranscriptText": open.map(|open| {

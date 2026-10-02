@@ -223,6 +223,7 @@ def attachment_evidence():
         "servers": sorted(json.loads(config_raw)["mcpServers"]) if config_raw else [],
         "url": URL,
         "allowedTools": flag_value("--allowedTools"),
+        "timeout": server.get("timeout"),
         "strict": "--strict-mcp-config" in ARGV,
         "headersHelper": bool(server and "headersHelper" in server),
         "tokenInEnv": bool(token),

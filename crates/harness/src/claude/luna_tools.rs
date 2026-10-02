@@ -335,7 +335,12 @@ fn reject(call: LunaMcpCall, message: &str) {
 /// `--mcp-config` names only the `luna` server; `--allowedTools` lists exactly
 /// the attached tools. The token never appears in argv.
 fn cli_args(url: &str, contract: &LunaAgentRuntimeContract) -> Vec<String> {
-    let mut server = json!({"type": "http", "url": url});
+    // Claude's HTTP request watchdog otherwise aborts a pending local human
+    // approval after 60 seconds, regardless of the longer tool deadline.
+    let mut server = json!({
+        "type": "http", "url": url,
+        "timeout": luna_mcp::TOOL_TIMEOUT_SEC * 1_000,
+    });
     if cfg!(unix) {
         server["headersHelper"] = Value::String(format!(
             "printf '{{\"Authorization\":\"Bearer %s\"}}' \"${}\"",

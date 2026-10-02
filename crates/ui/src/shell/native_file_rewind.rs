@@ -107,11 +107,9 @@ pub(super) fn section(files: &NativeFiles, theme: &Theme, cx: &mut Context<Shell
         NativeFiles::Idle => "Optionally restore files Claude's own file tools changed since this message. Conversation rewind never changes files.".into(),
         NativeFiles::Loading => "Asking Claude which files it would restore…".into(),
         NativeFiles::Failed(error) => format!("Claude file checkpoint unavailable: {error}"),
-        NativeFiles::Restored(view) => format!(
-            "Restored {} file{} from Claude's checkpoint.",
-            view.files_changed.len(),
-            if view.files_changed.len() == 1 { "" } else { "s" }
-        ),
+        // Claude's applied response may describe the remaining diff (zero),
+        // rather than enumerate the files it just restored.
+        NativeFiles::Restored(_) => "Claude confirmed the checkpoint restore.".into(),
         NativeFiles::Preview(view) | NativeFiles::Restoring(view) if !view.can_rewind => format!(
             "Claude cannot restore files here: {}",
             view.error.clone().unwrap_or_else(|| "no checkpoint".into())
