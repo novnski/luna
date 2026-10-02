@@ -4,7 +4,8 @@
 //! module is only for secrets LUNA owns (currently the optional sync refresh
 //! token, and later integration/project credentials). The vault ciphertext is
 //! stored below the selected LUNA data root; its independent random key lives
-//! in the operating-system credential store.
+//! in an owner-only file in that same device root. No Keychain access occurs.
+//! An old vault without its local key stays untouched and unavailable.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
@@ -17,7 +18,6 @@ use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::now_ms;
@@ -26,7 +26,6 @@ const VAULT_FORMAT: &str = "luna-environment-vault";
 const VAULT_VERSION: u32 = 1;
 const VAULT_CIPHER: &str = "aes-256-gcm";
 const VAULT_AAD: &[u8] = b"luna-environment-vault:v1:aes-256-gcm";
-const KEYCHAIN_SERVICE: &str = "com.novnski.luna.environment-vault";
 const KEY_BYTES: usize = 32;
 const NONCE_BYTES: usize = 12;
 
@@ -134,13 +133,11 @@ impl fmt::Display for CredentialError {
         let message = match self {
             Self::InvalidRequest(message) => message,
             Self::CredentialStoreUnavailable => {
-                "the operating-system credential store is unavailable; LUNA will not store secrets as plaintext"
+                "the local credential key file is unavailable; LUNA will not store secrets as plaintext"
             }
-            Self::CredentialStoreLocked => {
-                "the operating-system credential store is locked; unlock it and retry"
-            }
+            Self::CredentialStoreLocked => "the local credential key file is unavailable",
             Self::VaultKeyMissing => {
-                "the encrypted LUNA vault exists but its credential-store key is missing"
+                "the encrypted LUNA vault exists but its local key file is missing"
             }
             Self::VaultCorrupt => "the encrypted LUNA vault could not be authenticated",
             Self::NotFound => "the requested credential is not configured",
@@ -168,66 +165,150 @@ trait VaultKeyStore: Send + Sync {
     fn store(&self, key: &[u8]) -> Result<(), KeyStoreFailure>;
 }
 
-#[cfg(target_os = "macos")]
-struct PlatformKeyStore {
-    account: String,
+struct LocalKeyStore {
+    path: PathBuf,
 }
 
-#[cfg(target_os = "macos")]
-impl PlatformKeyStore {
+impl LocalKeyStore {
     fn for_data_dir(data_dir: &Path) -> Self {
-        let stable_path = stable_path(data_dir);
-        let digest = Sha256::digest(stable_path.to_string_lossy().as_bytes());
         Self {
-            account: format!("vault-v1-{}", hex_prefix(&digest, 16)),
+            path: data_dir.join("credentials").join("environment-v1.key"),
         }
     }
 
-    fn classify(error: security_framework::base::Error) -> KeyStoreFailure {
-        // errSecInteractionNotAllowed, errSecAuthFailed, and userCanceled.
-        match error.code() {
-            -25308 | -25293 | -128 => KeyStoreFailure::Locked,
-            _ => KeyStoreFailure::Unavailable,
+    #[cfg(unix)]
+    fn validate_parent(&self) -> Result<(), KeyStoreFailure> {
+        let parent = self.path.parent().ok_or(KeyStoreFailure::Unavailable)?;
+        let metadata =
+            std::fs::symlink_metadata(parent).map_err(|_| KeyStoreFailure::Unavailable)?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(KeyStoreFailure::Unavailable);
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o077 != 0 {
+                return Err(KeyStoreFailure::Unavailable);
+            }
+        }
+        Ok(())
     }
 }
 
-#[cfg(target_os = "macos")]
-impl VaultKeyStore for PlatformKeyStore {
+#[cfg(unix)]
+impl VaultKeyStore for LocalKeyStore {
     fn load(&self) -> Result<Option<Vec<u8>>, KeyStoreFailure> {
-        match crate::macos_keychain::get_generic_password_noninteractive(
-            KEYCHAIN_SERVICE,
-            &self.account,
-        ) {
-            Ok(key) => Ok(Some(key)),
-            // errSecItemNotFound.
-            Err(error) if error.code() == -25300 => Ok(None),
-            Err(error) => Err(Self::classify(error)),
+        use std::io::Read;
+        self.validate_parent()?;
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
         }
+        let mut file = match options.open(&self.path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(KeyStoreFailure::Unavailable),
+        };
+        let metadata = file.metadata().map_err(|_| KeyStoreFailure::Unavailable)?;
+        if !metadata.is_file() || metadata.len() != KEY_BYTES as u64 {
+            return Err(KeyStoreFailure::Unavailable);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if metadata.uid() != unsafe { libc::geteuid() }
+                || metadata.mode() & 0o077 != 0
+                || metadata.nlink() != 1
+            {
+                return Err(KeyStoreFailure::Unavailable);
+            }
+        }
+        let mut bytes = Zeroizing::new(vec![0u8; KEY_BYTES]);
+        file.read_exact(&mut bytes)
+            .map_err(|_| KeyStoreFailure::Unavailable)?;
+        Ok(Some(bytes.to_vec()))
     }
 
     fn store(&self, key: &[u8]) -> Result<(), KeyStoreFailure> {
-        security_framework::passwords::set_generic_password(KEYCHAIN_SERVICE, &self.account, key)
-            .map_err(Self::classify)
+        self.validate_parent()?;
+        if key.len() != KEY_BYTES {
+            return Err(KeyStoreFailure::Unavailable);
+        }
+        // Publish only a complete key. A short write/crash before publication
+        // leaves the final name absent and the next explicit save can retry.
+        let parent = self.path.parent().ok_or(KeyStoreFailure::Unavailable)?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".environment-v1.key-")
+            .tempfile_in(parent)
+            .map_err(|_| KeyStoreFailure::Unavailable)?;
+        use std::os::unix::fs::PermissionsExt;
+        temporary
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))
+            .map_err(|_| KeyStoreFailure::Unavailable)?;
+        temporary
+            .write_all(key)
+            .and_then(|_| temporary.as_file().sync_all())
+            .map_err(|_| KeyStoreFailure::Unavailable)?;
+        publish_key_noreplace(temporary.path(), &self.path)
+            .map_err(|_| KeyStoreFailure::Unavailable)?;
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|_| KeyStoreFailure::Unavailable)
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-struct PlatformKeyStore;
-
-#[cfg(not(target_os = "macos"))]
-impl PlatformKeyStore {
-    fn for_data_dir(_data_dir: &Path) -> Self {
-        Self
+// Both supported desktop Unix targets provide an atomic no-replace rename.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn publish_key_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    let source = CString::new(source.as_os_str().as_bytes())?;
+    let destination = CString::new(destination.as_os_str().as_bytes())?;
+    #[cfg(target_os = "macos")]
+    let result = unsafe {
+        libc::renameatx_np(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    #[cfg(target_os = "linux")]
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result != 0 {
+        return Err(std::io::Error::last_os_error());
     }
+    Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-impl VaultKeyStore for PlatformKeyStore {
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn publish_key_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic key publication unavailable",
+    ))
+}
+
+// Keep the previous unsupported-platform behavior until a private-file ACL
+// implementation exists. Never replace Keychain with a broadly readable key.
+#[cfg(not(unix))]
+impl VaultKeyStore for LocalKeyStore {
     fn load(&self) -> Result<Option<Vec<u8>>, KeyStoreFailure> {
         Err(KeyStoreFailure::Unavailable)
     }
-
     fn store(&self, _key: &[u8]) -> Result<(), KeyStoreFailure> {
         Err(KeyStoreFailure::Unavailable)
     }
@@ -273,7 +354,7 @@ impl fmt::Debug for CredentialBroker {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CredentialBroker")
             .field("vault_file", &self.inner.vault_file)
-            .field("key_store", &"[OS CREDENTIAL STORE]")
+            .field("key_store", &"[LOCAL PRIVATE KEY FILE]")
             .finish()
     }
 }
@@ -295,7 +376,7 @@ impl CredentialBroker {
     pub fn for_data_dir(data_dir: &Path) -> Self {
         Self::with_store(
             data_dir.join("credentials").join("environment-v1.vault"),
-            Arc::new(PlatformKeyStore::for_data_dir(data_dir)),
+            Arc::new(LocalKeyStore::for_data_dir(data_dir)),
             None,
         )
     }
@@ -542,17 +623,56 @@ impl CredentialBroker {
                 .parent()
                 .ok_or(CredentialError::StorageUnavailable)?;
             std::fs::create_dir_all(parent).map_err(|_| CredentialError::StorageUnavailable)?;
-            std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700))
+            use std::os::fd::FromRawFd;
+            use std::os::unix::ffi::OsStrExt;
+            use std::os::unix::fs::MetadataExt;
+            let directory = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW | libc::O_DIRECTORY | libc::O_CLOEXEC)
+                .open(parent)
+                .map_err(|_| CredentialError::StorageUnavailable)?;
+            if directory
+                .metadata()
+                .map_err(|_| CredentialError::StorageUnavailable)?
+                .uid()
+                != unsafe { libc::geteuid() }
+            {
+                return Err(CredentialError::StorageUnavailable);
+            }
+            directory
+                .set_permissions(std::fs::Permissions::from_mode(0o700))
                 .map_err(|_| CredentialError::StorageUnavailable)?;
             let lock_file = self.inner.vault_file.with_extension("lock");
-            let file = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(lock_file)
+            let name = std::ffi::CString::new(
+                lock_file
+                    .file_name()
+                    .ok_or(CredentialError::StorageUnavailable)?
+                    .as_bytes(),
+            )
+            .map_err(|_| CredentialError::StorageUnavailable)?;
+            // Resolve the lock against the pinned directory, without following
+            // a symlink or changing permissions on a foreign linked inode.
+            let fd = unsafe {
+                libc::openat(
+                    directory.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                    0o600,
+                )
+            };
+            if fd < 0 {
+                return Err(CredentialError::StorageUnavailable);
+            }
+            let file = unsafe { std::fs::File::from_raw_fd(fd) };
+            let metadata = file
+                .metadata()
                 .map_err(|_| CredentialError::StorageUnavailable)?;
+            if !metadata.is_file()
+                || metadata.nlink() != 1
+                || metadata.uid() != unsafe { libc::geteuid() }
+            {
+                return Err(CredentialError::StorageUnavailable);
+            }
             file.set_permissions(std::fs::Permissions::from_mode(0o600))
                 .map_err(|_| CredentialError::StorageUnavailable)?;
             // SAFETY: `file` remains owned by the guard for the full critical
@@ -808,14 +928,6 @@ fn stable_path(path: &Path) -> PathBuf {
         key.push(name);
     }
     key
-}
-
-fn hex_prefix(bytes: &[u8], bytes_to_use: usize) -> String {
-    bytes
-        .iter()
-        .take(bytes_to_use)
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
 }
 
 fn write_atomic_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -1101,47 +1213,6 @@ mod tests {
                 .materialize(&lease, &CredentialScope::luna_sync())
                 .unwrap_err(),
             CredentialError::VaultCorrupt
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    #[ignore = "opt-in real macOS login-Keychain integration test"]
-    fn macos_keychain_backs_an_isolated_fixture_vault() {
-        struct Cleanup(String);
-        impl Drop for Cleanup {
-            fn drop(&mut self) {
-                let _ = security_framework::passwords::delete_generic_password(
-                    KEYCHAIN_SERVICE,
-                    &self.0,
-                );
-            }
-        }
-
-        let root = tempfile::tempdir().unwrap();
-        let store = PlatformKeyStore::for_data_dir(root.path());
-        let _cleanup = Cleanup(store.account.clone());
-        let broker = CredentialBroker::with_store(
-            root.path().join("credentials/environment-v1.vault"),
-            Arc::new(store),
-            None,
-        );
-        let (_, lease) = store_sync(&broker, b"isolated-keychain-fixture-value");
-        assert_eq!(
-            broker
-                .materialize(&lease, &CredentialScope::luna_sync())
-                .unwrap()
-                .as_utf8()
-                .unwrap(),
-            "isolated-keychain-fixture-value"
-        );
-        security_framework::passwords::delete_generic_password(KEYCHAIN_SERVICE, &_cleanup.0)
-            .unwrap();
-        assert_eq!(
-            security_framework::passwords::get_generic_password(KEYCHAIN_SERVICE, &_cleanup.0,)
-                .unwrap_err()
-                .code(),
-            -25300
         );
     }
 }

@@ -143,8 +143,6 @@ pub(crate) mod integration_actions;
 pub mod integration_settings;
 pub mod live_usage;
 pub mod local_import;
-#[cfg(target_os = "macos")]
-mod macos_keychain;
 mod model_cache;
 mod native_tasks;
 pub mod permissions;

@@ -4,8 +4,8 @@
 //! Provider-native authentication remains authoritative:
 //!
 //! - **Claude Code** — credentials in `~/.claude/.credentials.json`
-//!   (`$CLAUDE_CONFIG_DIR` relocates the dir) or, on macOS, the Keychain item
-//!   `Claude Code-credentials`; the account identity (`oauthAccount`, `userID`)
+//!   (`$CLAUDE_CONFIG_DIR` relocates the dir); LUNA never accesses the OS credential
+//!   store. The account identity (`oauthAccount`, `userID`)
 //!   lives in `~/.claude.json`.
 //! - **Codex** — the default account uses `$CODEX_HOME/auth.json` (default
 //!   `~/.codex`). Named accounts use LUNA-owned T3-style auth overlays: only
@@ -55,9 +55,6 @@ const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
 const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-
-#[cfg(target_os = "macos")]
-const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
 /// Claude Code stores these next to `claudeAiOauth` in the same credential
 /// blob, but they are machine-shared (MCP server OAuth, plugin secrets) and
@@ -134,10 +131,8 @@ impl AgentAccountsConfig {
         self.claude_config_dir.join(".credentials.json")
     }
 
-    /// Seal a synthetic/test provider root against the macOS Claude Keychain.
-    /// The marker is checked even when the credentials file is absent, so a
-    /// cleanup or partial fixture seed fails closed instead of escaping to the
-    /// user's native login store.
+    /// Legacy fixture marker retained for existing isolated test profiles.
+    /// Production never accesses Keychain, with or without this marker.
     #[doc(hidden)]
     pub fn disable_claude_keychain_fallback(&self) -> std::io::Result<()> {
         std::fs::create_dir_all(&self.claude_config_dir)?;
@@ -148,6 +143,7 @@ impl AgentAccountsConfig {
         )
     }
 
+    #[cfg(test)]
     fn claude_keychain_fallback_disabled(&self) -> bool {
         self.claude_config_dir
             .join(DISABLE_CLAUDE_KEYCHAIN_FALLBACK)
@@ -198,7 +194,7 @@ struct Slot {
     /// The provider-side identity the slot is keyed by (account uuid/email).
     account_key: String,
     profile: SlotProfile,
-    /// Claude: the `.credentials.json`/Keychain payload. Codex: `auth.json`.
+    /// Claude: an explicitly available `.credentials.json` payload. Codex: `auth.json`.
     credentials: serde_json::Value,
     /// Claude only: `{oauthAccount, userID}` merged into the provider config
     /// while completing an explicit sign-in.
@@ -662,7 +658,7 @@ impl AgentAccounts {
 
     /// Provider-scoped listing for surfaces such as the Codex model picker.
     /// This boundary matters on macOS: asking only for Codex must never probe
-    /// Claude's Keychain-backed native login as a side effect.
+    /// Claude's native account metadata as a side effect.
     pub async fn list_harness(
         &self,
         harness: HarnessId,
@@ -717,7 +713,19 @@ impl AgentAccounts {
                 usage,
                 state.claude_enabled,
                 !state.claude_enabled,
-                (!state.claude_enabled).then_some(AgentAuthenticationState::Unavailable),
+                Some(if !state.claude_enabled {
+                    AgentAuthenticationState::Unavailable
+                } else if detected
+                    .credentials
+                    .as_ref()
+                    .and_then(|credentials| credentials.get("claudeAiOauth"))
+                    .and_then(|oauth| str_field(oauth, "accessToken"))
+                    .is_none_or(|token| token.is_empty())
+                {
+                    AgentAuthenticationState::Unknown
+                } else {
+                    AgentAuthenticationState::Authenticated
+                }),
                 None,
                 None,
             ));
@@ -1461,44 +1469,21 @@ impl AgentAccounts {
             })
     }
 
-    // ── Claude credential store (Keychain on macOS, file elsewhere) ─────────
+    // ── Claude provider-owned credentials file ───────────────────────────────
 
-    /// Read the live Claude credentials. `None` payload + warning ⇒ we know a
-    /// login exists but couldn't read the secret (Keychain denied us).
+    /// An absent file is normal for provider-managed authentication. Never
+    /// inspect Keychain or verify credentials merely to discover an account.
     async fn read_claude_credentials(&self) -> (Option<serde_json::Value>, Option<String>) {
-        if let Some(creds) = read_json(&self.inner.config.claude_creds_file()) {
-            return (Some(creds), None);
-        }
-        if self.inner.config.claude_keychain_fallback_disabled() {
-            return (None, None);
-        }
-        #[cfg(target_os = "macos")]
-        {
-            keychain::read_credentials().await
-        }
-        #[cfg(not(target_os = "macos"))]
-        (None, None)
+        (read_json(&self.inner.config.claude_creds_file()), None)
     }
 
     async fn write_claude_credentials(
         &self,
         credentials: &serde_json::Value,
     ) -> Result<(), EngineError> {
+        // Only the explicit sign-in flow writes this provider-owned file.
         let mut json = credentials.to_string();
-        #[cfg(target_os = "macos")]
-        {
-            // claude-swap's primitive: update the Keychain item in place — but only
-            // when no credentials FILE exists (the file wins when present).
-            if !self.inner.config.claude_creds_file().exists()
-                && !self.inner.config.claude_keychain_fallback_disabled()
-            {
-                let result = keychain::write_credentials(&json).await;
-                json.zeroize();
-                return result;
-            }
-        }
         std::fs::create_dir_all(&self.inner.config.claude_config_dir)?;
-        // Atomic + owner-only from birth — live tokens.
         let result = write_file_atomic(
             &self.inner.config.claude_creds_file(),
             json.as_bytes(),
@@ -1799,76 +1784,6 @@ fn incompatible_auth_store_source(
     match requirement.or(managed_default) {
         Some((store, source)) if store != "file" => Some(source),
         _ => None,
-    }
-}
-
-// ── macOS Keychain (documented here; compiled only on macOS) ────────────────
-//
-// Claude Code stores its credentials in the login Keychain under the service
-// `Claude Code-credentials`, account = the current username. Native Security
-// Framework calls avoid placing credentials in process arguments. Background
-// reads explicitly disallow authentication UI; a timeout alone cannot cancel
-// a blocking Security Framework call and is not a no-popup guarantee.
-#[cfg(target_os = "macos")]
-mod keychain {
-    use super::*;
-
-    const EXEC_TIMEOUT: Duration = Duration::from_secs(15);
-
-    fn account() -> String {
-        std::env::var("USER").unwrap_or_else(|_| "unknown".into())
-    }
-
-    pub(super) async fn read_credentials() -> (Option<serde_json::Value>, Option<String>) {
-        let account = account();
-        let read = tokio::task::spawn_blocking(move || {
-            crate::macos_keychain::get_generic_password_noninteractive(KEYCHAIN_SERVICE, &account)
-                .map_err(|error| error.code())
-        });
-        let mut bytes = match tokio::time::timeout(EXEC_TIMEOUT, read).await {
-            Ok(Ok(Ok(bytes))) => bytes,
-            Ok(Ok(Err(-25300))) => return (None, None), // errSecItemNotFound
-            _ => {
-                return (
-                    None,
-                    Some(
-                        "A Claude Code login may exist, but its macOS Keychain entry is unavailable without user interaction. LUNA will not open an authentication prompt during discovery."
-                            .into(),
-                    ),
-                );
-            }
-        };
-        let parsed = serde_json::from_slice(&bytes);
-        bytes.zeroize();
-        match parsed {
-            Ok(creds) => (Some(creds), None),
-            Err(_) => (
-                None,
-                Some("The Claude Code Keychain entry could not be parsed.".into()),
-            ),
-        }
-    }
-
-    pub(super) async fn write_credentials(json: &str) -> Result<(), EngineError> {
-        let account = account();
-        let mut bytes = json.as_bytes().to_vec();
-        let write = tokio::task::spawn_blocking(move || {
-            let result = security_framework::passwords::set_generic_password(
-                KEYCHAIN_SERVICE,
-                &account,
-                &bytes,
-            )
-            .map_err(|error| error.code());
-            bytes.zeroize();
-            result
-        });
-        match tokio::time::timeout(EXEC_TIMEOUT, write).await {
-            Ok(Ok(Ok(()))) => Ok(()),
-            _ => Err(EngineError::Other(
-                "Claude Code Keychain write failed or timed out; completion is unknown, so refresh provider status before retrying."
-                    .into(),
-            )),
-        }
     }
 }
 

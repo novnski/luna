@@ -44,6 +44,8 @@ const CHUNK: usize = 64 * 1024;
 // v15 keeps workspace repair authority; v16 adds local prompt stash records.
 const CURRENT_SCHEMA: i64 = 16;
 
+// Serialized legacy labels are part of archive validation. The credentials/
+// directory, including the new device-local key, remains outside the allowlist.
 const EXCLUDED: &[&str] = &[
     "OS Keychain and LUNA credential vault",
     "provider-native stores and authentication homes",
