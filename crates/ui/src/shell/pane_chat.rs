@@ -4,9 +4,11 @@
 //! the main [`Transcript`] (tool rendering, markdown, history actions) bound
 //! to the chat's doc, and the main [`Composer`] bound to the same chat id
 //! (queue/steer/Stop, approvals and questions, goals, model/effort/access,
-//! context usage, attachments, `@` and `/` pickers). A compact header carries
-//! the chat's identity ("Side chat" / "Child chat"), its parent and the
-//! navigation controls.
+//! context usage, attachments, `@` and `/` pickers), with the main column's
+//! gutter so both pills share one geometry. A child chat's compact header
+//! carries its identity, status, parent and navigation; a side chat inherits
+//! all of that from the main chat beside it, so its header is one row (Back,
+//! title, Close) with the details in the title's tooltip.
 //!
 //! Composers are cached per chat in [`PaneComposers`], owned by the shell, so
 //! drafts, pending submissions and their receipt watches belong to the chat,
@@ -207,13 +209,17 @@ fn header_control<V: 'static>(
 }
 
 /// Compact identity header: Back · title · identity badge · Open as main,
-/// then one quiet line with status, parent link and provider facts.
+/// then one quiet line with status, parent link and provider facts. Side
+/// chats get the single-row [`render_side_header`] instead.
 pub(super) fn render_pane_header<V: 'static>(
     chrome: &PaneChatChrome,
     actions: PaneHeaderActions<V>,
     theme: &Theme,
     cx: &mut Context<V>,
 ) -> gpui::Div {
+    if chrome.identity == PaneIdentity::Side {
+        return render_side_header(chrome, actions, theme, cx);
+    }
     let muted = theme.text_muted;
     let back_tooltip: SharedString =
         format!("Back to {} (Esc)", actions.back_label.to_lowercase()).into();
@@ -371,6 +377,110 @@ pub(super) fn render_pane_header<V: 'static>(
         .child(strip)
 }
 
+/// A side chat inherits its checkout, access and provider from the main chat
+/// beside it, so its header is one quiet row (Codex's side tab): Back to the
+/// list, the chat's name, then the trailing controls (Close). The lease
+/// lifetime, parent and provider facts live in the title's tooltip, and the
+/// title reveals where the chat started. Only a state other than the live
+/// lease ("Writable · N min left") — saving, read-only — stays visible.
+fn render_side_header<V: 'static>(
+    chrome: &PaneChatChrome,
+    actions: PaneHeaderActions<V>,
+    theme: &Theme,
+    cx: &mut Context<V>,
+) -> gpui::Div {
+    let muted = theme.text_muted;
+    let back = header_control(
+        "pane-chat-back",
+        format!("Back to {}", actions.back_label.to_lowercase()),
+        theme,
+        actions.back,
+        cx,
+    )
+    .w(px(crate::surface_chrome::CONTROL_SIZE))
+    .justify_center()
+    .tooltip(move |_, cx| {
+        crate::pickers::ControlTooltip::view("All side chats", Some("Esc".into()), cx)
+    })
+    .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+    .child(
+        icon(icons::ALT_ARROW_LEFT)
+            .size(px(crate::surface_chrome::ICON_SIZE))
+            .text_color(muted),
+    );
+    let live = chrome
+        .status
+        .as_ref()
+        .is_none_or(|(label, _, _)| label.starts_with("Writable"));
+    let facts: Vec<String> = chrome
+        .status
+        .iter()
+        .map(|(label, _, _)| label.to_string())
+        .chain(std::iter::once(format!("From {}", chrome.parent_title)))
+        .chain(chrome.meta.iter().map(|meta| meta.to_string()))
+        .collect();
+    let tooltip_title = chrome.title.clone();
+    let tooltip_detail: SharedString = facts.join(" · ").into();
+    let title_text = div()
+        .min_w_0()
+        .truncate()
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.text)
+        .child(chrome.title.clone());
+    let title = match actions.show_parent {
+        Some(show_parent) => header_control(
+            "pane-chat-title",
+            format!("{}: show where it started", chrome.title),
+            theme,
+            show_parent,
+            cx,
+        )
+        .min_w_0()
+        .px(px(6.0))
+        .child(title_text)
+        .tooltip(move |_, cx| {
+            crate::pickers::ControlTooltip::view(
+                tooltip_title.clone(),
+                Some(format!("{tooltip_detail}. Click to show where it started.").into()),
+                cx,
+            )
+        })
+        .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+        .into_any_element(),
+        None => div()
+            .id("pane-chat-title")
+            .min_w_0()
+            .px(px(6.0))
+            .child(title_text)
+            .tooltip(move |_, cx| {
+                crate::pickers::ControlTooltip::view(
+                    tooltip_title.clone(),
+                    Some(tooltip_detail.clone()),
+                    cx,
+                )
+            })
+            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+            .into_any_element(),
+    };
+    crate::surface_chrome::toolbar(theme)
+        .child(back)
+        .child(title)
+        .child(div().flex_1())
+        .when_some(
+            chrome.status.clone().filter(|_| !live),
+            |row, (label, color, _)| {
+                row.child(
+                    div()
+                        .flex_none()
+                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_color(color)
+                        .child(label),
+                )
+            },
+        )
+        .children(actions.extra)
+}
+
 /// Body below the header: notices, the transcript, then the composer slot
 /// (the bound main composer, or a read-only strip).
 pub(super) fn render_pane_body(
@@ -440,10 +550,6 @@ pub(super) struct PaneChatView {
     status_override: Option<(SharedString, gpui::Hsla)>,
     _subscriptions: Vec<Subscription>,
 }
-
-/// Horizontal inset around the pane composer, matching the main column's
-/// composer gutter at narrow widths.
-const PANE_COMPOSER_INSET: f32 = 12.0;
 
 impl PaneChatView {
     #[allow(clippy::too_many_arguments)]
@@ -623,21 +729,33 @@ impl Render for PaneChatView {
                         div()
                             .id("pane-chat-unload")
                             .role(gpui::Role::Button)
-                            .aria_label("Unload side chat: stop work and keep read-only history")
+                            .aria_label("Close side chat: stop work and keep read-only history")
                             .tab_index(0)
-                            .h(px(crate::surface_chrome::CONTROL_SIZE))
-                            .px(px(8.0))
+                            .size(px(crate::surface_chrome::CONTROL_SIZE))
                             .flex_none()
                             .flex()
                             .items_center()
+                            .justify_center()
                             .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
+                            .border_1()
+                            .border_color(gpui::transparent_black())
                             .cursor_pointer()
-                            .text_size(crate::typography::ui_rems(11.5))
-                            .text_color(theme.text_muted)
                             .hover(move |style| style.bg(hover))
                             .focus_visible(move |style| style.border_color(border_strong))
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(PaneChatEvent::Unload)))
-                            .child("Unload")
+                            .tooltip(|_, cx| {
+                                crate::pickers::ControlTooltip::view(
+                                    "Close side chat",
+                                    Some("Stops its work; the history stays readable.".into()),
+                                    cx,
+                                )
+                            })
+                            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+                            .child(
+                                icon(icons::CLOSE)
+                                    .size(px(crate::surface_chrome::ICON_SIZE))
+                                    .text_color(theme.text_muted),
+                            )
                             .into_any_element(),
                     ]
                 } else {
@@ -650,7 +768,7 @@ impl Render for PaneChatView {
         let width = self.composer_width.get();
         if width > 0.0 {
             self.composer.update(cx, |composer, cx| {
-                composer.set_available_width(width - 2.0 * PANE_COMPOSER_INSET, cx)
+                composer.set_available_width(width.min(crate::composer::COMPOSER_MAX_WIDTH), cx)
             });
         }
         // The main view's layout: the transcript spans the body and the
@@ -693,9 +811,9 @@ impl Render for PaneChatView {
                 .w_full()
                 .flex_none()
                 .relative()
-                .px(px(PANE_COMPOSER_INSET))
-                .pt(px(4.0))
-                .pb(px(PANE_COMPOSER_INSET))
+                // No inset of its own: the composer carries the main
+                // column's 16px gutter and bottom margin, so the pane's pill
+                // and footer sit exactly level with the main composer's.
                 .child(
                     gpui::canvas(
                         move |bounds, window, _| {
@@ -762,5 +880,33 @@ impl Render for PaneChatView {
             .text_color(theme.text)
             .child(header)
             .child(body)
+    }
+}
+
+#[cfg(feature = "appshots-fixture")]
+impl Shell {
+    /// Composer-parity fixture: the main composer and the cached pane
+    /// composer bound to `pane_chat`, when one exists.
+    pub fn fixture_composers(
+        &self,
+        pane_chat: Option<&str>,
+        cx: &App,
+    ) -> (Entity<Composer>, Option<Entity<Composer>>) {
+        let pane = pane_chat.and_then(|id| self.pane_composers.read(cx).get(id));
+        (self.composer.clone(), pane)
+    }
+
+    /// The main and pane composers' readbacks (geometry, chips, controls row).
+    pub fn fixture_composer_readbacks(
+        &self,
+        pane_chat: &str,
+        cx: &App,
+    ) -> (serde_json::Value, serde_json::Value) {
+        let (main, pane) = self.fixture_composers(Some(pane_chat), cx);
+        (
+            main.read(cx).readback(cx),
+            pane.map(|pane| pane.read(cx).readback(cx))
+                .unwrap_or(serde_json::Value::Null),
+        )
     }
 }

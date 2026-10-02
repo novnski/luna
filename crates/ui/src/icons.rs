@@ -103,6 +103,15 @@ icon_assets![
     // scale transform at the pinned rev, so the flip is baked into the asset.
     (SIDEBAR_MINIMALISTIC_LEFT, "sidebar-minimalistic-left"),
     (KEY_MINIMALISTIC, "key-minimalistic"),
+    // Solar Linear access levels for the composer's icon-only access chip:
+    // limited (locked), approve for me (shield check), full access
+    // (unlocked) and a choice still to make (shield warning).
+    (LOCK_KEYHOLE, "lock-keyhole-minimalistic"),
+    (LOCK_KEYHOLE_UNLOCKED, "lock-keyhole-minimalistic-unlocked"),
+    (SHIELD_CHECK, "shield-check"),
+    (SHIELD_WARNING, "shield-warning"),
+    // Solar Linear bolt: the model chip's fast-speed mark.
+    (BOLT_FAST, "bolt-fast"),
     (KEYBOARD, "keyboard"),
     (ARROW_LEFT, "arrow-left"),
     (ARROW_RIGHT, "arrow-right"),

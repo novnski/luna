@@ -84,7 +84,7 @@ enum HarnessCatalog {
     private static let codexMaxLadder = ["low", "medium", "high", "xhigh", "max"]
     private static let codexXhighLadder = ["low", "medium", "high", "xhigh"]
     private static let codexServiceTier = [
-        ModelOptionInfo(id: "serviceTier", label: "Service Tier", choices: [
+        ModelOptionInfo(id: "serviceTier", label: "Speed", choices: [
             ModelOptionChoiceInfo(id: "default", label: "Standard"),
             ModelOptionChoiceInfo(id: "fast", label: "Fast"),
         ], defaultChoice: "default"),

@@ -480,6 +480,179 @@ pub fn traits_customized(
     })
 }
 
+/// Model option ids that carry a provider's speed: Codex's service tier and
+/// Claude's fast mode (both labelled "Speed" in the catalog).
+const SPEED_OPTION_IDS: [&str; 3] = ["serviceTier", "fastMode", "speed"];
+
+/// Whether the effective speed choice for `model` runs faster than standard —
+/// the model chip then carries a bolt instead of spelling out "Fast".
+pub fn fast_speed(
+    model: Option<&Model>,
+    selections: &serde_json::Map<String, serde_json::Value>,
+) -> bool {
+    let Some(model) = model else {
+        return false;
+    };
+    model
+        .options
+        .iter()
+        .filter(|option| SPEED_OPTION_IDS.contains(&option.id.as_str()))
+        .any(|option| {
+            let choice = selections
+                .get(&option.id)
+                .and_then(|v| v.as_str())
+                .filter(|id| option.choices.iter().any(|c| c.id == *id))
+                .unwrap_or(&option.default_choice);
+            matches!(choice, "fast" | "on" | "priority" | "ultrafast")
+        })
+}
+
+/// How much of the model chip the composer's controls row shows; the
+/// composer picks it from measured widths (see `composer::controls_row_fit`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModelChipFit {
+    /// Brand mark, model name, fast bolt and the reasoning level.
+    #[default]
+    Full,
+    /// The reasoning level moves into the tooltip.
+    NameOnly,
+    /// Only the brand mark (Codex's narrowest composer); the tooltip names
+    /// the model and its configuration.
+    IconOnly,
+}
+
+/// The access chip is icon-only and square (so is the Goal switch when it
+/// gives up its label).
+pub const ACCESS_CHIP_SIZE: f32 = 32.0;
+/// Chip geometry shared by the measured widths and the rendered chips.
+const CHIP_PAD_X: f32 = 10.0;
+const CHIP_ICON: f32 = 16.0;
+const CHIP_GAP: f32 = 6.0;
+const CHIP_BOLT: f32 = 13.0;
+const CHIP_TEXT_SIZE: f32 = 12.0;
+
+/// Hover delay for composer control tooltips.
+pub(crate) const CONTROL_TOOLTIP_DELAY: Duration = Duration::from_millis(400);
+
+/// Rendered width of `text` at the chips' 12px medium weight.
+pub(crate) fn chip_text_width(text: &str, window: &Window, theme: &Theme) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let font = gpui::Font {
+        family: theme.font_sans.clone(),
+        weight: gpui::FontWeight::MEDIUM,
+        ..window.text_style().font()
+    };
+    let run = gpui::TextRun {
+        len: text.len(),
+        font,
+        color: theme.text,
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    let size = crate::typography::ui_rems(CHIP_TEXT_SIZE).to_pixels(window.rem_size());
+    let line =
+        window
+            .text_system()
+            .shape_line(SharedString::from(text.to_string()), size, &[run], None);
+    f32::from(line.width).ceil()
+}
+
+/// A composer control's hover card: its name and, optionally, what it does
+/// or the state it summarizes. Shared by the chips, Attach and Goal.
+pub(crate) struct ControlTooltip {
+    title: SharedString,
+    detail: Option<SharedString>,
+}
+
+impl ControlTooltip {
+    pub(crate) fn view(
+        title: impl Into<SharedString>,
+        detail: Option<SharedString>,
+        cx: &mut App,
+    ) -> gpui::AnyView {
+        let title = title.into();
+        cx.new(|_| Self { title, detail }).into()
+    }
+}
+
+/// Details longer than this wrap inside a fixed-width card; shorter ones
+/// stay on one line. GPUI lays tooltips out at their min-content width, so a
+/// card needs either a definite width or unwrapped text to size correctly.
+const TOOLTIP_WRAP_CHARS: usize = 40;
+
+impl Render for ControlTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let wraps = self
+            .detail
+            .as_ref()
+            .is_some_and(|detail| detail.chars().count() > TOOLTIP_WRAP_CHARS);
+        div()
+            .when(wraps, |card| card.w(px(260.0)))
+            .when(!wraps, |card| card.whitespace_nowrap())
+            .px(px(10.0))
+            .py(px(7.0))
+            .flex()
+            .flex_col()
+            .gap(px(2.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .bg(popover::surface_bg(theme))
+            .shadow_md()
+            .text_size(crate::typography::ui_rems(12.0))
+            .child(
+                div()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(self.title.clone()),
+            )
+            .when_some(self.detail.clone(), |card, detail| {
+                card.child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.text_muted)
+                        .child(detail),
+                )
+            })
+    }
+}
+
+/// What the access chip shows: its icon and tint, the tooltip's title and
+/// explanation, and whether a requested level is still waiting to apply.
+struct AccessChip {
+    icon: &'static str,
+    tint: Option<gpui::Hsla>,
+    title: SharedString,
+    detail: SharedString,
+    attention: bool,
+}
+
+/// One composer chip's content (see `Pickers::trigger_chip`).
+struct TriggerChip {
+    label: SharedString,
+    /// A concrete pick (brighter text) rather than a placeholder.
+    set: bool,
+    icon: Option<(&'static str, Option<gpui::Hsla>)>,
+    // The chip never collapses while identity resolves (user report):
+    // `icon_loading` swaps the brand slot for the pixel-glyph loader (harness
+    // unknown), `label_loading` swaps the text for a ghost bar (model unknown).
+    icon_loading: bool,
+    label_loading: bool,
+    /// A mark after the label (the fast-speed bolt).
+    badge: Option<&'static str>,
+    suffix: Option<(SharedString, Option<gpui::Hsla>)>,
+    /// Square and label-less (the access chip); the tooltip names it.
+    icon_only: bool,
+    /// Corner dot on the icon.
+    attention: Option<gpui::Hsla>,
+    /// Tooltip title (also the accessible name) and explanation.
+    tooltip: (SharedString, Option<SharedString>),
+}
+
 // ---------------------------------------------------------------------------
 // Pure: folder-browser navigation (used by the shell's add-space flow)
 // ---------------------------------------------------------------------------
@@ -712,6 +885,8 @@ pub struct Pickers {
     setting_hover_pointer: Option<gpui::Point<gpui::Pixels>>,
     setting_hover_task: Option<Task<()>>,
     model_space_below: Option<f32>,
+    /// How much of the model chip the composer's controls row has room for.
+    model_chip_fit: ModelChipFit,
     setting_bounds: Option<gpui::Bounds<gpui::Pixels>>,
     setting_scroll: gpui::ScrollHandle,
     harnesses: Loadable<Vec<HarnessDescriptor>>,
@@ -990,6 +1165,7 @@ impl Pickers {
             setting_hover_pointer: None,
             setting_hover_task: None,
             model_space_below: None,
+            model_chip_fit: ModelChipFit::Full,
             setting_bounds: None,
             setting_scroll: gpui::ScrollHandle::new(),
             harnesses: Loadable::Idle,
@@ -3338,19 +3514,281 @@ impl Pickers {
     // ---- render ----
 
     #[allow(clippy::too_many_arguments)]
+    /// The model chip: brand mark and model name (the harness reads from the
+    /// mark), a bolt for a fast speed, then the reasoning level as the muted
+    /// second tone — brighter when it departs from the model's default.
+    /// `NameOnly` moves the level into the tooltip, which always spells out
+    /// the full configuration ("High · 1M · Fast").
+    fn model_chip_content(&self, fit: ModelChipFit, theme: &Theme, cx: &App) -> TriggerChip {
+        // Never "Default model": before the catalog lands the remembered
+        // label (or the configured id) names the pick; the loaded list then
+        // resolves it to a concrete row. No-agents state: nothing runnable
+        // resolved (and the catalog is loaded, so that's a conclusion, not a
+        // loading gap) — the chip says so instead of wearing a brand mark for
+        // an agent that can't run.
+        let no_agents = self.no_agents_available() && self.effective_harness(cx).is_none();
+        let label: SharedString = if no_agents {
+            SharedString::from("No agents available")
+        } else {
+            let loaded = self.selected_model(cx).map(|m| m.label.clone());
+            let label = loaded.or_else(|| {
+                let remembered = self
+                    .effective_harness(cx)
+                    .and_then(|h| self.defaults.model_for(h));
+                match self.effective_model_id(cx) {
+                    Some(id) => Some(
+                        remembered
+                            .filter(|m| m.id == id)
+                            .map(|m| m.label.clone())
+                            .or_else(|| self.defaults.label_for(id).map(str::to_string))
+                            .unwrap_or_else(|| id.to_string()),
+                    ),
+                    None => remembered.map(|m| m.label.clone()),
+                }
+            });
+            label.map(SharedString::from).unwrap_or_default()
+        };
+        let catalog_loading = matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
+        let models_loading = self.effective_harness(cx).is_some_and(|harness| {
+            !matches!(
+                self.models.get(&harness),
+                Some(Loadable::Ready(_)) | Some(Loadable::Error(_))
+            )
+        });
+        // Harness unknown while the catalog resolves: the pixel-glyph loader
+        // instead of guessing a brand mark.
+        let icon_loading = self.effective_harness(cx).is_none() && !no_agents && catalog_loading;
+        // Harness known but nothing names the model yet (fresh install, no
+        // remembered pick): a ghost label instead of a bare icon.
+        let label_loading = !no_agents && label.is_empty() && (catalog_loading || models_loading);
+        let icon: (&'static str, Option<gpui::Hsla>) = match self.effective_harness(cx) {
+            Some(harness) => harness_brand_icon(harness),
+            None if no_agents => (crate::icons::TERMINAL, Some(theme.text_muted)),
+            None => (
+                crate::icons::CLAUDE_MARK,
+                Some(crate::icons::claude_brand()),
+            ),
+        };
+        let model = self.selected_model(cx);
+        let reasoning = self.effective_reasoning(cx);
+        let explicit_options = self.explicit_options(cx);
+        let customized =
+            traits_customized(model, reasoning, &self.trait_ladder(cx), &explicit_options);
+        let fast = fast_speed(model, &explicit_options);
+        let suffix = reasoning
+            .filter(|_| fit == ModelChipFit::Full)
+            .map(|level| {
+                (
+                    SharedString::from(reasoning_label(level)),
+                    customized.then(|| theme.text.opacity(0.85)),
+                )
+            });
+        let detail = traits_summary(model, reasoning, &explicit_options).map(SharedString::from);
+        let title = if label.is_empty() {
+            SharedString::from("Model")
+        } else {
+            label.clone()
+        };
+        TriggerChip {
+            label,
+            set: true,
+            icon: Some(icon),
+            icon_loading,
+            label_loading,
+            badge: fast.then_some(crate::icons::BOLT_FAST),
+            suffix,
+            icon_only: fit == ModelChipFit::IconOnly,
+            attention: None,
+            tooltip: (title, detail),
+        }
+    }
+
+    /// The model chip's measured widths `(full, name only)` at its current
+    /// content, for the composer's controls-row fit.
+    pub(crate) fn model_chip_widths(&self, window: &Window, cx: &App) -> (f32, f32) {
+        let theme = Theme::of(cx);
+        let chip = self.model_chip_content(ModelChipFit::Full, theme, cx);
+        let label = if chip.label_loading {
+            56.0
+        } else {
+            chip_text_width(&chip.label, window, theme)
+        };
+        // One pixel of slack per measured run absorbs subpixel rounding.
+        let name_only = 2.0 * CHIP_PAD_X
+            + CHIP_ICON
+            + CHIP_GAP
+            + label
+            + 1.0
+            + chip.badge.map_or(0.0, |_| CHIP_GAP + CHIP_BOLT);
+        let full = name_only
+            + chip.suffix.as_ref().map_or(0.0, |(suffix, _)| {
+                CHIP_GAP + chip_text_width(suffix, window, theme) + 1.0
+            });
+        (full, name_only)
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_pick_reasoning(&mut self, level: ReasoningLevel, cx: &mut Context<Self>) {
+        self.pick_reasoning(level, cx);
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_pick_option(&mut self, option: &str, choice: &str, cx: &mut Context<Self>) {
+        let default = self
+            .selected_model(cx)
+            .and_then(|model| model.options.iter().find(|o| o.id == option))
+            .is_some_and(|o| o.default_choice == choice);
+        self.pick_option(option.to_string(), choice.to_string(), default, cx);
+    }
+
+    /// The model menu's setting groups as labels: `(group, choices)`.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_setting_groups(&self, cx: &App) -> Vec<(String, Vec<String>)> {
+        self.setting_groups(cx)
+            .into_iter()
+            .map(|group| {
+                (
+                    group.label.to_string(),
+                    group
+                        .choices
+                        .into_iter()
+                        .map(|c| c.label.to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_close(&mut self, cx: &mut Context<Self>) {
+        self.close(cx);
+    }
+
+    /// Set by the composer each frame from its measured controls row.
+    pub(crate) fn set_model_chip_fit(&mut self, fit: ModelChipFit, cx: &mut Context<Self>) {
+        if self.model_chip_fit != fit {
+            self.model_chip_fit = fit;
+            cx.notify();
+        }
+    }
+
+    /// The icon-only access chip: Limited is a closed lock, Approve for me a
+    /// shield check, Full access an open lock in the warning tone. A level
+    /// still waiting to apply keeps the effective icon and adds a corner dot;
+    /// the tooltip names both.
+    fn access_chip_content(&self, theme: &Theme, cx: &App) -> AccessChip {
+        let choice = self.permission_choice_state(cx);
+        let requested = self.requested_permission_mode(cx);
+        let effective = self.effective_permission_preview(cx, requested);
+        let level = |mode: PermissionMode| -> (&'static str, Option<gpui::Hsla>, &'static str, &'static str) {
+            match mode {
+                PermissionMode::Ask => (
+                    crate::icons::LOCK_KEYHOLE,
+                    None,
+                    "Limited access",
+                    "The agent asks before actions that need approval.",
+                ),
+                PermissionMode::Auto => (
+                    crate::icons::SHIELD_CHECK,
+                    None,
+                    PERMISSION_OPTIONS[0].1,
+                    PERMISSION_OPTIONS[0].2,
+                ),
+                PermissionMode::Full => (
+                    crate::icons::LOCK_KEYHOLE_UNLOCKED,
+                    Some(theme.warning),
+                    PERMISSION_OPTIONS[1].1,
+                    PERMISSION_OPTIONS[1].2,
+                ),
+            }
+        };
+        match (choice, effective) {
+            (PermissionChoiceState::Unselected, _) => AccessChip {
+                icon: crate::icons::SHIELD_WARNING,
+                tint: Some(theme.warning),
+                title: "Choose access".into(),
+                detail: "Select Approve for me or Full access before sending.".into(),
+                attention: false,
+            },
+            (PermissionChoiceState::LegacyAsk, _) => {
+                let (icon, tint, _, _) = level(PermissionMode::Ask);
+                AccessChip {
+                    icon,
+                    tint,
+                    title: "Limited access".into(),
+                    detail: "Legacy Ask: the agent asks before acting. Choose Approve for me or Full access to change it.".into(),
+                    attention: false,
+                }
+            }
+            (PermissionChoiceState::Selected(_), EffectivePermissionPreview::Known(mode))
+                if mode == requested =>
+            {
+                let (icon, tint, title, detail) = level(mode);
+                AccessChip {
+                    icon,
+                    tint,
+                    title: title.into(),
+                    detail: detail.into(),
+                    attention: false,
+                }
+            }
+            (PermissionChoiceState::Selected(_), EffectivePermissionPreview::Known(mode)) => {
+                let (icon, tint, title, _) = level(mode);
+                let (_, _, requested_title, _) = level(requested);
+                AccessChip {
+                    icon,
+                    tint,
+                    title: title.into(),
+                    detail: format!(
+                        "{requested_title} is requested and applies at the next safe point."
+                    )
+                    .into(),
+                    attention: true,
+                }
+            }
+            (PermissionChoiceState::Selected(_), EffectivePermissionPreview::Pending) => {
+                let (icon, _, title, _) = level(requested);
+                AccessChip {
+                    icon,
+                    tint: None,
+                    title: format!("{title} (pending)").into(),
+                    detail: "Waiting for the host to confirm the requested access.".into(),
+                    attention: true,
+                }
+            }
+        }
+    }
+
+    /// The controls-row chips as rendered, for headless fixtures. `id` is this
+    /// picker's entity id (its hover keys are scoped by it).
+    pub(crate) fn chip_readback(&self, id: gpui::EntityId, cx: &App) -> serde_json::Value {
+        let theme = Theme::of(cx);
+        let model = self.model_chip_content(self.model_chip_fit, theme, cx);
+        let access = self.access_chip_content(theme, cx);
+        let hover = |chip: &str| motion::hover_t(&format!("{chip}-{id}"));
+        serde_json::json!({
+            "model": model.label.to_string(),
+            "effort": model.suffix.map(|(suffix, _)| suffix.to_string()),
+            "fast": model.badge.is_some(),
+            "modelTooltip": model.tooltip.1.map(|detail| detail.to_string()),
+            "fit": format!("{:?}", self.model_chip_fit),
+            "access": access.title.to_string(),
+            "accessIcon": access.icon,
+            "accessAttention": access.attention,
+            "selectedModel": self.selected_model(cx).map(|model| serde_json::json!({
+                "id": model.id,
+                "options": model.options.iter().map(|o| o.id.clone()).collect::<Vec<_>>(),
+            })),
+            "explicitOptions": self.explicit_options(cx),
+            "hoverModel": hover("picker-model"),
+            "hoverAccess": hover("picker-permission"),
+        })
+    }
+
     fn trigger_chip(
         &self,
         kind: PickerKind,
-        label: SharedString,
-        set: bool,
-        chip_icon: Option<(&'static str, Option<gpui::Hsla>)>,
-        // The chip never collapses while identity resolves (user report):
-        // `icon_loading` swaps the brand slot for the pixel-glyph loader
-        // (harness unknown), `label_loading` swaps the text for a ghost bar
-        // (model unknown).
-        icon_loading: bool,
-        label_loading: bool,
-        suffix: Option<(SharedString, Option<gpui::Hsla>)>,
+        chip: TriggerChip,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
@@ -3363,41 +3801,53 @@ impl Pickers {
             PickerKind::Device => "picker-device",
         };
         let open = self.open_kind() == Some(kind);
+        // Hover fades are keyed per picker: every composer (main and pane)
+        // renders the same chip ids, and a shared key lit them all at once.
+        let hover: SharedString = format!("{id}-{}", cx.entity_id()).into();
+        let label_color = motion::hover_blend(
+            &hover,
+            if chip.set {
+                theme.text.opacity(0.9)
+            } else {
+                theme.text_muted
+            },
+            theme.text,
+        );
+        let (tooltip_title, tooltip_detail) = chip.tooltip;
+        let icon_only = chip.icon_only;
         // Ghost pill (luna composer/styles.tsx `pill`): `h-8 rounded-lg px-2.5
         // gap-1.5 text-[12px] font-medium text-muted-foreground`, icons size-4,
         // hover/open wash — no border, no caret; the actions row stays quiet.
         div()
             .id(id)
+            .role(gpui::Role::Button)
+            .aria_label(tooltip_title.clone())
             .h(px(32.0))
-            .max_w(px(248.0))
-            // Shrinkable under row pressure — four footer chips share one
-            // line; without min_w_0 they overflowed and painted overlapped.
+            // Shrinkable under row pressure: the composer drops whole pieces
+            // first (see `composer::controls_row_fit`), so truncation is only
+            // the last resort for an extremely narrow pill.
             .min_w_0()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
-            .px(px(10.0))
+            .when(icon_only, |el| {
+                el.w(px(ACCESS_CHIP_SIZE)).flex_none().justify_center()
+            })
+            .when(!icon_only, |el| {
+                el.max_w(px(280.0)).gap(px(CHIP_GAP)).px(px(CHIP_PAD_X))
+            })
             .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
+            .text_size(crate::typography::ui_rems(CHIP_TEXT_SIZE))
             .font_weight(gpui::FontWeight::MEDIUM)
             // luna composer/styles.tsx `pill`: `transition-colors` — the wash
             // and text brighten fade over 150ms.
-            .text_color(motion::hover_blend(
-                id,
-                if set {
-                    theme.text.opacity(0.9)
-                } else {
-                    theme.text_muted
-                },
-                theme.text,
-            ))
+            .text_color(label_color)
             .bg(if open {
                 theme.element_hover
             } else {
-                motion::hover_blend(id, gpui::transparent_black(), theme.element_hover)
+                motion::hover_blend(&hover, gpui::transparent_black(), theme.element_hover)
             })
-            .on_hover(motion::hover_listener(id))
+            .on_hover(motion::hover_listener(hover.clone()))
             .cursor_pointer()
             .on_mouse_down(
                 gpui::MouseButton::Left,
@@ -3406,7 +3856,14 @@ impl Pickers {
                 }),
             )
             .on_click(cx.listener(move |this, _, window, cx| this.toggle(kind, window, cx)))
-            .when(icon_loading, |el| {
+            // The open menu already says everything the tooltip would.
+            .when(!open, |el| {
+                el.tooltip(move |_, cx| {
+                    ControlTooltip::view(tooltip_title.clone(), tooltip_detail.clone(), cx)
+                })
+                .tooltip_show_delay(CONTROL_TOOLTIP_DELAY)
+            })
+            .when(chip.icon_loading, |el| {
                 el.child(div().flex_none().child(crate::loaders::mini_glyph_spinner(
                     "picker-chip-loader",
                     2.0,
@@ -3416,32 +3873,56 @@ impl Pickers {
                 )))
             })
             .when_some(
-                (!icon_loading).then_some(chip_icon).flatten(),
+                (!chip.icon_loading).then_some(chip.icon).flatten(),
                 |el, (path, tint)| {
                     el.child(
-                        crate::icons::icon(path)
-                            .size(px(16.0))
-                            .text_color(tint.unwrap_or(theme.text_muted)),
+                        div()
+                            .flex_none()
+                            .relative()
+                            .child(
+                                crate::icons::icon(path)
+                                    .size(px(CHIP_ICON))
+                                    .text_color(tint.unwrap_or(theme.text_muted)),
+                            )
+                            // A requested level still waiting to apply (or a
+                            // choice still to make): a small corner dot, the
+                            // details in the tooltip.
+                            .when_some(chip.attention, |icon, color| {
+                                icon.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(-1.0))
+                                        .right(px(-2.0))
+                                        .size(px(6.0))
+                                        .rounded_full()
+                                        .bg(color),
+                                )
+                            }),
                     )
                 },
             )
-            .when(label_loading, |el| {
+            .when(!icon_only && chip.label_loading, |el| {
                 el.child(popover::skeleton_bar(56.0, cx.entity_id(), cx))
             })
-            .when(!label_loading, |el| {
-                el.child(div().min_w_0().truncate().child(label))
+            .when(!icon_only && !chip.label_loading, |el| {
+                el.child(div().min_w_0().truncate().child(chip.label))
             })
-            // The effort half of the combined model+effort chip (and the space
-            // chip's "@ device" tag): muted, no icon — one button, two tones.
-            // `tint` overrides the muted tone (the offline warning). Under row
-            // pressure the suffix yields FIRST (large shrink factor) so the
-            // model name — the run's identity — truncates last.
-            .when_some(suffix, |el, (suffix, tint)| {
+            // The fast-speed bolt sits with the model name it qualifies.
+            .when_some(chip.badge.filter(|_| !icon_only), |el, path| {
+                el.child(
+                    crate::icons::icon(path)
+                        .size(px(CHIP_BOLT))
+                        .flex_none()
+                        .text_color(label_color),
+                )
+            })
+            // The effort half of the combined model+effort chip: muted, no
+            // icon — one button, two tones. `tint` brightens it when the
+            // level departs from the model's default.
+            .when_some(chip.suffix.filter(|_| !icon_only), |el, (suffix, tint)| {
                 el.child(
                     div()
-                        .flex_shrink(1000.0)
-                        .min_w_0()
-                        .truncate()
+                        .flex_none()
                         .text_color(tint.unwrap_or(theme.readable_muted(0.7)))
                         .child(suffix),
                 )
@@ -3461,6 +3942,7 @@ impl Pickers {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let open = self.open_kind() == Some(kind);
+        let hover: SharedString = format!("{id}-{}", cx.entity_id()).into();
         div()
             .id(id)
             .h(px(20.0))
@@ -3474,16 +3956,16 @@ impl Pickers {
             .text_size(crate::typography::ui_rems(12.0))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(motion::hover_blend(
-                id,
+                &hover,
                 theme.readable_muted(0.7),
                 theme.text.opacity(0.8),
             ))
             .bg(if open {
                 theme.element_hover
             } else {
-                motion::hover_blend(id, gpui::transparent_black(), theme.element_hover)
+                motion::hover_blend(&hover, gpui::transparent_black(), theme.element_hover)
             })
-            .on_hover(motion::hover_listener(id))
+            .on_hover(motion::hover_listener(hover))
             .cursor_pointer()
             .on_mouse_down(
                 gpui::MouseButton::Left,
@@ -6008,70 +6490,6 @@ impl Render for Pickers {
         {
             self.ensure_refs(false, cx);
         }
-        // Chip shows the model's display name alone (luna `modelText`); the
-        // harness reads from the brand mark beside it. Never "Default model":
-        // before the catalog lands the remembered label (or the configured id)
-        // names the pick; the loaded list then resolves it to a concrete row.
-        // No-agents state: nothing runnable resolved (and the catalog is
-        // loaded, so that's a conclusion, not a loading gap) — the chip says
-        // so instead of wearing a brand mark for an agent that can't run.
-        let no_agents = self.no_agents_available() && self.effective_harness(cx).is_none();
-        let model_label: SharedString = if no_agents {
-            SharedString::from("No agents available")
-        } else {
-            let loaded = self.selected_model(cx).map(|m| m.label.clone());
-            let label = loaded.or_else(|| {
-                let remembered = self
-                    .effective_harness(cx)
-                    .and_then(|h| self.defaults.model_for(h));
-                match self.effective_model_id(cx) {
-                    Some(id) => Some(
-                        remembered
-                            .filter(|m| m.id == id)
-                            .map(|m| m.label.clone())
-                            .or_else(|| self.defaults.label_for(id).map(str::to_string))
-                            .unwrap_or_else(|| id.to_string()),
-                    ),
-                    None => remembered.map(|m| m.label.clone()),
-                }
-            });
-            label.map(SharedString::from).unwrap_or_default()
-        };
-        let catalog_loading = matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
-        let models_loading = self.effective_harness(cx).is_some_and(|harness| {
-            !matches!(
-                self.models.get(&harness),
-                Some(Loadable::Ready(_)) | Some(Loadable::Error(_))
-            )
-        });
-        // Harness unknown while the catalog resolves: the pixel-glyph loader
-        // instead of guessing a brand mark.
-        let chip_icon_loading =
-            self.effective_harness(cx).is_none() && !no_agents && catalog_loading;
-        // Harness known but nothing names the model yet (fresh install, no
-        // remembered pick): a ghost label instead of a bare icon.
-        let chip_label_loading =
-            !no_agents && model_label.is_empty() && (catalog_loading || models_loading);
-        let harness_icon: (&'static str, Option<gpui::Hsla>) = match self.effective_harness(cx) {
-            Some(harness) => harness_brand_icon(harness),
-            None if no_agents => (crate::icons::TERMINAL, Some(theme.text_muted)),
-            None => (
-                crate::icons::CLAUDE_MARK,
-                Some(crate::icons::claude_brand()),
-            ),
-        };
-        let explicit_options = self.explicit_options(cx);
-        let traits_set = traits_summary(
-            self.selected_model(cx),
-            self.effective_reasoning(cx),
-            &explicit_options,
-        );
-        let traits_active = traits_customized(
-            self.selected_model(cx),
-            self.effective_reasoning(cx),
-            &self.trait_ladder(cx),
-            &explicit_options,
-        );
         // Render the open popover's body first (mutable borrow), then the
         // chips. Branch/Checkout render in the composer FOOTER row (see
         // `render_footer`), not here.
@@ -6101,27 +6519,9 @@ impl Render for Pickers {
             None => None,
         };
 
-        // The composer places this model chip beside the attachment button.
-        // ONE chip for the whole run identity (user request): brand icon +
-        // model name, then the joined traits summary ("Medium", "High · 1M ·
-        // Fast", "Agent · Balance") as the chip's muted second tone — the
-        // run's configuration reads without opening anything, and the suffix
-        // brightens only when something departs from its default. No suffix
-        // when the model has neither a ladder nor options (e.g. Hermes).
-        let chip_suffix = traits_set.map(|summary| {
-            (
-                SharedString::from(summary),
-                traits_active.then(|| theme.text.opacity(0.85)),
-            )
-        });
         let model_chip = self.trigger_chip(
             PickerKind::HarnessModel,
-            model_label,
-            true,
-            Some(harness_icon),
-            chip_icon_loading,
-            chip_label_loading,
-            chip_suffix,
+            self.model_chip_content(self.model_chip_fit, &theme, cx),
             &theme,
             cx,
         );
@@ -6171,63 +6571,21 @@ impl Render for Pickers {
                 closing,
             )
         };
-        let permission_choice = self.permission_choice_state(cx);
-        let requested_permission = self.requested_permission_mode(cx);
-        let effective_permission = self.effective_permission_preview(cx, requested_permission);
-        let permission_label: SharedString = match permission_choice {
-            PermissionChoiceState::Unselected => "Choose",
-            PermissionChoiceState::LegacyAsk => "Limited",
-            PermissionChoiceState::Selected(_) => match effective_permission {
-                EffectivePermissionPreview::Known(PermissionMode::Ask) => "Limited",
-                EffectivePermissionPreview::Known(PermissionMode::Auto) => "Auto",
-                EffectivePermissionPreview::Known(PermissionMode::Full) => "Full",
-                EffectivePermissionPreview::Pending => "Pending",
-            },
-        }
-        .into();
-        let permission_suffix = match permission_choice {
-            PermissionChoiceState::Unselected => Some((
-                SharedString::from("Select Auto or Full"),
-                Some(theme.warning.opacity(0.82)),
-            )),
-            PermissionChoiceState::LegacyAsk => {
-                Some((SharedString::from("Legacy Ask"), Some(theme.text_faint)))
-            }
-            PermissionChoiceState::Selected(_) => match effective_permission {
-                EffectivePermissionPreview::Known(effective)
-                    if requested_permission == effective =>
-                {
-                    None
-                }
-                EffectivePermissionPreview::Known(_) | EffectivePermissionPreview::Pending => {
-                    Some((
-                        SharedString::from(match requested_permission {
-                            PermissionMode::Ask => "Legacy Ask",
-                            PermissionMode::Auto => "Requested Auto",
-                            PermissionMode::Full => "Requested Full",
-                        }),
-                        Some(theme.warning.opacity(0.82)),
-                    ))
-                }
-            },
-        };
-        let effective_full =
-            effective_permission == EffectivePermissionPreview::Known(PermissionMode::Full);
+        let access = self.access_chip_content(&theme, cx);
         let permission_chip = self.trigger_chip(
             PickerKind::Permission,
-            permission_label,
-            true,
-            Some((
-                if effective_full {
-                    crate::icons::DANGER_TRIANGLE
-                } else {
-                    crate::icons::KEY_MINIMALISTIC
-                },
-                effective_full.then_some(theme.warning),
-            )),
-            false,
-            false,
-            permission_suffix,
+            TriggerChip {
+                label: access.title.clone(),
+                set: true,
+                icon: Some((access.icon, access.tint)),
+                icon_loading: false,
+                label_loading: false,
+                badge: None,
+                suffix: None,
+                icon_only: true,
+                attention: access.attention.then_some(theme.warning),
+                tooltip: (access.title, Some(access.detail)),
+            },
             &theme,
             cx,
         );
@@ -6264,7 +6622,7 @@ impl Render for Pickers {
             // labels paint over the attach/send buttons at narrow widths
             // instead of truncating (user report).
             .min_w_0()
-            .gap(px(4.0))
+            .gap(px(crate::composer::CHIP_GAP))
             .child(model_chip)
             .child(permission_chip)
     }
