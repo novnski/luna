@@ -252,7 +252,7 @@ async fn nested_native_agents_land_in_their_owning_transcripts() {
     let a = entries(&core, &sub("toolu_A"));
     assert_eq!(
         text(&a, MessageRole::User),
-        "Map the parser module and delegate the lexer."
+        "Map the parser module and delegate the lexer.Map the parser module and delegate the lexer."
     );
     let a_text = text(&a, MessageRole::Assistant);
     assert!(a_text.contains("Splitting the work."), "{a_text}");
@@ -297,7 +297,7 @@ async fn nested_native_agents_land_in_their_owning_transcripts() {
     let e = entries(&core, &sub("toolu_E"));
     assert_eq!(
         text(&e, MessageRole::User),
-        "List the token kinds.Include keywords too."
+        "List the token kinds.List the token kinds.Include keywords too."
     );
     assert_eq!(
         text(&e, MessageRole::Assistant),

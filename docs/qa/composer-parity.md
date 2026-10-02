@@ -1,6 +1,6 @@
 # Composer parity: main, side and child chats
 
-Side chats, child chats and the main chat use one composer geometry, modelled on the Codex desktop app. Verification is a headless design fixture; native app QA has not been run for this change.
+Side chats, child chats and the main chat use one composer geometry, modelled on the Codex desktop app. The headless design fixture and merged native app have been checked. Native findings and corrective verification are recorded in [the October2 QA follow-up](codex-native-2026-10-02.md).
 
 ## Design
 

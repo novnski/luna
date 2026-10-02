@@ -3678,7 +3678,10 @@ impl DocsStore {
         authority: &[LocalExecutableChange],
     ) -> Result<Vec<CommandReceipt>, StoreError> {
         let mut conn = self.conn();
-        let tx = conn.transaction()?;
+        // Reserve write authority before reading pending receipts. A deferred
+        // read-to-write upgrade can return BUSY immediately under WAL contention,
+        // bypassing the busy timeout and leaving an executed queue row claimed.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let rows = {
             let mut stmt = tx.prepare(
                 "SELECT receipt_json FROM task_command_receipts WHERE task_id=?1 ORDER BY updated_at",

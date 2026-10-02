@@ -435,6 +435,7 @@ fn render_side_header<V: 'static>(
             show_parent,
             cx,
         )
+        .flex_1()
         .min_w_0()
         .px(px(6.0))
         .child(title_text)
@@ -449,6 +450,7 @@ fn render_side_header<V: 'static>(
         .into_any_element(),
         None => div()
             .id("pane-chat-title")
+            .flex_1()
             .min_w_0()
             .px(px(6.0))
             .child(title_text)
@@ -465,7 +467,6 @@ fn render_side_header<V: 'static>(
     crate::surface_chrome::toolbar(theme)
         .child(back)
         .child(title)
-        .child(div().flex_1())
         .when_some(
             chrome.status.clone().filter(|_| !live),
             |row, (label, color, _)| {

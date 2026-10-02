@@ -153,9 +153,18 @@ impl Harness for HistoryHarness {
         request: RunRequest,
         _controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let terminal = request
+            .prompt
+            .strip_prefix("TERMINAL_HISTORY:")
+            .map(str::to_owned);
         let session_id = request
             .resume
             .unwrap_or_else(|| "synthetic-history-source".into());
+        let status = match terminal.as_deref() {
+            Some("interrupted" | "empty-interrupted") => DoneStatus::Interrupted,
+            Some("failed") => DoneStatus::Errored,
+            _ => DoneStatus::Completed,
+        };
         Ok(futures::stream::iter(vec![
             Ok(AgentEvent::SessionStarted {
                 harness: self.provider,
@@ -166,13 +175,21 @@ impl Harness for HistoryHarness {
                 assistant_message_id: "assistant-history".into(),
             }),
             Ok(AgentEvent::TextDelta {
-                text: "synthetic completed answer".into(),
+                text: if terminal.as_deref() == Some("empty-interrupted") {
+                    String::new()
+                } else {
+                    "synthetic completed answer".into()
+                },
             }),
             Ok(AgentEvent::ProviderCheckpoint {
-                checkpoint_id: "provider-message-1".into(),
+                checkpoint_id: if terminal.is_some() {
+                    "terminal-checkpoint".into()
+                } else {
+                    "provider-message-1".into()
+                },
             }),
             Ok(AgentEvent::Done {
-                status: DoneStatus::Completed,
+                status,
                 result: None,
                 error: None,
                 session_id: Some(session_id),
@@ -5730,4 +5747,119 @@ async fn side_chat_context_snapshot_is_an_explicit_native_fork_alternative() {
         "request dedupe includes the explicit context choice"
     );
     core.shutdown().await;
+}
+
+#[tokio::test]
+async fn codex_settled_terminal_turns_keep_checkpoints_and_history_prefixes() {
+    use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+    use luna_engine::history_operations::plan_history;
+    for terminal in ["interrupted", "empty-interrupted", "failed"] {
+        let dir = tempfile::tempdir().unwrap();
+        let core = assemble_history(
+            dir.path(),
+            Arc::new(Mutex::new(Vec::new())),
+            HarnessId::Codex,
+        );
+        let client = luna_rpc::memory_client(core.rpc_service());
+        let task = uuid::Uuid::new_v4().to_string();
+        create_materialized_history_task(&core, &client, &task, HarnessId::Codex).await;
+        let receipt = execute(&client, envelope("terminal-run", &task, Some(&snapshot(&client, &task).await), serde_json::json!({
+            "kind":"session", "command":{"kind":"run", "request":history_request(&format!("TERMINAL_HISTORY:{terminal}"), HarnessId::Codex), "messageId":"terminal-user"}
+        }))).await;
+        assert!(
+            matches!(
+                receipt.status,
+                CommandReceiptStatus::Applied | CommandReceiptStatus::Pending
+            ),
+            "{receipt:?}"
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let entries = core
+                    .doc_host
+                    .open(&task)
+                    .unwrap()
+                    .doc()
+                    .read_entries()
+                    .unwrap();
+                let terminal_finished = entries
+                    .iter()
+                    .position(|e| e.id == "terminal-user")
+                    .and_then(|i| entries.get(i + 1))
+                    .is_some_and(|e| {
+                        e.role == MessageRole::Assistant
+                            && matches!(
+                                e.status,
+                                Some(MessageStatus::Complete | MessageStatus::Aborted)
+                            )
+                    });
+                if terminal_finished
+                    && snapshot(&client, &task)
+                        .await
+                        .snapshot
+                        .active_turn_id
+                        .is_none()
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let handle = core.doc_host.open(&task).unwrap();
+        let entries = handle.doc().read_entries().unwrap();
+        let assistant = entries
+            .iter()
+            .rev()
+            .find(|e| e.role == MessageRole::Assistant)
+            .unwrap();
+        assert_eq!(
+            handle.doc().provider_checkpoint(&assistant.id).as_deref(),
+            Some("terminal-checkpoint"),
+            "{terminal}: known terminal id must survive"
+        );
+        handle
+            .write_user_message(
+                "next-user",
+                "next prompt",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap();
+        handle
+            .doc()
+            .push_message(&SessionMessageEntry {
+                id: "next-assistant".into(),
+                role: MessageRole::Assistant,
+                parts: vec![MessagePart::Text {
+                    id: "t0".into(),
+                    text: "next answer".into(),
+                }],
+                created_at: chrono::Utc::now().timestamp_millis(),
+                device_id: core.device_id.clone(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: None,
+            })
+            .unwrap();
+        handle
+            .doc()
+            .set_provider_checkpoint("next-assistant", "next-checkpoint")
+            .unwrap();
+        let plan = plan_history(
+            handle.doc(),
+            HarnessId::Codex,
+            luna_proto::ConversationForkBoundaryKind::BeforeUserMessage,
+            Some("next-user"),
+        )
+        .unwrap();
+        assert!(
+            plan.entries.iter().any(|e| e.id == assistant.id),
+            "{terminal}: retained native history must keep the terminal projection"
+        );
+        assert_eq!(
+            plan.checkpoints.get(&assistant.id).map(String::as_str),
+            Some("terminal-checkpoint")
+        );
+        core.shutdown().await;
+    }
 }

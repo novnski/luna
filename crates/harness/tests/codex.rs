@@ -4056,3 +4056,47 @@ async fn initial_turn_start_carries_the_engine_user_message_id() {
         "the first message is not a steer boundary: {events:?}"
     );
 }
+
+#[tokio::test]
+async fn native_rewind_accepts_terminal_history_and_refuses_live_or_ambiguous_turns() {
+    use luna_harness::codex::native::{CodexRewindObservation, CodexRewindProgress};
+    let home = tempfile::tempdir().unwrap();
+    let executable =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-rewind-terminal.py");
+    let client = CodexNativeClient::new(home.path()).with_executable(executable);
+    for status in ["completed", "interrupted", "failed"] {
+        let thread = format!("rewind-{status}");
+        let plan = client
+            .prepare_rewind(&thread, "t2", "/tmp")
+            .await
+            .unwrap_or_else(|error| panic!("terminal {status} must be rewindable: {error}"));
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let observed = progress.clone();
+        client
+            .revert_thread(&plan, "/tmp", &move |event| {
+                observed.lock().unwrap().push(event);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            *progress.lock().unwrap(),
+            vec![
+                CodexRewindProgress::MutationStarted,
+                CodexRewindProgress::Acknowledged
+            ]
+        );
+        assert_eq!(
+            client.observe_rewind(&plan, "/tmp").await.unwrap(),
+            CodexRewindObservation::Reverted
+        );
+    }
+    for status in ["active", "missing", "unknown", "duplicate"] {
+        let thread = format!("rewind-{status}");
+        assert!(
+            client.prepare_rewind(&thread, "t2", "/tmp").await.is_err(),
+            "{status} must be refused"
+        );
+        assert!(!home.path().join(format!("reverted-{thread}")).exists());
+    }
+}

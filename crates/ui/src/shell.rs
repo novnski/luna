@@ -1901,7 +1901,9 @@ pub struct Shell {
     /// while the lookup key keeps a file tab scoped to its chat panel.
     file_surfaces: std::collections::HashMap<u64, Entity<FilesSurface>>,
     file_surface_paths: std::collections::HashMap<u64, String>,
-    file_surface_keys: std::collections::HashMap<(String, String), u64>,
+    // Stable panel/checkout ownership survives a path-cache rename collision.
+    file_surface_owners: std::collections::HashMap<u64, (String, String)>,
+    file_surface_keys: std::collections::HashMap<(String, String, String), u64>,
     file_surface_subs: std::collections::HashMap<u64, Subscription>,
     file_surface_seq: u64,
     pending_file_closes: std::collections::HashSet<RightSurface>,
@@ -2406,6 +2408,7 @@ impl Shell {
             files_subs: std::collections::HashMap::new(),
             file_surfaces: std::collections::HashMap::new(),
             file_surface_paths: std::collections::HashMap::new(),
+            file_surface_owners: std::collections::HashMap::new(),
             file_surface_keys: std::collections::HashMap::new(),
             file_surface_subs: std::collections::HashMap::new(),
             file_surface_seq: 0,
@@ -3475,6 +3478,20 @@ impl Shell {
                 .side_chat_panel
                 .as_ref()
                 .is_some_and(|panel| panel.read(cx).owns_link_source(source, cx)),
+            RightSurface::File(id) => {
+                self.right_pane_open(cx)
+                    && self
+                        .file_surface_owners
+                        .get(&id)
+                        .is_some_and(|(_, owner)| owner == source)
+            }
+            RightSurface::Subagent(id) => {
+                self.right_pane_open(cx)
+                    && self
+                        .subagent_tabs
+                        .get(&id)
+                        .is_some_and(|tab| !tab.paused && tab.chat_id == source)
+            }
             _ => false,
         };
         if self.active_chat.is_empty()
@@ -3651,11 +3668,22 @@ impl Shell {
     /// a separate FilesSurface so its tree, search, watcher and split layout
     /// stay stable while users move among open files.
     fn add_file_surface(&mut self, path: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.active_chat.is_empty() {
+        self.add_file_surface_for_owner(self.active_chat.clone(), path, window, cx);
+    }
+
+    fn add_file_surface_for_owner(
+        &mut self,
+        owner: String,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_chat.is_empty() || owner.is_empty() {
             return;
         }
         let panel_key = self.panel_key(cx);
-        let lookup = (panel_key.clone(), path.clone());
+        // Relative paths are unique within their checkout, not within the pane.
+        let lookup = (panel_key.clone(), owner.clone(), path.clone());
         if let Some(id) = self.file_surface_keys.get(&lookup).copied() {
             let surface = RightSurface::File(id);
             self.set_right_active(surface, cx);
@@ -3668,7 +3696,7 @@ impl Shell {
         let file = cx.new(|cx| {
             FilesSurface::new_editor(
                 self.state.clone(),
-                self.active_chat.clone(),
+                owner.clone(),
                 path.clone(),
                 self.settings.files_autosave_enabled,
                 self.settings.files_autosave_delay_ms,
@@ -3679,11 +3707,14 @@ impl Shell {
             )
         });
         let event_panel_key = panel_key.clone();
+        let event_owner = owner.clone();
         let sub = cx.subscribe_in(
             &file,
             window,
             move |this: &mut Self, _, event, window, cx| match event {
-                FilesEvent::OpenFile(path) => this.add_file_surface(path.clone(), window, cx),
+                FilesEvent::OpenFile(path) => {
+                    this.add_file_surface_for_owner(event_owner.clone(), path.clone(), window, cx)
+                }
                 FilesEvent::OpenWebLink(activation) => {
                     if let crate::markdown::render::LinkOutcome::External(url) =
                         this.activate_session_link(activation, window, cx)
@@ -3692,9 +3723,14 @@ impl Shell {
                     }
                 }
                 FilesEvent::TitleChanged => cx.notify(),
-                FilesEvent::FileRenamed { old_path, new_path } => {
-                    this.rename_file_surface(id, &event_panel_key, old_path, new_path, cx)
-                }
+                FilesEvent::FileRenamed { old_path, new_path } => this.rename_file_surface(
+                    id,
+                    &event_panel_key,
+                    &event_owner,
+                    old_path,
+                    new_path,
+                    cx,
+                ),
                 FilesEvent::WordWrapChanged(word_wrap) => {
                     this.set_files_word_wrap(*word_wrap, window, cx)
                 }
@@ -3709,6 +3745,8 @@ impl Shell {
         );
         self.file_surfaces.insert(id, file);
         self.file_surface_paths.insert(id, path);
+        self.file_surface_owners
+            .insert(id, (panel_key.clone(), owner));
         self.file_surface_keys.insert(lookup, id);
         self.file_surface_subs.insert(id, sub);
         self.right_tabs
@@ -3748,7 +3786,7 @@ impl Shell {
         if !was_open {
             self.right_tween = Some(WidthTween::new(from, self.right_target(cx)));
         }
-        self.add_file_surface(link.path, window, cx);
+        self.add_file_surface_for_owner(source_chat.to_owned(), link.path, window, cx);
         true
     }
 
@@ -3756,6 +3794,7 @@ impl Shell {
         &mut self,
         id: u64,
         panel_key: &str,
+        owner: &str,
         old_path: &str,
         new_path: &str,
         cx: &mut Context<Self>,
@@ -3764,10 +3803,16 @@ impl Shell {
             return;
         }
         self.file_surface_paths.insert(id, new_path.to_string());
+        let old_key = (panel_key.to_owned(), owner.to_owned(), old_path.to_owned());
+        if self.file_surface_keys.get(&old_key) == Some(&id) {
+            self.file_surface_keys.remove(&old_key);
+        }
         self.file_surface_keys
-            .remove(&(panel_key.to_string(), old_path.to_string()));
-        self.file_surface_keys
-            .entry((panel_key.to_string(), new_path.to_string()))
+            .entry((
+                panel_key.to_string(),
+                owner.to_string(),
+                new_path.to_string(),
+            ))
             .or_insert(id);
         cx.notify();
     }
@@ -3927,6 +3972,11 @@ impl Shell {
         frozen: bool,
         cx: &mut Context<Self>,
     ) {
+        // Nested inspectors carry a derived document id as their transcript
+        // source. File/link ownership remains the original conversation.
+        let chat_id = chat_id
+            .split_once("--sub--")
+            .map_or_else(|| chat_id.clone(), |(owner, _)| owner.to_owned());
         // The chip lives in the conversation column — the pane it opens into
         // may still be closed.
         if !self.right_pane_open(cx) {
@@ -3946,7 +3996,7 @@ impl Shell {
         // a frozen one reads top-down.
         let transcript =
             cx.new(|cx| Transcript::for_doc(self.state.clone(), doc_id.clone(), !frozen, cx));
-        let links = Self::session_links(Some(self.active_chat.clone()), cx);
+        let links = Self::session_links(Some(chat_id.clone()), cx);
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
         });
@@ -4226,12 +4276,15 @@ impl Shell {
                 .has_unsaved_changes()
                 .then(|| (key.clone(), RightSurface::Files))
         });
-        let editors = self.file_surface_keys.iter().filter_map(|((key, _), id)| {
-            self.file_surfaces
-                .get(id)
-                .filter(|files| files.read(cx).has_unsaved_changes())
-                .map(|_| (key.clone(), RightSurface::File(*id)))
-        });
+        let editors = self
+            .file_surface_owners
+            .iter()
+            .filter_map(|(id, (key, _))| {
+                self.file_surfaces
+                    .get(id)
+                    .filter(|files| files.read(cx).has_unsaved_changes())
+                    .map(|_| (key.clone(), RightSurface::File(*id)))
+            });
         let current = self.panel_key(cx);
         let mut dirty = browser.chain(editors).collect::<Vec<_>>();
         dirty.sort_by_key(|(key, _)| (key != &current, key.clone()));
@@ -4268,6 +4321,7 @@ impl Shell {
             RightSurface::File(id) => {
                 self.file_surfaces.remove(&id);
                 self.file_surface_paths.remove(&id);
+                self.file_surface_owners.remove(&id);
                 self.file_surface_subs.remove(&id);
                 self.file_surface_keys.retain(|_, value| *value != id);
             }

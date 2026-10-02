@@ -89,8 +89,13 @@ fn visible_text(entry: &SessionMessageEntry) -> String {
         .join("\n")
 }
 
-fn completed_copy(entry: &SessionMessageEntry) -> Option<SessionMessageEntry> {
-    if entry.role == MessageRole::System || entry.status != Some(MessageStatus::Complete) {
+fn completed_copy(
+    entry: &SessionMessageEntry,
+    verified_abort: bool,
+) -> Option<SessionMessageEntry> {
+    if entry.role == MessageRole::System
+        || (entry.status != Some(MessageStatus::Complete) && !verified_abort)
+    {
         return None;
     }
     let mut entry = entry.clone();
@@ -108,13 +113,21 @@ pub fn plan_history(
     message_id: Option<&str>,
 ) -> Result<HistoryPlan, EngineError> {
     let entries = doc.read_entries()?;
+    // Codex's interrupted turns are settled native history. Preserve their
+    // projection only with a recorded native checkpoint, never by position.
+    let verified_abort = |entry: &SessionMessageEntry| {
+        provider == HarnessId::Codex
+            && entry.role == MessageRole::Assistant
+            && entry.status == Some(MessageStatus::Aborted)
+            && doc.provider_checkpoint(&entry.id).is_some()
+    };
     let (end, boundary, selected_text, cutoff_message_id) = match kind {
         ConversationForkBoundaryKind::Tip => {
             let last = entries
                 .iter()
                 .rposition(|entry| {
                     entry.role == MessageRole::Assistant
-                        && entry.status == Some(MessageStatus::Complete)
+                        && (entry.status == Some(MessageStatus::Complete) || verified_abort(entry))
                 })
                 .map_or(0, |index| index + 1);
             if entries[last..]
@@ -160,7 +173,7 @@ pub fn plan_history(
                 .find(|entry| matches!(entry.role, MessageRole::User | MessageRole::Assistant))
                 .filter(|entry| {
                     entry.role == MessageRole::Assistant
-                        && entry.status == Some(MessageStatus::Complete)
+                        && (entry.status == Some(MessageStatus::Complete) || verified_abort(entry))
                 })
                 .ok_or_else(|| EngineError::Other("selected user turn never completed".into()))?;
             let checkpoint = doc.provider_checkpoint(&assistant.id).ok_or_else(|| {
@@ -205,7 +218,7 @@ pub fn plan_history(
 
     let copied = entries[..end]
         .iter()
-        .filter_map(completed_copy)
+        .filter_map(|entry| completed_copy(entry, verified_abort(entry)))
         .collect::<Vec<_>>();
     let checkpoints = copied
         .iter()

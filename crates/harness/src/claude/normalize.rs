@@ -204,7 +204,7 @@ fn tag(parent: &str, event: AgentEvent) -> AgentEvent {
 ///
 /// Prefix-matched: the CLI ships at least two spellings of the marker
 /// (`…by user]` and `…by user for tool use]`).
-fn is_synthetic_user_text(text: &str) -> bool {
+pub(super) fn is_synthetic_user_text(text: &str) -> bool {
     let text = text.trim_start();
     text.starts_with("<system-reminder>") || text.starts_with("[Request interrupted")
 }
@@ -353,6 +353,9 @@ impl Normalizer {
                     return Vec::new();
                 }
                 if let Some(parent) = &f.parent_tool_use_id {
+                    if matches!(f.event.delta.kind.as_str(), "text_delta" | "thinking_delta") {
+                        self.tasks.note_child_content(parent);
+                    }
                     return match f.event.delta.kind.as_str() {
                         "text_delta" => vec![tag(
                             parent,
@@ -404,6 +407,7 @@ impl Normalizer {
                     }
                     let mut out = self.tasks.tagged_assistant(parent, &f.message);
                     if let Some(code) = &f.error {
+                        self.tasks.note_child_content(parent);
                         out.push(tag(
                             parent,
                             AgentEvent::Error {
@@ -428,24 +432,11 @@ impl Normalizer {
                             id: b.id.clone(),
                             call: decode_tool_use(&b.name, &b.input),
                         };
-                        // A spawn's `prompt` is the subagent's opening user
-                        // message — the wire never echoes it on the child
-                        // feed (child user frames carry tool results and
-                        // steers only), so seed it here and the subagent
-                        // transcript starts the way every chat does.
+                        // Seed once for older CLIs that omit the opening frame;
+                        // newer tagged initial-user echoes reconcile this seed.
                         let opening = matches!(b.name.as_str(), "Agent" | "Task")
-                            .then(|| b.input.get("prompt"))
-                            .flatten()
-                            .and_then(Value::as_str)
-                            .filter(|p| !p.trim().is_empty())
-                            .map(|prompt| {
-                                tag(
-                                    &b.id,
-                                    AgentEvent::UserMessage {
-                                        text: prompt.to_owned(),
-                                    },
-                                )
-                            });
+                            .then(|| self.tasks.opening_prompt(&b.id, &b.input))
+                            .flatten();
                         // A SendMessage steer never echoes on the child feed
                         // (live-verified) — surface it from the parent's own
                         // call, re-keyed onto the spawn it addresses.
@@ -492,6 +483,13 @@ impl Normalizer {
             }
 
             Frame::User(f) => {
+                if f.origin.is_some()
+                    && let Some(parent) = &f.parent_tool_use_id
+                {
+                    // An attributed human/peer instruction is never an
+                    // un-attributed initial echo, even if its text matches.
+                    self.tasks.note_child_content(parent);
+                }
                 if let Some(events) = self.peer.arrival_events(&f) {
                     return events;
                 }
@@ -509,21 +507,23 @@ impl Normalizer {
                         .into_iter()
                         .map(|event| tag(parent, event))
                         .collect();
-                    // A tagged user frame's TEXT blocks are the parent
-                    // steering its subagent (SendMessage-style follow-ups —
+                    // The first native opening echo may match our legacy seed.
+                    // Later TEXT blocks are steering (SendMessage follow-ups —
                     // tool results ride their own blocks, filtered above).
                     // Synthetic harness injections are not conversation, and
                     // must not read as a steer — see [`is_synthetic_user_text`].
-                    out.extend(
-                        f.message
-                            .blocks()
-                            .filter(|b: &ContentBlock| {
-                                b.kind == "text"
-                                    && !b.text.trim().is_empty()
-                                    && !is_synthetic_user_text(&b.text)
-                            })
-                            .map(|b| tag(parent, AgentEvent::UserMessage { text: b.text })),
-                    );
+                    if !self.tasks.consume_initial_echo(parent, &f.message.content) {
+                        out.extend(
+                            f.message
+                                .blocks()
+                                .filter(|b: &ContentBlock| {
+                                    b.kind == "text"
+                                        && !b.text.trim().is_empty()
+                                        && !is_synthetic_user_text(&b.text)
+                                })
+                                .map(|b| tag(parent, AgentEvent::UserMessage { text: b.text })),
+                        );
+                    }
                     return out;
                 }
                 self.tools.results(

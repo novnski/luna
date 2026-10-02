@@ -780,6 +780,27 @@ async fn side_documents_and_tool_blobs_do_not_export_to_configured_edge() {
         .unwrap()
         .write_user_message("sub-message", "PRIVATE_SUBDOC", 1)
         .unwrap();
+    // Native-agent inspection reads the derived document through its active
+    // side owner. The derived id must never become an independent writable chat.
+    let mut sub_messages = client
+        .subscribe_checked("WatchDocMessages", json!({"chatId":subdoc}))
+        .await
+        .expect("active side owner admits its native-agent transcript");
+    let initial = tokio::time::timeout(Duration::from_secs(5), sub_messages.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(initial.to_string().contains("PRIVATE_SUBDOC"), "{initial}");
+    drop(sub_messages);
+    assert!(
+        client
+            .call(
+                "QueueMessage",
+                json!({"chatId":subdoc,"text":"forbidden derived mutation"})
+            )
+            .await
+            .is_err()
+    );
     core.doc_host.upload_tool_sidecar(
         child,
         luna_doc::SidecarPayload {
@@ -848,6 +869,20 @@ async fn side_documents_and_tool_blobs_do_not_export_to_configured_edge() {
     core.store
         .enqueue_chat_update(&subdoc, "restored-sub-batch", &sub_update)
         .unwrap();
+    client
+        .call(
+            "UnloadSideChat",
+            json!({"id":child,"lease":created["lease"]}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        client
+            .subscribe_checked("WatchDocMessages", json!({"chatId":subdoc}))
+            .await
+            .is_err(),
+        "an unloaded side owner must still refuse derived reads"
+    );
     core.shutdown().await;
     drop(client);
     drop(core);

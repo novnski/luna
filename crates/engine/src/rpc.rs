@@ -8885,10 +8885,19 @@ impl RpcService for EngineRpc {
         {
             // A side chat with a live view lease is an ordinary local chat for
             // per-chat RPCs; without one it is read-only history.
+            // Native-agent transcripts are derived documents, not side-chat
+            // metadata rows. Admit only their read through the owning lease;
+            // keep the original document id for the watch below. Other methods
+            // retain exact-id admission, so derived ids never gain mutation.
+            let admission_id = if method == methods::WATCH_DOC_MESSAGES {
+                id.split_once("--sub--").map_or(id, |(owner, _)| owner)
+            } else {
+                id
+            };
             self.side_chats
                 .as_ref()
                 .ok_or_else(|| RpcError::Failed("Side chat service unavailable".into()))?
-                .admit_ordinary(id)
+                .admit_ordinary(admission_id)
                 .map_err(|error| {
                     RpcError::Failed(format!(
                         "{error}. Historical side chats are read through the side chat panel."

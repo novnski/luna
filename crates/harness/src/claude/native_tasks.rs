@@ -143,6 +143,9 @@ impl TaskUsage {
 #[derive(Default)]
 struct Spawn {
     description: Option<String>,
+    /// Older CLIs omit the opening user frame; newer ones echo it once.
+    opening_seeded: bool,
+    pending_initial_echo: Option<String>,
     /// Last model the child's own snapshots reported.
     model: Option<String>,
     background: Option<bool>,
@@ -257,6 +260,74 @@ impl NativeTasks {
         }
     }
 
+    /// Seed an opening once, retaining compatibility with seed-only producers.
+    pub fn opening_prompt(&mut self, id: &str, input: &Value) -> Option<AgentEvent> {
+        self.register_spawn(id, input);
+        let prompt = input
+            .get("prompt")?
+            .as_str()
+            .filter(|p| !p.trim().is_empty())?;
+        let spawn = self.spawns.get_mut(id)?;
+        if spawn.opening_seeded || spawn.settled {
+            return None;
+        }
+        spawn.opening_seeded = true;
+        spawn.pending_initial_echo = Some(prompt.to_owned());
+        Some(tag(
+            id,
+            AgentEvent::UserMessage {
+                text: prompt.to_owned(),
+            },
+        ))
+    }
+
+    pub fn note_child_content(&mut self, id: &str) {
+        if let Some(spawn) = self.spawns.get_mut(id) {
+            spawn.pending_initial_echo = None;
+        }
+    }
+
+    /// Only the first plain, single-text native frame can reconcile the seed.
+    /// Mixed/tool-result frames and later identical instructions stay intact.
+    pub fn consume_initial_echo(&mut self, id: &str, content: &Value) -> bool {
+        let plain = match content {
+            Value::String(text) if !text.trim().is_empty() => Some(text.as_str()),
+            Value::Array(blocks) if blocks.len() == 1 => blocks[0]
+                .get("type")
+                .and_then(Value::as_str)
+                .filter(|kind| *kind == "text")
+                .and_then(|_| blocks[0].get("text").and_then(Value::as_str))
+                .filter(|text| !text.trim().is_empty()),
+            _ => None,
+        };
+        let Some(spawn) = self.spawns.get_mut(id) else {
+            return false;
+        };
+        if let Some(text) = plain {
+            if super::normalize::is_synthetic_user_text(text) {
+                if text.trim_start().starts_with("[Request interrupted") {
+                    spawn.pending_initial_echo = None;
+                }
+                return false;
+            }
+            return spawn.pending_initial_echo.take().as_deref() == Some(text);
+        }
+        // Any other meaningful user text closes the opening window, including
+        // multiple text blocks; it must not suppress a later matching steer.
+        if content.as_array().is_some_and(|blocks| {
+            blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("tool_result")
+                    || (block.get("type").and_then(Value::as_str) == Some("text")
+                        && block.get("text").and_then(Value::as_str).is_some_and(|t| {
+                            !t.trim().is_empty() && !super::normalize::is_synthetic_user_text(t)
+                        }))
+            })
+        }) {
+            spawn.pending_initial_echo = None;
+        }
+        false
+    }
+
     /// Root assistant frame: register its Agent/Task spawn calls (root-owned)
     /// so their completion settles even without a `task_started`.
     pub fn root_calls(&mut self, message: &MessageBody) {
@@ -285,6 +356,13 @@ impl NativeTasks {
     /// `SendMessage` steer re-keyed onto the addressed spawn. The child's
     /// reported model is surfaced once per change.
     pub fn tagged_assistant(&mut self, parent: &str, message: &MessageBody) -> Vec<AgentEvent> {
+        if message
+            .content
+            .as_array()
+            .is_some_and(|blocks| !blocks.is_empty())
+        {
+            self.note_child_content(parent);
+        }
         let mut out = Vec::new();
         if let Some(model) = message
             .model
@@ -344,18 +422,8 @@ impl NativeTasks {
                     self.tool_owner.insert(id, parent, MAX_TOOL_OWNERS);
                     self.note_background_call(id, input);
                     if is_spawn_tool(name) && id != parent {
-                        self.register_spawn(id, input);
-                        if let Some(prompt) = input
-                            .get("prompt")
-                            .and_then(Value::as_str)
-                            .filter(|p| !p.trim().is_empty())
-                        {
-                            out.push(tag(
-                                id,
-                                AgentEvent::UserMessage {
-                                    text: prompt.to_owned(),
-                                },
-                            ));
+                        if let Some(opening) = self.opening_prompt(id, input) {
+                            out.push(opening);
                         }
                     }
                     if let Some(steer) = self.send_message_steer(name, input) {
@@ -370,7 +438,7 @@ impl NativeTasks {
 
     /// A `SendMessage{to: <agent id>}` call never echoes on the addressed
     /// child's feed; surface it there as that child's steer.
-    pub fn send_message_steer(&self, name: &str, input: &Value) -> Option<AgentEvent> {
+    pub fn send_message_steer(&mut self, name: &str, input: &Value) -> Option<AgentEvent> {
         if name != "SendMessage" {
             return None;
         }
@@ -378,14 +446,15 @@ impl NativeTasks {
             .iter()
             .find_map(|k| input.get(*k))
             .and_then(Value::as_str)?;
-        let spawn = self.spawn_for_agent(to)?;
+        let spawn = self.spawn_for_agent(to)?.to_owned();
         let text = ["message", "content"]
             .iter()
             .find_map(|k| input.get(*k))
             .and_then(Value::as_str)
             .filter(|m| !m.trim().is_empty())?;
+        self.note_child_content(&spawn);
         Some(tag(
-            spawn,
+            &spawn,
             AgentEvent::UserMessage {
                 text: text.to_owned(),
             },
@@ -600,6 +669,7 @@ impl NativeTasks {
                 return Vec::new();
             }
             spawn.settled = true;
+            spawn.pending_initial_echo = None;
             native_stop::untrack(&self.stoppable, &spawn_id);
             // The CLI falls back to the task description as the summary;
             // that is not an outcome.

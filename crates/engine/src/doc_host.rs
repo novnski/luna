@@ -1578,6 +1578,40 @@ impl DocHost {
         Ok(receipt)
     }
 
+    /// Retry only recording proven provider acceptance, never provider dispatch.
+    /// Each attempt releases the projection/SQLite locks and rebuilds the exact
+    /// correlation's projection under the existing receipt and workspace fences.
+    pub(crate) async fn confirm_task_command_correlation_retry(
+        &self,
+        task_id: &str,
+        correlation_id: &str,
+        active_turn_id: &str,
+        binding_id: Option<&str>,
+        binding_generation: Option<u32>,
+    ) -> Result<Vec<CommandReceipt>, EngineError> {
+        for attempt in 0..=3 {
+            let result = self.confirm_task_command_correlation(
+                task_id,
+                correlation_id,
+                active_turn_id,
+                binding_id,
+                binding_generation,
+            );
+            let busy = matches!(
+                &result,
+                Err(EngineError::Store(luna_sync::StoreError::Sqlite(
+                    rusqlite::Error::SqliteFailure(error, _)
+                ))) if matches!(error.code,
+                    rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+            );
+            if !busy || attempt == 3 {
+                return result;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50 << attempt)).await;
+        }
+        unreachable!("receipt retries return on the final attempt")
+    }
+
     pub fn confirm_task_command_correlation(
         &self,
         task_id: &str,

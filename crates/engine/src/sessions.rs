@@ -9006,13 +9006,16 @@ async fn drive_run(
                     .get()
                     .and_then(|identity| identity.view(&chat_id))
                     .and_then(|view| view.current_binding);
-                if let Err(error) = host.confirm_task_command_correlation(
-                    &chat_id,
-                    &steer.message_id,
-                    &run_id,
-                    binding.as_ref().map(|binding| binding.binding_id.as_str()),
-                    binding.as_ref().map(|binding| binding.generation),
-                ) {
+                if let Err(error) = host
+                    .confirm_task_command_correlation_retry(
+                        &chat_id,
+                        &steer.message_id,
+                        &run_id,
+                        binding.as_ref().map(|binding| binding.binding_id.as_str()),
+                        binding.as_ref().map(|binding| binding.generation),
+                    )
+                    .await
+                {
                     tracing::error!(chat = %chat_id, run = %run_id, %error,
                         "steer recording receipt finalization failed");
                 } else {
@@ -9256,13 +9259,15 @@ async fn drive_run(
                         }
                     }
                     if !resume_state.control_only
-                        && let Err(error) = host.confirm_task_command_correlation(
-                            &chat_id,
-                            &resume_state.user_message_id,
-                            &run_id,
-                            binding.as_ref().map(|binding| binding.binding_id.as_str()),
-                            binding.as_ref().map(|binding| binding.generation),
-                        )
+                        && let Err(error) = host
+                            .confirm_task_command_correlation_retry(
+                                &chat_id,
+                                &resume_state.user_message_id,
+                                &run_id,
+                                binding.as_ref().map(|binding| binding.binding_id.as_str()),
+                                binding.as_ref().map(|binding| binding.generation),
+                            )
+                            .await
                     {
                         tracing::error!(chat = %chat_id, run = %run_id, %error,
                             "provider acceptance receipt finalization failed");
@@ -9402,7 +9407,11 @@ async fn drive_run(
             // A Done landing on a PARKED session with nothing streamed (the
             // idle reaper's or an interrupt's own teardown) has no entry to
             // finalize — writing one would leave an empty aborted stub.
-            let nothing_streamed = writer.is_none() && folded.is_empty();
+            let nothing_streamed = writer.is_none()
+                && folded.is_empty()
+                // A known Codex turn must retain even an empty terminal row,
+                // so a later rewind has an exact native before-turn boundary.
+                && !(harness_id == HarnessId::Codex && provider_checkpoint_id.is_some());
             if !nothing_streamed {
                 if let Err(err) = finish_segment(
                     doc_ref,
@@ -9415,7 +9424,7 @@ async fn drive_run(
                 ) {
                     tracing::warn!(chat = %chat_id, error = %err, "final segment finish failed");
                 }
-                if *status == DoneStatus::Completed
+                if (*status == DoneStatus::Completed || harness_id == HarnessId::Codex)
                     && let Some(checkpoint_id) = provider_checkpoint_id.take()
                     && let Err(error) = doc_ref.set_provider_checkpoint(&entry_id, &checkpoint_id)
                 {

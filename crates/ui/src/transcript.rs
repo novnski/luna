@@ -6724,15 +6724,18 @@ impl Transcript {
                     "Side chat"
                 };
                 let emit = move |cx: &mut Context<Self>| {
-                    if let Some(task_id) = &parent {
-                        cx.emit(TranscriptEvent::StartSideChat {
-                            task_id: task_id.clone(),
+                    // A full side transcript also has a history task id. Its
+                    // handoff action must take precedence over creating a side
+                    // conversation from an ordinary main/child message.
+                    if let Some(side_chat_id) = &side {
+                        cx.emit(TranscriptEvent::SideChatResult {
+                            side_chat_id: side_chat_id.clone(),
                             message_id: message.clone(),
                             text: text.clone(),
                         });
-                    } else if let Some(side_chat_id) = &side {
-                        cx.emit(TranscriptEvent::SideChatResult {
-                            side_chat_id: side_chat_id.clone(),
+                    } else if let Some(task_id) = &parent {
+                        cx.emit(TranscriptEvent::StartSideChat {
+                            task_id: task_id.clone(),
                             message_id: message.clone(),
                             text: text.clone(),
                         });

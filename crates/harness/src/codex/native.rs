@@ -1033,8 +1033,13 @@ async fn read_rewind_history(
         for turn in data {
             let id = codex_turn_id(turn)
                 .ok_or_else(|| HarnessError::Protocol("Codex turn page has no turn id".into()))?;
+            // A stopped/paused or failed turn is settled history too. Refuse
+            // only live/unknown state; retain exact status/error signatures.
             if !seen_turns.insert(id.to_owned())
-                || turn.get("status").and_then(Value::as_str) != Some("completed")
+                || !matches!(
+                    turn.get("status").and_then(Value::as_str),
+                    Some("completed" | "interrupted" | "failed")
+                )
             {
                 return Err(HarnessError::Protocol(
                     "Codex rewind history contains duplicate or incomplete turns".into(),
