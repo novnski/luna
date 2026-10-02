@@ -765,7 +765,7 @@ async fn typed_skill_dispatches_native_invocation_after_images() {
     std::fs::write(
         &png,
         base64::engine::general_purpose::STANDARD
-            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
             .unwrap(),
     )
     .unwrap();

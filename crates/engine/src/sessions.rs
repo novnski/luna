@@ -281,7 +281,10 @@ impl ChildCardPlan {
             luna_proto::ApprovalDecision::AllowOnce => ChildCardAnswer::Allow,
             luna_proto::ApprovalDecision::ProviderChoice { index } => {
                 let choices = self.choices();
-                match choices.get(index as usize).map(|choice| choice.label.as_str()) {
+                match choices
+                    .get(index as usize)
+                    .map(|choice| choice.label.as_str())
+                {
                     Some(CHILD_CARD_ALLOW) => ChildCardAnswer::Allow,
                     Some(label) if Some(label) == self.grant_label().as_deref() => {
                         ChildCardAnswer::AllowAndGrant
@@ -835,6 +838,9 @@ impl RuntimeConfig {
                         key.as_str(),
                         luna_harness::codex::LUNA_STEER_RECONCILE_OPTION
                             | luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION
+                            | luna_harness::codex::LUNA_ATTACH_EXISTING_GOAL_OPTION
+                            | luna_harness::codex::LUNA_NATIVE_THREAD_NAME_OPTION
+                            | luna_harness::codex::LUNA_STRICT_RESUME_OPTION
                     )
                 })
                 .map(|(key, value)| (key.clone(), value.clone()))
@@ -884,6 +890,7 @@ impl RuntimeConfig {
 
 struct RunHandle {
     run_id: String,
+    started_for_goal_attachment: bool,
     workspace_repair_revision: u64,
     /// Positive evidence that a parked adapter stream reached EOF. A terminal
     /// Done or removal after an error does not prove its child released native
@@ -896,6 +903,9 @@ struct RunHandle {
     /// The binding durably published for this provider run's SessionStarted.
     /// A warm steer may reuse it, but never adopt a changed generation.
     run_provider_binding: Option<ProviderBindingKey>,
+    /// Validated SessionStarted for this exact run, including legacy chats.
+    /// Accounting display evidence only; never a command/grant authority.
+    observed_provider_session_id: Option<String>,
     provider_turn_readiness: watch::Sender<ProviderTurnReadiness>,
     steerable: bool,
     runtime_config: RuntimeConfig,
@@ -1264,6 +1274,7 @@ struct RoutedSteer {
     input_items: Vec<luna_proto::ComposerInput>,
     message_id: String,
     delivery: luna_harness::SteerDelivery,
+    frozen_request: Option<RunRequest>,
 }
 
 struct Inner {
@@ -1331,9 +1342,11 @@ struct Inner {
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type SideChatLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// Lease-gated admission of an ordinary-path run for a side chat: checks the
-/// live view lease, applies the parent ceiling and the first-turn seed.
+/// live view lease, applies the parent ceiling and returns frozen context.
 pub(crate) type SideChatAdmission = Arc<
-    dyn Fn(&str, &mut RunRequest, &mut Option<String>) -> Result<(), EngineError> + Send + Sync,
+    dyn Fn(&str, &mut RunRequest) -> Result<Vec<luna_proto::RuntimeInstructionSection>, EngineError>
+        + Send
+        + Sync,
 >;
 
 /// CC-06 live accounting and native live model/effort switch hooks.
@@ -1522,8 +1535,9 @@ impl SessionsEngine {
             tools.remove(index);
             omitted.push(luna_proto::OmittedRuntimeTool {
                 name: "create_thread".into(),
-                reason: "side chats cannot create child chats; create them from the main conversation"
-                    .into(),
+                reason:
+                    "side chats cannot create child chats; create them from the main conversation"
+                        .into(),
             });
         }
         (tools, omitted)
@@ -1804,7 +1818,9 @@ impl SessionsEngine {
                 "new worktree on branch {} from {}",
                 branch.as_deref().unwrap_or("luna/child-… (generated)"),
                 base.clone()
-                    .or_else(|| parent_branch.clone().map(|branch| format!("{branch} (this chat's branch)")))
+                    .or_else(|| parent_branch
+                        .clone()
+                        .map(|branch| format!("{branch} (this chat's branch)")))
                     .unwrap_or_else(|| "this chat's current branch".into())
             ),
             (_, Some(cwd)) => format!("existing directory {cwd}"),
@@ -2019,7 +2035,7 @@ impl SessionsEngine {
         }
         let grant = tokio::select! {
             _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
-            result = grant_rx => result.map_err(|_| CrossTaskError::UserRequest),
+            result = grant_rx => result.map_err(|_| CrossTaskError::Cancelled),
         };
         expire_pending_approval(&pending, &engine_tx, &request_id);
         let mut fence = grant.map_err(fail)?;
@@ -2810,14 +2826,11 @@ impl SessionsEngine {
             chat.as_ref(),
             identity.as_ref().map(|view| &view.task.lineage),
         );
-        let parent_thread_id = chat_identity
-            .parent_thread_id
-            .clone()
-            .or_else(|| {
-                identity
-                    .as_ref()
-                    .and_then(|view| view.task.lineage.parent_task_id.clone())
-            });
+        let parent_thread_id = chat_identity.parent_thread_id.clone().or_else(|| {
+            identity
+                .as_ref()
+                .and_then(|view| view.task.lineage.parent_task_id.clone())
+        });
         Ok(luna_proto::RuntimeContext {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: 1,
@@ -2877,8 +2890,9 @@ impl SessionsEngine {
                 .side_chat_lookup
                 .get()
                 .is_some_and(|lookup| lookup(chat_id));
-        let native_fork = lineage
-            .is_some_and(|lineage| lineage.parent_task_id.is_none() && lineage.source_task_id.is_some());
+        let native_fork = lineage.is_some_and(|lineage| {
+            lineage.parent_task_id.is_none() && lineage.source_task_id.is_some()
+        });
         let base = RuntimeChatCapabilities {
             context_origin: RuntimeContextOrigin::Fresh,
             checkout: RuntimeCheckoutOwnership::Own,
@@ -2927,21 +2941,24 @@ impl SessionsEngine {
                         .ok()
                         .flatten()
                         .and_then(|parent| parent.cwd);
-                    if parent_cwd.is_some() && parent_cwd == chat.and_then(|chat| chat.cwd.clone()) {
+                    if parent_cwd.is_some() && parent_cwd == chat.and_then(|chat| chat.cwd.clone())
+                    {
                         RuntimeCheckoutOwnership::SharedWithParent
                     } else {
                         RuntimeCheckoutOwnership::ExistingPath
                     }
                 }
             };
-            let granted_by_user = provisioning.is_some_and(|provisioning| provisioning.granted_by_user);
+            let granted_by_user =
+                provisioning.is_some_and(|provisioning| provisioning.granted_by_user);
             return RuntimeChatIdentity {
                 role: RuntimeChatRole::Child,
                 parent_thread_id: Some(child.parent_task_id.clone()),
                 capabilities: RuntimeChatCapabilities {
                     checkout,
                     reports_to_parent: child.report_results,
-                    granted_access: provisioning.map(|provisioning| provisioning.granted_permission_mode),
+                    granted_access: provisioning
+                        .map(|provisioning| provisioning.granted_permission_mode),
                     access_granted_by_user: granted_by_user,
                     access_capped_by_parent: !granted_by_user,
                     ..base
@@ -3527,20 +3544,19 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         request: &mut RunRequest,
-        message_id: &mut Option<String>,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Vec<luna_proto::RuntimeInstructionSection>, EngineError> {
         if !self
             .inner
             .side_chat_lookup
             .get()
             .is_some_and(|lookup| lookup(chat_id))
         {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let admission = self.inner.side_chat_admission.get().ok_or_else(|| {
             EngineError::Other("Side chats require an active side-panel lease".into())
         })?;
-        admission(chat_id, request, message_id)
+        admission(chat_id, request)
     }
 
     pub(crate) async fn dispatch_side_chat(
@@ -3562,6 +3578,98 @@ impl SessionsEngine {
             workspace_revision,
         )
         .await
+    }
+
+    /// Attach a saved Active Codex goal to the managed event feed. This is a
+    /// host-owned control operation, not another user message or goal start.
+    pub(crate) async fn attach_existing_goal(
+        &self,
+        chat_id: &str,
+        command_id: &str,
+        mut request: RunRequest,
+        expected_thread: &str,
+        expected_generation: u32,
+    ) -> Result<(), EngineError> {
+        let expected_binding = self
+            .inner
+            .task_identity
+            .get()
+            .and_then(|identity| identity.view(chat_id))
+            .and_then(|view| view.current_binding)
+            .filter(|binding| {
+                binding.provider_task_id == expected_thread
+                    && binding.generation == expected_generation
+            })
+            .ok_or_else(|| EngineError::Other("Goal binding changed before attachment".into()))?;
+        request.resume = Some(expected_thread.into());
+        let revision = self.inner.recovery.workspace_repair_revision(chat_id)?;
+        // Keep the large dispatch future off the nested RPC poll stack. Native
+        // worker threads have a smaller stack than the test runner's main thread.
+        let run_id = Box::pin(self.dispatch_inner(
+            chat_id,
+            HarnessId::Codex,
+            request,
+            Some(command_id.into()),
+            None,
+            revision,
+            true,
+        ))
+        .await?;
+        let mut ready = {
+            let runs = lock(&self.inner.runs);
+            let run = runs
+                .get(chat_id)
+                .filter(|run| run.run_id == run_id)
+                .ok_or_else(|| EngineError::Other("Goal runtime ended before attachment".into()))?;
+            run.provider_turn_readiness.subscribe()
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(35), async {
+            loop {
+                match *ready.borrow() {
+                    ProviderTurnReadiness::Ready => {
+                        if lock(&self.inner.runs)
+                            .get(chat_id)
+                            .is_none_or(|run| run.run_id != run_id)
+                        {
+                            return Err(EngineError::Other(
+                                "Goal runtime changed during attachment".into(),
+                            ));
+                        }
+                        let binding = self
+                            .inner
+                            .task_identity
+                            .get()
+                            .and_then(|identity| identity.view(chat_id))
+                            .and_then(|view| view.current_binding);
+                        if binding.as_ref().is_none_or(|binding| {
+                            binding.binding_id != expected_binding.binding_id
+                                || binding.generation != expected_generation
+                                || binding.provider_task_id != expected_thread
+                        }) {
+                            return Err(EngineError::Other(
+                                "Goal binding changed during attachment".into(),
+                            ));
+                        }
+                        return Ok(());
+                    }
+                    ProviderTurnReadiness::Ended | ProviderTurnReadiness::Unavailable => {
+                        return Err(EngineError::Other(
+                            "Goal runtime could not attach; resume was not retried".into(),
+                        ));
+                    }
+                    _ => {}
+                }
+                ready.changed().await.map_err(|_| {
+                    EngineError::Other("Goal runtime ended before attachment".into())
+                })?;
+            }
+        })
+        .await
+        .map_err(|_| {
+            EngineError::Other(
+                "Goal attachment is unconfirmed; read back before resuming again".into(),
+            )
+        })?
     }
 
     pub async fn dispatch(
@@ -3590,11 +3698,10 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         harness_id: HarnessId,
-        mut request: RunRequest,
-        mut message_id: Option<String>,
+        request: RunRequest,
+        message_id: Option<String>,
         workspace_repair_revision: u64,
     ) -> Result<String, EngineError> {
-        self.admit_side_chat_run(chat_id, &mut request, &mut message_id)?;
         self.dispatch_with_context(
             chat_id,
             harness_id,
@@ -3694,6 +3801,7 @@ impl SessionsEngine {
             message_id,
             recovery,
             workspace_repair_revision,
+            false,
         ))
     }
 
@@ -3705,8 +3813,12 @@ impl SessionsEngine {
         mut message_id: Option<String>,
         recovery: Option<RecoveryAttemptContext>,
         workspace_repair_revision: u64,
+        attach_existing_goal: bool,
     ) -> Result<String, EngineError> {
         let _in_flight = DispatchInFlight::enter(&self.inner);
+        request
+            .model_options
+            .remove(luna_harness::codex::LUNA_ATTACH_EXISTING_GOAL_OPTION);
         crate::provider_inputs::admit(harness_id, &request.attachments, &request.input_items)?;
         if recovery.is_some()
             && self
@@ -3868,6 +3980,7 @@ impl SessionsEngine {
                     .into(),
             ));
         }
+        let side_context_sections = self.admit_side_chat_run(chat_id, &mut request)?;
         if let Some(handoff) = context_control.pending_handoff.as_ref()
             && !request
                 .prompt
@@ -4073,8 +4186,8 @@ impl SessionsEngine {
             let (cross_task_tools, cross_task_omissions) =
                 self.cross_task_catalog(&context, provider_delivery);
             Self::apply_chat_tool_capabilities(&mut context, provider_delivery, &cross_task_tools);
-            let compiled =
-                crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
+            let compiled = crate::runtime_contract::compile_with_context_sections(
+                crate::runtime_contract::CompileInput {
                     context,
                     provider_delivery,
                     user_instructions,
@@ -4083,7 +4196,9 @@ impl SessionsEngine {
                     acknowledged_contract: prior,
                     cross_task_tools,
                     cross_task_omissions,
-                })?;
+                },
+                &side_context_sections,
+            )?;
             if compiled.must_reconstruct {
                 return Err(EngineError::Other(
                     "LUNA runtime instructions or tools changed for this provider session; start a fresh provider binding at a safe boundary before continuing".into()
@@ -4109,9 +4224,27 @@ impl SessionsEngine {
                 h.routed_steers.clone(),
             )
         });
+        if attach_existing_goal
+            && let Some((run_id, _, compatible, sender, _)) = &routed
+            && *compatible
+            && !sender.is_closed()
+        {
+            return Ok(run_id.clone());
+        }
+        if attach_existing_goal
+            && routed
+                .as_ref()
+                .is_some_and(|(_, _, _, sender, _)| !sender.is_closed())
+        {
+            return Err(EngineError::Other(
+                "A different runtime started during goal resume; attachment did not interrupt it"
+                    .into(),
+            ));
+        }
         let goal_runtime = request.goal.is_some()
             && lock(&self.inner.runs).get(chat_id).is_some_and(|h| {
-                h.workspace_repair_revision == workspace_repair_revision
+                !h.started_for_goal_attachment
+                    && h.workspace_repair_revision == workspace_repair_revision
                     && h.runtime_config.can_route_goal(harness_id, &request)
             });
         if routed.as_ref().is_some_and(|(_, _, _, _, ledger)| {
@@ -4175,6 +4308,7 @@ impl SessionsEngine {
                     };
                     if steer_tx.try_send(message).is_ok() {
                         pending.push_back(RoutedSteer {
+                            frozen_request: Some(frozen_request.clone()),
                             attachments: request.attachments.clone(),
                             input_items: request.input_items.clone(),
                             prompt: request.prompt.clone(),
@@ -4246,11 +4380,13 @@ impl SessionsEngine {
         let harness = self.inner.registry.resolve(harness_id)?;
         let handle = self.doc_handle(chat_id)?;
         let user_id = message_id.unwrap_or_else(new_id);
-        handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+        if !attach_existing_goal {
+            handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+        }
         if request.goal.is_some() {
             self.mark_goal_sent(chat_id, &user_id);
         }
-        if harness_id == HarnessId::Codex {
+        if harness_id == HarnessId::Codex && !attach_existing_goal {
             // The first turn/start carries the same correlation id as every
             // steer, so native readback can prove this message's delivery.
             request.model_options.insert(
@@ -4461,8 +4597,10 @@ impl SessionsEngine {
                 workspace_repair_revision,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: run_id.clone(),
+                started_for_goal_attachment: attach_existing_goal,
                 provider_turn: None,
                 run_provider_binding: None,
+                observed_provider_session_id: None,
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -4481,17 +4619,25 @@ impl SessionsEngine {
         self.set_status(chat_id, SessionStatus::Working, true);
         // AFTER Working (same causal-order guarantee as the steer path): the
         // lastMessageAt bump must never be observable ahead of the live run.
-        self.inner.note_message(chat_id, &request.prompt);
+        if !attach_existing_goal {
+            self.inner.note_message(chat_id, &request.prompt);
+        }
 
         // Name the chat NOW, off the first prompt — not after the first
         // exchange completes ("called New session for a long time for no
         // reason"; the titler only needs the prompt and skips titled chats;
         // the Done-time call below stays as the retry for a failed
         // generation).
-        if let Some(titles) = self.inner.titles.get() {
+        if !attach_existing_goal && let Some(titles) = self.inner.titles.get() {
             titles.maybe_generate(chat_id, harness_id, &request.prompt, &request.cwd);
         }
 
+        if attach_existing_goal {
+            request.model_options.insert(
+                luna_harness::codex::LUNA_ATTACH_EXISTING_GOAL_OPTION.into(),
+                true.into(),
+            );
+        }
         tokio::spawn(drive_run(
             self.inner.clone(),
             chat_id.to_string(),
@@ -4507,6 +4653,7 @@ impl SessionsEngine {
             RunResumeState {
                 user_message_id: user_id,
                 recovery,
+                control_only: attach_existing_goal,
             },
             run_permit,
         ));
@@ -4630,6 +4777,21 @@ impl SessionsEngine {
                 &user_id,
                 workspace_repair_revision,
             )?;
+        let frozen_steer_request = self
+            .last_request(chat_id)
+            .filter(|request| {
+                lock(&self.inner.runs).get(chat_id).is_some_and(|run| {
+                    run.run_id == run_id
+                        && run.runtime_config == RuntimeConfig::from_request(harness_id, request)
+                })
+            })
+            .map(|mut request| {
+                request.prompt = prompt.into();
+                request.attachments = attachments.to_vec();
+                request.input_items = input_items.to_vec();
+                request.goal = None;
+                request
+            });
         let (acceptance_tx, acceptance_rx) = tokio::sync::oneshot::channel();
         let message = SteerMessage {
             input_items: input_items.to_vec(),
@@ -4653,6 +4815,7 @@ impl SessionsEngine {
                 return Ok(SteerOutcome::Busy);
             }
             pending.push_back(RoutedSteer {
+                frozen_request: frozen_steer_request,
                 attachments: attachments.to_vec(),
                 input_items: input_items.to_vec(),
                 prompt: prompt.to_string(),
@@ -5129,9 +5292,9 @@ impl SessionsEngine {
             request_id: request_id.to_owned(),
         });
         let label = match (&proposal.child_plan, answer) {
-            (Some(plan), ChildCardAnswer::AllowAndGrant) if approved => {
-                plan.grant_label().unwrap_or_else(|| CHILD_CARD_ALLOW.into())
-            }
+            (Some(plan), ChildCardAnswer::AllowAndGrant) if approved => plan
+                .grant_label()
+                .unwrap_or_else(|| CHILD_CARD_ALLOW.into()),
             _ if approved => CHILD_CARD_ALLOW.into(),
             _ => CHILD_CARD_DENY.into(),
         };
@@ -6835,6 +6998,7 @@ impl Inner {
         {
             run.provider_turn = None;
             run.run_provider_binding = None;
+            run.observed_provider_session_id = None;
             run.set_provider_turn_readiness(ProviderTurnReadiness::AwaitingBinding);
         }
     }
@@ -6872,6 +7036,7 @@ impl Inner {
         {
             run.provider_turn = None;
             run.run_provider_binding = None;
+            run.observed_provider_session_id = None;
             run.set_provider_turn_readiness(ProviderTurnReadiness::Unavailable);
         }
     }
@@ -7170,6 +7335,7 @@ fn expand_home(cwd: &str) -> String {
 struct RunResumeState {
     user_message_id: String,
     recovery: Option<RecoveryAttemptContext>,
+    control_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -7362,6 +7528,10 @@ fn stop_after_journal_failure(
     let engine = SessionsEngine {
         inner: inner.clone(),
     };
+    if resume_state.control_only {
+        inner.set_status(chat_id, SessionStatus::Errored, false);
+        return;
+    }
     let recovery = engine.record_recovery_failure(
         chat_id,
         harness_id,
@@ -7483,13 +7653,13 @@ async fn drive_run(
     mut engine_rx: mpsc::UnboundedReceiver<AgentEvent>,
     mut cancel_rx: watch::Receiver<bool>,
     hold_recovery_on_interrupt: Arc<AtomicBool>,
-    resume_state: RunResumeState,
+    mut resume_state: RunResumeState,
     run_permit: Option<DeviceWritePermit>,
 ) {
     let device_id = inner.device_id.clone();
     // Captured for post-run auto-titling (the request moves into the harness).
     let harness_id = harness.id();
-    let user_prompt = request.prompt.clone();
+    let mut user_prompt = request.prompt.clone();
     let run_cwd = request.cwd.clone();
     let permission_policy = request.permission_policy.clone();
     let runtime_contract = request
@@ -7501,7 +7671,7 @@ async fn drive_run(
     if request.resume.is_none() {
         let _ = doc.clear_context_usage();
     }
-    let recovery_request = original_request;
+    let mut recovery_request = original_request;
     let mut stream = match harness.run(request, controls).await {
         Ok(stream) => stream,
         Err(err) => {
@@ -7555,6 +7725,9 @@ async fn drive_run(
                 acceptance
             };
             inner.set_status(&chat_id, SessionStatus::Errored, false);
+            if resume_state.control_only {
+                return;
+            }
             let engine = SessionsEngine {
                 inner: inner.clone(),
             };
@@ -8734,6 +8907,7 @@ async fn drive_run(
                     }
                     // Restore typed durable content from the same exact row.
                     Some(RoutedSteer {
+                        frozen_request: None,
                         prompt: row.text,
                         attachments: row.attachments,
                         input_items: row.input_items,
@@ -8841,16 +9015,32 @@ async fn drive_run(
                 ) {
                     tracing::error!(chat = %chat_id, run = %run_id, %error,
                         "steer recording receipt finalization failed");
-                } else if harness_id == HarnessId::Codex
-                    && host
-                        .queued_message(&chat_id, &steer.message_id)
-                        .is_ok_and(|row| row.is_none())
-                    && let Some(handle) = lock(&inner.runs)
-                        .get(&chat_id)
-                        .filter(|h| h.run_id == run_id)
-                {
-                    lock(&handle.routed_steers)
-                        .retain(|pending| pending.message_id != steer.message_id);
+                } else {
+                    if !historical_steer
+                        && resume_state.control_only
+                        && let Some(snapshot) = steer.frozen_request.as_ref()
+                    {
+                        recovery_request = snapshot.clone();
+                        recovery_request.prompt = steer.prompt.clone();
+                        recovery_request.attachments = steer.attachments.clone();
+                        recovery_request.input_items = steer.input_items.clone();
+                        recovery_request.goal = None;
+                        resume_state.user_message_id = steer.message_id.clone();
+                        resume_state.recovery = None;
+                        resume_state.control_only = false;
+                        user_prompt = steer.prompt.clone();
+                    }
+                    if harness_id == HarnessId::Codex
+                        && host
+                            .queued_message(&chat_id, &steer.message_id)
+                            .is_ok_and(|row| row.is_none())
+                        && let Some(handle) = lock(&inner.runs)
+                            .get(&chat_id)
+                            .filter(|h| h.run_id == run_id)
+                    {
+                        lock(&handle.routed_steers)
+                            .retain(|pending| pending.message_id != steer.message_id);
+                    }
                 }
             }
             continue;
@@ -9005,23 +9195,32 @@ async fn drive_run(
                     let engine = SessionsEngine {
                         inner: inner.clone(),
                     };
-                    if let Err(recovery_error) = engine.record_recovery_failure(
-                        &chat_id,
-                        harness_id,
-                        recovery_request.clone(),
-                        resume_state.user_message_id.clone(),
-                        RecoveryAcceptance::Accepted,
-                        RecoveryFailure::InvalidConfiguration,
-                        error.to_string(),
-                        Some(session_id.clone()),
-                        resume_state.recovery.as_ref(),
-                    ) {
+                    if !resume_state.control_only
+                        && let Err(recovery_error) = engine.record_recovery_failure(
+                            &chat_id,
+                            harness_id,
+                            recovery_request.clone(),
+                            resume_state.user_message_id.clone(),
+                            RecoveryAcceptance::Accepted,
+                            RecoveryFailure::InvalidConfiguration,
+                            error.to_string(),
+                            Some(session_id.clone()),
+                            resume_state.recovery.as_ref(),
+                        )
+                    {
                         tracing::warn!(chat = %chat_id, %recovery_error, "binding-failure recovery persistence failed");
                     }
                     return;
                 }
                 if provider_turn_fence(harness_id) {
                     inner.observe_codex_binding(&chat_id, &run_id, session_id);
+                }
+                if !session_id.is_empty()
+                    && let Some(run) = lock(&inner.runs)
+                        .get_mut(&chat_id)
+                        .filter(|run| run.run_id == run_id)
+                {
+                    run.observed_provider_session_id = Some(session_id.clone());
                 }
                 if let Some(contract) = runtime_contract.as_ref() {
                     let mut receipt = contract.diagnostics(session_id);
@@ -9056,13 +9255,15 @@ async fn drive_run(
                             tracing::warn!(chat = %chat_id, %error, "handoff acceptance persistence failed");
                         }
                     }
-                    if let Err(error) = host.confirm_task_command_correlation(
-                        &chat_id,
-                        &resume_state.user_message_id,
-                        &run_id,
-                        binding.as_ref().map(|binding| binding.binding_id.as_str()),
-                        binding.as_ref().map(|binding| binding.generation),
-                    ) {
+                    if !resume_state.control_only
+                        && let Err(error) = host.confirm_task_command_correlation(
+                            &chat_id,
+                            &resume_state.user_message_id,
+                            &run_id,
+                            binding.as_ref().map(|binding| binding.binding_id.as_str()),
+                            binding.as_ref().map(|binding| binding.generation),
+                        )
+                    {
                         tracing::error!(chat = %chat_id, run = %run_id, %error,
                             "provider acceptance receipt finalization failed");
                     }
@@ -9259,7 +9460,7 @@ async fn drive_run(
                     } else {
                         RecoveryAcceptance::Unknown
                     };
-                    if let Err(recovery_error) = engine.record_recovery_failure(
+                    if !resume_state.control_only && let Err(recovery_error) = engine.record_recovery_failure(
                         &chat_id,
                         harness_id,
                         recovery_request.clone(),
@@ -9278,6 +9479,7 @@ async fn drive_run(
             // Exchange completed on an untitled chat → name it (fire-and-forget;
             // interrupted/errored turns never trigger naming).
             if *status == DoneStatus::Completed
+                && !resume_state.control_only
                 && let Some(titles) = inner.titles.get()
             {
                 titles.maybe_generate(&chat_id, harness_id, &user_prompt, &run_cwd);
@@ -10639,11 +10841,13 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-a".into(),
             RunHandle {
+                started_for_goal_attachment: false,
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
                 run_provider_binding: None,
+                observed_provider_session_id: None,
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -10747,11 +10951,13 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-a".into(),
             RunHandle {
+                started_for_goal_attachment: false,
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
                 run_provider_binding: None,
+                observed_provider_session_id: None,
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -10830,11 +11036,13 @@ mod tests {
         lock(&core.sessions.inner.runs).insert(
             task_id.clone(),
             RunHandle {
+                started_for_goal_attachment: false,
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
                 provider_turn: None,
                 run_provider_binding: None,
+                observed_provider_session_id: None,
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -13521,6 +13729,7 @@ mod tests {
             &RunResumeState {
                 user_message_id: "user-a".into(),
                 recovery: None,
+                control_only: false,
             },
             None,
             &error,
@@ -14916,11 +15125,13 @@ mod tests {
         lock(&sessions.inner.runs).insert(
             "chat-active".into(),
             RunHandle {
+                started_for_goal_attachment: false,
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-active".into(),
                 provider_turn: None,
                 run_provider_binding: None,
+                observed_provider_session_id: None,
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )

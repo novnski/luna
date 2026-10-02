@@ -32,8 +32,8 @@ use crate::HarnessError;
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 /// Aggregate raw image bytes in one user message (one stdin line).
 const MAX_MESSAGE_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
-/// Engine admission inspects this prefix; the adapter re-checks full bytes.
-const ADMISSION_PREFIX_BYTES: u64 = 256 * 1024;
+/// Bound decoded output separately from compressed file size.
+const MAX_DECODED_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 const KEPT: &str = "your message, images and selections remain available";
 
 fn reject(detail: String) -> HarnessError {
@@ -58,20 +58,25 @@ pub fn validate_inputs(
         if !seen.insert(path.as_str()) {
             continue;
         }
-        let size = image_size(path)?;
+        image_size(path)?;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .and_then(|file| {
+                file.take(MAX_IMAGE_BYTES + 1)
+                    .read_to_end(&mut bytes)
+                    .map(|_| ())
+            })
+            .map_err(|error| reject(format!("Image is unreadable ({path}): {error}; {KEPT}.")))?;
+        let size = bytes.len() as u64;
+        if size > MAX_IMAGE_BYTES {
+            return Err(size_error(path, size));
+        }
         total += size;
         if total > MAX_MESSAGE_IMAGE_BYTES {
             return Err(aggregate_error(total));
         }
-        let mut prefix = Vec::new();
-        std::fs::File::open(path)
-            .and_then(|file| {
-                file.take(ADMISSION_PREFIX_BYTES)
-                    .read_to_end(&mut prefix)
-                    .map(|_| ())
-            })
-            .map_err(|error| reject(format!("Image is unreadable ({path}): {error}; {KEPT}.")))?;
-        inspect(path, &prefix, size <= ADMISSION_PREFIX_BYTES)?;
+        let media_type = inspect(path, &bytes, true)?;
+        validate_decodable(path, &bytes, media_type)?;
     }
     Ok(())
 }
@@ -137,9 +142,17 @@ pub(crate) async fn user_line(
             continue;
         }
         image_size(path)?;
-        let bytes = tokio::fs::read(path)
-            .await
-            .map_err(|error| reject(format!("Image is unreadable ({path}): {error}; {KEPT}.")))?;
+        let bytes = async {
+            use tokio::io::AsyncReadExt as _;
+            let file = tokio::fs::File::open(path).await?;
+            let mut bytes = Vec::new();
+            file.take(MAX_IMAGE_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .await?;
+            Ok::<_, std::io::Error>(bytes)
+        }
+        .await
+        .map_err(|error| reject(format!("Image is unreadable ({path}): {error}; {KEPT}.")))?;
         // The file may have changed since admission: judge the bytes we send.
         let size = bytes.len() as u64;
         if size > MAX_IMAGE_BYTES {
@@ -150,6 +163,7 @@ pub(crate) async fn user_line(
             return Err(aggregate_error(total));
         }
         let media_type = inspect(path, &bytes, true)?;
+        validate_decodable(path, &bytes, media_type)?;
         manifests.push(ImageManifest {
             path: path.clone(),
             media_type,
@@ -264,6 +278,41 @@ fn image_size(path: &str) -> Result<u64, HarnessError> {
         return Err(size_error(path, metadata.len()));
     }
     Ok(metadata.len())
+}
+
+/// Header recognition alone admits incomplete payloads that the CLI removes
+/// silently. Decode the exact bytes under decoded-output limits before a
+/// provider sees them, both at admission and immediately before dispatch.
+fn validate_decodable(path: &str, bytes: &[u8], media_type: &str) -> Result<(), HarnessError> {
+    use image::{ImageDecoder as _, ImageFormat, ImageReader, Limits};
+    let format = match media_type {
+        "image/png" => ImageFormat::Png,
+        "image/jpeg" => ImageFormat::Jpeg,
+        "image/gif" => ImageFormat::Gif,
+        "image/webp" => ImageFormat::WebP,
+        _ => unreachable!("inspect only admits Claude image formats"),
+    };
+    let too_large = || {
+        reject(format!(
+            "Image is too large to decode safely ({path}). Export a smaller image; {KEPT}."
+        ))
+    };
+    let decode_error = |error: image::ImageError| match error {
+        image::ImageError::Limits(_) => too_large(),
+        _ => reject(format!(
+            "Image is damaged or incomplete ({path}). Export it again; {KEPT}."
+        )),
+    };
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    let mut reader = ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    reader.limits(limits);
+    let decoder = reader.into_decoder().map_err(&decode_error)?;
+    if decoder.total_bytes() > MAX_DECODED_IMAGE_BYTES {
+        return Err(too_large());
+    }
+    image::DynamicImage::from_decoder(decoder).map_err(decode_error)?;
+    Ok(())
 }
 
 /// Media type from the bytes (never the extension), plus header sanity and

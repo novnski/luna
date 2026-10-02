@@ -97,6 +97,12 @@ pub(super) struct GoalUi {
     ticker: Option<Task<()>>,
 }
 
+impl GoalUi {
+    pub(super) fn has_work_in_flight(&self) -> bool {
+        self.pending.is_some() || self.task.as_ref().is_some_and(|task| !task.is_ready())
+    }
+}
+
 /// One in-flight goal change. Every goal control is disabled while it exists.
 struct GoalPending {
     chat_id: String,
@@ -457,9 +463,10 @@ impl Composer {
             cx.notify();
             return GoalSend::Consumed;
         }
-        // Like Codex's toggle, goal mode ends once the goal is handed off; a
-        // rejected send restores it with the draft.
-        self.goal_ui.mode.remove(&self.current_key);
+        // Preserve intent across preflight failures and deferred readiness:
+        // the deferred text may no longer contain its `/goal` prefix.
+        // Goal mode ends only when the sender actually takes the draft.
+        self.goal_ui.mode.insert(self.current_key.clone());
         if let Some(chat) = self
             .binding
             .chat_id(self.state.read(cx))
@@ -473,6 +480,10 @@ impl Composer {
             self.goal_ui.error = None;
         }
         GoalSend::Goal(objective)
+    }
+
+    pub(super) fn goal_handed_off(&mut self) {
+        self.goal_ui.mode.remove(&self.current_key);
     }
 
     /// A rejected goal send hands its draft back in goal mode.
@@ -990,6 +1001,17 @@ impl Composer {
         let live = goal
             .as_ref()
             .is_some_and(|goal| goal.status == GoalStatus::Active && working);
+        let needs_runtime = provider == GoalProvider::Codex
+            && !working
+            && goal
+                .as_ref()
+                .is_some_and(|goal| goal.status == GoalStatus::Active)
+            && self
+                .binding
+                .context_control(self.state.read(cx))
+                .goal
+                .as_ref()
+                .is_some_and(|readback| !readback.continuation_ready);
         self.drive_goal_timer(live, cx);
         if std::mem::take(&mut self.goal_ui.focus_editor)
             && let Some((objective, _)) = &editor
@@ -1003,7 +1025,11 @@ impl Composer {
         // ---- the bar: target · title · objective · timer | controls ----
         let status = goal.as_ref().map(|goal| goal.status);
         let tone = status.map_or(theme.accent, |status| status_tone(&theme, status));
-        let title = status.map_or("Goal", status_title);
+        let title = if needs_runtime {
+            "Goal not running"
+        } else {
+            status.map_or("Goal", status_title)
+        };
         let objective_preview = goal.as_ref().map(|goal| {
             goal.objective
                 .split_whitespace()
@@ -1132,13 +1158,23 @@ impl Composer {
                     cx,
                 ));
             }
-            // Pause keeps the running turn (Codex semantics); Resume is not
-            // offered for a reached budget: raise it with Edit instead.
+            // Pause keeps the running turn (Codex semantics). A reached budget
+            // can resume after Edit raises or removes the exhausted limit.
             // Claude goals cannot be paused at all.
             let toggle = match goal.status {
                 _ if claude => None,
+                GoalStatus::Active if needs_runtime => {
+                    Some(("Resume goal", crate::icons::PLAY, GoalStatus::Active))
+                }
                 GoalStatus::Active => Some(("Pause goal", crate::icons::PAUSE, GoalStatus::Paused)),
                 GoalStatus::Paused | GoalStatus::Blocked | GoalStatus::UsageLimited => {
+                    Some(("Resume goal", crate::icons::PLAY, GoalStatus::Active))
+                }
+                GoalStatus::BudgetLimited
+                    if goal
+                        .token_budget
+                        .is_none_or(|budget| budget > goal.tokens_used) =>
+                {
                     Some(("Resume goal", crate::icons::PLAY, GoalStatus::Active))
                 }
                 GoalStatus::BudgetLimited | GoalStatus::Complete => None,

@@ -86,6 +86,8 @@ pub const LUNA_STEER_RECONCILE_OPTION: &str = "lunaSteerReconcileIds";
 /// readback can correlate the first message too (Codex echoes it as the
 /// `userMessage` item's `clientId`).
 pub const LUNA_CLIENT_USER_MESSAGE_ID_OPTION: &str = "lunaClientUserMessageId";
+/// Host-only startup purpose. Engines strip caller input before minting it.
+pub const LUNA_ATTACH_EXISTING_GOAL_OPTION: &str = "lunaAttachExistingGoal";
 pub const LUNA_STRICT_RESUME_OPTION: &str = "lunaStrictResume";
 pub const LUNA_CODEX_HOME_OPTION: &str = "lunaCodexHome";
 pub const LUNA_CODEX_FILE_AUTH_OPTION: &str = "lunaCodexFileAuth";
@@ -1433,6 +1435,11 @@ async fn run_session(session: Session) {
         .filter(|t| *t != "default")
         .map(str::to_owned);
 
+    let attach_existing_goal = request
+        .model_options
+        .get(LUNA_ATTACH_EXISTING_GOAL_OPTION)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let start_params = {
         let mut p = serde_json::Map::new();
         if title_only {
@@ -1484,7 +1491,7 @@ async fn run_session(session: Session) {
         if let Some(tier) = &service_tier {
             p.insert("serviceTier".into(), Value::String(tier.clone()));
         }
-        if (request.review.is_some() || request.goal.is_some())
+        if (request.review.is_some() || request.goal.is_some() || attach_existing_goal)
             && let Some(effort) = effort
         {
             // review/start has no per-turn effort field, and a goal turn is
@@ -1496,7 +1503,7 @@ async fn run_session(session: Session) {
                 .expect("thread config is an object")
                 .insert("model_reasoning_effort".into(), effort.into());
         }
-        if request.goal.is_some() {
+        if request.goal.is_some() || attach_existing_goal {
             // Same reason as `summary: auto` on turn/start: without it the
             // server-started goal turn thinks in silence.
             p.entry("config".to_string())
@@ -1854,6 +1861,12 @@ async fn run_session(session: Session) {
         .filter(|id| !title_only && !id.is_empty() && id.len() <= 256)
         .map(str::to_owned);
     let initial_turn = async {
+        if attach_existing_goal {
+            // thread/resume starts the saved Active goal. Its queued events
+            // belong to this owned feed; do not reset the goal or send a user
+            // turn that would duplicate its work.
+            return Ok(None);
+        }
         match (request.review.as_ref(), request.goal.as_ref()) {
             (Some(review), _) => start_review(&client, &thread_id, review).await.map(Some),
             // Codex starts the goal turn itself; its `turn/started` is adopted

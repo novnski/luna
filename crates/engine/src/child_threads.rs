@@ -192,8 +192,9 @@ impl EngineRpc {
         else {
             return Ok(None);
         };
-        validate_child_request(request)
-            .map_err(|error| crate::EngineError::Other(format!("Invalid child request: {error}")))?;
+        validate_child_request(request).map_err(|error| {
+            crate::EngineError::Other(format!("Invalid child request: {error}"))
+        })?;
         if self
             .store
             .task_command_receipt(&format!("child-create:{child_id}"))?
@@ -366,7 +367,9 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id: authority.caller_task_id.clone(),
                 request,
-                access_grant: fence.access_granted.then_some(ChildAccessGrant::ApprovalCard),
+                access_grant: fence
+                    .access_granted
+                    .then_some(ChildAccessGrant::ApprovalCard),
             },
         );
         command.command_id = format!("child-create:{child_id}");
@@ -411,9 +414,8 @@ impl EngineRpc {
         access_grant: Option<ChildAccessGrant>,
         fence: Option<&ApprovedSendFence>,
     ) -> Result<CommandReceipt, TaskProjectionError> {
-        let fail = |message: String| {
-            TaskProjectionError::Mutation(crate::EngineError::Other(message))
-        };
+        let fail =
+            |message: String| TaskProjectionError::Mutation(crate::EngineError::Other(message));
         validate_child_request(&request).map_err(|error| fail(error.to_string()))?;
         if task_id != child_task_id(parent_id, &request.idempotency_key) {
             return Err(fail("Child identity does not match its request".into()));
@@ -463,12 +465,14 @@ impl EngineRpc {
             config.permission_ceiling_source = None;
             config.permission_degradation_reason = None;
         } else if escalation_denied {
-            config.permission_ceiling_source = Some(luna_proto::PermissionCeilingSource::ParentThread);
+            config.permission_ceiling_source =
+                Some(luna_proto::PermissionCeilingSource::ParentThread);
             config.permission_degradation_reason =
                 Some(luna_proto::PermissionDegradationReason::ParentCeiling);
         }
         let parent_cwd = parent.cwd.clone().unwrap_or_else(|| space.path.clone());
-        let (checkout_kind, cwd, branch, checkout_id, worktree_path, base) = match &request.checkout {
+        let (checkout_kind, cwd, branch, checkout_id, worktree_path, base) = match &request.checkout
+        {
             Some(luna_proto::ChildCheckoutRequest::NewWorktree { .. }) => {
                 let provisioned = self
                     .pending_child_worktrees
@@ -493,7 +497,9 @@ impl EngineRpc {
                 // Existing directories only. An explicit alternate cwd must
                 // stay inside the parent's workspace without Full access.
                 let cwd_path = std::fs::canonicalize(request.cwd.as_deref().expect("checked"))
-                    .map_err(|error| fail(format!("Existing child checkout is unavailable: {error}")))?;
+                    .map_err(|error| {
+                        fail(format!("Existing child checkout is unavailable: {error}"))
+                    })?;
                 if !cwd_path.is_dir() {
                     return Err(fail("Child checkout must be an existing directory".into()));
                 }

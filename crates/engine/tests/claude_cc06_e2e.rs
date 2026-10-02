@@ -511,3 +511,110 @@ async fn rejected_claude_switch_redispatches_once_with_the_new_model() {
     wait_for(|| idle(core), "the follow-up to complete").await;
     core.shutdown().await;
 }
+
+/// Warm idle is live; retirement hides its row without discarding accounting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn retired_claude_runtime_is_not_a_live_usage_row() {
+    let fx = setup("claude-sonnet-5-5", ReasoningLevel::Low).await;
+    let core = &fx.core;
+    let task = uuid::Uuid::new_v4().to_string();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    client
+        .call(
+            luna_rpc::methods::MUTATE,
+            serde_json::json!({
+                "op":"createChat","chatId":task,"spaceId":"space-cc06","cwd":fx.project,
+                "config":core.workspace.chat(CHAT).unwrap().unwrap().config,
+            }),
+        )
+        .await
+        .unwrap();
+    core.workspace
+        .rename_chat(&task, "Usage lifecycle fixture")
+        .unwrap();
+    core.doc_host
+        .queue_message(&task, "cc06:switch opening", Vec::new())
+        .unwrap();
+    wait_for(
+        || {
+            !core.sessions.turn_in_flight(&task)
+                && core.sessions.live_usage().sessions().iter().any(|row| {
+                    row.task_id == task
+                        && row.native_session_id.as_deref() == Some("sess-cc06")
+                        && row.results == 1
+                })
+        },
+        "a result-backed warm idle runtime",
+    )
+    .await;
+    assert!(core.sessions.has_live_run(&task));
+    let warm = client
+        .call(
+            luna_rpc::methods::GET_USAGE_SNAPSHOT,
+            serde_json::json!({"days":1,"includeLimits":false}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        warm["liveSessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["taskId"] == task),
+        "warm idle must remain live"
+    );
+    let previous: luna_proto::ProviderAccountingReport =
+        serde_json::from_value(serde_json::json!({
+            "kind":"result","provider":"claude","nativeSessionId":"retired-session",
+            "observedAtMs":chrono::Utc::now().timestamp_millis(),
+        }))
+        .unwrap();
+    core.sessions.live_usage().record(&task, &previous);
+    let replaced = client
+        .call(
+            luna_rpc::methods::GET_USAGE_SNAPSHOT,
+            serde_json::json!({"days":1,"includeLimits":false}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        replaced["liveSessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["nativeSessionId"] != "retired-session"),
+        "another native session's retained row is not the current runtime"
+    );
+    core.sessions.interrupt_for_stop(&task).await.unwrap();
+    wait_for(|| !core.sessions.has_live_run(&task), "runtime retirement").await;
+    let stopped = client
+        .call(
+            luna_rpc::methods::GET_USAGE_SNAPSHOT,
+            serde_json::json!({"days":1,"includeLimits":false}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        stopped["liveSessions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .all(|row| row["taskId"] != task),
+        "retired row is still live"
+    );
+    assert!(
+        core.sessions
+            .live_usage()
+            .sessions()
+            .iter()
+            .any(|row| row.task_id == task
+                && row.native_session_id.as_deref() == Some("sess-cc06")
+                && row.results >= 1),
+        "final ledger must survive"
+    );
+    if let Ok(dir) = std::env::var("CC06_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(Path::new(&dir).join("usage-lifecycle.json"),serde_json::to_vec_pretty(&serde_json::json!({"warm":warm,"replaced":replaced,"stopped":stopped,"retained":core.sessions.live_usage().sessions()})).unwrap()).unwrap();
+    }
+    core.shutdown().await;
+}

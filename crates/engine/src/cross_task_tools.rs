@@ -150,7 +150,9 @@ pub(crate) fn validate_child_request(
     }
     if let Some(luna_proto::ChildCheckoutRequest::NewWorktree { branch, base }) = &request.checkout
         && (request.cwd.is_some()
-            || branch.as_deref().is_some_and(|branch| !valid_branch_name(branch))
+            || branch
+                .as_deref()
+                .is_some_and(|branch| !valid_branch_name(branch))
             || base.as_deref().is_some_and(|base| !valid_base_ref(base)))
     {
         return Err(CrossTaskError::Input);

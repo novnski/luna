@@ -22,7 +22,7 @@ use luna_harness::{
 use luna_proto::{AgentEvent, ComposerInput, DoneStatus, ReasoningLevel, RunRequest, SandboxLevel};
 
 const PNG_1X1: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 
 fn png() -> Vec<u8> {
     base64::engine::general_purpose::STANDARD
@@ -33,6 +33,13 @@ fn png() -> Vec<u8> {
 /// Minimal baseline JPEG structure (SOI, APP0, SOF0, SOS, EOI) with
 /// `components` channels: 3 = YCbCr, 4 = CMYK.
 fn jpeg(components: u8) -> Vec<u8> {
+    if components == 3 {
+        let mut bytes = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80)
+            .encode(&[255, 0, 0], 1, 1, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        return bytes;
+    }
     let mut bytes = vec![0xFF, 0xD8];
     bytes.extend([0xFF, 0xE0, 0x00, 0x10]);
     bytes.extend(b"JFIF\0");
@@ -313,7 +320,7 @@ async fn invalid_inputs_reject_before_any_process_or_stdin_line() {
     oversized.set_len(21 * 1024 * 1024).unwrap();
     for name in ["big-a.png", "big-b.png"] {
         let mut file = std::fs::File::create(dir.join(name)).unwrap();
-        std::io::Write::write_all(&mut file, &png()[..33]).unwrap();
+        std::io::Write::write_all(&mut file, &png()).unwrap();
         file.set_len(17 * 1024 * 1024).unwrap();
     }
     let codex_skill = dir.join(".codex/skills/fixture-skill/SKILL.md");
@@ -398,6 +405,52 @@ async fn invalid_inputs_reject_before_any_process_or_stdin_line() {
             vec![write(dir, "cut.png", &png()[..8])],
             vec![],
             "damaged or incomplete",
+        ),
+        (
+            "header-only-png",
+            vec![write(dir, "header-only.png", &png()[..33])],
+            vec![],
+            "damaged or incomplete",
+        ),
+        (
+            "bad-png-crc",
+            vec![write(dir, "bad-crc.png", &{
+                let mut bytes = png();
+                bytes[29] ^= 1;
+                bytes
+            })],
+            vec![],
+            "damaged or incomplete",
+        ),
+        (
+            "header-only-gif",
+            vec![write(dir, "header-only.gif", b"GIF89a\x01\0\x01\0\0\0\0")],
+            vec![],
+            "damaged or incomplete",
+        ),
+        (
+            "header-only-webp",
+            vec![write(dir, "header-only.webp", b"RIFF\x08\0\0\0WEBPVP8L")],
+            vec![],
+            "damaged or incomplete",
+        ),
+        (
+            "decoded-image-over-budget",
+            vec![{
+                use image::ImageEncoder as _;
+                let mut bytes = Vec::new();
+                image::codecs::png::PngEncoder::new(&mut bytes)
+                    .write_image(
+                        &vec![0; 8192 * 2049 * 4],
+                        8192,
+                        2049,
+                        image::ExtendedColorType::Rgba8,
+                    )
+                    .unwrap();
+                write(dir, "decoded-over-budget.png", &bytes)
+            }],
+            vec![],
+            "too large to decode safely",
         ),
         (
             "truncated-jpeg",

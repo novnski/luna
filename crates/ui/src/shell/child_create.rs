@@ -301,11 +301,12 @@ impl Shell {
         };
         let parent = self.child_parent_facts(&parent_id, cx);
         if let Some(dialog) = self.child_thread_dialog.as_mut() {
+            let previous_access = dialog.access;
             update(dialog, &parent);
             dialog.error = None;
             // A grant confirms one concrete escalation; changing what is
             // granted asks again.
-            if !dialog.exceeds_parent(&parent) {
+            if dialog.access != previous_access || !dialog.exceeds_parent(&parent) {
                 dialog.grant_confirmed = false;
             }
         }
@@ -475,40 +476,42 @@ impl Shell {
         };
         // Model.
         let mut model_row = div().flex().flex_wrap().gap(px(6.0));
-        if parent.models.is_empty() {
-            model_row = model_row.child(self.option_chip(
+        let parent_model_label = parent
+            .model
+            .as_ref()
+            .and_then(|id| parent.models.iter().find(|candidate| &candidate.id == id))
+            .map(|candidate| candidate.label.clone())
+            .or_else(|| parent.model.clone())
+            .unwrap_or_else(|| "Provider default".into());
+        // Inheritance stays available regardless of catalog order, including
+        // a provider-default parent with no explicit model.
+        model_row = model_row.child(
+            self.option_chip(
                 "child-create-model-parent",
-                format!(
-                    "{} (parent)",
-                    parent.model.clone().unwrap_or_else(|| "Provider default".into())
-                ),
-                true,
+                format!("{parent_model_label} (parent)"),
+                model == parent.model,
                 None,
                 &theme,
-            ));
-        } else {
-            // The parent's model stays offered even when this device's
-            // catalog no longer lists it (it is what the child would inherit).
-            if let Some(parent_model) = parent
-                .model
-                .clone()
-                .filter(|id| !parent.models.iter().any(|candidate| &candidate.id == id))
+            )
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.child_dialog_update(cx, |dialog, parent| {
+                    dialog.model = None;
+                    let keep = dialog.reasoning.or(parent.reasoning);
+                    let ladder = dialog.ladder(parent).unwrap_or_default();
+                    if keep.is_some_and(|level| !ladder.contains(&level)) {
+                        dialog.reasoning = ladder.first().copied();
+                    }
+                });
+            })),
+        );
+        if !parent.models.is_empty() {
+            for (index, candidate) in parent
+                .models
+                .iter()
+                .filter(|candidate| Some(&candidate.id) != parent.model.as_ref())
+                .take(6)
+                .enumerate()
             {
-                let selected = model.as_deref() == Some(parent_model.as_str());
-                model_row = model_row.child(
-                    self.option_chip(
-                        "child-create-model-parent",
-                        format!("{parent_model} (parent)"),
-                        selected,
-                        None,
-                        &theme,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.child_dialog_update(cx, |dialog, _| dialog.model = None)
-                    })),
-                );
-            }
-            for (index, candidate) in parent.models.iter().take(6).enumerate() {
                 let id = candidate.id.clone();
                 let is_parent = Some(&candidate.id) == parent.model.as_ref();
                 let label = if is_parent {

@@ -3400,7 +3400,7 @@ async fn real_claude_sees_uploaded_image_inline() {
         .expect("rename chat");
 
     // 8×8 solid-red PNG, uploaded exactly as the composer does.
-    const RED_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAB+GTG2wAAJP0GeGuMDBnAAAAAElFTkSuQmCC";
+    const RED_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP8z4AdMOEQH6QSAM1BAQ/oQeJvAAAAAElFTkSuQmCC";
     let client = luna_rpc::memory_client(core.rpc_service());
     client
         .call(

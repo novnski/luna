@@ -511,6 +511,198 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     );
     assert_eq!(sha(&transcript(&workspace, &source_session)), source_hash);
 
+    // A native side fork hides its inherited turns in LUNA while retaining
+    // them in Claude. Rewind removes only side-owned turns and keeps that
+    // exact frozen provider prefix and the parent's transcript intact.
+    let created = client
+        .call(
+            methods::CREATE_SIDE_CHAT,
+            serde_json::json!({
+                "parentId":task, "requestId":uuid::Uuid::new_v4().to_string(),
+            }),
+        )
+        .await
+        .unwrap();
+    let side = created["meta"]["id"].as_str().unwrap();
+    let lease = created["lease"].as_str().unwrap();
+    assert!(entries(&core, side).is_empty());
+    let side_session = session(&core, side);
+    let inherited = native_turns(&workspace, &side_session).await;
+    assert_eq!(inherited.len(), 3);
+    let s1 = send(&client, &core, side, &workspace, "side-u1", "side first").await;
+    let _s2 = send(&client, &core, side, &workspace, "side-u2", "side second").await;
+    let read = snapshot(&client, side).await;
+    let rewound = execute(
+        &client,
+        envelope(
+            "side-rewind",
+            side,
+            Some(&read),
+            serde_json::json!({
+                "kind":"rewindConversation", "messageId":"side-u2", "keepFiles":true,
+                "review":review(&core, &read, side, Some("side-u2")),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        rewound.status,
+        CommandReceiptStatus::Applied,
+        "native side rewind: {rewound:?}"
+    );
+    let mut retained = inherited.clone();
+    retained.push(s1);
+    assert_eq!(native_turns(&workspace, &side_session).await, retained);
+    assert!(!conversation_ids(&core, side).contains(&"side-u2".to_string()));
+    send(
+        &client,
+        &core,
+        side,
+        &workspace,
+        "side-u3",
+        "side after rewind",
+    )
+    .await;
+    assert_eq!(native_turns(&workspace, &side_session).await.len(), 5);
+    assert_eq!(sha(&transcript(&workspace, &source_session)), source_hash);
+
+    // A normal fork and an earlier-message edit preserve hidden ancestry too.
+    let derived = uuid::Uuid::new_v4().to_string();
+    let read = snapshot(&client, side).await;
+    let derived_receipt = execute(
+        &client,
+        envelope(
+            "side-derived-fork",
+            side,
+            Some(&read),
+            serde_json::json!({
+                "kind":"forkTask", "newTaskId":derived, "boundary":"tip",
+                "sourceLink":format!("luna://open/chat/{side}?workspace=local"),
+                "review":review(&core, &read, side, None),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        derived_receipt.status,
+        CommandReceiptStatus::Applied,
+        "{derived_receipt:?}"
+    );
+    let derived_session = session(&core, &derived);
+    assert_eq!(native_turns(&workspace, &derived_session).await.len(), 5);
+    let read = snapshot(&client, &derived).await;
+    let derived_rewind = execute(
+        &client,
+        envelope(
+            "side-derived-rewind",
+            &derived,
+            Some(&read),
+            serde_json::json!({
+                "kind":"rewindConversation", "messageId":"side-u1", "keepFiles":true,
+                "review":review(&core, &read, &derived, Some("side-u1")),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        derived_rewind.status,
+        CommandReceiptStatus::Applied,
+        "{derived_rewind:?}"
+    );
+    assert_eq!(native_turns(&workspace, &derived_session).await.len(), 3);
+    send(
+        &client,
+        &core,
+        &derived,
+        &workspace,
+        "derived-u1",
+        "derived first",
+    )
+    .await;
+    let read = snapshot(&client, &derived).await;
+    let edited = execute(
+        &client,
+        envelope(
+            "side-derived-edit",
+            &derived,
+            Some(&read),
+            serde_json::json!({
+                "kind":"editEarlierMessage", "messageId":"derived-u1", "text":"derived edited",
+                "review":review(&core, &read, &derived, Some("derived-u1")),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(edited.status, CommandReceiptStatus::Applied, "{edited:?}");
+    settle(&client, &core, &workspace, &derived, 1).await;
+    let edited_session = session(&core, &derived);
+    assert_ne!(edited_session, derived_session);
+    assert_eq!(native_turns(&workspace, &edited_session).await.len(), 4);
+    assert_eq!(native_turns(&workspace, &side_session).await.len(), 5);
+
+    // An unrecorded external turn is never mistaken for the captured prefix.
+    let side_path = transcript(&workspace, &side_session);
+    let leaf = std::fs::read_to_string(&side_path)
+        .unwrap()
+        .lines()
+        .rev()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|row| row["type"] == "system" || row["type"] == "assistant")
+        .unwrap()["uuid"]
+        .clone();
+    let external = uuid::Uuid::new_v4().to_string();
+    let mut native_file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&side_path)
+        .unwrap();
+    use std::io::Write as _;
+    writeln!(
+        native_file,
+        "{}",
+        serde_json::json!({
+            "type":"user", "uuid":external, "parentUuid":leaf, "sessionId":side_session,
+            "isSidechain":false, "message":{"role":"user","content":"external side turn"},
+        })
+    )
+    .unwrap();
+    drop(native_file);
+    let external_hash = sha(&side_path);
+    let read = snapshot(&client, side).await;
+    let refused = execute(
+        &client,
+        envelope(
+            "side-external-refused",
+            side,
+            Some(&read),
+            serde_json::json!({
+                "kind":"rewindConversation", "messageId":"side-u3", "keepFiles":true,
+                "review":review(&core, &read, side, Some("side-u3")),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(refused.status, CommandReceiptStatus::Failed, "{refused:?}");
+    assert_eq!(
+        sha(&side_path),
+        external_hash,
+        "refusal sends no native mutation"
+    );
+    client
+        .call(
+            methods::UNLOAD_SIDE_CHAT,
+            serde_json::json!({"id":side,"lease":lease}),
+        )
+        .await
+        .unwrap();
+    let page = client
+        .call(methods::READ_SIDE_CHAT, serde_json::json!({"id":side}))
+        .await
+        .unwrap();
+    assert!(
+        !page.to_string().contains("side second"),
+        "saved history truncates the rewound tail"
+    );
+
     // Same-chat rewind before turn three on the same Claude session.
     let read = snapshot(&client, &task).await;
     let rewound = execute(

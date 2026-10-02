@@ -2890,6 +2890,7 @@ impl Shell {
             self.last_appshot_chat = Some(selected.clone());
         }
         if selected != self.active_chat {
+            self.pending_open_main = None;
             self.release_side_chat(cx);
             self.release_child_chat_panel(cx);
             self.suspend_subagent_watches(None, cx);
@@ -3298,7 +3299,9 @@ impl Shell {
 
     fn set_right_active(&mut self, surface: RightSurface, cx: &mut Context<Self>) {
         if self.resolved_right_active(cx) != surface {
-            self.release_side_chat(cx);
+            // The side tab owns its live leases until it is closed or the
+            // selected parent changes. Inspecting an agent, file or diff in
+            // another tab must not unload and interrupt that conversation.
             self.suspend_subagent_watches(Some(surface), cx);
             self.suspend_file_images(cx);
         }
@@ -3458,8 +3461,24 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> crate::markdown::render::LinkOutcome {
         use crate::markdown::render::{LinkAction, LinkOutcome};
+        let Some(source) = activation.source_session.as_deref() else {
+            return LinkOutcome::Rejected;
+        };
+        let current_pane = match self.resolved_right_active(cx) {
+            RightSurface::ChildChats => self.child_chat_panel.as_ref().is_some_and(|panel| {
+                let panel = panel.read(cx);
+                panel.is_current(cx)
+                    && panel.parent() == self.active_chat
+                    && panel.open_chat_id() == Some(source)
+            }),
+            RightSurface::SideChats => self
+                .side_chat_panel
+                .as_ref()
+                .is_some_and(|panel| panel.read(cx).owns_link_source(source, cx)),
+            _ => false,
+        };
         if self.active_chat.is_empty()
-            || activation.source_session.as_deref() != Some(self.active_chat.as_str())
+            || (source != self.active_chat && !current_pane)
             || self.state.read(cx).selected_chat.as_deref() != Some(self.active_chat.as_str())
         {
             return LinkOutcome::Rejected;
@@ -3468,8 +3487,12 @@ impl Shell {
             return if matches!(
                 activation.action,
                 LinkAction::Primary | LinkAction::Internal
-            ) && self.open_workspace_file_link(&activation.target.original, window, cx)
-            {
+            ) && self.open_workspace_file_link(
+                &activation.target.original,
+                source,
+                window,
+                cx,
+            ) {
                 LinkOutcome::Internal
             } else {
                 LinkOutcome::Rejected
@@ -3698,6 +3721,7 @@ impl Shell {
     fn open_workspace_file_link(
         &mut self,
         target: &str,
+        source_chat: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -3706,7 +3730,7 @@ impl Shell {
             .read(cx)
             .chats
             .iter()
-            .find(|chat| chat.id == self.active_chat)
+            .find(|chat| chat.id == source_chat)
         else {
             return false;
         };
@@ -3829,10 +3853,18 @@ impl Shell {
                 message_id,
                 text,
             } => {
-                if self.active_chat == *task_id {
+                let visible_child = self.child_chat_panel.as_ref().is_some_and(|panel| {
+                    let panel = panel.read(cx);
+                    panel.is_current(cx) && panel.open_chat_id() == Some(task_id.as_str())
+                });
+                if self.active_chat == *task_id || visible_child {
                     self.release_side_chat(cx);
                     self.add_work_surface(RightSurface::SideChats, cx);
-                    self.create_side_chat_panel(Some((message_id.clone(), text.clone())), cx);
+                    self.create_side_chat_panel_for(
+                        task_id.clone(),
+                        Some((message_id.clone(), text.clone())),
+                        cx,
+                    );
                 }
             }
             TranscriptEvent::SideChatResult { .. } => {}

@@ -289,12 +289,17 @@ impl EngineRpc {
             .map_err(TaskProjectionError::Mutation)?;
         // Every completed LUNA turn must be the same ordered native turn.
         // External terminal turns, native wakes and imported history refuse.
-        let document_turns = entries
-            .iter()
-            .filter(|entry| entry.role == MessageRole::Assistant)
-            .map(|entry| handle.doc().provider_checkpoint(&entry.id))
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| mutation("LUNA history lacks exact Claude turn identities"))?;
+        let mut document_turns = self
+            .hidden_turn_prefix(&chat, &binding)
+            .map_err(TaskProjectionError::Mutation)?;
+        document_turns.extend(
+            entries
+                .iter()
+                .filter(|entry| entry.role == MessageRole::Assistant)
+                .map(|entry| handle.doc().provider_checkpoint(&entry.id))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| mutation("LUNA history lacks exact Claude turn identities"))?,
+        );
         if document_turns != native.turn_starts {
             return Err(mutation(
                 "Claude and LUNA turn history differ; rewind was not sent",
@@ -318,11 +323,16 @@ impl EngineRpc {
                     .map(|id| (entry.id.clone(), id))
             })
             .collect::<HashMap<_, _>>();
-        let retained_turns = entries[..cutoff]
-            .iter()
-            .filter(|entry| entry.role == MessageRole::Assistant)
-            .filter_map(|entry| retained_checkpoints.get(&entry.id).cloned())
-            .collect::<Vec<_>>();
+        let mut retained_turns = self
+            .hidden_turn_prefix(&chat, &binding)
+            .map_err(TaskProjectionError::Mutation)?;
+        retained_turns.extend(
+            entries[..cutoff]
+                .iter()
+                .filter(|entry| entry.role == MessageRole::Assistant)
+                .filter_map(|entry| retained_checkpoints.get(&entry.id).cloned())
+                .collect::<Vec<_>>(),
+        );
         if retained_turns[..] != native.turn_starts[..position] {
             return Err(mutation(
                 "rewind retained turns differ from Claude's native prefix",

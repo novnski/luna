@@ -69,7 +69,11 @@ impl Harness for Synthetic {
         SteeringMode::StepBoundary
     }
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
-        &[ReasoningLevel::Low, ReasoningLevel::Medium, ReasoningLevel::High]
+        &[
+            ReasoningLevel::Low,
+            ReasoningLevel::Medium,
+            ReasoningLevel::High,
+        ]
     }
     fn fork_capability(&self) -> ProviderForkCapability {
         ProviderForkCapability::Checkpoint
@@ -482,10 +486,16 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     let identity = parent_contract.context.chat.clone().expect("chat identity");
     assert_eq!(identity.role, RuntimeChatRole::Main);
     assert_eq!(identity.parent_thread_id, None);
-    assert_eq!(identity.capabilities.context_origin, RuntimeContextOrigin::Fresh);
+    assert_eq!(
+        identity.capabilities.context_origin,
+        RuntimeContextOrigin::Fresh
+    );
     assert!(identity.capabilities.create_child_threads, "{identity:?}");
     assert!(instructions(&parent_contract).contains("Chat role: main"));
-    evidence("parent-main-contract.json", &serde_json::to_value(&parent_contract).unwrap());
+    evidence(
+        "parent-main-contract.json",
+        &serde_json::to_value(&parent_contract).unwrap(),
+    );
     let parent_row = core.workspace.chat(&parent).unwrap().unwrap();
 
     // A1 C1 D1 B8: a legacy payload defaults everything from the parent.
@@ -497,12 +507,17 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     for key in ["checkout", "permissionMode"] {
         assert!(reencoded.get(key).is_none(), "{reencoded}");
     }
-    let receipt = create_child(&client, &parent, legacy_request).await.unwrap();
+    let receipt = create_child(&client, &parent, legacy_request)
+        .await
+        .unwrap();
     let legacy = receipt["taskId"].as_str().unwrap().to_owned();
     let row = core.workspace.chat(&legacy).unwrap().unwrap();
     let child = row.child_thread.clone().unwrap();
     let provisioning = child.provisioning.clone().unwrap();
-    assert_eq!(receipt["provisioning"], serde_json::to_value(&provisioning).unwrap());
+    assert_eq!(
+        receipt["provisioning"],
+        serde_json::to_value(&provisioning).unwrap()
+    );
     assert_eq!(provisioning.created_by, ChildCreator::User);
     assert_eq!(provisioning.checkout_kind, ChildCheckoutKind::Current);
     assert_eq!(row.cwd.as_deref(), Some(repo.to_str().unwrap()));
@@ -518,7 +533,10 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     assert!(!provisioning.granted_by_user && !provisioning.escalation_denied);
     // The sweeper starts the child; its run carries the inherited settings
     // and an explicit child identity (F2).
-    until("legacy child run", || !runs_for(&recorder, &legacy).is_empty()).await;
+    until("legacy child run", || {
+        !runs_for(&recorder, &legacy).is_empty()
+    })
+    .await;
     let run = runs_for(&recorder, &legacy)[0].clone();
     assert_eq!(run.cwd, repo.to_str().unwrap());
     assert_eq!(run.model.as_deref(), Some("parent-model"));
@@ -531,13 +549,25 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     let identity = child_contract.context.chat.clone().unwrap();
     assert_eq!(identity.role, RuntimeChatRole::Child);
     assert_eq!(identity.parent_thread_id.as_deref(), Some(parent.as_str()));
-    assert_eq!(child_contract.context.parent_thread_id.as_deref(), Some(parent.as_str()));
-    assert_eq!(identity.capabilities.checkout, RuntimeCheckoutOwnership::SharedWithParent);
-    assert_eq!(identity.capabilities.granted_access, Some(PermissionMode::Auto));
+    assert_eq!(
+        child_contract.context.parent_thread_id.as_deref(),
+        Some(parent.as_str())
+    );
+    assert_eq!(
+        identity.capabilities.checkout,
+        RuntimeCheckoutOwnership::SharedWithParent
+    );
+    assert_eq!(
+        identity.capabilities.granted_access,
+        Some(PermissionMode::Auto)
+    );
     assert!(identity.capabilities.access_capped_by_parent);
     assert!(identity.capabilities.reports_to_parent);
     assert!(instructions(&child_contract).contains("Chat role: child chat"));
-    evidence("child-current-contract.json", &serde_json::to_value(&child_contract).unwrap());
+    evidence(
+        "child-current-contract.json",
+        &serde_json::to_value(&child_contract).unwrap(),
+    );
 
     // A2: authority cannot be smuggled through request fields.
     for request in [
@@ -546,11 +576,20 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
         json!({"prompt":"x","idempotencyKey":"smuggle-3","checkout":{"kind":"sideways"}}),
         json!({"prompt":"x","idempotencyKey":"smuggle-4","permissionMode":"root"}),
     ] {
-        assert!(create_child(&client, &parent, request.clone()).await.is_err(), "{request}");
+        assert!(
+            create_child(&client, &parent, request.clone())
+                .await
+                .is_err(),
+            "{request}"
+        );
     }
     let unknown_in_checkout = json!({"prompt":"x","idempotencyKey":"smuggle-5",
         "checkout":{"kind":"newWorktree","branch":"luna/ok","grant":true}});
-    assert!(create_child(&client, &parent, unknown_in_checkout).await.is_err());
+    assert!(
+        create_child(&client, &parent, unknown_in_checkout)
+            .await
+            .is_err()
+    );
 
     // B3 B5 B4 B2: invalid checkout input creates nothing.
     let before_dirs = child_dirs(repo_name);
@@ -602,7 +641,10 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     assert_eq!(provisioning.checkout_kind, ChildCheckoutKind::NewWorktree);
     assert_eq!(provisioning.branch.as_deref(), Some(wt_branch.as_str()));
     assert_eq!(provisioning.base.as_deref(), Some("main"));
-    assert!(wt_path.starts_with(worktrees_root().join(repo_name)), "{wt_path:?}");
+    assert!(
+        wt_path.starts_with(worktrees_root().join(repo_name)),
+        "{wt_path:?}"
+    );
     assert_eq!(row.cwd.as_deref(), Some(wt_path.to_str().unwrap()));
     assert_eq!(row.branch.as_deref(), Some(wt_branch.as_str()));
     assert!(row.checkout_id.is_some() && row.checkout_id != parent_row.checkout_id);
@@ -619,18 +661,36 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     // The parent's own checkout is untouched.
     assert_eq!(git(&repo, &["branch", "--show-current"]), "main");
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), main_sha);
-    assert_eq!(git(&repo, &["status", "--porcelain", "--untracked-files=no"]), "");
-    until("worktree child run", || !runs_for(&recorder, &wt_child).is_empty()).await;
+    assert_eq!(
+        git(&repo, &["status", "--porcelain", "--untracked-files=no"]),
+        ""
+    );
+    until("worktree child run", || {
+        !runs_for(&recorder, &wt_child).is_empty()
+    })
+    .await;
     let run = runs_for(&recorder, &wt_child)[0].clone();
     assert_eq!(run.cwd, wt_path.to_str().unwrap());
     let wt_contract = contract(&run);
     assert_eq!(
-        wt_contract.context.chat.as_ref().unwrap().capabilities.checkout,
+        wt_contract
+            .context
+            .chat
+            .as_ref()
+            .unwrap()
+            .capabilities
+            .checkout,
         RuntimeCheckoutOwnership::OwnWorktree
     );
-    assert_eq!(wt_contract.context.branch.as_deref(), Some(wt_branch.as_str()));
+    assert_eq!(
+        wt_contract.context.branch.as_deref(),
+        Some(wt_branch.as_str())
+    );
     assert!(instructions(&wt_contract).contains("its own git worktree and branch"));
-    evidence("child-worktree-row.json", &serde_json::to_value(&row).unwrap());
+    evidence(
+        "child-worktree-row.json",
+        &serde_json::to_value(&row).unwrap(),
+    );
 
     // Named branch from an explicit base; a retry reuses it (B6).
     let named = json!({"prompt":"WT_NAMED","idempotencyKey":"wt-named",
@@ -644,7 +704,11 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     let dirs = child_dirs(repo_name);
     let again = create_child(&client, &parent, named).await.unwrap();
     assert_eq!(again["taskId"], first["taskId"]);
-    assert_eq!(child_dirs(repo_name), dirs, "a retry must not mint a second worktree");
+    assert_eq!(
+        child_dirs(repo_name),
+        dirs,
+        "a retry must not mint a second worktree"
+    );
 
     // C6: the creation dialog is the user's own grant above the ceiling.
     let granted = create_child(
@@ -659,12 +723,21 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     let child = row.child_thread.clone().unwrap();
     let provisioning = child.provisioning.clone().unwrap();
     assert_eq!(provisioning.granted_permission_mode, PermissionMode::Full);
-    assert_eq!(provisioning.requested_permission_mode, Some(PermissionMode::Full));
+    assert_eq!(
+        provisioning.requested_permission_mode,
+        Some(PermissionMode::Full)
+    );
     assert!(provisioning.granted_by_user && !provisioning.escalation_denied);
     assert_eq!(child.permission_ceiling, PermissionMode::Full);
     assert_eq!(child.sandbox_ceiling, None);
-    assert_eq!(row.config.unwrap().effective_permission_mode, PermissionMode::Full);
-    until("granted child run", || !runs_for(&recorder, &granted).is_empty()).await;
+    assert_eq!(
+        row.config.unwrap().effective_permission_mode,
+        PermissionMode::Full
+    );
+    until("granted child run", || {
+        !runs_for(&recorder, &granted).is_empty()
+    })
+    .await;
     let run = runs_for(&recorder, &granted)[0].clone();
     assert_eq!(
         run.permission_policy.as_ref().unwrap().effective_mode,
@@ -700,10 +773,19 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     .await
     .unwrap();
     let explicit = explicit["taskId"].as_str().unwrap().to_owned();
-    let explicit_config = core.workspace.chat(&explicit).unwrap().unwrap().config.unwrap();
+    let explicit_config = core
+        .workspace
+        .chat(&explicit)
+        .unwrap()
+        .unwrap()
+        .config
+        .unwrap();
     assert_eq!(explicit_config.model.as_deref(), Some("child-model"));
     assert_eq!(explicit_config.reasoning, Some(ReasoningLevel::Low));
-    until("explicit child run", || !runs_for(&recorder, &explicit).is_empty()).await;
+    until("explicit child run", || {
+        !runs_for(&recorder, &explicit).is_empty()
+    })
+    .await;
     assert_eq!(
         runs_for(&recorder, &explicit)[0].model.as_deref(),
         Some("child-model")
@@ -712,29 +794,33 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     // C5 (dispatch): lowering the parent re-caps ordinary children (the Auto
     // child is refused rather than silently run as hidden Ask) but not the
     // one the user granted.
-    let mut lowered: luna_proto::ChatConfig = serde_json::from_value(config(
-        HarnessId::Codex,
-        "ask",
-        "parent-model",
-        "high",
-    ))
-    .unwrap();
+    let mut lowered: luna_proto::ChatConfig =
+        serde_json::from_value(config(HarnessId::Codex, "ask", "parent-model", "high")).unwrap();
     lowered.effective_permission_mode = PermissionMode::Ask;
     core.workspace.set_chat_config(&parent, &lowered).unwrap();
     for (chat, message) in [(&legacy, "legacy-2"), (&granted, "granted-2")] {
         until("child idle", || !core.sessions.turn_in_flight(chat)).await;
         queue(&client, chat, message, "second turn").await;
     }
-    until("granted child second run", || runs_for(&recorder, &granted).len() == 2).await;
+    until("granted child second run", || {
+        runs_for(&recorder, &granted).len() == 2
+    })
+    .await;
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(
-        runs_for(&recorder, &legacy)
-            .iter()
-            .all(|run| run.permission_policy.as_ref().unwrap().effective_mode
-                <= PermissionMode::Auto),
+        runs_for(&recorder, &legacy).iter().all(|run| run
+            .permission_policy
+            .as_ref()
+            .unwrap()
+            .effective_mode
+            <= PermissionMode::Auto),
         "a parent-capped child never runs above the parent"
     );
-    assert_eq!(runs_for(&recorder, &legacy).len(), 1, "capped Auto child is refused");
+    assert_eq!(
+        runs_for(&recorder, &legacy).len(),
+        1,
+        "capped Auto child is refused"
+    );
     assert_eq!(
         runs_for(&recorder, &granted)[1]
             .permission_policy
@@ -758,13 +844,22 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     assert!(oversized.contains("too large"), "{oversized}");
     assert_eq!(child_dirs(repo_name), dirs);
     assert_eq!(git(&repo, &["branch", "--list"]), branches);
-    assert_eq!(git(&repo, &["worktree", "list"]).lines().count(), dirs.len() + 1);
+    assert_eq!(
+        git(&repo, &["worktree", "list"]).lines().count(),
+        dirs.len() + 1
+    );
 
     // B1: a project that is not a git repository cannot get a worktree.
     let plain = base.join("plain-project");
     std::fs::create_dir_all(&plain).unwrap();
     core.workspace
-        .create_space("space-plain", &core.device_id, plain.to_str().unwrap(), None, false)
+        .create_space(
+            "space-plain",
+            &core.device_id,
+            plain.to_str().unwrap(),
+            None,
+            false,
+        )
         .unwrap();
     let plain_parent = uuid::Uuid::new_v4().to_string();
     create_chat(
@@ -783,14 +878,11 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     .await
     .unwrap_err();
     assert!(error.contains("not a git repository"), "{error}");
-    assert!(
-        !core
-            .workspace
-            .read_chats()
-            .unwrap()
-            .iter()
-            .any(|chat| chat.child_thread.as_ref().is_some_and(|c| c.initial_prompt == "NO_GIT"))
-    );
+    assert!(!core.workspace.read_chats().unwrap().iter().any(|chat| {
+        chat.child_thread
+            .as_ref()
+            .is_some_and(|c| c.initial_prompt == "NO_GIT")
+    }));
 
     evidence(
         "children-summary.json",
@@ -808,6 +900,221 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
 // Side chats (native fork path), both provider identities
 // ---------------------------------------------------------------------------
 
+/// A rejected first send must not consume or echo the seed. Goals and native
+/// reviews carry the same frozen parent context as ordinary sends, without
+/// changing the objective, review target, or visible user message.
+#[tokio::test(flavor = "multi_thread")]
+async fn snapshot_side_context_survives_goals_reviews_and_rejected_first_send() {
+    for provider in [HarnessId::Codex, HarnessId::ClaudeCode] {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let repo = base.join("snapshot-side");
+        init_repo(&repo);
+        let parent_wt = base.join("snapshot-parent-wt");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "snapshot-parent",
+                parent_wt.to_str().unwrap(),
+                "main",
+            ],
+        );
+        let (core, recorder) = assemble(&base, provider);
+        let client = luna_rpc::memory_client(core.rpc_service());
+        core.workspace
+            .create_space(
+                "snapshot-space",
+                &core.device_id,
+                repo.to_str().unwrap(),
+                None,
+                true,
+            )
+            .unwrap();
+        let parent = uuid::Uuid::new_v4().to_string();
+        create_chat(
+            &client,
+            &parent,
+            "snapshot-space",
+            &parent_wt,
+            config(provider, "ask", "parent-model", "low"),
+        )
+        .await;
+        core.doc_host
+            .open(&parent)
+            .unwrap()
+            .write_user_message("snapshot-origin", "SNAPSHOT_PARENT_927", 1)
+            .unwrap();
+        core.workspace
+            .set_chat_branch(&parent, "snapshot-parent")
+            .unwrap();
+        queue(&client, &parent, "parent-bound", "BIND_PARENT").await;
+        until("snapshot parent idle", || {
+            runs_for(&recorder, &parent).len() == 1 && !core.sessions.turn_in_flight(&parent)
+        })
+        .await;
+        let parent_row = core.workspace.chat(&parent).unwrap().unwrap();
+        assert!(parent_row.checkout_id.is_some() && parent_row.source_context.is_some());
+        for review in [false, true] {
+            let created: Value = client.call("CreateSideChat", json!({
+                "parentId":parent, "requestId":uuid::Uuid::new_v4().to_string(),
+                "forceSnapshot":true, "originMessageId":"snapshot-origin", "anchorText":"SELECTED_QUOTE_813",
+            })).await.unwrap();
+            let side = created["meta"]["id"].as_str().unwrap();
+            let side_row = core.workspace.chat(side).unwrap().unwrap();
+            assert_eq!(side_row.cwd, parent_row.cwd);
+            assert_eq!(side_row.branch, parent_row.branch);
+            assert_eq!(
+                side_row.checkout_id, parent_row.checkout_id,
+                "snapshot retains checkout before any send"
+            );
+            assert_eq!(side_row.source_context, parent_row.source_context);
+            let make_request = |objective: &str| RunRequest {
+                prompt: "visible first input".into(),
+                harness: Some(provider),
+                provider_account_id: side_row
+                    .config
+                    .as_ref()
+                    .unwrap()
+                    .provider_account_id
+                    .clone(),
+                model: Some("parent-model".into()),
+                reasoning: Some(ReasoningLevel::Low),
+                model_options: Default::default(),
+                cwd: parent_wt.to_str().unwrap().into(),
+                sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
+                auto_approve: false,
+                permission_mode: PermissionMode::Ask,
+                parent_permission_ceiling: None,
+                environment_permission_ceiling: None,
+                permission_policy: None,
+                resume: None,
+                attachments: vec![],
+                worktree: None,
+                input_items: vec![],
+                review: None,
+                goal: Some(luna_proto::GoalStartRequest {
+                    objective: objective.into(),
+                    token_budget: None,
+                }),
+            };
+            let rejected = core
+                .sessions
+                .dispatch(
+                    side,
+                    provider,
+                    make_request(""),
+                    Some("rejected-first".into()),
+                )
+                .await;
+            assert!(rejected.is_err());
+            assert_eq!(
+                entry_count(&core, side),
+                0,
+                "invalid first goal must not leave an echo"
+            );
+            let mut request = make_request("USE_SELECTED_CONTEXT");
+            if review {
+                request.goal = None;
+                request.review = Some(luna_proto::NativeReviewRequest {
+                    target: luna_proto::ReviewTarget::Custom {
+                        instructions: "REVIEW_SELECTED_CONTEXT".into(),
+                    },
+                });
+            }
+            core.sessions
+                .dispatch(
+                    side,
+                    provider,
+                    request.clone(),
+                    Some("accepted-first".into()),
+                )
+                .await
+                .unwrap();
+            until("seeded side run", || {
+                !runs_for(&recorder, side).is_empty() && !core.sessions.turn_in_flight(side)
+            })
+            .await;
+            let run = runs_for(&recorder, side)[0].clone();
+            let seeded = contract(&run);
+            let section = seeded
+                .instructions
+                .iter()
+                .find(|section| section.name == "Side chat parent context")
+                .expect("parent context delivered outside rewritten prompt");
+            assert!(
+                section.text.contains("SNAPSHOT_PARENT_927")
+                    && section.text.contains("SELECTED_QUOTE_813")
+            );
+            if !review {
+                assert_eq!(run.prompt, "USE_SELECTED_CONTEXT");
+                assert_eq!(run.goal, request.goal);
+            } else if provider == HarnessId::Codex {
+                assert_eq!(run.review, request.review);
+            } else {
+                assert_eq!(run.prompt, "REVIEW_SELECTED_CONTEXT");
+            }
+            queue(&client, side, "follow-up", "FOLLOW_UP").await;
+            until("stable side contract", || {
+                runs_for(&recorder, side).len() == 2 && !core.sessions.turn_in_flight(side)
+            })
+            .await;
+            let follow_up = contract(&runs_for(&recorder, side)[1]);
+            evidence(
+                "snapshot-context-contracts.json",
+                &json!({"first":seeded,"followUp":follow_up}),
+            );
+            assert_eq!(
+                Some(section),
+                follow_up
+                    .instructions
+                    .iter()
+                    .find(|section| section.name == "Side chat parent context"),
+                "frozen seed is stable after binding publication"
+            );
+            let mut held = runs_for(&recorder, side)[1].clone();
+            held.prompt = "HOLD_WITH_CONTEXT".into();
+            core.sessions
+                .dispatch(
+                    side,
+                    provider,
+                    held.clone(),
+                    Some("held-with-context".into()),
+                )
+                .await
+                .unwrap();
+            until("warm seeded side", || {
+                runs_for(&recorder, side).len() == 3 && core.sessions.turn_in_flight(side)
+            })
+            .await;
+            held.prompt = "STEER_WITH_CONTEXT".into();
+            core.sessions
+                .dispatch(side, provider, held, Some("steer-with-context".into()))
+                .await
+                .unwrap();
+            until("seeded steer accepted", || {
+                recorder
+                    .steers
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(_, prompt)| prompt == "STEER_WITH_CONTEXT")
+            })
+            .await;
+            core.sessions.interrupt_for_stop(side).await.unwrap();
+            until("seeded side stopped", || {
+                !core.sessions.turn_in_flight(side)
+            })
+            .await;
+        }
+        drop(client);
+        core.shutdown().await;
+    }
+}
+
 /// E1–E5 and the side-chat identity, for one provider identity.
 async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &str) {
     let tmp = tempfile::tempdir().unwrap();
@@ -818,24 +1125,45 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
     let parent_wt = base.join("parent-worktree");
     git(
         &repo,
-        &["worktree", "add", "-q", "-b", "parent-wt", parent_wt.to_str().unwrap(), "main"],
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "parent-wt",
+            parent_wt.to_str().unwrap(),
+            "main",
+        ],
     );
     let (core, recorder) = assemble(&base, id);
     let client = luna_rpc::memory_client(core.rpc_service());
     core.workspace
-        .create_space("space-side", &core.device_id, repo.to_str().unwrap(), None, true)
+        .create_space(
+            "space-side",
+            &core.device_id,
+            repo.to_str().unwrap(),
+            None,
+            true,
+        )
         .unwrap();
     let parent = uuid::Uuid::new_v4().to_string();
-    create_chat(
+    let mut parent_config = config(id, mode, "parent-model", "medium");
+    // The product Full picker changes mode, not this historical field.
+    // Native parent runs already derive DangerFullAccess from effective Full.
+    if mode == "full" {
+        parent_config["sandbox"] = json!("workspace-write");
+    }
+    create_chat(&client, &parent, "space-side", &parent_wt, parent_config).await;
+    core.workspace
+        .set_chat_branch(&parent, "parent-wt")
+        .unwrap();
+    queue(
         &client,
         &parent,
-        "space-side",
-        &parent_wt,
-        config(id, mode, "parent-model", "medium"),
+        "parent-context",
+        "PARENT_CONTEXT_SENTINEL",
     )
     .await;
-    core.workspace.set_chat_branch(&parent, "parent-wt").unwrap();
-    queue(&client, &parent, "parent-context", "PARENT_CONTEXT_SENTINEL").await;
     until("parent bound and idle", || {
         runs_for(&recorder, &parent).len() == 1
             && !core.sessions.turn_in_flight(&parent)
@@ -902,13 +1230,29 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
     let identity = side_contract.context.chat.clone().unwrap();
     assert_eq!(identity.role, RuntimeChatRole::Side);
     assert_eq!(identity.parent_thread_id.as_deref(), Some(parent.as_str()));
-    assert_eq!(identity.capabilities.context_origin, RuntimeContextOrigin::NativeFork);
-    assert_eq!(identity.capabilities.checkout, RuntimeCheckoutOwnership::SharedWithParent);
+    assert_eq!(
+        identity.capabilities.context_origin,
+        RuntimeContextOrigin::NativeFork
+    );
+    assert_eq!(
+        identity.capabilities.checkout,
+        RuntimeCheckoutOwnership::SharedWithParent
+    );
     assert!(!identity.capabilities.persistent);
     assert!(!identity.capabilities.create_child_threads);
-    assert!(!side_contract.tools.iter().any(|tool| tool.name == "create_thread"));
-    assert!(side_contract.omitted_tools.iter().any(|tool| tool.name == "create_thread"
-        && tool.reason.contains("side chats cannot create child chats")));
+    assert!(
+        !side_contract
+            .tools
+            .iter()
+            .any(|tool| tool.name == "create_thread")
+    );
+    assert!(
+        side_contract
+            .omitted_tools
+            .iter()
+            .any(|tool| tool.name == "create_thread"
+                && tool.reason.contains("side chats cannot create child chats"))
+    );
     let text = instructions(&side_contract);
     assert!(text.contains("Chat role: side chat"), "{text}");
     assert!(text.contains(&format!("@thread:{parent}")), "{text}");
@@ -923,7 +1267,13 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
     assert_eq!(runs_for(&recorder, &parent).len(), 1);
 
     // E4: the parent runs a full turn while the side turn is still running.
-    queue(&client, &parent, "parent-during-side", "parent turn during side").await;
+    queue(
+        &client,
+        &parent,
+        "parent-during-side",
+        "parent turn during side",
+    )
+    .await;
     until("parent second turn", || {
         runs_for(&recorder, &parent).len() == 2 && !core.sessions.turn_in_flight(&parent)
     })
@@ -932,7 +1282,10 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
         runs_for(&recorder, &parent)[1].resume.as_deref(),
         Some(parent_session.as_str())
     );
-    assert!(core.sessions.turn_in_flight(&side), "side turn must keep running");
+    assert!(
+        core.sessions.turn_in_flight(&side),
+        "side turn must keep running"
+    );
 
     // E3: Stop in the side chat leaves the parent alone.
     let parent_entries = entry_count(&core, &parent);
@@ -954,7 +1307,10 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
 
     // E4: a parent turn and its Stop leave the side chat untouched.
     queue(&client, &parent, "parent-hold", "HOLD parent work").await;
-    until("parent hold running", || core.sessions.turn_in_flight(&parent)).await;
+    until("parent hold running", || {
+        core.sessions.turn_in_flight(&parent)
+    })
+    .await;
     client
         .call(
             "SendSideChat",
@@ -966,10 +1322,16 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
         runs_for(&recorder, &side).len() == 2 && !core.sessions.turn_in_flight(&side)
     })
     .await;
-    assert!(core.sessions.turn_in_flight(&parent), "parent turn must keep running");
+    assert!(
+        core.sessions.turn_in_flight(&parent),
+        "parent turn must keep running"
+    );
     let side_entries = entry_count(&core, &side);
     let snapshot: luna_proto::TaskCommandRead = client
-        .call_as(luna_rpc::methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId": parent}))
+        .call_as(
+            luna_rpc::methods::GET_TASK_COMMAND_SNAPSHOT,
+            json!({"taskId": parent}),
+        )
         .await
         .unwrap();
     let mut stop = json!({
@@ -1019,6 +1381,11 @@ async fn codex_side_chat_forks_inherits_and_runs_independently() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn codex_full_side_chat_inherits_effective_access_with_legacy_sandbox() {
+    side_chat_forks_inherits_and_runs_independently(HarnessId::Codex, "full").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn claude_side_chat_forks_inherits_and_runs_independently() {
     side_chat_forks_inherits_and_runs_independently(HarnessId::ClaudeCode, "full").await;
 }
@@ -1040,7 +1407,10 @@ const PNG_1X1: &[u8] = &[
 /// composer's `task_commands::execute` does.
 async fn command(client: &RpcClient, task: &str, id: &str, intent: Value) -> Result<Value, String> {
     let snapshot: luna_proto::TaskCommandRead = client
-        .call_as(luna_rpc::methods::GET_TASK_COMMAND_SNAPSHOT, json!({"taskId": task}))
+        .call_as(
+            luna_rpc::methods::GET_TASK_COMMAND_SNAPSHOT,
+            json!({"taskId": task}),
+        )
         .await
         .map_err(|error| error.to_string())?;
     let mut envelope = json!({
@@ -1084,7 +1454,10 @@ fn chat_diag(core: &EngineCore, recorder: &Recorder, chat: &str) -> String {
             ));
         }
         for entry in handle.doc().read_entries().unwrap_or_default() {
-            out.push_str(&format!("  entry {:?} {} {:?}\n", entry.role, entry.id, entry.parts));
+            out.push_str(&format!(
+                "  entry {:?} {} {:?}\n",
+                entry.role, entry.id, entry.parts
+            ));
         }
     }
     out.push_str(&run_summary(recorder));
@@ -1137,17 +1510,20 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     let (core, recorder) = assemble(&base, id);
     let client = luna_rpc::memory_client(core.rpc_service());
     core.workspace
-        .create_space("space-ordinary", &core.device_id, repo.to_str().unwrap(), None, true)
+        .create_space(
+            "space-ordinary",
+            &core.device_id,
+            repo.to_str().unwrap(),
+            None,
+            true,
+        )
         .unwrap();
     let parent = uuid::Uuid::new_v4().to_string();
-    create_chat(
-        &client,
-        &parent,
-        "space-ordinary",
-        &repo,
-        config(id, mode, "parent-model", "medium"),
-    )
-    .await;
+    let mut parent_config = config(id, mode, "parent-model", "medium");
+    if mode == "full" {
+        parent_config["sandbox"] = json!("workspace-write");
+    }
+    create_chat(&client, &parent, "space-ordinary", &repo, parent_config).await;
     core.workspace.set_chat_branch(&parent, "main").unwrap();
     queue(&client, &parent, "parent-context", "PARENT_CONTEXT").await;
     until("parent bound and idle", || {
@@ -1163,23 +1539,31 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     tokio::time::sleep(Duration::from_millis(300)).await;
     let parent_before = core.workspace.chat(&parent).unwrap().unwrap();
     let parent_entries = entry_count(&core, &parent);
-    let parent_untouched = |core: &EngineCore, recorder: &Recorder, step: &str| {
-        assert_eq!(runs_for(recorder, &parent).len(), 1, "{step}: parent ran");
-        assert!(!core.sessions.turn_in_flight(&parent), "{step}: parent busy");
-        assert_eq!(queue_len(core, &parent), 0, "{step}: parent queue");
-        assert_eq!(entry_count(core, &parent), parent_entries, "{step}: parent transcript");
-        assert_eq!(
-            core.workspace.chat(&parent).unwrap().unwrap().config,
-            parent_before.config,
-            "{step}: parent config"
-        );
-        assert!(
-            recorder.steers.lock().unwrap().iter().all(|(session, _)| {
-                Some(session) != parent_before.harness_session_id.as_ref()
-            }),
-            "{step}: parent steered"
-        );
-    };
+    let parent_untouched =
+        |core: &EngineCore, recorder: &Recorder, step: &str| {
+            assert_eq!(runs_for(recorder, &parent).len(), 1, "{step}: parent ran");
+            assert!(
+                !core.sessions.turn_in_flight(&parent),
+                "{step}: parent busy"
+            );
+            assert_eq!(queue_len(core, &parent), 0, "{step}: parent queue");
+            assert_eq!(
+                entry_count(core, &parent),
+                parent_entries,
+                "{step}: parent transcript"
+            );
+            assert_eq!(
+                core.workspace.chat(&parent).unwrap().unwrap().config,
+                parent_before.config,
+                "{step}: parent config"
+            );
+            assert!(
+                recorder.steers.lock().unwrap().iter().all(|(session, _)| {
+                    Some(session) != parent_before.harness_session_id.as_ref()
+                }),
+                "{step}: parent steered"
+            );
+        };
     let created: Value = client
         .call(
             "CreateSideChat",
@@ -1242,7 +1626,9 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         luna_rpc::methods::WATCH_QUEUE,
         luna_rpc::methods::WATCH_NATIVE_TASKS,
     ] {
-        let stream = client.subscribe_checked(method, json!({"chatId": side})).await;
+        let stream = client
+            .subscribe_checked(method, json!({"chatId": side}))
+            .await;
         assert!(stream.is_ok(), "{method}: {:?}", stream.err());
     }
     client
@@ -1287,7 +1673,11 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     let run = runs_for(&recorder, &side)[0].clone();
     assert!(run.prompt.contains("HOLD side work"), "{}", run.prompt);
     assert_eq!(run.attachments.len(), 1, "{:?}", run.attachments);
-    assert!(run.attachments[0].ends_with("att-side-pic.png"), "{:?}", run.attachments);
+    assert!(
+        run.attachments[0].ends_with("att-side-pic.png"),
+        "{:?}",
+        run.attachments
+    );
     assert_eq!(run.resume.as_deref(), Some(fork_session.as_str()));
     assert_eq!(
         contract(&run).context.chat.unwrap().role,
@@ -1324,7 +1714,10 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     )
     .await
     .unwrap();
-    until_diag_side(&core, &recorder, &side, "side queue holds", || queued_ids(&core, &side).contains(&"side-q2".to_string())).await;
+    until_diag_side(&core, &recorder, &side, "side queue holds", || {
+        queued_ids(&core, &side).contains(&"side-q2".to_string())
+    })
+    .await;
     parent_untouched(&core, &recorder, "queue");
 
     // G5: the ordinary Stop task command stops only the side turn.
@@ -1336,7 +1729,10 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     )
     .await
     .unwrap();
-    until_diag_side(&core, &recorder, &side, "side stopped", || !core.sessions.turn_in_flight(&side)).await;
+    until_diag_side(&core, &recorder, &side, "side stopped", || {
+        !core.sessions.turn_in_flight(&side)
+    })
+    .await;
     parent_untouched(&core, &recorder, "stop");
     // The held follow-up still belongs to the side chat; send it now if the
     // queue was paused by Stop.
@@ -1424,9 +1820,13 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     .await
     .unwrap();
     let before = runs_for(&recorder, &side).len();
-    queue_with(&client, &side, json!({"messageId":"side-q3","text":"after model change","holdForTurnEnd":true}))
-        .await
-        .unwrap();
+    queue_with(
+        &client,
+        &side,
+        json!({"messageId":"side-q3","text":"after model change","holdForTurnEnd":true}),
+    )
+    .await
+    .unwrap();
     until_diag_side(&core, &recorder, &side, "side model run", || {
         runs_for(&recorder, &side).len() == before + 1 && !core.sessions.turn_in_flight(&side)
     })
@@ -1437,14 +1837,26 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     parent_untouched(&core, &recorder, "model change");
 
     // G6: access change on the side chat; above the parent's ceiling it is capped.
-    command(&client, &side, "side-ask", json!({"kind":"setPermission","mode":"ask"}))
-        .await
-        .unwrap();
+    command(
+        &client,
+        &side,
+        "side-ask",
+        json!({"kind":"setPermission","mode":"ask"}),
+    )
+    .await
+    .unwrap();
     let before = runs_for(&recorder, &side).len();
-    queue_with(&client, &side, json!({"messageId":"side-q4","text":"after access change","holdForTurnEnd":true}))
-        .await
-        .unwrap();
-    until_diag_side(&core, &recorder, &side, "side ask run", || runs_for(&recorder, &side).len() == before + 1).await;
+    queue_with(
+        &client,
+        &side,
+        json!({"messageId":"side-q4","text":"after access change","holdForTurnEnd":true}),
+    )
+    .await
+    .unwrap();
+    until_diag_side(&core, &recorder, &side, "side ask run", || {
+        runs_for(&recorder, &side).len() == before + 1
+    })
+    .await;
     assert_eq!(
         runs_for(&recorder, &side)[before]
             .permission_policy
@@ -1453,32 +1865,73 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
             .effective_mode,
         PermissionMode::Ask
     );
-    until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
+    until_diag_side(&core, &recorder, &side, "side idle", || {
+        !core.sessions.turn_in_flight(&side)
+    })
+    .await;
     if mode != "full" {
-        command(&client, &side, "side-full", json!({"kind":"setPermission","mode":"full"}))
-            .await
-            .unwrap();
+        command(
+            &client,
+            &side,
+            "side-full",
+            json!({"kind":"setPermission","mode":"full"}),
+        )
+        .await
+        .unwrap();
         let before = runs_for(&recorder, &side).len();
-        queue_with(&client, &side, json!({"messageId":"side-q5","text":"above parent","holdForTurnEnd":true}))
-            .await
+        queue_with(
+            &client,
+            &side,
+            json!({"messageId":"side-q5","text":"above parent","holdForTurnEnd":true}),
+        )
+        .await
+        .unwrap();
+        until_diag_side(&core, &recorder, &side, "side capped run", || {
+            runs_for(&recorder, &side).len() == before + 1
+        })
+        .await;
+        let policy = runs_for(&recorder, &side)[before]
+            .permission_policy
+            .clone()
             .unwrap();
-        until_diag_side(&core, &recorder, &side, "side capped run", || runs_for(&recorder, &side).len() == before + 1).await;
-        let policy = runs_for(&recorder, &side)[before].permission_policy.clone().unwrap();
         assert_eq!(
             policy.effective_mode,
-            parent_before.config.as_ref().unwrap().effective_permission_mode,
+            parent_before
+                .config
+                .as_ref()
+                .unwrap()
+                .effective_permission_mode,
             "a side chat never runs above its parent"
         );
-        until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
+        until_diag_side(&core, &recorder, &side, "side idle", || {
+            !core.sessions.turn_in_flight(&side)
+        })
+        .await;
     }
     parent_untouched(&core, &recorder, "access change");
 
     // G7: commands that would leave the parent's checkout/provider are refused.
     for (key, intent, reason) in [
-        ("side-cwd", json!({"kind":"setCwd","cwd": base}), "shares its parent's checkout"),
-        ("side-branch", json!({"kind":"setBranch","branch":"other"}), "shares its parent's checkout"),
-        ("side-archive", json!({"kind":"setArchived","archived":true}), "not sidebar tasks"),
-        ("side-account", json!({"kind":"setProviderAccount","accountId":"other"}), "keeps its parent's provider"),
+        (
+            "side-cwd",
+            json!({"kind":"setCwd","cwd": base}),
+            "shares its parent's checkout",
+        ),
+        (
+            "side-branch",
+            json!({"kind":"setBranch","branch":"other"}),
+            "shares its parent's checkout",
+        ),
+        (
+            "side-archive",
+            json!({"kind":"setArchived","archived":true}),
+            "not sidebar tasks",
+        ),
+        (
+            "side-account",
+            json!({"kind":"setProviderAccount","accountId":"other"}),
+            "keeps its parent's provider",
+        ),
     ] {
         let error = command(&client, &side, key, intent).await.expect_err(key);
         assert!(error.contains(reason), "{key}: {error}");
@@ -1498,7 +1951,10 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
             .any(|run| run.prompt == "legacy send")
     })
     .await;
-    until_diag_side(&core, &recorder, &side, "side idle", || !core.sessions.turn_in_flight(&side)).await;
+    until_diag_side(&core, &recorder, &side, "side idle", || {
+        !core.sessions.turn_in_flight(&side)
+    })
+    .await;
     // The legacy send now honours the side chat's own model change.
     assert_eq!(
         runs_for(&recorder, &side)
@@ -1522,17 +1978,29 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .call("UnloadSideChat", json!({"id":side,"lease":lease}))
         .await
         .unwrap();
-    let error = queue_with(&client, &side, json!({"messageId":"side-late","text":"late","holdForTurnEnd":true}))
-        .await
-        .unwrap_err();
+    let error = queue_with(
+        &client,
+        &side,
+        json!({"messageId":"side-late","text":"late","holdForTurnEnd":true}),
+    )
+    .await
+    .unwrap_err();
     assert!(error.contains("read-only"), "{error}");
-    let error = command(&client, &side, "side-late-stop", json!({"kind":"session","command":{"kind":"interrupt"}}))
-        .await
-        .unwrap_err();
+    let error = command(
+        &client,
+        &side,
+        "side-late-stop",
+        json!({"kind":"session","command":{"kind":"interrupt"}}),
+    )
+    .await
+    .unwrap_err();
     assert!(error.contains("read-only"), "{error}");
     assert!(!queued_ids(&core, &side).contains(&"side-late".to_string()));
     let stream = client
-        .subscribe_checked(luna_rpc::methods::WATCH_DOC_MESSAGES, json!({"chatId": side}))
+        .subscribe_checked(
+            luna_rpc::methods::WATCH_DOC_MESSAGES,
+            json!({"chatId": side}),
+        )
         .await;
     assert!(stream.is_err(), "an unloaded side chat is not a live chat");
     parent_untouched(&core, &recorder, "after unload");
@@ -1610,7 +2078,8 @@ fn legacy_child_rows_contracts_and_requests_decode_unchanged() {
         "branch": null, "harness": "codex", "model": null, "reasoning": null,
         "executionRoute": "local", "grantedScopes": ["threads.read"]
     });
-    let context: luna_proto::RuntimeContext = serde_json::from_value(legacy_context.clone()).unwrap();
+    let context: luna_proto::RuntimeContext =
+        serde_json::from_value(legacy_context.clone()).unwrap();
     assert_eq!(context.chat, None);
     assert_eq!(serde_json::to_value(&context).unwrap(), legacy_context);
     for request in [

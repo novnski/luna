@@ -15,13 +15,13 @@ use std::process::Command;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use luna_engine::sessions::LunaApprovalOutcome;
 use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use luna_harness::{ClaudeHarness, CodexHarness};
 use luna_proto::{
     AgentEvent, ApprovalDecision, ChatConfig, ChildCheckoutKind, HarnessId, PermissionMode,
     PermissionScope, RunRequest, SandboxLevel, TaskLineage, UserInputQuestion,
 };
-use luna_engine::sessions::LunaApprovalOutcome;
 use serde_json::{Value, json};
 
 fn worktrees_root() -> PathBuf {
@@ -134,7 +134,13 @@ fn new_task(core: &EngineCore, project: &str, cwd: &Path, config: &ChatConfig) -
         .create_chat(&id, Some(project), None, Some(config.clone()), None)
         .unwrap();
     core.task_identity
-        .register_new_task(&id, Some(project), None, cwd.to_str(), TaskLineage::default())
+        .register_new_task(
+            &id,
+            Some(project),
+            None,
+            cwd.to_str(),
+            TaskLineage::default(),
+        )
         .unwrap();
     id
 }
@@ -303,7 +309,13 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
     std::fs::write(repo.join(".git/info/exclude"), ".luna-*\n").unwrap();
     std::fs::write(repo.join(".luna-fake-thread-per-task"), b"").unwrap();
     core.workspace
-        .create_space("project-a", &core.device_id, repo.to_str().unwrap(), None, true)
+        .create_space(
+            "project-a",
+            &core.device_id,
+            repo.to_str().unwrap(),
+            None,
+            true,
+        )
         .unwrap();
     let config = parent_config(HarnessId::Codex, PermissionMode::Auto);
     let source = new_task(&core, "project-a", &repo, &config);
@@ -322,7 +334,12 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
     let http = reqwest::Client::new();
 
     // F3: the Codex LUNA MCP endpoint lists the new create_thread schema.
-    let listed = post(&http, &a, &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).await;
+    let listed = post(
+        &http,
+        &a,
+        &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+    )
+    .await;
     let create = listed["result"]["tools"]
         .as_array()
         .unwrap()
@@ -333,8 +350,12 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
     schema_has_new_fields(&create["inputSchema"]);
     evidence("codex-create-thread-tool.json", &create);
     // The parent session's instructions name its role.
-    let thread_request = std::fs::read_to_string(hold_dir.join(format!("{source}.thread"))).unwrap();
-    assert!(thread_request.contains("Chat role: main"), "{thread_request}");
+    let thread_request =
+        std::fs::read_to_string(hold_dir.join(format!("{source}.thread"))).unwrap();
+    assert!(
+        thread_request.contains("Chat role: main"),
+        "{thread_request}"
+    );
 
     // C5: model-requested Full on an Auto parent, user picks the grant choice.
     let call = |id, args: Value, call_id: &str| tool_call(id, args, &a, call_id);
@@ -351,18 +372,39 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
             a.token.clone(),
         );
         tokio::spawn(async move {
-            post(&http, &Held { url, token, thread: String::new(), turn: String::new() }, &body).await
+            post(
+                &http,
+                &Held {
+                    url,
+                    token,
+                    thread: String::new(),
+                    turn: String::new(),
+                },
+                &body,
+            )
+            .await
         })
     };
     let (request_id, question) = next_card(&mut events).await;
     assert_card(&question, &["Deny", "Allow once", GRANT_FULL]);
-    assert!(question.question.contains("Full access requested"), "{}", question.question);
-    assert!(question.question.contains("new worktree on branch codex/granted"));
+    assert!(
+        question.question.contains("Full access requested"),
+        "{}",
+        question.question
+    );
+    assert!(
+        question
+            .question
+            .contains("new worktree on branch codex/granted")
+    );
     assert_eq!(
         question.approval.as_ref().unwrap().requested_scope,
         PermissionScope::Full
     );
-    evidence("codex-escalation-card.json", &serde_json::to_value(&question).unwrap());
+    evidence(
+        "codex-escalation-card.json",
+        &serde_json::to_value(&question).unwrap(),
+    );
     // Nothing is provisioned before the answer.
     assert!(!git(&repo, &["branch", "--list"]).contains("codex/granted"));
     assert_eq!(
@@ -377,7 +419,10 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
     assert!(!failed, "{text}");
     let receipt: Value = serde_json::from_str(&text).unwrap();
     let granted = receipt["taskId"].as_str().unwrap().to_owned();
-    assert_eq!(receipt["provisioning"]["grantedByUser"], true, "{receipt:#}");
+    assert_eq!(
+        receipt["provisioning"]["grantedByUser"], true,
+        "{receipt:#}"
+    );
     assert_eq!(receipt["provisioning"]["createdBy"], "agent");
     let row = core.workspace.chat(&granted).unwrap().unwrap();
     let provisioning = row.child_thread.clone().unwrap().provisioning.unwrap();
@@ -387,17 +432,32 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
     assert_eq!(row.branch.as_deref(), Some("codex/granted"));
     let worktree = PathBuf::from(row.cwd.clone().unwrap());
     assert!(worktree.starts_with(worktrees_root().join(repo_name)));
-    assert_eq!(git(&worktree, &["branch", "--show-current"]), "codex/granted");
-    evidence("codex-granted-child-row.json", &serde_json::to_value(&row).unwrap());
+    assert_eq!(
+        git(&worktree, &["branch", "--show-current"]),
+        "codex/granted"
+    );
+    evidence(
+        "codex-granted-child-row.json",
+        &serde_json::to_value(&row).unwrap(),
+    );
 
     // F2 on Codex: the child's own thread request carries its identity.
     let child_hold = worktree.join(".luna-mcp-hold");
     let _child = held(&child_hold, &granted).await;
     let child_request =
         std::fs::read_to_string(child_hold.join(format!("{granted}.thread"))).unwrap();
-    assert!(child_request.contains("Chat role: child chat"), "{child_request}");
-    assert!(child_request.contains("granted by the user"), "{child_request}");
-    assert!(child_request.contains("its own git worktree"), "{child_request}");
+    assert!(
+        child_request.contains("Chat role: child chat"),
+        "{child_request}"
+    );
+    assert!(
+        child_request.contains("granted by the user"),
+        "{child_request}"
+    );
+    assert!(
+        child_request.contains("its own git worktree"),
+        "{child_request}"
+    );
     assert!(child_request.contains(&source), "{child_request}");
     std::fs::write(child_hold.join(format!("release-{granted}")), b"").unwrap();
 
@@ -414,14 +474,27 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
             a.token.clone(),
         );
         tokio::spawn(async move {
-            post(&http, &Held { url, token, thread: String::new(), turn: String::new() }, &body).await
+            post(
+                &http,
+                &Held {
+                    url,
+                    token,
+                    thread: String::new(),
+                    turn: String::new(),
+                },
+                &body,
+            )
+            .await
         })
     };
     let (request_id, question) = next_card(&mut events).await;
     assert_card(&question, &["Deny", "Allow once", GRANT_FULL]);
     assert_eq!(
-        core.sessions
-            .respond_luna_local_ui_approval(&source, &request_id, ApprovalDecision::AllowOnce),
+        core.sessions.respond_luna_local_ui_approval(
+            &source,
+            &request_id,
+            ApprovalDecision::AllowOnce
+        ),
         LunaApprovalOutcome::AllowedOnce
     );
     let (failed, text) = tool_text(&pending.await.unwrap());
@@ -441,9 +514,19 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
         .unwrap()
         .count();
     for (id, index, key, decision) in [
-        (12, 0u32, "codex-denied", ApprovalDecision::ProviderChoice { index: 0 }),
+        (
+            12,
+            0u32,
+            "codex-denied",
+            ApprovalDecision::ProviderChoice { index: 0 },
+        ),
         // C8: a forged index outside the advertised choices is a denial.
-        (13, 9, "codex-forged", ApprovalDecision::ProviderChoice { index: 9 }),
+        (
+            13,
+            9,
+            "codex-forged",
+            ApprovalDecision::ProviderChoice { index: 9 },
+        ),
         (14, 0, "codex-deny-legacy", ApprovalDecision::Deny),
     ] {
         let _ = index;
@@ -460,8 +543,17 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
                 a.token.clone(),
             );
             tokio::spawn(async move {
-                post(&http, &Held { url, token, thread: String::new(), turn: String::new() }, &body)
-                    .await
+                post(
+                    &http,
+                    &Held {
+                        url,
+                        token,
+                        thread: String::new(),
+                        turn: String::new(),
+                    },
+                    &body,
+                )
+                .await
             })
         };
         let (request_id, _) = next_card(&mut events).await;
@@ -470,7 +562,11 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
                 .respond_luna_local_ui_approval(&source, &request_id, decision),
             LunaApprovalOutcome::Denied
         );
-        let (failed, _) = tool_text(&pending.await.unwrap());
+        let (failed, text) = tool_text(&pending.await.unwrap());
+        assert!(
+            text.contains("cancelled") && !text.contains("explicit user request"),
+            "denied/retired approval must report cancellation: {text}"
+        );
         assert!(failed, "{key} must fail");
         assert!(child_with_prompt(&core, &format!("Denied {key}")).is_none());
         assert!(!git(&repo, &["branch", "--list"]).contains(&format!("codex/{key}")));
@@ -495,7 +591,17 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
             a.token.clone(),
         );
         tokio::spawn(async move {
-            post(&http, &Held { url, token, thread: String::new(), turn: String::new() }, &body).await
+            post(
+                &http,
+                &Held {
+                    url,
+                    token,
+                    thread: String::new(),
+                    turn: String::new(),
+                },
+                &body,
+            )
+            .await
         })
     };
     let (request_id, question) = next_card(&mut events).await;
@@ -554,7 +660,13 @@ async fn claude_create_thread_schema_grant_cap_deny_and_child_identity() {
     init_repo(&repo);
     std::fs::write(repo.join(".git/info/exclude"), ".luna-*\n").unwrap();
     core.workspace
-        .create_space("project-a", &core.device_id, repo.to_str().unwrap(), None, true)
+        .create_space(
+            "project-a",
+            &core.device_id,
+            repo.to_str().unwrap(),
+            None,
+            true,
+        )
         .unwrap();
     let config = parent_config(HarnessId::ClaudeCode, PermissionMode::Ask);
     let source = new_task(&core, "project-a", &repo, &config);
@@ -595,7 +707,10 @@ async fn claude_create_thread_schema_grant_cap_deny_and_child_identity() {
     ] {
         let (request_id, question) = next_card(&mut events).await;
         assert_card(&question, &["Deny", "Allow once", GRANT_FULL]);
-        assert_eq!(question.approval.as_ref().unwrap().provider, HarnessId::ClaudeCode);
+        assert_eq!(
+            question.approval.as_ref().unwrap().provider,
+            HarnessId::ClaudeCode
+        );
         cards.push(serde_json::to_value(&question).unwrap());
         let expected = if decision == ApprovalDecision::Deny {
             LunaApprovalOutcome::Denied
@@ -642,11 +757,17 @@ async fn claude_create_thread_schema_grant_cap_deny_and_child_identity() {
     let capped = child_with_prompt(&core, "Claude capped child").unwrap();
     let capped_provisioning = capped.child_thread.clone().unwrap().provisioning.unwrap();
     assert!(capped_provisioning.escalation_denied);
-    assert_eq!(capped_provisioning.granted_permission_mode, PermissionMode::Ask);
+    assert_eq!(
+        capped_provisioning.granted_permission_mode,
+        PermissionMode::Ask
+    );
     assert_eq!(results["2"]["isError"], true);
     assert!(child_with_prompt(&core, "Claude denied child").is_none());
     assert!(!git(&repo, &["branch", "--list"]).contains("claude/denied"));
-    assert_eq!(results["3"]["isError"], true, "smuggled grant must be rejected");
+    assert_eq!(
+        results["3"]["isError"], true,
+        "smuggled grant must be rejected"
+    );
     assert!(child_with_prompt(&core, "Claude smuggled child").is_none());
 
     // F2 on Claude: each child is launched with its own role instructions.

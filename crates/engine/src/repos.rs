@@ -1254,14 +1254,28 @@ impl Repos {
             )));
         }
         self.git(
-            &["rev-parse", "--verify", "--quiet", &format!("{base}^{{commit}}")],
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{base}^{{commit}}"),
+            ],
             Some(repo_path),
         )
         .await
-        .map_err(|_| EngineError::Other(format!("Base ref does not resolve to a commit: {base}")))?;
+        .map_err(|_| {
+            EngineError::Other(format!("Base ref does not resolve to a commit: {base}"))
+        })?;
         std::fs::create_dir_all(&parent)?;
         self.git(
-            &["worktree", "add", "-b", branch, &path.to_string_lossy(), base],
+            &[
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                &path.to_string_lossy(),
+                base,
+            ],
             Some(repo_path),
         )
         .await?;

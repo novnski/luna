@@ -104,6 +104,115 @@ async fn setup(root: &std::path::Path, recorder: Arc<Recorder>) -> EngineCore {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn side_history_projection_removes_rewound_tail_and_empty_history() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let core = setup(dir.path(), recorder).await;
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let created = client.call("CreateSideChat", json!({
+        "parentId": "parent", "requestId": uuid::Uuid::new_v4().to_string(), "forceSnapshot": true,
+    })).await.unwrap();
+    let id = created["meta"]["id"].as_str().unwrap();
+    let lease = created["lease"].clone();
+    for (message, text) in [
+        ("projection-a", "SIDE_PREFIX"),
+        ("projection-b", "SIDE_REMOVED_TAIL"),
+    ] {
+        client
+            .call(
+                "SendSideChat",
+                json!({
+                    "id": id, "lease": lease, "messageId": message, "text": text,
+                }),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let entries = core
+                    .doc_host
+                    .open(id)
+                    .unwrap()
+                    .doc()
+                    .read_entries()
+                    .unwrap();
+                if entries.iter().any(|entry| entry.id == message)
+                    && !core.sessions.turn_in_flight(id)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+    // Read through the production RPC to populate the durable sequence projection.
+    let before = client
+        .call("ReadSideChat", json!({"id": id, "lease": lease}))
+        .await
+        .unwrap();
+    assert!(before.to_string().contains("SIDE_REMOVED_TAIL"));
+    let handle = core.doc_host.open(id).unwrap();
+    let entries = handle.doc().read_entries().unwrap();
+    let tail = entries
+        .iter()
+        .position(|entry| entry.id == "projection-b")
+        .unwrap();
+    // This is the same conversation replacement primitive used by native rewind.
+    handle
+        .doc()
+        .replace_conversation_entries(&entries[..tail], &Default::default())
+        .unwrap();
+    let after = client
+        .call("ReadSideChat", json!({"id": id, "lease": lease}))
+        .await
+        .unwrap();
+    assert!(
+        !after.to_string().contains("SIDE_REMOVED_TAIL"),
+        "{after:#}"
+    );
+    handle
+        .doc()
+        .replace_conversation_entries(&[], &Default::default())
+        .unwrap();
+    let empty = client
+        .call("ReadSideChat", json!({"id": id, "lease": lease}))
+        .await
+        .unwrap();
+    assert_eq!(empty["entries"].as_array().unwrap().len(), 0, "{empty:#}");
+    client
+        .call("UnloadSideChat", json!({"id": id, "lease": lease}))
+        .await
+        .unwrap();
+    let reopened = client
+        .call("ReadSideChat", json!({"id": id}))
+        .await
+        .unwrap();
+    assert_eq!(
+        reopened["entries"].as_array().unwrap().len(),
+        0,
+        "{reopened:#}"
+    );
+    for method in ["PreviewNativeFileRewind", "ApplyNativeFileRewind"] {
+        let rejected = client
+            .call(
+                method,
+                json!({
+                    "taskId": id, "messageId": "projection-a", "digest": "old-preview",
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            rejected.to_string().contains("read-only"),
+            "{method}: {rejected}"
+        );
+    }
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn side_chat_lifecycle_is_durable_isolated_and_history_does_not_run() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());

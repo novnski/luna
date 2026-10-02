@@ -5294,6 +5294,16 @@ impl Composer {
             || !self.draft_submitting.is_empty()
             || !self.draft_receipt_tasks.is_empty()
             || !self.interrupt_tasks.is_empty()
+            || self.goal_ui.has_work_in_flight()
+            || self
+                .action_task
+                .as_ref()
+                .is_some_and(|task| !task.is_ready())
+            || self.queue_edit_pending_id.is_some()
+            || self
+                .queue_edit_task
+                .as_ref()
+                .is_some_and(|task| !task.is_ready())
     }
 
     /// Drop this composer's in-memory copy of `key`'s draft so the next
@@ -9853,6 +9863,16 @@ impl Composer {
             return;
         }
         let message_id = uuid::Uuid::new_v4().to_string();
+        // Autosave owns the literal editor text at its revision. Goal slash
+        // parsing and ordinary trimming can normalize the outbound snapshot;
+        // changed content must reserve a new immutable draft revision.
+        if self.input.read(cx).text() != text.as_str() {
+            let revision = self
+                .draft_revisions
+                .entry(self.current_key.clone())
+                .or_insert(0);
+            *revision = revision.saturating_add(1);
+        }
         let draft_snapshot = self.build_draft_record(&self.current_key, text.clone(), cx);
         let submitted_revision = draft_snapshot.revision;
         self.draft_submitting
@@ -10028,6 +10048,9 @@ impl Composer {
             continuation_of: None,
         };
         self.launching_new_chat = is_new;
+        if as_goal {
+            self.goal_handed_off();
+        }
         if is_new {
             cx.emit(ComposerEvent::NewThreadTransitionStarted);
         }

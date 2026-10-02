@@ -17,6 +17,7 @@ required-features = ["native-fixture"]
 [dependencies]
 luna-proto.workspace = true
 base64 = "0.22"
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # Per-process `luna` MCP endpoint for Codex (same versions as luna-preview).
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }

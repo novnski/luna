@@ -54,6 +54,12 @@ pub(super) enum SideChatEvent {
         engine_generation: u64,
         text: String,
     },
+    Transcript {
+        side_chat_id: String,
+        engine_generation: u64,
+        transcript: Entity<Transcript>,
+        event: TranscriptEvent,
+    },
 }
 
 impl gpui::EventEmitter<SideChatEvent> for SideChatPanel {}
@@ -94,6 +100,8 @@ pub(super) struct SideChatPanel {
     links: crate::markdown::render::LinkUi,
     engine: Option<EngineHandle>,
     parent: String,
+    /// The selected root owns this panel even when its actual parent is a child.
+    owner_chat: Option<String>,
     engine_generation: u64,
     parent_title: String,
     page: Option<SideChatPage>,
@@ -116,6 +124,14 @@ pub(super) struct SideChatPanel {
 }
 
 impl SideChatPanel {
+    pub(super) fn owns_link_source(&self, source: &str, cx: &App) -> bool {
+        self.is_current(cx)
+            && (source == self.parent
+                || self
+                    .page
+                    .as_ref()
+                    .is_some_and(|page| page.meta.id == source))
+    }
     pub(super) fn new(
         state: Entity<AppState>,
         composers: Entity<PaneComposers>,
@@ -126,6 +142,7 @@ impl SideChatPanel {
     ) -> Self {
         let engine = state.read(cx).engine().cloned();
         let engine_generation = state.read(cx).engine_generation();
+        let owner_chat = state.read(cx).selected_chat.clone();
         let parent_title = state
             .read(cx)
             .chats
@@ -181,6 +198,7 @@ impl SideChatPanel {
             links,
             engine,
             parent,
+            owner_chat,
             engine_generation,
             parent_title,
             page: None,
@@ -215,7 +233,9 @@ impl SideChatPanel {
     /// Shell owns the asynchronous readback, so a failed unload stays visible
     /// even after the side view and its subscriptions have been released.
     pub(super) fn is_current(&self, cx: &App) -> bool {
-        self.state.read(cx).engine_generation() == self.engine_generation
+        let state = self.state.read(cx);
+        state.engine_generation() == self.engine_generation
+            && state.selected_chat == self.owner_chat
     }
 
     /// The open page is a writable, first-class side chat.
@@ -990,7 +1010,8 @@ impl SideChatPanel {
             let state = self.state.clone();
             let side = page.meta.id.clone();
             let parent = self.parent.clone();
-            let links = self.links.clone();
+            let mut links = self.links.clone();
+            links.source_session = Some(side.clone());
             let view = cx.new(|cx| {
                 PaneChatView::new(
                     state,
@@ -1012,31 +1033,44 @@ impl SideChatPanel {
             // "Use in parent" on a side chat answer, as in the leased view.
             let transcript = view.read(cx).transcript().clone();
             transcript.update(cx, |view, _| view.allow_side_chat_handoff());
-            self.transcript_events = Some(cx.subscribe(&transcript, |panel, _, event, cx| {
-                if let TranscriptEvent::SideChatResult {
-                    side_chat_id,
-                    message_id,
-                    text,
-                } = event
-                    && panel.is_current(cx)
-                    && panel
-                        .page
-                        .as_ref()
-                        .is_some_and(|page| page.meta.id == *side_chat_id)
-                    && panel
-                        .state
-                        .read(cx)
-                        .sub_transcript(side_chat_id)
-                        .iter()
-                        .any(|entry| entry.id == *message_id)
-                {
-                    cx.emit(SideChatEvent::ResultToParent {
-                        parent: panel.parent.clone(),
-                        engine_generation: panel.engine_generation,
-                        text: text.clone(),
-                    });
-                }
-            }));
+            self.transcript_events =
+                Some(cx.subscribe(&transcript, |panel, transcript, event, cx| {
+                    if !panel.is_current(cx) {
+                        return;
+                    }
+                    if let TranscriptEvent::SideChatResult {
+                        side_chat_id,
+                        message_id,
+                        text,
+                    } = event
+                        && panel.is_current(cx)
+                        && panel
+                            .page
+                            .as_ref()
+                            .is_some_and(|page| page.meta.id == *side_chat_id)
+                        && panel
+                            .state
+                            .read(cx)
+                            .sub_transcript(side_chat_id)
+                            .iter()
+                            .any(|entry| entry.id == *message_id)
+                    {
+                        cx.emit(SideChatEvent::ResultToParent {
+                            parent: panel.parent.clone(),
+                            engine_generation: panel.engine_generation,
+                            text: text.clone(),
+                        });
+                    } else if !matches!(event, TranscriptEvent::SideChatResult { .. })
+                        && let Some(page) = &panel.page
+                    {
+                        cx.emit(SideChatEvent::Transcript {
+                            side_chat_id: page.meta.id.clone(),
+                            engine_generation: panel.engine_generation,
+                            transcript,
+                            event: event.clone(),
+                        });
+                    }
+                }));
             self.transcript = None;
             self.full_view = Some((view, events));
         }
@@ -1502,33 +1536,81 @@ impl Shell {
         origin: Option<(String, String)>,
         cx: &mut Context<Self>,
     ) {
-        let links = Self::session_links(Some(self.active_chat.clone()), cx);
+        self.create_side_chat_panel_for(self.active_chat.clone(), origin, cx);
+    }
+
+    pub(super) fn create_side_chat_panel_for(
+        &mut self,
+        parent: String,
+        origin: Option<(String, String)>,
+        cx: &mut Context<Self>,
+    ) {
+        let links = Self::session_links(Some(parent.clone()), cx);
         let panel = cx.new(|cx| {
             SideChatPanel::new(
                 self.state.clone(),
                 self.pane_composers.clone(),
                 links,
-                self.active_chat.clone(),
+                parent,
                 origin,
                 cx,
             )
         });
-        self.side_chat_events = Some(cx.subscribe(&panel, |shell, _, event, cx| {
+        self.side_chat_events = Some(cx.subscribe(&panel, |shell, panel, event, cx| {
+            if !panel.read(cx).is_current(cx)
+                || shell
+                    .side_chat_panel
+                    .as_ref()
+                    .is_none_or(|current| current.entity_id() != panel.entity_id())
+            {
+                return;
+            }
             let (parent, engine_generation, text) = match event {
+                SideChatEvent::Transcript {
+                    side_chat_id,
+                    engine_generation,
+                    transcript,
+                    event,
+                } => {
+                    let current = panel.read(cx);
+                    let owns_transcript = current.full_view.as_ref().is_some_and(|(view, _)| {
+                        view.read(cx).transcript().entity_id() == transcript.entity_id()
+                    });
+                    if current.engine_generation == *engine_generation
+                        && current
+                            .page
+                            .as_ref()
+                            .is_some_and(|page| page.meta.id == *side_chat_id)
+                        && owns_transcript
+                    {
+                        shell.on_transcript_event(transcript.clone(), event, cx);
+                    }
+                    return;
+                }
                 SideChatEvent::RevealOrigin {
                     parent,
                     message_id,
                     engine_generation,
                 } => {
-                    if shell.active_chat == *parent
-                        && shell.state.read(cx).engine_generation() == *engine_generation
-                    {
+                    if shell.state.read(cx).engine_generation() == *engine_generation {
                         if shell.right_pane_expanded {
                             shell.toggle_right_pane_expand(cx);
                         }
-                        shell.transcript.update(cx, |transcript, cx| {
-                            transcript.navigate_to_message(parent.clone(), message_id.clone(), cx)
-                        });
+                        if shell.active_chat == *parent {
+                            shell.transcript.update(cx, |transcript, cx| {
+                                transcript.navigate_to_message(
+                                    parent.clone(),
+                                    message_id.clone(),
+                                    cx,
+                                )
+                            });
+                        } else {
+                            shell.add_work_surface(RightSurface::ChildChats, cx);
+                            let child_panel = shell.ensure_child_chat_panel(cx);
+                            child_panel.update(cx, |panel, cx| {
+                                panel.reveal_message(parent.clone(), message_id.clone(), cx);
+                            });
+                        }
                     }
                     return;
                 }
@@ -1538,13 +1620,18 @@ impl Shell {
                     text,
                 } => (parent, engine_generation, text),
             };
-            if shell.active_chat != *parent
-                || shell.state.read(cx).engine_generation() != *engine_generation
-            {
+            if shell.state.read(cx).engine_generation() != *engine_generation {
                 return;
             }
-            let inserted = shell.composer.update(cx, |composer, cx| {
-                composer.insert_side_chat_result(parent, text, *engine_generation, cx)
+            let parent_composer = if shell.active_chat == *parent {
+                Some(shell.composer.clone())
+            } else {
+                shell.pane_composers.read(cx).get(parent)
+            };
+            let inserted = parent_composer.is_some_and(|composer| {
+                composer.update(cx, |composer, cx| {
+                    composer.insert_side_chat_result(parent, text, *engine_generation, cx)
+                })
             });
             shell.sidebar_notice = Some(SidebarNotice::status(if inserted {
                 "Added to the parent draft. Review it and press Send."

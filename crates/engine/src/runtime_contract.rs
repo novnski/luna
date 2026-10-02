@@ -4,9 +4,9 @@
 //! Client-supplied `model_options` never grant scopes or supply a contract.
 
 use luna_proto::{
-    LUNA_RUNTIME_CONTRACT_VERSION, LunaAgentRuntimeContract, OmittedRuntimeTool, RuntimeChatIdentity,
-    RuntimeChatRole, RuntimeCheckoutOwnership, RuntimeContext, RuntimeContextOrigin,
-    RuntimeContractDiagnostics, RuntimeDelivery, RuntimeInstructionSection,
+    LUNA_RUNTIME_CONTRACT_VERSION, LunaAgentRuntimeContract, OmittedRuntimeTool,
+    RuntimeChatIdentity, RuntimeChatRole, RuntimeCheckoutOwnership, RuntimeContext,
+    RuntimeContextOrigin, RuntimeContractDiagnostics, RuntimeDelivery, RuntimeInstructionSection,
     RuntimeInstructionSource, RuntimeToolDefinition, RuntimeToolSummary,
 };
 use sha2::{Digest, Sha256};
@@ -158,9 +158,8 @@ fn role_text(context: &RuntimeContext, chat: &RuntimeChatIdentity) -> String {
                 }
             },
             match (caps.granted_access, caps.access_granted_by_user) {
-                (Some(mode), true) => format!(
-                    "Access: {mode:?}, granted by the user above the parent's access."
-                ),
+                (Some(mode), true) =>
+                    format!("Access: {mode:?}, granted by the user above the parent's access."),
                 (Some(mode), false) => format!("Access: {mode:?}, capped by the parent's access."),
                 (None, _) => "Access is capped by the parent's access.".into(),
             },
@@ -206,6 +205,7 @@ fn assemble(
     delivery: RuntimeDelivery,
     cross_task_tools: &[RuntimeToolDefinition],
     cross_task_omissions: &[OmittedRuntimeTool],
+    context_sections: &[RuntimeInstructionSection],
 ) -> Result<LunaAgentRuntimeContract, EngineError> {
     let instructions_supported = delivery != RuntimeDelivery::Unsupported;
     let tools_supported = delivery.attaches_luna_tools();
@@ -283,6 +283,7 @@ fn assemble(
             provenance: "engine-authoritative task and workspace identity".into(),
             text: context_text(&context)?,
         });
+        instructions.extend_from_slice(context_sections);
     }
     let mut tools = tools_supported
         .then_some(tool)
@@ -334,6 +335,16 @@ fn assemble(
 }
 
 pub fn compile(input: CompileInput) -> Result<CompiledRuntime, EngineError> {
+    compile_with_context_sections(input, &[])
+}
+
+/// Only engine-owned, frozen quoted context may use this channel. Include it
+/// before hashing both candidate and legacy contracts so goals, native review,
+/// and warm steering retain the same context without rewriting user input.
+pub(crate) fn compile_with_context_sections(
+    input: CompileInput,
+    context_sections: &[RuntimeInstructionSection],
+) -> Result<CompiledRuntime, EngineError> {
     let candidate_delivery = input.provider_delivery;
     let candidate = assemble(
         input.context.clone(),
@@ -342,6 +353,7 @@ pub fn compile(input: CompileInput) -> Result<CompiledRuntime, EngineError> {
         candidate_delivery,
         &input.cross_task_tools,
         &input.cross_task_omissions,
+        context_sections,
     )?;
     if !input.resume {
         return Ok(CompiledRuntime {
@@ -383,6 +395,7 @@ pub fn compile(input: CompileInput) -> Result<CompiledRuntime, EngineError> {
         legacy_delivery,
         &input.cross_task_tools,
         &input.cross_task_omissions,
+        context_sections,
     )?;
     let Some(prior) = input.acknowledged_contract else {
         // The old session predates L23. Never claim that dynamic tools were

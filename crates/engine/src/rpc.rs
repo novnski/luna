@@ -313,6 +313,16 @@ struct HistoryReviewToken {
     message_text: Option<String>,
 }
 
+/// Engine-owned proof of provider turns inherited by a fork but intentionally
+/// absent from its visible conversation. Scoped to one provider session.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct HiddenTurnPrefix {
+    provider: HarnessId,
+    provider_account_id: Option<String>,
+    cwd: String,
+    turns: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 enum TaskCommandIntent {
@@ -4173,6 +4183,95 @@ impl EngineRpc {
         Ok(receipt)
     }
 
+    fn hidden_turn_prefix(
+        &self,
+        chat: &Chat,
+        binding: &luna_proto::ExecutionBinding,
+    ) -> Result<Vec<String>, crate::EngineError> {
+        let key = format!(
+            "luna-hidden-turn-prefix-v1:{}:{}",
+            chat.id, binding.provider_task_id
+        );
+        let Some(bytes) = self.store.load_snapshot(&key)? else {
+            // Older sides retain strict full-history equality. Never infer a
+            // prefix from a matching suffix of today's provider history.
+            return Ok(Vec::new());
+        };
+        let prefix: HiddenTurnPrefix = serde_json::from_slice(&bytes)?;
+        if prefix.provider != binding.provider_id
+            || prefix.cwd != chat.cwd.clone().unwrap_or_else(|| ".".into())
+            || prefix.provider_account_id
+                != chat
+                    .config
+                    .as_ref()
+                    .and_then(|config| config.provider_account_id.clone())
+        {
+            return Err(crate::EngineError::Other(
+                "Inherited provider history belongs to a different account or checkout".into(),
+            ));
+        }
+        Ok(prefix.turns)
+    }
+
+    fn preserve_fork_hidden_turns(
+        &self,
+        target_task: &str,
+        source: &Chat,
+        source_binding: &luna_proto::ExecutionBinding,
+        result: &luna_proto::ProviderForkResult,
+        plan: &crate::history_operations::HistoryPlan,
+        side_chat: bool,
+    ) -> Result<(), crate::EngineError> {
+        let mut source_turns = self.hidden_turn_prefix(source, source_binding)?;
+        if side_chat {
+            for entry in &plan.entries {
+                if entry.role == MessageRole::Assistant {
+                    source_turns.push(plan.checkpoints.get(&entry.id).cloned().ok_or_else(
+                        || {
+                            crate::EngineError::Other(
+                                "Inherited side history lacks an exact provider checkpoint".into(),
+                            )
+                        },
+                    )?);
+                }
+            }
+        }
+        let turns = source_turns
+            .iter()
+            .map(|turn| {
+                result.checkpoint_map.get(turn).cloned().ok_or_else(|| {
+                    crate::EngineError::Other(
+                        "Provider fork did not map an inherited history checkpoint".into(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let prefix = HiddenTurnPrefix {
+            provider: source_binding.provider_id,
+            provider_account_id: source
+                .config
+                .as_ref()
+                .and_then(|config| config.provider_account_id.clone()),
+            cwd: source.cwd.clone().unwrap_or_else(|| ".".into()),
+            turns,
+        };
+        let key = format!(
+            "luna-hidden-turn-prefix-v1:{target_task}:{}",
+            result.provider_session_id
+        );
+        if let Some(prior) = self.store.load_snapshot(&key)? {
+            if serde_json::from_slice::<HiddenTurnPrefix>(&prior)? != prefix {
+                return Err(crate::EngineError::Other(
+                    "Conflicting inherited provider history proof; fork was not published".into(),
+                ));
+            }
+            return Ok(());
+        }
+        self.store
+            .save_snapshot(&key, &serde_json::to_vec(&prefix)?)?;
+        Ok(())
+    }
+
     async fn fork_provider_history(
         &self,
         command_id: &str,
@@ -4542,7 +4641,7 @@ impl EngineRpc {
             .await;
         // Transport loss after dispatch is unknown; a correlated provider
         // rejection proves this control did not apply and can be reported failed.
-        let readback = match result {
+        let mut readback = match result {
             Ok(readback) => readback,
             Err(error) => {
                 if let Some(guard) = &mut cancellation_guard {
@@ -4564,6 +4663,77 @@ impl EngineRpc {
                 );
             }
         };
+        if matches!(operation, luna_proto::GoalOperation::Set { .. })
+            && readback
+                .goal
+                .as_ref()
+                .is_some_and(|goal| goal.status == luna_proto::GoalStatus::Active)
+            && !readback.continuation_ready
+        {
+            let request = self
+                .doc_host
+                .request_from_chat_row(task_id, "")
+                .ok_or_else(|| {
+                    TaskProjectionError::ProviderUnknown(crate::EngineError::Other(
+                        "Goal runtime configuration is unavailable".into(),
+                    ))
+                })?;
+            if request.provider_account_id != config.provider_account_id
+                || request.cwd != chat.cwd.as_deref().unwrap_or(".")
+            {
+                return Err(TaskProjectionError::ProviderUnknown(
+                    crate::EngineError::Other(
+                        "Goal account or checkout changed before attachment".into(),
+                    ),
+                ));
+            }
+            let expected_thread = readback.thread_id.clone();
+            let expected_generation = readback.binding_generation;
+            let attachment = self
+                .sessions
+                .attach_existing_goal(
+                    task_id,
+                    command_id,
+                    request,
+                    &expected_thread,
+                    expected_generation,
+                )
+                .await;
+            readback = self
+                .task_identity
+                .goal_operation(
+                    task_id,
+                    &home,
+                    execution.codex_file_auth,
+                    chat.cwd.as_deref().unwrap_or("."),
+                    &luna_proto::GoalOperation::Get,
+                )
+                .await
+                .map_err(TaskProjectionError::ProviderUnknown)?;
+            if readback.thread_id != expected_thread
+                || readback.binding_generation != expected_generation
+            {
+                return Err(TaskProjectionError::ProviderUnknown(
+                    crate::EngineError::Other("Goal binding changed after attachment".into()),
+                ));
+            }
+            if readback
+                .goal
+                .as_ref()
+                .is_some_and(|goal| goal.status == luna_proto::GoalStatus::Active)
+            {
+                if let Err(error) = attachment {
+                    return Err(TaskProjectionError::ProviderUnknown(error));
+                }
+                if !readback.continuation_ready {
+                    return Err(TaskProjectionError::ProviderUnknown(
+                        crate::EngineError::Other(
+                            "Goal runtime did not attach; resume was not retried".into(),
+                        ),
+                    ));
+                }
+            }
+        }
         let receipt = self
             .doc_host
             .complete_goal_operation(task_id, command_id, &readback)
@@ -5277,6 +5447,25 @@ impl EngineRpc {
                                     crate::EngineError::Other(format!("no such space: {space_id}"))
                                 })?;
                                 let host_device = space.device_id.clone();
+                                let child_cwd = cwd.unwrap_or_else(|| space.path.clone());
+                                let inherited_parent = side_parent_id
+                                    .as_deref()
+                                    .map(|parent_id| {
+                                        let parent = doc.chat(parent_id)?.ok_or_else(|| {
+                                            crate::EngineError::Other("Side chat parent disappeared before creation".into())
+                                        })?;
+                                        if parent.cwd.as_deref() != Some(child_cwd.as_str())
+                                            || parent.branch != branch
+                                            || parent.space_id.as_deref() != Some(space.id.as_str())
+                                            || parent.device_id != host_device
+                                        {
+                                            return Err(crate::EngineError::Other(
+                                                "Side chat parent checkout changed before creation; open a new side chat".into(),
+                                            ));
+                                        }
+                                        Ok(parent)
+                                    })
+                                    .transpose()?;
                                 let child = Chat {
                                     child_thread: None,
                                     id: owned_task_id.clone(),
@@ -5285,10 +5474,10 @@ impl EngineRpc {
                                     archived: false,
                                     settlement_override: None,
                                     pinned_order: None,
-                                    cwd: Some(cwd.unwrap_or_else(|| space.path.clone())),
+                                    cwd: Some(child_cwd),
                                     branch: None,
-                                    checkout_id: None,
-                                    source_context: None,
+                                    checkout_id: inherited_parent.as_ref().and_then(|parent| parent.checkout_id.clone()),
+                                    source_context: inherited_parent.and_then(|parent| parent.source_context),
                                     config,
                                     last_message_preview: None,
                                     last_message_at: None,
@@ -5458,6 +5647,8 @@ impl EngineRpc {
 
                 let target_doc = SessionDoc::init(&new_task_id)
                     .map_err(crate::EngineError::from)
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
+                self.preserve_fork_hidden_turns(&new_task_id, &source, &binding, &provider_result, &plan, side_chat)
                     .map_err(TaskProjectionError::ProviderUnknown)?;
                 if !side_chat {
                     target_doc
@@ -5680,7 +5871,9 @@ impl EngineRpc {
                     .read_entries()
                     .map_err(crate::EngineError::from)
                     .map_err(TaskProjectionError::Mutation)?;
-                let document_turns = entries
+                let mut document_turns = self.hidden_turn_prefix(&chat, &binding)
+                    .map_err(TaskProjectionError::Mutation)?;
+                document_turns.extend(entries
                     .iter()
                     .filter(|entry| entry.role == MessageRole::Assistant)
                     .map(|entry| handle.doc().provider_checkpoint(&entry.id))
@@ -5689,7 +5882,7 @@ impl EngineRpc {
                         TaskProjectionError::Mutation(crate::EngineError::Other(
                             "LUNA history lacks exact provider checkpoints".into(),
                         ))
-                    })?;
+                    })?);
                 let native_turns = native
                     .original
                     .iter()
@@ -5752,10 +5945,12 @@ impl EngineRpc {
                             .map(|id| (entry.id.clone(), id))
                     })
                     .collect::<HashMap<_, _>>();
-                let retained_ids = entries[..cutoff]
+                let hidden_turns = self.hidden_turn_prefix(&chat, &binding)
+                    .map_err(TaskProjectionError::Mutation)?;
+                let retained_ids = hidden_turns.iter().map(String::as_str).chain(entries[..cutoff]
                     .iter()
                     .filter(|entry| entry.role == MessageRole::Assistant)
-                    .filter_map(|entry| retained_checkpoints.get(&entry.id).map(String::as_str))
+                    .filter_map(|entry| retained_checkpoints.get(&entry.id).map(String::as_str)))
                     .collect::<Vec<_>>();
                 if retained_ids
                     != native
@@ -5984,6 +6179,8 @@ impl EngineRpc {
                 let provider_session_id = provider_result.provider_session_id.clone();
                 let remapped_checkpoints = plan
                     .remapped_checkpoints(&provider_result)
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
+                self.preserve_fork_hidden_turns(task_id, &source, &binding, &provider_result, &plan, false)
                     .map_err(TaskProjectionError::ProviderUnknown)?;
                 let after = self
                     .current_task_command_snapshot(task_id)
@@ -6231,6 +6428,8 @@ impl EngineRpc {
                 }
                 let remapped_checkpoints = plan
                     .remapped_checkpoints(&provider_result)
+                    .map_err(TaskProjectionError::ProviderUnknown)?;
+                self.preserve_fork_hidden_turns(task_id, &source, &old_binding, &provider_result, &plan, false)
                     .map_err(TaskProjectionError::ProviderUnknown)?;
 
                 let after = self
@@ -8678,9 +8877,6 @@ impl RpcService for EngineRpc {
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
         }
-        if claude_history::handles(method) {
-            return self.handle_native_file_rewind(method, params).await;
-        }
         if let Some(id) = params
             .get("chatId")
             .or_else(|| params.get("taskId"))
@@ -8698,6 +8894,9 @@ impl RpcService for EngineRpc {
                         "{error}. Historical side chats are read through the side chat panel."
                     ))
                 })?;
+        }
+        if claude_history::handles(method) {
+            return self.handle_native_file_rewind(method, params).await;
         }
         if local_only_credential_method(method)
             && params
@@ -9005,6 +9204,8 @@ impl RpcService for EngineRpc {
                     &still_enabled,
                     include_limits && !synthetic,
                 );
+                self.sessions
+                    .retain_owned_live_usage_rows(&mut snapshot.live_sessions);
                 for source in &mut snapshot.summary.sources {
                     source.environment_id = self.engine_info.device_id.clone();
                 }

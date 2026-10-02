@@ -245,6 +245,23 @@ pub(super) struct ChildChatPanel {
 }
 
 impl ChildChatPanel {
+    pub(super) fn open_chat_id(&self) -> Option<&str> {
+        self.open.as_ref().map(|open| open.id.as_str())
+    }
+
+    pub(super) fn reveal_message(&mut self, id: String, message: String, cx: &mut Context<Self>) {
+        self.open_child(id.clone(), cx);
+        if let Some(open) = &self.open {
+            open.view
+                .read(cx)
+                .transcript()
+                .clone()
+                .update(cx, |view, cx| {
+                    view.navigate_to_message(id, message, cx);
+                });
+        }
+    }
+
     pub(super) fn new(
         state: Entity<AppState>,
         composers: Entity<PaneComposers>,
@@ -294,7 +311,8 @@ impl ChildChatPanel {
             .composers
             .update(cx, |composers, cx| composers.composer(&id, cx));
         let state = self.state.clone();
-        let links = self.links.clone();
+        let mut links = self.links.clone();
+        links.source_session = Some(id.clone());
         let parent = self.parent.clone();
         let view_id = id.clone();
         let view = cx.new(|cx| {
@@ -646,7 +664,10 @@ impl Shell {
         }
     }
 
-    fn ensure_child_chat_panel(&mut self, cx: &mut Context<Self>) -> Entity<ChildChatPanel> {
+    pub(super) fn ensure_child_chat_panel(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Entity<ChildChatPanel> {
         if let Some(panel) = &self.child_chat_panel
             && panel.read(cx).parent() == self.active_chat
             && panel.read(cx).is_current(cx)
@@ -692,9 +713,16 @@ impl Shell {
             self.finish_open_pane_chat_as_main(id, cx);
             return;
         }
+        let owner_chat = self.active_chat.clone();
+        let owner_generation = self.state.read(cx).engine_generation();
         self.pending_open_main = Some(cx.subscribe(&composer, move |shell, _, event, cx| {
             if matches!(event, ComposerEvent::DraftFlushCompleted) {
                 shell.pending_open_main = None;
+                if shell.active_chat != owner_chat
+                    || shell.state.read(cx).engine_generation() != owner_generation
+                {
+                    return;
+                }
                 shell.finish_open_pane_chat_as_main(id.clone(), cx);
             }
         }));

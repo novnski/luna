@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::{path::Path, sync::Arc, time::Duration};
 
 const PNG_1X1: &str =
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=";
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const SVG: &[u8] = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"/>";
 const TIFF: &[u8] = b"II*\0\x08\0\0\0fixture";
 

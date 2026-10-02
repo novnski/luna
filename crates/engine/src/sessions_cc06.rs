@@ -97,6 +97,41 @@ impl SessionsEngine {
         &self.inner.live_usage
     }
 
+    /// Retained accounting is not proof that a provider still runs. Filter
+    /// the outgoing live projection, preserving the ledger and warm idle feeds.
+    pub(crate) fn retain_owned_live_usage_rows(
+        &self,
+        rows: &mut Vec<luna_proto::LiveSessionUsage>,
+    ) {
+        use luna_proto::UsageProvider;
+        let runs = lock(&self.inner.runs);
+        rows.retain(|row| {
+            let Some(run) = runs.get(&row.task_id) else {
+                return false;
+            };
+            let provider_matches = matches!(
+                (run.runtime_config.harness_id, row.provider),
+                (HarnessId::Codex, UsageProvider::Codex)
+                    | (HarnessId::ClaudeCode, UsageProvider::Claude)
+                    | (HarnessId::Opencode, UsageProvider::OpenCodeGo)
+            );
+            let session = run
+                .run_provider_binding
+                .as_ref()
+                .map(|binding| binding.provider_thread_id.as_str())
+                .or(run.observed_provider_session_id.as_deref());
+            provider_matches
+                && session.is_some()
+                && row.native_session_id.as_deref() == session
+                && !run.interrupt_token.is_cancelled()
+                && !*run.cancel.borrow()
+                && !run
+                    .idle_stream_closed
+                    .load(std::sync::atomic::Ordering::Acquire)
+                && (!run.steerable || !run.steer_tx.is_closed())
+        });
+    }
+
     /// Stage a native live switch for `message_id` on the parked run
     /// `run_id`. Returns true only when the adapter accepted the plan; the
     /// handle's runtime config and the re-dispatch request then describe the
