@@ -83,6 +83,12 @@ const BUSY_REASON: &str = "Unavailable while a goal change is in progress.";
 const TEXT_ONLY: &str =
     "A goal is text only. Remove attachments, mentions and comments, then send it again.";
 
+/// The Goal switch's label and geometry (see [`Composer::goal_mode_chip_widths`]).
+const GOAL_CHIP_LABEL: &str = "Goal";
+const GOAL_CHIP_PAD_X: f32 = 10.0;
+const GOAL_CHIP_ICON: f32 = 15.0;
+const GOAL_CHIP_ICON_GAP: f32 = 6.0;
+
 #[derive(Default)]
 pub(super) struct GoalUi {
     editor: Option<GoalEditor>,
@@ -858,8 +864,27 @@ impl Composer {
             .into_any_element()
     }
 
+    /// The Goal switch's `(label, icon-only)` widths for the controls row's
+    /// fit, or `None` when this chat doesn't offer it.
+    pub(super) fn goal_mode_chip_widths(&self, window: &Window, cx: &App) -> Option<(f32, f32)> {
+        if !self.goal_mode_available(cx) || self.goal_provider(cx).is_none() {
+            return None;
+        }
+        let label = crate::pickers::chip_text_width(GOAL_CHIP_LABEL, window, Theme::of(cx));
+        Some((
+            2.0 * GOAL_CHIP_PAD_X + GOAL_CHIP_ICON + GOAL_CHIP_ICON_GAP + label,
+            crate::pickers::ACCESS_CHIP_SIZE,
+        ))
+    }
+
     /// The composer's "Goal" switch, beside the access chip on Codex chats.
-    pub(super) fn render_goal_mode_chip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// `icon_only` drops the label when the controls row is short of room;
+    /// the tooltip then names the switch and its state.
+    pub(super) fn render_goal_mode_chip(
+        &self,
+        icon_only: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         if !self.goal_mode_available(cx) {
             return None;
         }
@@ -897,10 +922,14 @@ impl Composer {
                 .tab_index(0)
                 .flex_none()
                 .h(px(32.0))
-                .px(px(10.0))
+                .when(icon_only, |chip| {
+                    chip.w(px(crate::pickers::ACCESS_CHIP_SIZE))
+                        .justify_center()
+                })
+                .when(!icon_only, |chip| chip.px(px(GOAL_CHIP_PAD_X)))
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(GOAL_CHIP_ICON_GAP))
                 .rounded(px(8.0))
                 .text_size(crate::typography::ui_rems(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
@@ -915,12 +944,24 @@ impl Composer {
                         this.set_goal_mode(!on, cx);
                     }
                 }))
+                .tooltip(move |_, cx| {
+                    crate::pickers::ControlTooltip::view(
+                        if on { "Goal mode is on" } else { "Goal mode" },
+                        Some(if on {
+                            provider.mode_on_description().into()
+                        } else {
+                            "Off: Send posts an ordinary message.".into()
+                        }),
+                        cx,
+                    )
+                })
+                .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
                 .child(
                     crate::icons::icon(crate::icons::TARGET)
-                        .size(px(15.0))
+                        .size(px(GOAL_CHIP_ICON))
                         .text_color(if on { rest } else { theme.text_muted }),
                 )
-                .child("Goal")
+                .when(!icon_only, |chip| chip.child(GOAL_CHIP_LABEL))
                 .into_any_element(),
         )
     }

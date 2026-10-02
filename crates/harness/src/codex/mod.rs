@@ -469,7 +469,7 @@ fn model_service_tier(item: &Value) -> Option<ModelOption> {
         .to_owned();
     Some(ModelOption {
         id: "serviceTier".into(),
-        label: "Service Tier".into(),
+        label: "Speed".into(),
         choices,
         default_choice,
     })

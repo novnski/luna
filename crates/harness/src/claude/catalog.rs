@@ -87,6 +87,27 @@ fn toggle(id: &str, label: &str) -> ModelOption {
     }
 }
 
+/// Fast mode as the shared "Speed" select (Standard / Fast), named like the
+/// Codex service tier. The choice ids stay the CLI toggle's `off`/`on`, which
+/// persisted picks and the launch flags already use.
+pub(crate) fn speed() -> ModelOption {
+    ModelOption {
+        id: "fastMode".into(),
+        label: "Speed".into(),
+        choices: vec![
+            ModelOptionChoice {
+                id: "off".into(),
+                label: "Standard".into(),
+            },
+            ModelOptionChoice {
+                id: "on".into(),
+                label: "Fast".into(),
+            },
+        ],
+        default_choice: "off".into(),
+    }
+}
+
 /// The 200K/1M context-window select carried by the long-context models. The
 /// 1M window is selected via a model-id suffix (`<model>[1m]`), exactly how the
 /// CLI itself does it.
@@ -175,21 +196,21 @@ pub fn static_models() -> Vec<Model> {
             "Opus 5",
             "Powerful model for complex work",
             FULL_LADDER,
-            vec![context_window(), toggle("fastMode", "Fast Mode")],
+            vec![context_window(), speed()],
         ),
         model(
             "claude-opus-4-8",
             "Opus 4.8",
             "Previous generation Opus",
             FULL_LADDER,
-            vec![toggle("fastMode", "Fast Mode")],
+            vec![speed()],
         ),
         model(
             "claude-opus-4-7",
             "Opus 4.7",
             "Older generation Opus",
             XHIGH_LADDER,
-            vec![toggle("fastMode", "Fast Mode")],
+            vec![speed()],
         ),
         model(
             "claude-sonnet-5",
@@ -295,7 +316,7 @@ pub(crate) fn models_from_initialize(response: &Value) -> Vec<Model> {
         if entry.get("supportsFastMode").and_then(Value::as_bool) == Some(true)
             && !options.iter().any(|option| option.id == "fastMode")
         {
-            options.push(toggle("fastMode", "Fast Mode"));
+            options.push(speed());
         }
         models.push(Model {
             id: id.to_owned(),
