@@ -10,6 +10,7 @@ pub fn render(
     usage: Option<ContextUsage>,
     compact_status: ContextOperationStatus,
     state: gpui::Entity<crate::state::AppState>,
+    binding: crate::chat_binding::ChatBinding,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
     let fraction = usage.and_then(ContextUsage::fraction);
@@ -79,6 +80,7 @@ pub fn render(
             cx.new(|cx| UsageCard {
                 _subscription: cx.observe(&state, |_, _, cx| cx.notify()),
                 state: state.clone(),
+                binding: binding.clone(),
             })
             .into()
         })
@@ -86,6 +88,8 @@ pub fn render(
 
 struct UsageCard {
     state: gpui::Entity<crate::state::AppState>,
+    /// The chat whose usage this card describes (selected or pane-bound).
+    binding: crate::chat_binding::ChatBinding,
     _subscription: gpui::Subscription,
 }
 
@@ -156,11 +160,11 @@ impl Render for UsageCard {
                     .whitespace_nowrap()
                     .text_color(theme.text_muted)
                     .child(SharedString::from(details(
-                        self.state.read(cx).context_usage,
+                        self.binding.context_usage(self.state.read(cx)),
                     ))),
             )
             .child({
-                let context = &self.state.read(cx).context_control;
+                let context = self.binding.context_control(self.state.read(cx));
                 let mut detail = context
                     .compact
                     .detail

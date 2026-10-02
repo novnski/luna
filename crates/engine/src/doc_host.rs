@@ -2013,10 +2013,6 @@ impl DocHost {
         self.inner.workspace.get()
     }
 
-    pub(crate) fn default_harness(&self) -> HarnessId {
-        self.inner.config.default_harness
-    }
-
     pub fn device_id(&self) -> &str {
         &self.inner.config.device_id
     }

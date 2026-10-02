@@ -2,19 +2,22 @@
 //!
 //! Persistent child chats (`Chat.child_thread`) belong to the conversation
 //! that started them. Instead of an indented sidebar tree, the parent's right
-//! pane lists them ([`RightSurface::ChildChats`]) and drills into one child's
-//! live transcript with a reply composer, then back to the list: the Side
-//! chats interaction over full persistent chats.
+//! pane lists them ([`RightSurface::ChildChats`]) and drills into one child as
+//! a full chat: the shared pane chat view ([`super::pane_chat`]) with the main
+//! transcript and the main composer bound to the child.
 //!
-//! One open child holds exactly one `WatchDocMessages` subscription
-//! (`AppState::watch_subagent_doc`, keyed by the child's chat id). Back,
-//! closing the tab or pane, switching chats and engine replacement release it.
+//! One open child holds exactly one set of pane watches
+//! (`AppState::watch_pane_chat`: doc messages, queue and native tasks, keyed
+//! by the child's chat id). Back, closing the tab or pane, switching chats and
+//! engine replacement release them. The child's composer is cached by the
+//! shell ([`super::pane_chat::PaneComposers`]), so its draft and any send in
+//! flight survive all of those.
 
+use super::pane_chat::{PaneChatEvent, PaneChatView, PaneComposers, PaneIdentity};
 use super::*;
 use crate::markdown::render::LinkUi;
-use crate::state::{ChildReplyState, ChildReplySubmission, EngineHandle};
 use chrono::DateTime;
-use luna_proto::{Chat, ChatIndicator, CommandReceiptStatus};
+use luna_proto::{Chat, ChatIndicator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ChildChatStatus {
@@ -54,7 +57,7 @@ impl ChildChatStatus {
     }
 
     /// The sidebar's status palette, so a child reads the same in both places.
-    fn color(self, theme: &Theme) -> gpui::Hsla {
+    pub(super) fn color(self, theme: &Theme) -> gpui::Hsla {
         let indicator = match self {
             Self::NeedsApproval => ChatIndicator::AwaitingApproval,
             Self::NeedsInput => ChatIndicator::AwaitingInput,
@@ -142,6 +145,16 @@ pub(super) fn child_chat_status(
     }
 }
 
+pub(super) fn provider_label(harness: HarnessId) -> &'static str {
+    match harness {
+        HarnessId::Codex => "Codex",
+        HarnessId::ClaudeCode => "Claude Code",
+        HarnessId::Opencode => "OpenCode",
+        HarnessId::Mock => "Mock",
+        _ => "Provider",
+    }
+}
+
 fn first_line(text: &str) -> Option<String> {
     let line = transcript::single_line(text);
     let line = line.trim();
@@ -173,13 +186,7 @@ pub(super) fn child_chat_rows(
                 })
                 .filter(|line| Some(line.as_str()) != chat.title.as_deref());
             let model = chat.config.as_ref().map(|config| {
-                let provider = match config.harness {
-                    HarnessId::Codex => "Codex",
-                    HarnessId::ClaudeCode => "Claude Code",
-                    HarnessId::Opencode => "OpenCode",
-                    HarnessId::Mock => "Mock",
-                    _ => "Provider",
-                };
+                let provider = provider_label(config.harness);
                 match config.model.as_deref().filter(|model| !model.is_empty()) {
                     Some(model) => format!("{provider} · {model}"),
                     None => provider.to_string(),
@@ -206,56 +213,26 @@ pub(super) fn child_chat_rows(
     rows
 }
 
-/// Engine, host device and live-run flag for a reply, or why it cannot be
-/// sent (`None` = silently ignored, e.g. archived).
-fn prepare_reply(
-    state: &AppState,
-    id: &str,
-    now: DateTime<Utc>,
-) -> Result<(EngineHandle, String, bool), Option<&'static str>> {
-    let chat = state
-        .chats
-        .iter()
-        .find(|chat| chat.id == id)
-        .ok_or(Some("This child chat is no longer available."))?;
-    if chat.archived {
-        return Err(None);
-    }
-    let engine = state
-        .engine()
-        .cloned()
-        .ok_or(Some("Engine not connected"))?;
-    let capability = luna_proto::capabilities::MESSAGE_QUEUE_V1;
-    if !engine.engine_info().supports(capability) || !state.chat_host_supports(id, capability) {
-        return Err(Some(
-            "Update this child chat's engine to reply from here, or open it as the main chat.",
-        ));
-    }
-    let running = matches!(
-        child_chat_status(state, chat, now),
-        ChildChatStatus::Running | ChildChatStatus::NeedsApproval | ChildChatStatus::NeedsInput
-    );
-    Ok((engine, chat.device_id.clone(), running))
-}
-
 pub(super) enum ChildChatEvent {
     /// Promote this child to the main conversation view.
     OpenAsMain(String),
+    /// Bring the parent conversation (the main view) forward.
+    ShowParent(String),
+    /// A child opened: route its transcript's history/subagent events.
+    Opened(Entity<Transcript>),
 }
 
 impl gpui::EventEmitter<ChildChatEvent> for ChildChatPanel {}
 
 struct OpenChild {
     id: String,
-    transcript: Entity<Transcript>,
-    reply: Entity<ChildReplyState>,
-    _input_events: Subscription,
-    _reply_events: Subscription,
-    focus_pending: bool,
+    view: Entity<PaneChatView>,
+    _events: Subscription,
 }
 
 pub(super) struct ChildChatPanel {
     state: Entity<AppState>,
+    composers: Entity<PaneComposers>,
     parent: String,
     engine_generation: u64,
     links: LinkUi,
@@ -270,6 +247,7 @@ pub(super) struct ChildChatPanel {
 impl ChildChatPanel {
     pub(super) fn new(
         state: Entity<AppState>,
+        composers: Entity<PaneComposers>,
         parent: String,
         links: LinkUi,
         cx: &mut Context<Self>,
@@ -280,13 +258,14 @@ impl ChildChatPanel {
         cx.on_release(|panel, cx| {
             if let Some(open) = panel.open.take() {
                 panel.state.update(cx, |state, _| {
-                    state.unwatch_subagent_doc(&open.id);
+                    state.unwatch_pane_chat(&open.id);
                 });
             }
         })
         .detach();
         Self {
             state,
+            composers,
             parent,
             engine_generation,
             links,
@@ -311,59 +290,45 @@ impl ChildChatPanel {
             return;
         }
         self.close_open(cx);
+        let composer = self
+            .composers
+            .update(cx, |composers, cx| composers.composer(&id, cx));
         let state = self.state.clone();
-        state.update(cx, |state, cx| {
-            state.watch_subagent_doc(id.clone(), cx);
-            // Reading it here is reading it: clear the unseen marker exactly
-            // as opening it as the main chat would.
-            state.mark_chat_seen(&id, cx);
+        let links = self.links.clone();
+        let parent = self.parent.clone();
+        let view_id = id.clone();
+        let view = cx.new(|cx| {
+            PaneChatView::new(
+                state,
+                view_id,
+                PaneIdentity::Child,
+                parent,
+                "Child chats",
+                composer,
+                links,
+                cx,
+            )
         });
-        let transcript = cx.new(|cx| Transcript::for_doc(state.clone(), id.clone(), true, cx));
-        let mut links = self.links.clone();
-        links.source_session = Some(id.clone());
-        transcript.update(cx, |transcript, _| {
-            transcript.set_workspace_link_handler(links)
+        let events = cx.subscribe(&view, |panel, _, event, cx| match event {
+            PaneChatEvent::Back => panel.back(cx),
+            PaneChatEvent::OpenAsMain(id) => cx.emit(ChildChatEvent::OpenAsMain(id.clone())),
+            PaneChatEvent::ShowParent(id) => cx.emit(ChildChatEvent::ShowParent(id.clone())),
+            PaneChatEvent::Unload => {}
         });
-        let cached = self.state.read(cx).child_reply_states.get(&id).cloned();
-        let reply = cached.unwrap_or_else(|| {
-            let input = cx.new(|cx| ComposerInput::new("Reply to this child chat…", cx));
-            let reply = cx.new(|_| ChildReplyState {
-                input,
-                sending: false,
-                notice: None,
-                submission: None,
-                task: None,
-            });
-            self.state.update(cx, |state, _| {
-                state.child_reply_states.insert(id.clone(), reply.clone());
-            });
-            reply
-        });
-        let input = reply.read(cx).input.clone();
-        let input_events = cx.subscribe(&input, |panel, _, event, cx| {
-            if matches!(
-                event,
-                ComposerInputEvent::Submitted | ComposerInputEvent::ModifierSubmitted
-            ) {
-                panel.send(cx);
-            }
-        });
-        let reply_events = cx.observe(&reply, |_, _, cx| cx.notify());
+        let transcript = view.read(cx).transcript().clone();
         self.open = Some(OpenChild {
             id,
-            transcript,
-            reply,
-            _input_events: input_events,
-            _reply_events: reply_events,
-            focus_pending: true,
+            view,
+            _events: events,
         });
+        cx.emit(ChildChatEvent::Opened(transcript));
         cx.notify();
     }
 
     fn close_open(&mut self, cx: &mut Context<Self>) {
         if let Some(open) = self.open.take() {
             self.state.update(cx, |state, cx| {
-                state.unwatch_subagent_doc(&open.id);
+                state.unwatch_pane_chat(&open.id);
                 state.mark_chat_seen(&open.id, cx);
                 cx.notify();
             });
@@ -377,157 +342,6 @@ impl ChildChatPanel {
         self.close_open(cx);
         self.focus_root_pending = true;
         cx.notify();
-    }
-
-    /// Queue the reply on the child exactly as the engine starts a child: a
-    /// held queue row on the child's host, delivered now when it is idle or
-    /// when its current turn ends. The child's own execution settings apply.
-    pub(super) fn send(&mut self, cx: &mut Context<Self>) {
-        if !self.is_current(cx) {
-            return;
-        }
-        let Some((id, reply)) = self.open.as_ref().and_then(|open| {
-            let reply = open.reply.read(cx);
-            (!reply.sending
-                && (reply.submission.is_some() || !reply.input.read(cx).text().trim().is_empty()))
-            .then(|| (open.id.clone(), open.reply.clone()))
-        }) else {
-            return;
-        };
-        let prepared = prepare_reply(self.state.read(cx), &id, Utc::now());
-        let (engine, host, running) = match prepared {
-            Ok(prepared) => prepared,
-            Err(None) => return,
-            Err(Some(error)) => {
-                reply.update(cx, |reply, cx| {
-                    reply.notice = Some((true, error.into()));
-                    cx.notify();
-                });
-                return;
-            }
-        };
-        let previous = reply.read(cx).submission.clone();
-        let checking = previous.is_some();
-        let submission = previous.unwrap_or_else(|| ChildReplySubmission {
-            command_id: uuid::Uuid::new_v4().to_string(),
-            text: reply.read(cx).input.read(cx).text().trim().to_string(),
-            host,
-            queued: running,
-        });
-        let text = submission.text.clone();
-        let intent = serde_json::json!({
-            "kind": "queueMessage",
-            "messageId": submission.command_id,
-            "text": text,
-            "attachments": [],
-            "inputItems": [],
-            "holdForTurnEnd": true,
-        });
-        reply.update(cx, |reply, cx| {
-            reply.sending = true;
-            reply.notice = None;
-            reply.submission = Some(submission.clone());
-            // The task belongs to the cached reply, not its current pane.
-            reply.task = Some(cx.spawn(async move |this, cx| {
-                let request = submission.clone();
-                let result = Tokio::spawn(cx, async move {
-                tokio::time::timeout(
-                    Duration::from_secs(45),
-                    async {
-                        if checking {
-                            engine.client().call_as::<Option<luna_proto::CommandReceipt>>(
-                                luna_rpc::methods::GET_TASK_COMMAND_RECEIPT,
-                                serde_json::json!({
-                                    "commandId": request.command_id,
-                                    "targetDeviceId": request.host,
-                                }),
-                            ).await
-                        } else {
-                            crate::task_commands::execute_receipt_on_with_id(
-                                &engine, &id, Some(&request.host), request.command_id, intent,
-                            ).await.map(Some)
-                        }
-                    },
-                )
-                .await
-                .map_err(|_| {
-                    luna_rpc::RpcError::Failed(
-                        "Reply timed out. Delivery is unknown; check the transcript before sending again."
-                            .into(),
-                    )
-                })?
-            })
-            .await;
-            this.update(cx, |reply, cx| {
-                reply.sending = false;
-                let delivered = match result {
-                    Ok(Ok(Some(receipt))) => match receipt.status {
-                        CommandReceiptStatus::Applied => {
-                            reply.submission = None;
-                            Ok(if submission.queued {
-                            "Queued. It is delivered when the current turn ends."
-                        } else {
-                            "Sent."
-                        })
-                        }
-                        CommandReceiptStatus::Pending => Err(
-                            "Waiting for the host to confirm delivery. Check delivery before sending again.".into(),
-                        ),
-                        _ => {
-                            reply.submission = None;
-                            Err(crate::task_commands::failure_message(
-                            &receipt,
-                            "The child chat rejected this reply.",
-                        ))
-                        }
-                    },
-                    Ok(Ok(None)) => Err("Delivery is still unknown. Check the transcript or check delivery again.".into()),
-                    Ok(Err(error)) => Err(format!("Delivery is unknown: {error}")),
-                    Err(error) => Err(format!("Delivery is unknown: {error}")),
-                };
-                match delivered {
-                    Ok(notice) => {
-                        if reply.input.read(cx).text().trim() == text {
-                            reply.input.update(cx, |input, cx| input.set_text("", cx));
-                        }
-                        reply.notice = Some((false, notice.into()));
-                    }
-                    Err(error) => reply.notice = Some((true, error)),
-                }
-                cx.notify();
-            })
-            .ok();
-        }));
-            cx.notify();
-        });
-        cx.notify();
-    }
-
-    fn control(
-        &self,
-        id: impl Into<SharedString>,
-        label: impl Into<SharedString>,
-        theme: &Theme,
-    ) -> gpui::Stateful<gpui::Div> {
-        let label = label.into();
-        let border_strong = theme.border_strong;
-        let hover = crate::theme::ink(0.06);
-        div()
-            .id(id.into())
-            .role(gpui::Role::Button)
-            .aria_label(label)
-            .tab_index(0)
-            .h(px(crate::surface_chrome::CONTROL_SIZE))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-            .border_1()
-            .border_color(gpui::transparent_black())
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover))
-            .focus_visible(move |style| style.border_color(border_strong))
     }
 
     fn status_glyph(
@@ -775,331 +589,11 @@ impl ChildChatPanel {
             .child(list)
     }
 
-    fn render_open(
-        &mut self,
-        window: &mut Window,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let Some(open) = self.open.as_mut() else {
-            return div();
-        };
-        let id = open.id.clone();
-        let transcript = open.transcript.clone();
-        let (input, sending, notice, checking) = {
-            let reply = open.reply.read(cx);
-            (
-                reply.input.clone(),
-                reply.sending,
-                reply.notice.clone(),
-                reply.submission.is_some(),
-            )
-        };
-        if std::mem::take(&mut open.focus_pending) {
-            window.focus(&input.focus_handle(cx), cx);
+    fn render_open(&self) -> AnyElement {
+        match &self.open {
+            Some(open) => open.view.clone().into_any_element(),
+            None => Empty.into_any_element(),
         }
-        let (row, loading) = {
-            let state = self.state.read(cx);
-            let row = child_chat_rows(state, &self.parent, Utc::now())
-                .into_iter()
-                .find(|row| row.id == id);
-            (row, state.sub_transcript(&id).is_empty())
-        };
-        let title = row
-            .as_ref()
-            .map(|row| row.title.clone())
-            .unwrap_or_else(|| "Child chat".into());
-        let status = row
-            .as_ref()
-            .map(|row| row.status)
-            .unwrap_or(ChildChatStatus::Idle);
-        let muted = theme.text_muted;
-        let back = self
-            .control("child-chat-back", "Back to child chats", theme)
-            .pl(px(4.0))
-            .pr(px(8.0))
-            .text_color(muted)
-            .tooltip(|_, cx| {
-                cx.new(|_| SurfaceTabTooltip {
-                    text: "Back to child chats (Esc)".into(),
-                })
-                .into()
-            })
-            .tooltip_show_delay(Duration::from_millis(350))
-            .on_click(cx.listener(|panel, _, _, cx| panel.back(cx)))
-            .on_key_down(cx.listener(|panel, event: &gpui::KeyDownEvent, _, cx| {
-                if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                    panel.back(cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .child(icon(icons::ALT_ARROW_LEFT).size(px(14.0)).text_color(muted))
-            .child("Child chats");
-        let promote_id = id.clone();
-        let promote_key_id = id.clone();
-        let open_main = self
-            .control("child-chat-open-main", "Open as main chat", theme)
-            .w(px(crate::surface_chrome::CONTROL_SIZE))
-            .justify_center()
-            .tooltip(|_, cx| {
-                cx.new(|_| SurfaceTabTooltip {
-                    text: "Open as main chat".into(),
-                })
-                .into()
-            })
-            .tooltip_show_delay(Duration::from_millis(350))
-            .on_click(cx.listener(move |_, _, _, cx| {
-                cx.emit(ChildChatEvent::OpenAsMain(promote_id.clone()))
-            }))
-            .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
-                if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                    cx.emit(ChildChatEvent::OpenAsMain(promote_key_id.clone()));
-                    cx.stop_propagation();
-                }
-            }))
-            .child(
-                icon(icons::ARROW_UP_RIGHT)
-                    .size(px(crate::surface_chrome::ICON_SIZE))
-                    .text_color(muted),
-            );
-        let toolbar = crate::surface_chrome::toolbar(theme)
-            .child(back)
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme.readable_muted(0.4))
-                    .child("/"),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .px(px(2.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(title),
-            )
-            .child(open_main);
-        let meta = [
-            row.as_ref().and_then(|row| row.model.clone()),
-            row.as_ref()
-                .map(|row| format!("updated {}", format_time_ago(row.updated_at, Utc::now()))),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(" · ");
-        let status_strip = div()
-            .px(px(16.0))
-            .py(px(8.0))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .border_b_1()
-            .border_color(theme.border)
-            .text_size(crate::typography::ui_rems(11.5))
-            .child(self.status_glyph(format!("child-chat-open-glyph-{id}"), status, theme, cx))
-            .child(
-                div()
-                    .flex_none()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(status.color(theme))
-                    .child(status.label()),
-            )
-            .when(!meta.is_empty(), |el| {
-                el.child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.readable_muted(0.6))
-                        .child(format!("· {meta}")),
-                )
-            });
-        let attention = match status {
-            ChildChatStatus::NeedsApproval => Some("This child chat is waiting for an approval."),
-            ChildChatStatus::NeedsInput => Some("This child chat is asking you a question."),
-            _ => None,
-        };
-        let attention_id = id.clone();
-        let attention_key_id = id.clone();
-        let mut root = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .child(toolbar)
-            .child(status_strip)
-            .when_some(attention, |el, text| {
-                el.child(
-                    div()
-                        .mx(px(12.0))
-                        .mt(px(10.0))
-                        .px(px(12.0))
-                        .py(px(8.0))
-                        .rounded(px(8.0))
-                        .bg(theme.warning.opacity(0.08))
-                        .border_1()
-                        .border_color(theme.warning.opacity(0.25))
-                        .flex()
-                        .items_center()
-                        .gap(px(10.0))
-                        .child(div().flex_1().min_w_0().child(text))
-                        .child(
-                            self.control("child-chat-respond", "Open to respond", theme)
-                                .px(px(8.0))
-                                .border_color(theme.border)
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(ChildChatEvent::OpenAsMain(attention_id.clone()))
-                                }))
-                                .on_key_down(cx.listener(
-                                    move |_, event: &gpui::KeyDownEvent, _, cx| {
-                                        if is_settings_nav_activation(
-                                            &event.keystroke.key,
-                                            event.is_held,
-                                        ) {
-                                            cx.emit(ChildChatEvent::OpenAsMain(
-                                                attention_key_id.clone(),
-                                            ));
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                ))
-                                .child("Open to respond"),
-                        ),
-                )
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .relative()
-                    .child(transcript)
-                    .when(loading, |el| {
-                        el.child(
-                            div()
-                                .absolute()
-                                .top(px(16.0))
-                                .left(px(16.0))
-                                .text_color(theme.text_muted)
-                                .child("Loading messages…"),
-                        )
-                    }),
-            );
-        if status == ChildChatStatus::Archived {
-            root = root.child(
-                div()
-                    .px(px(16.0))
-                    .py(px(12.0))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .text_color(theme.text_muted)
-                    .child("Archived · read-only. Unarchive it to reply."),
-            );
-        } else {
-            let has_text = !input.read(cx).is_empty();
-            let hint: (bool, String) = notice.unwrap_or_else(|| {
-                (
-                    false,
-                    if sending {
-                        "Sending…".into()
-                    } else if matches!(
-                        status,
-                        ChildChatStatus::Running
-                            | ChildChatStatus::NeedsApproval
-                            | ChildChatStatus::NeedsInput
-                    ) {
-                        "Replies queue until the current turn ends".into()
-                    } else {
-                        "Replies go to this child chat, not the parent".into()
-                    },
-                )
-            });
-            let border_strong = theme.border_strong;
-            root = root.child(
-                div()
-                    .p(px(12.0))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .min_h(px(48.0))
-                            .max_h(px(160.0))
-                            .rounded(px(8.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(crate::theme::ink(0.02))
-                            .p(px(10.0))
-                            .child(input),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .justify_between()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(crate::typography::ui_rems(11.5))
-                                    .text_color(if hint.0 {
-                                        theme.danger
-                                    } else {
-                                        theme.text_muted
-                                    })
-                                    .child(hint.1),
-                            )
-                            .child(
-                                div()
-                                    .id("child-chat-send")
-                                    .role(gpui::Role::Button)
-                                    .aria_label(if checking {
-                                        "Check child reply delivery"
-                                    } else {
-                                        "Send reply to child chat"
-                                    })
-                                    .tab_index(0)
-                                    .flex_none()
-                                    .px(px(10.0))
-                                    .py(px(6.0))
-                                    .rounded(px(6.0))
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .cursor_pointer()
-                                    .text_color(theme.text)
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .hover(move |style| style.border_color(border_strong))
-                                    .focus_visible(move |style| style.border_color(border_strong))
-                                    .when(sending || (!has_text && !checking), |style| {
-                                        style.opacity(0.5)
-                                    })
-                                    .on_click(cx.listener(|panel, _, _, cx| panel.send(cx)))
-                                    .on_key_down(cx.listener(
-                                        |panel, event: &gpui::KeyDownEvent, _, cx| {
-                                            if is_settings_nav_activation(
-                                                &event.keystroke.key,
-                                                event.is_held,
-                                            ) {
-                                                panel.send(cx);
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
-                                    .child(if sending {
-                                        "Sending…"
-                                    } else if checking {
-                                        "Check delivery"
-                                    } else {
-                                        "Send"
-                                    }),
-                            ),
-                    ),
-            );
-        }
-        root
     }
 }
 
@@ -1119,7 +613,7 @@ impl Render for ChildChatPanel {
             window.focus(&self.focus, cx);
         }
         let body = if self.open.is_some() {
-            self.render_open(window, &theme, cx)
+            div().size_full().child(self.render_open())
         } else {
             self.render_list(&theme, cx)
         };
@@ -1144,6 +638,7 @@ impl Render for ChildChatPanel {
 impl Shell {
     pub(super) fn release_child_chat_panel(&mut self, cx: &mut Context<Self>) {
         self.child_chat_events = None;
+        self.pane_transcript_events = None;
         // Dropping the last handle runs the panel's release hook, which
         // cancels its doc watch.
         if self.child_chat_panel.take().is_some() {
@@ -1160,18 +655,77 @@ impl Shell {
         }
         self.release_child_chat_panel(cx);
         let links = Self::session_links(Some(self.active_chat.clone()), cx);
-        let panel = cx
-            .new(|cx| ChildChatPanel::new(self.state.clone(), self.active_chat.clone(), links, cx));
+        let composers = self.pane_composers.clone();
+        let panel = cx.new(|cx| {
+            ChildChatPanel::new(
+                self.state.clone(),
+                composers,
+                self.active_chat.clone(),
+                links,
+                cx,
+            )
+        });
         self.child_chat_events = Some(cx.subscribe(&panel, |shell, _, event, cx| match event {
-            ChildChatEvent::OpenAsMain(id) => {
-                // Release first: the pane's watch and the main transcript
-                // watch share the child's doc id.
-                shell.release_child_chat_panel(cx);
-                shell.open_chat(id.clone(), cx);
+            ChildChatEvent::OpenAsMain(id) => shell.open_pane_chat_as_main(id.clone(), cx),
+            ChildChatEvent::ShowParent(id) => shell.show_pane_parent(id.clone(), cx),
+            ChildChatEvent::Opened(transcript) => {
+                shell.pane_transcript_events =
+                    Some(cx.subscribe(transcript, Self::on_transcript_event));
             }
         }));
         self.child_chat_panel = Some(panel.clone());
         panel
+    }
+
+    /// Promote a pane chat to the main view. Release first: the pane's watch
+    /// and the main transcript watch share the doc id. The pane composer's
+    /// draft is made durable before the main composer loads it, so the text
+    /// moves with the chat instead of two composers editing one draft.
+    pub(super) fn open_pane_chat_as_main(&mut self, id: String, cx: &mut Context<Self>) {
+        self.release_child_chat_panel(cx);
+        self.pending_open_main = None;
+        let Some(composer) = self.pane_composers.read(cx).get(&id) else {
+            self.open_chat(id, cx);
+            return;
+        };
+        if composer.update(cx, |composer, cx| composer.prepare_close(cx)) {
+            self.finish_open_pane_chat_as_main(id, cx);
+            return;
+        }
+        self.pending_open_main = Some(cx.subscribe(&composer, move |shell, _, event, cx| {
+            if matches!(event, ComposerEvent::DraftFlushCompleted) {
+                shell.pending_open_main = None;
+                shell.finish_open_pane_chat_as_main(id.clone(), cx);
+            }
+        }));
+    }
+
+    fn finish_open_pane_chat_as_main(&mut self, id: String, cx: &mut Context<Self>) {
+        // A composer with a send or receipt check in flight keeps owning it;
+        // only an idle one is dropped so the main view reloads the draft.
+        let idle = self
+            .pane_composers
+            .read(cx)
+            .get(&id)
+            .is_some_and(|composer| !composer.read(cx).has_work_in_flight());
+        if idle {
+            self.pane_composers
+                .update(cx, |composers, _| composers.remove(&id));
+        }
+        self.composer
+            .update(cx, |composer, _| composer.forget_cached_draft(&id));
+        self.open_chat(id, cx);
+    }
+
+    /// The parent link: bring the parent conversation forward in the main view.
+    pub(super) fn show_pane_parent(&mut self, parent: String, cx: &mut Context<Self>) {
+        if self.right_pane_expanded {
+            self.toggle_right_pane_expand(cx);
+        }
+        if self.active_chat != parent {
+            self.open_chat(parent, cx);
+        }
+        cx.notify();
     }
 
     pub(super) fn render_child_chats(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -1250,19 +804,52 @@ impl Shell {
         }
     }
 
+    fn fixture_open_child_composer(&self, cx: &App) -> Option<Entity<Composer>> {
+        let panel = self.child_chat_panel.as_ref()?.read(cx);
+        Some(panel.open.as_ref()?.view.read(cx).composer().clone())
+    }
+
+    /// Type into the open child's composer (a draft; nothing is sent).
+    pub fn fixture_child_chat_type(&mut self, text: &str, cx: &mut Context<Self>) {
+        if let Some(composer) = self.fixture_open_child_composer(cx) {
+            let input = composer.read(cx).input.clone();
+            input.update(cx, |input, cx| input.set_text(text, cx));
+        }
+    }
+
+    /// Type and press Enter in the open child's composer: the main composer's
+    /// own submit path, bound to the child.
     pub fn fixture_child_chat_send(&mut self, text: &str, cx: &mut Context<Self>) {
-        if let Some(panel) = self.child_chat_panel.clone() {
-            panel.update(cx, |panel, cx| {
-                if let Some(open) = &panel.open {
-                    open.reply
-                        .read(cx)
-                        .input
-                        .clone()
-                        .update(cx, |input, cx| input.set_text(text, cx));
-                }
-                panel.send(cx);
+        if let Some(composer) = self.fixture_open_child_composer(cx) {
+            let input = composer.read(cx).input.clone();
+            input.update(cx, |input, cx| {
+                input.set_text(text, cx);
+                cx.emit(crate::composer::ComposerInputEvent::Submitted);
             });
         }
+    }
+
+    pub fn fixture_child_chat_open_main(&mut self, cx: &mut Context<Self>) {
+        let id = self
+            .child_chat_panel
+            .as_ref()
+            .and_then(|panel| panel.read(cx).open.as_ref().map(|open| open.id.clone()));
+        if let Some(id) = id {
+            self.open_pane_chat_as_main(id, cx);
+        }
+    }
+
+    pub fn fixture_main_composer_readback(&self, cx: &Context<Self>) -> serde_json::Value {
+        self.composer.read(cx).readback(cx)
+    }
+
+    pub fn fixture_set_right_pane_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        self.settings.right_pane_width = width;
+        cx.notify();
+    }
+
+    pub fn fixture_engine(&self, cx: &Context<Self>) -> Option<crate::state::EngineHandle> {
+        self.state.read(cx).engine().cloned()
     }
 
     pub fn fixture_close_right_pane(&mut self, cx: &mut Context<Self>) {
@@ -1285,9 +872,44 @@ impl Shell {
             "pickerCardVisible": any,
             "panelParent": panel.map(|panel| panel.parent().to_string()),
             "openChild": open.map(|open| open.id.clone()),
-            "openNotice": open.and_then(|open| open.reply.read(cx).notice.as_ref().map(|(error, text)| serde_json::json!({"error": error, "text": text}))),
-            "openSending": open.map(|open| open.reply.read(cx).sending),
-            "openInput": open.map(|open| open.reply.read(cx).input.read(cx).text().to_string()),
+            "openComposer": open.map(|open| open.view.read(cx).composer().read(cx).readback(cx)),
+            "openTranscriptScroll": open.map(|open| open.view.read(cx).transcript().read(cx).scroll_readback()),
+            "openNotice": open.and_then(|open| open.view.read(cx).composer().read(cx).failure.as_ref().map(|text| serde_json::json!({"error": true, "text": text.to_string()}))),
+            "openSending": open.map(|open| open.view.read(cx).composer().read(cx).is_sending()),
+            "openInput": open.map(|open| open.view.read(cx).composer().read(cx).input.read(cx).text().to_string()),
+            "openEchoes": open.map(|open| state.echoes_for(&open.id).len()),
+            "openTranscriptUserIds": open.map(|open| {
+                state
+                    .sub_transcript(&open.id)
+                    .iter()
+                    .filter(|entry| entry.role == luna_doc::MessageRole::User)
+                    .map(|entry| entry.id.clone())
+                    .collect::<Vec<_>>()
+            }),
+            "mainComposer": self.composer.read(cx).readback(cx),
+            "paneComposerStates": self
+                .pane_composers
+                .read(cx)
+                .ids()
+                .into_iter()
+                .filter_map(|id| {
+                    let composer = self.pane_composers.read(cx).get(&id)?;
+                    Some((id, composer.read(cx).readback(cx)))
+                })
+                .collect::<serde_json::Map<_, _>>(),
+            "parentTranscriptRows": state.transcript.len(),
+            "parentTranscriptText": state
+                .transcript
+                .iter()
+                .flat_map(|entry| entry.parts.iter())
+                .filter_map(|part| match part {
+                    luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            "openSendPending": open.map(|open| state.send_pending(&open.id, now)),
+            "paneChats": state.pane_chat_ids(),
+            "paneComposers": self.pane_composers.read(cx).ids(),
             "watchedDocs": state.fixture_sub_watch_ids(),
             "openTranscriptRows": open.map(|open| state.sub_transcript(&open.id).len()),
             "openTranscriptText": open.map(|open| {

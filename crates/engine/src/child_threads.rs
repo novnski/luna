@@ -27,6 +27,32 @@ fn child_creation_failure(receipt: &CommandReceipt) -> String {
     }
 }
 
+/// One line for the parent's creation notice. Legacy rows have no record.
+fn child_checkout_summary(chat: &Chat, child: &ChildThread) -> String {
+    let cwd = chat.cwd.as_deref().unwrap_or("unknown");
+    let Some(provisioning) = child.provisioning.as_ref() else {
+        return format!("existing checkout {cwd}");
+    };
+    let checkout = match provisioning.checkout_kind {
+        luna_proto::ChildCheckoutKind::NewWorktree => format!(
+            "new worktree {cwd} on branch {} from {}",
+            provisioning.branch.as_deref().unwrap_or("unknown"),
+            provisioning.base.as_deref().unwrap_or("unknown")
+        ),
+        luna_proto::ChildCheckoutKind::ExistingPath => format!("existing checkout {cwd}"),
+        luna_proto::ChildCheckoutKind::Current => format!("the parent's checkout {cwd}"),
+    };
+    let access = crate::claude_child_reports::mode_label(provisioning.granted_permission_mode);
+    let note = if provisioning.granted_by_user {
+        " (granted by the user above the parent's access)"
+    } else if provisioning.escalation_denied {
+        " (requested access above the parent's was not granted)"
+    } else {
+        ""
+    };
+    format!("{checkout}; access {access}{note}")
+}
+
 pub(super) fn child_row_bytes(chat: &Chat) -> usize {
     serde_json::to_vec(chat).map_or(usize::MAX, |bytes| bytes.len())
 }
@@ -64,23 +90,29 @@ pub(super) fn compact_child_outcomes(child: &mut ChildThread) {
     child.outcome_floor_ms = floor;
 }
 
-#[derive(Default, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-struct NewTaskPreferences {
-    harness: Option<luna_proto::HarnessId>,
-    model_by_harness: HashMap<luna_proto::HarnessId, PreferenceModel>,
-    reasoning: Option<luna_proto::ReasoningLevel>,
-    permission_by_harness: HashMap<luna_proto::HarnessId, luna_proto::PermissionMode>,
+/// Engine-private record of who granted access above the parent's ceiling.
+/// It rides the durable intent only from trusted engine paths; clients cannot
+/// submit `CreateChildChat` (see `EXECUTE_TASK_COMMAND`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ChildAccessGrant {
+    /// The user's own creation dialog (`CreateChildThread`).
+    CreationDialog,
+    /// The explicit grant choice on the agent's approval card.
+    ApprovalCard,
 }
-#[derive(Deserialize)]
-struct PreferenceModel {
-    id: String,
+
+/// A child worktree materialized before the durable child commit. Held in
+/// memory only between provisioning and commit; never a replay input.
+#[derive(Debug, Clone)]
+pub(super) struct ProvisionedChildWorktree {
+    repo_path: String,
+    worktree: luna_proto::Worktree,
+    base: String,
+    fresh: bool,
 }
 
 impl EngineRpc {
-    pub(crate) fn set_new_task_preferences_path(&mut self, path: std::path::PathBuf) {
-        self.new_task_preferences_path = Some(path);
-    }
     pub(super) fn validate_child_authority(
         &self,
         request: &CreateChildThreadRequest,
@@ -146,22 +178,147 @@ impl EngineRpc {
         Ok(parent)
     }
 
+    /// Materialize a `newWorktree` child's checkout before its durable commit.
+    /// Nothing is provisioned for other checkouts, invalid input, or a request
+    /// whose creation command already has a receipt (a retry replays it).
+    async fn provision_child_checkout(
+        &self,
+        parent_id: &str,
+        child_id: &str,
+        request: &CreateChildThreadRequest,
+    ) -> Result<Option<ProvisionedChildWorktree>, crate::EngineError> {
+        let Some(luna_proto::ChildCheckoutRequest::NewWorktree { branch, base }) =
+            &request.checkout
+        else {
+            return Ok(None);
+        };
+        validate_child_request(request)
+            .map_err(|error| crate::EngineError::Other(format!("Invalid child request: {error}")))?;
+        if self
+            .store
+            .task_command_receipt(&format!("child-create:{child_id}"))?
+            .is_some()
+            || self.workspace.chat(child_id)?.is_some()
+        {
+            return Ok(None);
+        }
+        let parent = self.validate_child_parent(parent_id)?;
+        let project_id = parent.space_id.clone().expect("validated project");
+        let space = self
+            .workspace
+            .space(&project_id)?
+            .ok_or_else(|| crate::EngineError::Other("Project is missing".into()))?;
+        let repo = std::path::PathBuf::from(&space.path);
+        if !self.repos.is_repo(&repo).await {
+            return Err(crate::EngineError::Other(
+                "This project is not a git repository; choose the current checkout for the child"
+                    .into(),
+            ));
+        }
+        let parent_cwd = std::path::PathBuf::from(parent.cwd.as_deref().unwrap_or(&space.path));
+        let base = match base {
+            Some(base) => base.clone(),
+            None => match self.repos.current_branch(&parent_cwd).await? {
+                branch if branch != "HEAD" => branch,
+                _ => self.repos.head_sha(&parent_cwd).await?.ok_or_else(|| {
+                    crate::EngineError::Other(
+                        "The parent checkout has no commit to branch from; name a base".into(),
+                    )
+                })?,
+            },
+        };
+        let dir = format!("child-{}", &child_id[..8]);
+        let branch = branch.clone().unwrap_or_else(|| format!("luna/{dir}"));
+        let (worktree, fresh) = self
+            .repos
+            .provision_child_worktree(&repo, &dir, &branch, &base)
+            .await?;
+        let provisioned = ProvisionedChildWorktree {
+            repo_path: space.path,
+            worktree,
+            base,
+            fresh,
+        };
+        self.pending_child_worktrees
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(child_id.to_owned(), provisioned.clone());
+        Ok(Some(provisioned))
+    }
+
+    /// Drop the pending provisioning. A fresh worktree whose child committed
+    /// gets the project's new-worktree setup (owned by the child, as the
+    /// composer's WorktreeSpec path does); one whose child did not commit is
+    /// removed, so a failed creation leaves no orphaned checkout.
+    async fn settle_child_provisioning(
+        &self,
+        child_id: &str,
+        provisioned: Option<ProvisionedChildWorktree>,
+    ) {
+        self.pending_child_worktrees
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(child_id);
+        let Some(provisioned) = provisioned.filter(|provisioned| provisioned.fresh) else {
+            return;
+        };
+        match self.workspace.chat(child_id) {
+            Ok(Some(_)) => {
+                if let Some(commands) = self.project_commands.as_ref()
+                    && let Err(error) = commands
+                        .setup_new_worktree(child_id, &provisioned.worktree.path)
+                        .await
+                {
+                    tracing::warn!(child = %child_id, %error, "child worktree setup did not start");
+                }
+            }
+            Ok(None) => {
+                if let Err(error) = self
+                    .repos
+                    .discard_child_worktree(
+                        std::path::Path::new(&provisioned.repo_path),
+                        &provisioned.worktree,
+                    )
+                    .await
+                {
+                    tracing::warn!(child = %child_id, %error, "uncommitted child worktree cleanup failed");
+                }
+            }
+            Err(error) => {
+                tracing::warn!(child = %child_id, %error, "child worktree outcome unknown; kept");
+            }
+        }
+    }
+
     pub(super) async fn create_child_manual(
         &self,
         parent_id: String,
         request: CreateChildThreadRequest,
     ) -> Result<ChildThreadReceipt, RpcError> {
         let child_id = child_task_id(&parent_id, &request.idempotency_key);
+        // The dialog is the user's own explicit choice. Only a request that
+        // names an access level carries the grant marker, so legacy payloads
+        // keep their durable payload hash.
+        let access_grant = request
+            .permission_mode
+            .map(|_| ChildAccessGrant::CreationDialog);
+        let provisioned = self
+            .provision_child_checkout(&parent_id, &child_id, &request)
+            .await
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
         let mut command = legacy_task_command(
             child_id.clone(),
             TaskCommandIntent::CreateChildChat {
                 parent_task_id: parent_id.clone(),
                 request,
+                access_grant,
             },
         );
         command.command_id = format!("child-create:{child_id}");
         command.actor_id = "luna-user:child-create".into();
-        let receipt = self.execute_task_command(command, true).await?;
+        let receipt = self.execute_task_command(command, true).await;
+        self.settle_child_provisioning(&child_id, provisioned).await;
+        let receipt = receipt?;
         if receipt.status != CommandReceiptStatus::Applied {
             return Err(RpcError::Failed(child_creation_failure(&receipt)));
         }
@@ -181,6 +338,7 @@ impl EngineRpc {
             command: receipt,
             initial_message_id: child.initial_message_id.clone(),
             startup_state: self.child_startup_state(&child_id, &child),
+            provisioning: child.provisioning.clone(),
         })
     }
 
@@ -199,11 +357,16 @@ impl EngineRpc {
         {
             return Err(CrossTaskError::UserRequest);
         }
+        let provisioned = self
+            .provision_child_checkout(&authority.caller_task_id, &child_id, &request)
+            .await
+            .map_err(|error| CrossTaskError::Backend(error.to_string()))?;
         let mut command = legacy_task_command(
             child_id.clone(),
             TaskCommandIntent::CreateChildChat {
                 parent_task_id: authority.caller_task_id.clone(),
                 request,
+                access_grant: fence.access_granted.then_some(ChildAccessGrant::ApprovalCard),
             },
         );
         command.command_id = format!("child-create:{child_id}");
@@ -211,12 +374,13 @@ impl EngineRpc {
         command.client_id = "luna-child-create".into();
         let receipt = self
             .execute_task_command_with_send_fence(command, true, Some(&fence.source))
-            .await
-            .map_err(|error| CrossTaskError::Backend(error.to_string()))?;
+            .await;
+        self.settle_child_provisioning(&child_id, provisioned).await;
+        let receipt = receipt.map_err(|error| CrossTaskError::Backend(error.to_string()))?;
         if receipt.status != CommandReceiptStatus::Applied {
             // The receipt's reason is the actionable cause (for example a
-            // provider default that differs from the parent). Surface it to
-            // the model and the tool chip instead of a bare status/code.
+            // branch that already exists). Surface it to the model and the
+            // tool chip instead of a bare status/code.
             return Err(CrossTaskError::Backend(child_creation_failure(&receipt)));
         }
         let chat = self
@@ -233,24 +397,26 @@ impl EngineRpc {
             command: receipt,
             initial_message_id: child.initial_message_id.clone(),
             startup_state: self.child_startup_state(&child_id, &child),
+            provisioning: child.provisioning.clone(),
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn apply_child_creation(
         &self,
         command_id: &str,
         task_id: &str,
         parent_id: &str,
         request: CreateChildThreadRequest,
+        access_grant: Option<ChildAccessGrant>,
         fence: Option<&ApprovedSendFence>,
     ) -> Result<CommandReceipt, TaskProjectionError> {
-        validate_child_request(&request).map_err(|error| {
-            TaskProjectionError::Mutation(crate::EngineError::Other(error.to_string()))
-        })?;
+        let fail = |message: String| {
+            TaskProjectionError::Mutation(crate::EngineError::Other(message))
+        };
+        validate_child_request(&request).map_err(|error| fail(error.to_string()))?;
         if task_id != child_task_id(parent_id, &request.idempotency_key) {
-            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                "Child identity does not match its request".into(),
-            )));
+            return Err(fail("Child identity does not match its request".into()));
         }
         let parent = self
             .validate_child_parent(parent_id)
@@ -260,102 +426,142 @@ impl EngineRpc {
             .workspace
             .space(&project_id)
             .map_err(TaskProjectionError::Mutation)?
-            .ok_or_else(|| {
-                TaskProjectionError::Mutation(crate::EngineError::Other(
-                    "Project is missing".into(),
-                ))
-            })?;
-        let mut config = parent.config.clone().ok_or_else(|| {
-            TaskProjectionError::Mutation(crate::EngineError::Other(
-                "Parent execution configuration is unavailable".into(),
-            ))
-        })?;
-        let permission_ceiling = config.effective_permission_mode;
-        let global = self
-            .new_task_preferences_path
-            .as_ref()
-            .and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| serde_json::from_slice::<NewTaskPreferences>(&bytes).ok())
-            .unwrap_or_default();
-        let selected_harness = space
-            .execution_defaults
-            .provider
-            .as_ref()
-            .map(|provider| provider.harness)
-            .or(global.harness)
-            .unwrap_or_else(|| self.doc_host.default_harness());
-        let selection = space.execution_defaults.resolve(
-            Some(selected_harness),
-            global
-                .model_by_harness
-                .get(&selected_harness)
-                .map(|model| model.id.as_str()),
-            global.permission_by_harness.get(&selected_harness).copied(),
-        );
-        // Only same-provider account resolution is verified in this first
-        // version. Provider defaults still use the shared desktop policy.
-        if selected_harness != config.harness {
-            return Err(TaskProjectionError::Mutation(crate::EngineError::Other("Child creation requires the same provider as its parent in this version; update the project/global provider default before retrying".into())));
-        }
-        config.model = request
-            .model
+            .ok_or_else(|| fail("Project is missing".into()))?;
+        let parent_config = parent
+            .config
             .clone()
-            .or_else(|| selection.model.map(str::to_owned));
-        config.reasoning = request.reasoning.or(global.reasoning);
+            .ok_or_else(|| fail("Parent execution configuration is unavailable".into()))?;
+        // Model, reasoning and access default from the parent; the provider
+        // and provider account are always the parent's.
+        let ceiling = parent_config.effective_permission_mode;
+        let mut config = parent_config.clone();
+        if let Some(model) = request.model.clone() {
+            config.model = Some(model);
+        }
+        if let Some(reasoning) = request.reasoning {
+            config.reasoning = Some(reasoning);
+        }
         config.model_options.clear();
         config.permission_audit.clear();
-        config.permission_mode = std::cmp::min(
-            selection.permission_mode.unwrap_or(config.permission_mode),
-            config.effective_permission_mode,
-        );
-        config.effective_permission_mode = config.permission_mode;
-        let cwd = request
-            .cwd
-            .clone()
-            .or(parent.cwd.clone())
-            .unwrap_or(space.path);
-        // Existing directories only; filesystem isolation is an explicit
-        // choice. No worktree or fork can be inferred from lineage.
-        let cwd_path = std::fs::canonicalize(&cwd).map_err(|error| {
-            TaskProjectionError::Mutation(crate::EngineError::Other(format!(
-                "Existing child checkout is unavailable: {error}"
-            )))
-        })?;
-        if !cwd_path.is_dir() {
-            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                "Child checkout must be an existing directory".into(),
-            )));
+        let requested = request.permission_mode.unwrap_or(ceiling);
+        let (granted, granted_by_user, escalation_denied) = if requested <= ceiling {
+            (requested, false, false)
+        } else if access_grant.is_some() {
+            (requested, true, false)
+        } else {
+            (ceiling, false, true)
+        };
+        config.permission_mode = granted;
+        config.effective_permission_mode = granted;
+        if granted_by_user {
+            config.sandbox = match granted {
+                luna_proto::PermissionMode::Full => luna_proto::SandboxLevel::DangerFullAccess,
+                luna_proto::PermissionMode::Ask | luna_proto::PermissionMode::Auto => {
+                    luna_proto::SandboxLevel::WorkspaceWrite
+                }
+            };
+            config.permission_ceiling_source = None;
+            config.permission_degradation_reason = None;
+        } else if escalation_denied {
+            config.permission_ceiling_source = Some(luna_proto::PermissionCeilingSource::ParentThread);
+            config.permission_degradation_reason =
+                Some(luna_proto::PermissionDegradationReason::ParentCeiling);
         }
-        // Explicit alternate cwd must stay inside the parent's granted
-        // workspace when the parent lacks full filesystem authority.
-        let parent_cwd = parent.cwd.as_deref().unwrap_or(&cwd);
-        if config.permission_mode != luna_proto::PermissionMode::Full {
-            let parent_root = std::fs::canonicalize(parent_cwd).map_err(|error| {
-                TaskProjectionError::Mutation(crate::EngineError::Other(error.to_string()))
-            })?;
-            if !cwd_path.starts_with(&parent_root) {
-                return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                    "Child checkout exceeds the parent workspace permission ceiling".into(),
-                )));
+        let parent_cwd = parent.cwd.clone().unwrap_or_else(|| space.path.clone());
+        let (checkout_kind, cwd, branch, checkout_id, worktree_path, base) = match &request.checkout {
+            Some(luna_proto::ChildCheckoutRequest::NewWorktree { .. }) => {
+                let provisioned = self
+                    .pending_child_worktrees
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .get(task_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        fail("Child worktree provisioning is unavailable; retry with a new request ID".into())
+                    })?;
+                let path = provisioned.worktree.path.clone();
+                (
+                    luna_proto::ChildCheckoutKind::NewWorktree,
+                    path.clone(),
+                    Some(provisioned.worktree.branch.clone()),
+                    provisioned.worktree.checkout_id.clone(),
+                    Some(path),
+                    Some(provisioned.base.clone()),
+                )
             }
-        }
-        let cwd = cwd_path.to_string_lossy().into_owned();
+            _ if request.cwd.is_some() => {
+                // Existing directories only. An explicit alternate cwd must
+                // stay inside the parent's workspace without Full access.
+                let cwd_path = std::fs::canonicalize(request.cwd.as_deref().expect("checked"))
+                    .map_err(|error| fail(format!("Existing child checkout is unavailable: {error}")))?;
+                if !cwd_path.is_dir() {
+                    return Err(fail("Child checkout must be an existing directory".into()));
+                }
+                if granted != luna_proto::PermissionMode::Full {
+                    let parent_root = std::fs::canonicalize(&parent_cwd)
+                        .map_err(|error| fail(error.to_string()))?;
+                    if !cwd_path.starts_with(&parent_root) {
+                        return Err(fail(
+                            "Child checkout exceeds the parent workspace permission ceiling".into(),
+                        ));
+                    }
+                }
+                (
+                    luna_proto::ChildCheckoutKind::ExistingPath,
+                    cwd_path.to_string_lossy().into_owned(),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            }
+            _ => {
+                let cwd_path = std::fs::canonicalize(&parent_cwd)
+                    .map_err(|error| fail(format!("Parent checkout is unavailable: {error}")))?;
+                (
+                    luna_proto::ChildCheckoutKind::Current,
+                    cwd_path.to_string_lossy().into_owned(),
+                    parent.branch.clone(),
+                    parent.checkout_id.clone(),
+                    None,
+                    None,
+                )
+            }
+        };
         let current = self
             .current_task_command_snapshot(task_id)
             .map_err(|error| {
                 TaskProjectionError::Commit(crate::EngineError::Other(error.to_string()))
             })?;
+        let provisioning = luna_proto::ChildProvisioning {
+            created_by: if fence.is_some() {
+                luna_proto::ChildCreator::Agent
+            } else {
+                luna_proto::ChildCreator::User
+            },
+            checkout_kind,
+            cwd: cwd.clone(),
+            worktree_path,
+            branch: branch.clone(),
+            base,
+            requested_permission_mode: request.permission_mode,
+            granted_permission_mode: granted,
+            parent_permission_ceiling: ceiling,
+            granted_by_user,
+            escalation_denied,
+        };
         let child = ChildThread {
             parent_task_id: parent_id.into(),
             creation_command_id: command_id.into(),
-            permission_ceiling,
-            sandbox_ceiling: Some(config.sandbox),
+            permission_ceiling: if granted_by_user { granted } else { ceiling },
+            sandbox_ceiling: (!granted_by_user).then_some(parent_config.sandbox),
             initial_message_id: format!("child-initial:{task_id}"),
             initial_prompt: request.prompt,
             report_results: request.report_results,
             continue_parent: request.continue_parent,
             outcomes: Vec::new(),
             outcome_floor_ms: None,
+            provisioning: Some(provisioning),
         };
         let row = Chat {
             child_thread: Some(child),
@@ -366,8 +572,8 @@ impl EngineRpc {
             settlement_override: None,
             pinned_order: None,
             cwd: Some(cwd.clone()),
-            branch: None,
-            checkout_id: None,
+            branch,
+            checkout_id,
             source_context: None,
             config: Some(config),
             last_message_preview: None,
@@ -383,9 +589,9 @@ impl EngineRpc {
         // Reject before any identity/registry write: an oversized row would be
         // refused by the synced registry and wedge this device's sync.
         if child_row_bytes(&row) > CHILD_ROW_BUDGET_BYTES {
-            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+            return Err(fail(
                 "Child brief, title or checkout path is too large for a synced task; shorten the brief".into(),
-            )));
+            ));
         }
         let lineage = TaskLineage {
             parent_task_id: Some(parent_id.into()),
@@ -530,10 +736,10 @@ impl EngineRpc {
             &child.parent_task_id,
             &format!("child-created:{}", chat.id),
             &format!(
-                "Created child {}: {}. Fresh context; existing checkout {}.",
+                "Created child {}: {}. Fresh context; {}.",
                 self.child_reference(chat.title.as_deref(), &chat.id),
                 self.child_startup_state(&chat.id, &child),
-                chat.cwd.as_deref().unwrap_or("unknown")
+                child_checkout_summary(chat, &child)
             ),
         )
         .await?;

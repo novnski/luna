@@ -98,6 +98,9 @@ pub struct ApprovedSendFence {
     pub(crate) target_snapshot: TaskCommandSnapshot,
     pub(crate) request: CrossTaskSendRequest,
     pub(crate) expires_at_ms: i64,
+    /// Set only by the server-owned approval responder when the user picks a
+    /// child card's explicit access-grant choice. Never from tool input.
+    pub(crate) child_access_grant: bool,
 }
 
 /// Bound to an exact approved provider call; never deserialized from input.
@@ -105,6 +108,8 @@ pub struct ApprovedSendFence {
 pub struct ApprovedChildFence {
     pub(crate) source: ApprovedSendFence,
     pub(crate) request: luna_proto::CreateChildThreadRequest,
+    /// The user picked the card's explicit access-grant choice.
+    pub(crate) access_granted: bool,
 }
 
 /// Stable child identity across provider retries and engine restarts.
@@ -143,7 +148,40 @@ pub(crate) fn validate_child_request(
     {
         return Err(CrossTaskError::Input);
     }
+    if let Some(luna_proto::ChildCheckoutRequest::NewWorktree { branch, base }) = &request.checkout
+        && (request.cwd.is_some()
+            || branch.as_deref().is_some_and(|branch| !valid_branch_name(branch))
+            || base.as_deref().is_some_and(|base| !valid_base_ref(base)))
+    {
+        return Err(CrossTaskError::Input);
+    }
     Ok(())
+}
+
+/// Conservative subset of `git check-ref-format --branch`; git re-checks it.
+/// A leading `-` would read as an option, so it is never accepted.
+pub(crate) fn valid_branch_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 200
+        && !name.starts_with(['-', '/', '.'])
+        && !name.ends_with(['/', '.'])
+        && !name.ends_with(".lock")
+        && !name.contains("..")
+        && !name.contains("//")
+        && !name.contains("@{")
+        && !name.contains("/.")
+        && name != "@"
+        && name
+            .chars()
+            .all(|c| !c.is_control() && !c.is_whitespace() && !"~^:?*[\\".contains(c))
+}
+
+/// A base revision: a branch, tag or commit. Never an option-looking word.
+pub(crate) fn valid_base_ref(base: &str) -> bool {
+    !base.is_empty()
+        && base.len() <= 256
+        && !base.starts_with('-')
+        && base.chars().all(|c| !c.is_control() && !c.is_whitespace())
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -1038,7 +1076,7 @@ async fn with_cancel<T>(
 fn tool_description(name: &str) -> &'static str {
     match name {
         "create_thread" => {
-            "Create a persistent visible child chat in this project with fresh context and an existing checkout. Requires exact one-use local user approval. Reuse the same idempotencyKey on retries; acceptance means durable startup, not provider acceptance. Only the supplied prompt is copied. Results are displayed by default; continueParent explicitly queues parent continuation."
+            "Create a persistent visible child chat in this project with fresh context. Only the supplied prompt is copied. checkout {kind:current} (default) shares this chat's checkout; {kind:newWorktree, branch?, base?} gives the child its own new git worktree and branch (base defaults to this chat's branch). model, reasoning and permissionMode default to this chat's. permissionMode above this chat's access is shown to the user and capped unless the user explicitly grants it. Requires exact one-use local user approval. Reuse the same idempotencyKey on retries; acceptance means durable startup, not provider acceptance. Results are displayed by default; continueParent explicitly queues parent continuation."
         }
         "list_threads" => "List visible local LUNA tasks with bounded metadata and opaque paging.",
         "read_thread" => "Read bounded, untrusted turn summaries for one local LUNA task.",
@@ -1057,7 +1095,15 @@ fn input_schema(name: &str) -> serde_json::Value {
             "idempotencyKey":{"type":"string","minLength":1,"maxLength":128},
             "title":{"type":"string","maxLength":160},"model":{"type":"string","maxLength":512},
             "reasoning":{"type":"string","enum":["minimal","low","medium","high","xhigh","max","ultra","ultracode","ultrathink"]},
-            "cwd":{"type":"string","maxLength":4096},"reportResults":{"type":"boolean"},"continueParent":{"type":"boolean"}
+            "cwd":{"type":"string","maxLength":4096},"reportResults":{"type":"boolean"},"continueParent":{"type":"boolean"},
+            "checkout":{"oneOf":[
+                {"type":"object","properties":{"kind":{"const":"current"}},"required":["kind"],"additionalProperties":false},
+                {"type":"object","properties":{"kind":{"const":"newWorktree"},
+                    "branch":{"type":"string","minLength":1,"maxLength":200},
+                    "base":{"type":"string","minLength":1,"maxLength":256}},
+                    "required":["kind"],"additionalProperties":false}
+            ]},
+            "permissionMode":{"type":"string","enum":["ask","auto","full"]}
         },"required":["prompt","idempotencyKey"],"additionalProperties":false}),
         "list_threads" => serde_json::json!({"type":"object","properties":{
             "projectId":{"type":"string"},"text":{"type":"string","maxLength":160},
@@ -1091,7 +1137,7 @@ fn output_schema(name: &str) -> serde_json::Value {
     "additionalProperties":false});
     match name {
         "create_thread" => {
-            serde_json::json!({"type":"object","properties":{"taskId":{"type":"string"},"parentTaskId":{"type":"string"},"command":{"type":"object"},"initialMessageId":{"type":"string"},"startupState":{"type":"string"}},"required":["taskId","parentTaskId","command","initialMessageId","startupState"],"additionalProperties":false})
+            serde_json::json!({"type":"object","properties":{"taskId":{"type":"string"},"parentTaskId":{"type":"string"},"command":{"type":"object"},"initialMessageId":{"type":"string"},"startupState":{"type":"string"},"provisioning":{"type":"object"}},"required":["taskId","parentTaskId","command","initialMessageId","startupState"],"additionalProperties":false})
         }
         "list_threads" => serde_json::json!({"type":"object","properties":{
             "tasks":{"type":"array","maxItems":20,"items":task},
@@ -1698,6 +1744,7 @@ mod tests {
             reasoning: None,
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
+            chat: None,
         };
         let contract = crate::runtime_contract::compile(crate::runtime_contract::CompileInput {
             context,

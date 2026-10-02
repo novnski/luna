@@ -320,6 +320,9 @@ enum TaskCommandIntent {
     CreateChildChat {
         parent_task_id: String,
         request: luna_proto::CreateChildThreadRequest,
+        /// Engine-set only; absent for legacy payloads (unchanged hash).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        access_grant: Option<child_threads::ChildAccessGrant>,
     },
     ChildOutcome {
         outcome: luna_proto::ChildThreadOutcome,
@@ -1246,7 +1249,10 @@ pub struct EngineRpc {
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
     cleanup_boot_id: String,
-    new_task_preferences_path: Option<std::path::PathBuf>,
+    /// Child worktrees provisioned for an in-flight creation command.
+    pending_child_worktrees: std::sync::Mutex<
+        std::collections::HashMap<String, child_threads::ProvisionedChildWorktree>,
+    >,
     activity_cancel: CancellationToken,
 }
 
@@ -1334,6 +1340,85 @@ impl EngineRpc {
     fn is_side_chat(&self, id: &str) -> bool {
         let owner = id.split_once("--sub--").map_or(id, |(owner, _)| owner);
         self.workspace.is_side_chat(owner) || self.store.is_side_chat(owner).unwrap_or(true)
+    }
+
+    /// Ordinary task commands a leased side chat accepts. Everything that would
+    /// move it off the parent's checkout, provider session or lifecycle is
+    /// refused with the reason the UI shows.
+    fn side_chat_command_allowed(
+        &self,
+        task_id: &str,
+        intent: &TaskCommandIntent,
+    ) -> Result<(), String> {
+        let same_provider = |config: &ChatConfig| {
+            self.workspace
+                .chat(task_id)
+                .ok()
+                .flatten()
+                .and_then(|chat| chat.config)
+                .is_some_and(|current| {
+                    current.harness == config.harness
+                        && current.provider_account_id == config.provider_account_id
+                })
+        };
+        match intent {
+            TaskCommandIntent::Session { .. }
+            | TaskCommandIntent::NativeReview { .. }
+            | TaskCommandIntent::QueueMessage { .. }
+            | TaskCommandIntent::EditQueuedMessage { .. }
+            | TaskCommandIntent::RemoveQueuedMessage { .. }
+            | TaskCommandIntent::SendQueuedNow { .. }
+            | TaskCommandIntent::SteerQueuedNow { .. }
+            | TaskCommandIntent::SetPermission { .. }
+            | TaskCommandIntent::Goal { .. }
+            | TaskCommandIntent::CompactContext {}
+            | TaskCommandIntent::ClearContext {}
+            | TaskCommandIntent::Rename { .. }
+            | TaskCommandIntent::SetRead { .. }
+            | TaskCommandIntent::MarkSeen { .. }
+            | TaskCommandIntent::SetActivity { .. }
+            | TaskCommandIntent::EditEarlierMessage { .. }
+            | TaskCommandIntent::RewindConversation { .. }
+            | TaskCommandIntent::ReconcileConversationRewind { .. }
+            | TaskCommandIntent::RestoreHistoryRecovery { .. }
+            | TaskCommandIntent::RetryRecovery { .. }
+            | TaskCommandIntent::CancelRecovery { .. } => Ok(()),
+            TaskCommandIntent::ForkTask { side_chat: false, .. } => Ok(()),
+            TaskCommandIntent::ForkTask { side_chat: true, .. } => {
+                Err("Start side chats from a main conversation".into())
+            }
+            TaskCommandIntent::SetModel { config } | TaskCommandIntent::SetConfig { config } => {
+                if same_provider(config) {
+                    Ok(())
+                } else {
+                    Err("A side chat keeps its parent's provider and account: its context is the parent's forked provider session".into())
+                }
+            }
+            TaskCommandIntent::SwitchProvider { .. }
+            | TaskCommandIntent::SetProviderAccount { .. } => Err(
+                "A side chat keeps its parent's provider and account: its context is the parent's forked provider session".into(),
+            ),
+            TaskCommandIntent::SetBranch { .. }
+            | TaskCommandIntent::SetCwd { .. }
+            | TaskCommandIntent::SetHost { .. }
+            | TaskCommandIntent::MoveProject { .. }
+            | TaskCommandIntent::RepairWorkspaceIdentity { .. } => Err(
+                "A side chat shares its parent's checkout, branch and project; change them in the parent".into(),
+            ),
+            TaskCommandIntent::SetArchived { .. }
+            | TaskCommandIntent::SetPinned { .. }
+            | TaskCommandIntent::SetSettled { .. } => Err(
+                "Side chats are not sidebar tasks; unload or delete them from the side panel".into(),
+            ),
+            TaskCommandIntent::CreateChildChat { .. }
+            | TaskCommandIntent::ChildOutcome { .. }
+            | TaskCommandIntent::ChildOutcomeDelivered { .. } => {
+                Err("Side chats cannot create or own child chats".into())
+            }
+            TaskCommandIntent::CreateChat { .. } | TaskCommandIntent::Delete {} => Err(
+                "Side chats are created and deleted only by their side panel and parent".into(),
+            ),
+        }
     }
 
     pub(crate) fn with_side_chats(mut self, side_chats: crate::side_chats::SideChats) -> Self {
@@ -1577,7 +1662,7 @@ impl EngineRpc {
             local_import: None,
             engine_info,
             cleanup_boot_id,
-            new_task_preferences_path: None,
+            pending_child_worktrees: Default::default(),
             activity_cancel: CancellationToken::new(),
         };
         rpc.spawn_activity_bootstrap();
@@ -3008,7 +3093,18 @@ impl EngineRpc {
             let reserved_create = matches!(&command.intent, TaskCommandIntent::CreateChat { side_parent_id: Some(parent), .. }
                 if self.side_chats.as_ref().is_some_and(|service| service.reserved_for(&command.task_id, parent)));
             if !owned_delete && !reserved_create {
-                return Err(RpcError::Failed("Side chats are unavailable outside their owning side panel; saved history is read-only".into()));
+                if send_fence.is_some() {
+                    return Err(RpcError::Failed(
+                        "Side chats accept messages only from their own panel, not from another task's LUNA tools".into(),
+                    ));
+                }
+                self.side_chat_command_allowed(&command.task_id, &command.intent)
+                    .map_err(RpcError::Failed)?;
+                self.side_chats
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("Side chat service unavailable".into()))?
+                    .admit_ordinary(&command.task_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
             }
         }
         let _lane = self.doc_host.task_command_gate(&command.task_id).await;
@@ -5116,8 +5212,16 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id,
                 request,
+                access_grant,
             } => self
-                .apply_child_creation(command_id, task_id, &parent_task_id, request, send_fence)
+                .apply_child_creation(
+                    command_id,
+                    task_id,
+                    &parent_task_id,
+                    request,
+                    access_grant,
+                    send_fence,
+                )
                 .map(Some),
             TaskCommandIntent::CreateChat {
                 side_parent_id,
@@ -8577,15 +8681,23 @@ impl RpcService for EngineRpc {
         if claude_history::handles(method) {
             return self.handle_native_file_rewind(method, params).await;
         }
-        if params
+        if let Some(id) = params
             .get("chatId")
             .or_else(|| params.get("taskId"))
             .and_then(|id| id.as_str())
-            .is_some_and(|id| self.is_side_chat(id))
+            .filter(|id| self.is_side_chat(id))
         {
-            return Err(RpcError::Failed(
-                "Use the side chat panel. Historical side chats are read-only.".into(),
-            ));
+            // A side chat with a live view lease is an ordinary local chat for
+            // per-chat RPCs; without one it is read-only history.
+            self.side_chats
+                .as_ref()
+                .ok_or_else(|| RpcError::Failed("Side chat service unavailable".into()))?
+                .admit_ordinary(id)
+                .map_err(|error| {
+                    RpcError::Failed(format!(
+                        "{error}. Historical side chats are read through the side chat panel."
+                    ))
+                })?;
         }
         if local_only_credential_method(method)
             && params
@@ -10475,16 +10587,37 @@ impl RpcService for EngineRpc {
                     watch_stream(self.workspace.watch_chats())
                         .map(move |mut value| {
                             if let Some(items) = value.as_array_mut() {
-                                items.retain(|chat| {
-                                    chat.get("spaceId").and_then(|id| id.as_str()).is_some()
-                                        && !chat.get("id").and_then(|id| id.as_str()).is_some_and(
-                                            |id| {
-                                                workspace.is_side_chat(id)
-                                                    || side_chats
-                                                        .as_ref()
-                                                        .is_some_and(|service| service.contains(id))
-                                            },
-                                        )
+                                items.retain_mut(|chat| {
+                                    let Some(id) = chat
+                                        .get("id")
+                                        .and_then(|id| id.as_str())
+                                        .map(str::to_owned)
+                                    else {
+                                        return false;
+                                    };
+                                    let side = workspace.is_side_chat(&id)
+                                        || side_chats
+                                            .as_ref()
+                                            .is_some_and(|service| service.contains(&id));
+                                    if !side {
+                                        return chat
+                                            .get("spaceId")
+                                            .and_then(|id| id.as_str())
+                                            .is_some();
+                                    }
+                                    // A live side chat is published spaceless (never a
+                                    // sidebar task) with its parent, so its own pane can
+                                    // bind the full composer to the row.
+                                    let live = side_chats
+                                        .as_ref()
+                                        .is_some_and(|service| service.is_live(&id));
+                                    if let (true, Some(object)) = (live, chat.as_object_mut()) {
+                                        object.remove("spaceId");
+                                        if let Some(parent) = workspace.side_chat_parent(&id) {
+                                            object.insert("sideChatParentId".into(), parent.into());
+                                        }
+                                    }
+                                    live
                                 });
                             }
                             value

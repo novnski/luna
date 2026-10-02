@@ -1,0 +1,205 @@
+//! Which chat a composer (and its pickers, queue, goal bar and approval
+//! cards) drives.
+//!
+//! The main conversation composer follows [`AppState::selected_chat`]. A
+//! right-pane chat view (side chat or child chat) binds the SAME composer to
+//! one fixed chat id instead. Every read of "the composer's own chat" goes
+//! through this type so the two never cross: a pane composer must never send,
+//! steer, stop, approve or change settings on the selected chat, and the main
+//! composer must keep reading exactly what it read before.
+//!
+//! Per-chat projections (`transcript`, `queue`, context usage, provider
+//! notice, native tasks) live on `AppState` for the selected chat and in
+//! [`AppState::pane_chat`] for pane-bound chats. When a pane chat happens to
+//! be the selected chat too, the selected chat's live projection wins.
+
+use luna_doc::{QueuedMessage, SessionMessageEntry};
+use luna_proto::{Chat, ContextControlState, ContextUsage, NativeTaskLedger, ProviderNotice};
+
+use crate::state::AppState;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ChatBinding {
+    /// Follow `AppState::selected_chat` (the main conversation composer).
+    #[default]
+    Selected,
+    /// A fixed chat shown in the right pane.
+    Chat(String),
+}
+
+static EMPTY_CONTROL: std::sync::LazyLock<ContextControlState> =
+    std::sync::LazyLock::new(ContextControlState::default);
+static EMPTY_TASKS: std::sync::LazyLock<NativeTaskLedger> =
+    std::sync::LazyLock::new(NativeTaskLedger::default);
+
+impl ChatBinding {
+    /// A pane binding (fixed chat id).
+    pub fn is_pane(&self) -> bool {
+        matches!(self, Self::Chat(_))
+    }
+
+    /// The fixed chat id of a pane binding.
+    pub fn pane_chat(&self) -> Option<&str> {
+        match self {
+            Self::Selected => None,
+            Self::Chat(id) => Some(id),
+        }
+    }
+
+    /// The bound chat id: the selected chat, or the fixed pane chat.
+    pub fn chat_id<'a>(&'a self, state: &'a AppState) -> Option<&'a str> {
+        match self {
+            Self::Selected => state.selected_chat.as_deref(),
+            Self::Chat(id) => Some(id.as_str()),
+        }
+    }
+
+    /// Draft/attachment key: the bound chat id, or `""` for the new-chat canvas.
+    pub fn key(&self, state: &AppState) -> String {
+        self.chat_id(state).unwrap_or_default().to_string()
+    }
+
+    pub fn chat_row<'a>(&self, state: &'a AppState) -> Option<&'a Chat> {
+        match self {
+            Self::Selected => state.selected_chat_row(),
+            Self::Chat(id) => state.chats.iter().find(|chat| chat.id == *id),
+        }
+    }
+
+    /// The project this composer targets: the selected project, or the
+    /// bound chat's own project (falling back to the selection).
+    pub fn space_id(&self, state: &AppState) -> Option<String> {
+        match self {
+            Self::Selected => state.selected_space.clone(),
+            Self::Chat(_) => self
+                .chat_row(state)
+                .and_then(|chat| chat.space_id.clone())
+                .or_else(|| state.selected_space.clone()),
+        }
+    }
+
+    pub fn space_row<'a>(&self, state: &'a AppState) -> Option<&'a luna_proto::Space> {
+        match self {
+            Self::Selected => state.selected_space_row(),
+            Self::Chat(_) => match self
+                .chat_row(state)
+                .and_then(|chat| chat.space_id.as_deref())
+            {
+                Some(space) => state.space_row(space),
+                None => state.selected_space_row(),
+            },
+        }
+    }
+
+    /// The device whose catalogs (agents, models, refs) this composer uses:
+    /// the effective new-session target, or the bound chat's host.
+    pub fn device_id(&self, state: &AppState) -> Option<String> {
+        match self {
+            Self::Selected => state.effective_device_id(),
+            Self::Chat(_) => self
+                .chat_row(state)
+                .map(|chat| chat.device_id.clone())
+                .or_else(|| state.effective_device_id()),
+        }
+    }
+
+    pub fn space_git(&self, state: &AppState) -> bool {
+        self.space_row(state)
+            .is_some_and(|space| space.git_detected)
+    }
+
+    /// Whether this binding reads the selected chat's live projections.
+    fn reads_selected(&self, state: &AppState) -> bool {
+        match self {
+            Self::Selected => true,
+            Self::Chat(id) => state.selected_chat.as_deref() == Some(id.as_str()),
+        }
+    }
+
+    pub fn transcript<'a>(&self, state: &'a AppState) -> &'a [SessionMessageEntry] {
+        match self {
+            _ if self.reads_selected(state) => &state.transcript,
+            Self::Chat(id) => state.sub_transcript(id),
+            Self::Selected => &[],
+        }
+    }
+
+    pub fn queue<'a>(&self, state: &'a AppState) -> &'a [QueuedMessage] {
+        match self {
+            _ if self.reads_selected(state) => &state.queue,
+            Self::Chat(id) => state
+                .pane_chat(id)
+                .map(|pane| pane.queue.as_slice())
+                .unwrap_or(&[]),
+            Self::Selected => &[],
+        }
+    }
+
+    pub fn queue_mut<'a>(&self, state: &'a mut AppState) -> Option<&'a mut Vec<QueuedMessage>> {
+        if self.reads_selected(state) {
+            return Some(&mut state.queue);
+        }
+        match self {
+            Self::Chat(id) => state.pane_chat_mut(id).map(|pane| &mut pane.queue),
+            Self::Selected => None,
+        }
+    }
+
+    pub fn context_usage(&self, state: &AppState) -> Option<ContextUsage> {
+        match self {
+            _ if self.reads_selected(state) => state.context_usage,
+            Self::Chat(id) => state.pane_chat(id).and_then(|pane| pane.context_usage),
+            Self::Selected => None,
+        }
+    }
+
+    pub fn context_control<'a>(&self, state: &'a AppState) -> &'a ContextControlState {
+        match self {
+            _ if self.reads_selected(state) => &state.context_control,
+            Self::Chat(id) => state
+                .pane_chat(id)
+                .map(|pane| &pane.context_control)
+                .unwrap_or(&EMPTY_CONTROL),
+            Self::Selected => &EMPTY_CONTROL,
+        }
+    }
+
+    pub fn provider_notice<'a>(&self, state: &'a AppState) -> Option<&'a ProviderNotice> {
+        match self {
+            _ if self.reads_selected(state) => state.provider_notice.as_ref(),
+            Self::Chat(id) => state
+                .pane_chat(id)
+                .and_then(|pane| pane.provider_notice.as_ref()),
+            Self::Selected => None,
+        }
+    }
+
+    pub fn native_tasks<'a>(&self, state: &'a AppState) -> &'a NativeTaskLedger {
+        match self {
+            _ if self.reads_selected(state) => &state.native_tasks,
+            Self::Chat(id) => state
+                .pane_chat(id)
+                .map(|pane| &pane.native_tasks)
+                .unwrap_or(&EMPTY_TASKS),
+            Self::Selected => &EMPTY_TASKS,
+        }
+    }
+
+    /// Whether the bound chat's transcript has replayed at least once.
+    pub fn transcript_replayed(&self, state: &AppState) -> bool {
+        match self {
+            _ if self.reads_selected(state) => state.transcript_replayed,
+            Self::Chat(id) => state.pane_chat(id).is_some_and(|pane| pane.replayed),
+            Self::Selected => false,
+        }
+    }
+
+    /// Resubscribe the bound chat's queue after a failed optimistic edit.
+    pub fn refresh_queue(&self, state: &mut AppState, cx: &mut gpui::Context<AppState>) {
+        match self {
+            _ if self.reads_selected(state) => state.refresh_selected_queue(cx),
+            Self::Chat(id) => state.refresh_pane_queue(id, cx),
+            Self::Selected => {}
+        }
+    }
+}

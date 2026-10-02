@@ -564,6 +564,8 @@ case "$turnline" in
   mkdir -p "$hold_dir"
   emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"$turn\"}}}"
   emit "{\"method\":\"turn/started\",\"params\":{\"threadId\":\"$thread\",\"turn\":{\"id\":\"$turn\"}}}"
+  # The thread request (with LUNA developerInstructions) for identity checks.
+  printf '%s\n' "$thread_line" > "$hold_dir/$LUNA_THREAD_ID.thread"
   printf '%s\n%s\n%s\n%s\n' "$mcp_url" "$LUNA_MCP_BEARER_TOKEN" "$thread" "$turn" > "$hold_dir/$LUNA_THREAD_ID.tmp"
   mv "$hold_dir/$LUNA_THREAD_ID.tmp" "$hold_dir/$LUNA_THREAD_ID"
   waited=0

@@ -85,6 +85,10 @@ pub mod methods {
     pub const SEND_SIDE_CHAT: &str = "SendSideChat";
     pub const ANSWER_SIDE_CHAT: &str = "AnswerSideChat";
     pub const UNLOAD_SIDE_CHAT: &str = "UnloadSideChat";
+    /// Stop the side chat's current turn; the view lease stays writable.
+    pub const STOP_SIDE_CHAT: &str = "StopSideChat";
+    /// Renew a side chat view lease without reading a history page.
+    pub const RENEW_SIDE_CHAT: &str = "RenewSideChat";
     pub const WATCH_DOC_MESSAGES: &str = "WatchDocMessages";
     /// Messages typed while the agent was busy, held on the chat doc so every
     /// device sees the same queue. `{ chatId }` → `{ items: QueuedMessage[] }`.
@@ -362,6 +366,8 @@ pub mod methods {
         SEND_SIDE_CHAT,
         ANSWER_SIDE_CHAT,
         UNLOAD_SIDE_CHAT,
+        STOP_SIDE_CHAT,
+        RENEW_SIDE_CHAT,
         WATCH_DOC_MESSAGES,
         WATCH_QUEUE,
         WATCH_NATIVE_TASKS,

@@ -4,7 +4,8 @@
 //! Client-supplied `model_options` never grant scopes or supply a contract.
 
 use luna_proto::{
-    LUNA_RUNTIME_CONTRACT_VERSION, LunaAgentRuntimeContract, OmittedRuntimeTool, RuntimeContext,
+    LUNA_RUNTIME_CONTRACT_VERSION, LunaAgentRuntimeContract, OmittedRuntimeTool, RuntimeChatIdentity,
+    RuntimeChatRole, RuntimeCheckoutOwnership, RuntimeContext, RuntimeContextOrigin,
     RuntimeContractDiagnostics, RuntimeDelivery, RuntimeInstructionSection,
     RuntimeInstructionSource, RuntimeToolDefinition, RuntimeToolSummary,
 };
@@ -116,6 +117,68 @@ fn core_text(context: &RuntimeContext) -> String {
     )
 }
 
+/// Explicit chat identity. Only engine-resolved ids and enums are used, so no
+/// user-controlled text reaches this privileged section.
+fn role_text(context: &RuntimeContext, chat: &RuntimeChatIdentity) -> String {
+    let caps = &chat.capabilities;
+    let parent = chat
+        .parent_thread_id
+        .as_deref()
+        .map(one_line)
+        .unwrap_or_else(|| "unknown".into());
+    let thread = one_line(&context.thread_id);
+    let mut text = match chat.role {
+        RuntimeChatRole::Main => format!(
+            "Chat role: main. This is an ordinary top-level LUNA conversation (thread {thread}){}.",
+            if caps.context_origin == RuntimeContextOrigin::NativeFork {
+                ", forked with its own provider history"
+            } else {
+                ""
+            }
+        ),
+        RuntimeChatRole::Side => format!(
+            "Chat role: side chat. This is a temporary LUNA side conversation (thread {thread}) opened from parent conversation @thread:{parent}. {} It works in the parent's checkout and branch with the parent's permissions, so file changes here affect the parent's working tree. Its turns and Stop are independent of the parent's run and queue: the parent is not paused, and it does not see this conversation. Side chats expire and cannot create child chats.",
+            if caps.context_origin == RuntimeContextOrigin::NativeFork {
+                "It began as a native fork of the parent conversation, so the parent's earlier context is already in this history."
+            } else {
+                "It began with a bounded snapshot of the parent conversation in its first message."
+            }
+        ),
+        RuntimeChatRole::Child => format!(
+            "Chat role: child chat. This is a persistent LUNA child conversation (thread {thread}) of parent @thread:{parent}. It started with fresh context: only its brief was copied. {} {}{}",
+            match caps.checkout {
+                RuntimeCheckoutOwnership::OwnWorktree => {
+                    "It works in its own git worktree and branch, created for it; manage that branch here."
+                }
+                RuntimeCheckoutOwnership::ExistingPath => {
+                    "It works in an explicitly chosen existing directory."
+                }
+                RuntimeCheckoutOwnership::SharedWithParent | RuntimeCheckoutOwnership::Own => {
+                    "It shares the parent's checkout and branch; coordinate file changes with the parent."
+                }
+            },
+            match (caps.granted_access, caps.access_granted_by_user) {
+                (Some(mode), true) => format!(
+                    "Access: {mode:?}, granted by the user above the parent's access."
+                ),
+                (Some(mode), false) => format!("Access: {mode:?}, capped by the parent's access."),
+                (None, _) => "Access is capped by the parent's access.".into(),
+            },
+            if caps.reports_to_parent {
+                " Completed turns are reported to the parent as untrusted summaries."
+            } else {
+                ""
+            }
+        ),
+    };
+    text.push_str(if caps.create_child_threads {
+        " You can create child chats with create_thread (each needs the user's approval)."
+    } else {
+        " create_thread is not available in this chat."
+    });
+    text
+}
+
 fn context_text(context: &RuntimeContext) -> Result<String, EngineError> {
     // JSON quoting keeps user-controlled names from introducing headings or
     // pseudo-role delimiters in the privileged instruction channel.
@@ -155,6 +218,14 @@ fn assemble(
             provenance: format!("LUNA runtime v{}", LUNA_RUNTIME_CONTRACT_VERSION),
             text: core_text(&context),
         });
+        if let Some(chat) = context.chat.as_ref() {
+            instructions.push(RuntimeInstructionSection {
+                name: "LUNA chat role".into(),
+                source: RuntimeInstructionSource::LunaCore,
+                provenance: "engine-authoritative chat identity".into(),
+                text: role_text(&context, chat),
+            });
+        }
         if tools_supported {
             instructions.push(RuntimeInstructionSection {
                 name: "luna_status guidance".into(),
@@ -453,6 +524,7 @@ mod tests {
             reasoning: None,
             execution_route: "local".into(),
             granted_scopes: vec!["threads.read".into()],
+            chat: None,
         }
     }
 

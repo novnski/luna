@@ -8,6 +8,8 @@ pub(super) fn handles(method: &str) -> bool {
             | methods::READ_SIDE_CHAT
             | methods::SEND_SIDE_CHAT
             | methods::UNLOAD_SIDE_CHAT
+            | methods::STOP_SIDE_CHAT
+            | methods::RENEW_SIDE_CHAT
             | methods::ANSWER_SIDE_CHAT
     )
 }
@@ -123,7 +125,7 @@ impl EngineRpc {
                         "commandId": format!("side-chat-create:{}", p.request_id), "taskId":id,
                         "intent": { "kind":"createChat", "sideParentId":p.parent_id,
                             "deviceId":chat.device_id, "spaceId":chat.space_id, "cwd":chat.cwd,
-                            "config":created.meta.config,
+                            "branch":chat.branch, "config":created.meta.config,
                             "lineage":{"parentTaskId":p.parent_id,"sourceTaskId":p.parent_id,"lifecycleOwnerTaskId":p.parent_id}
                         }
                     }))?;
@@ -230,6 +232,19 @@ impl EngineRpc {
                     .await
                     .map_err(fail)?,
             ),
+            methods::RENEW_SIDE_CHAT => RpcReply::value(
+                &service
+                    .renew(&p.id, p.lease.as_deref().unwrap_or_default())
+                    .await
+                    .map_err(fail)?,
+            ),
+            methods::STOP_SIDE_CHAT => {
+                service
+                    .stop(&p.id, p.lease.as_deref().unwrap_or_default())
+                    .await
+                    .map_err(fail)?;
+                RpcReply::value(&serde_json::json!({"stopped":true}))
+            }
             methods::ANSWER_SIDE_CHAT => {
                 service
                     .answer(
