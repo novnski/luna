@@ -1,0 +1,11 @@
+# Remove LUNA-owned Keychain access
+
+Opening Providers could request the login-Keychain password for `Claude Code-credentials`. LUNA now has no direct Keychain read/write implementation or engine Security-framework dependency. Provider account discovery uses existing file metadata without requiring credential verification. A Claude identity with no readable token file remains active with Unknown authentication; the CLI can run using its own native login.
+
+The optional LUNA credential vault uses `credentials/environment-v1.key` under the chosen LUNA data directory. The random32-byte key is owner-only (0600), in a private directory (0700). A complete synced temporary key is published atomically without replacing an existing key; parent and lock ownership checks refuse redirected or linked foreign targets before modifying them. New key/vault are excluded from portable backups. Legacy serialized backup labels remain unchanged.
+
+An existing vault without the local key is preserved and returns a missing-key error. LUNA does not read Keychain to migrate it and never generates a replacement key over existing ciphertext. Non-Unix systems retain the previous unavailable behavior until private-file ACL handling exists.
+
+Validation: five production lifecycle integration checks cover metadata-only/empty/shared-only Claude credential files, restart and independent vault handles, missing/unsafe key preservation, short-write recovery in an isolated16-byte-limit subprocess, and redirected directory/lock refusal. Existing account-switch1 and Claude account4 pass. Engine all-target Clippy and formatting pass. No unit tests were added after implementation; failure cases and integration tests preceded their corrections.
+
+A fresh75s LUNA Dev build passed process, IPC59777 and strict signature checks. Providers refresh and Usage load without the Keychain prompt; a real Sonnet Low continuation returned the exact requested marker with no tools. No credential permission was granted, and provider configuration was not edited. Evidence: `luna-feature-checkouts/2026-10-02-pane-chat/evidence/qa-completion-20261002/`, especially `no-keychain-user-baseline.png`, `35-provider-no-keychain.png`, `36-usage-no-keychain.png`, `37-no-keychain-continuation-pass.png` and the no-keychain logs.
