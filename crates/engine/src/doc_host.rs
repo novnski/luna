@@ -3540,6 +3540,71 @@ impl DocHost {
 
     /// Per-open-chat room introspection for SyncStatus / `luna sync`.
     /// `None` room = still dialing (join retry loop) or edge-less.
+    /// Bounded list metadata from an already-open document. The transcript
+    /// mirror is intentionally empty while unwatched, so it cannot supply
+    /// titles/counts here. Read scalar fields and at most 16 short user parts;
+    /// never hydrate a cold doc or materialize assistant/tool histories.
+    pub(crate) fn loaded_chat_summary(
+        &self,
+        chat_id: &str,
+    ) -> Option<(usize, Option<String>, Option<i64>)> {
+        use loro::{Container, LoroValue, ValueOrContainer};
+        let handle = lock(&self.inner.handles).get(chat_id).cloned()?;
+        let messages = handle.doc.doc().get_list("messages");
+        let count = messages.len();
+        let last_activity = count.checked_sub(1).and_then(|index| {
+            let ValueOrContainer::Container(Container::Map(entry)) = messages.get(index)? else {
+                return None;
+            };
+            let ValueOrContainer::Value(LoroValue::I64(created)) = entry.get("createdAt")? else {
+                return None;
+            };
+            Some(created)
+        });
+        let mut preview = None;
+        'entries: for index in 0..count.min(16) {
+            let Some(ValueOrContainer::Container(Container::Map(entry))) = messages.get(index)
+            else {
+                continue;
+            };
+            if !matches!(entry.get("role"), Some(ValueOrContainer::Value(LoroValue::String(role))) if role.as_ref() == "user")
+            {
+                continue;
+            }
+            let Some(ValueOrContainer::Container(Container::List(parts))) = entry.get("parts")
+            else {
+                continue;
+            };
+            for part in 0..parts.len().min(16) {
+                let Some(ValueOrContainer::Container(Container::Map(part))) = parts.get(part)
+                else {
+                    continue;
+                };
+                if !matches!(part.get("kind"), Some(ValueOrContainer::Value(LoroValue::String(kind))) if kind.as_ref() == "text")
+                {
+                    continue;
+                }
+                let text = match part.get("text") {
+                    Some(ValueOrContainer::Container(Container::Text(text))) => {
+                        text.slice(0, text.len_unicode().min(1200)).ok()
+                    }
+                    Some(ValueOrContainer::Value(LoroValue::String(text))) => {
+                        Some(text.chars().take(1200).collect())
+                    }
+                    _ => None,
+                };
+                if let Some(line) = text
+                    .as_deref()
+                    .and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()))
+                {
+                    preview = Some(line.chars().take(200).collect());
+                    break 'entries;
+                }
+            }
+        }
+        Some((count, preview, last_activity))
+    }
+
     pub fn sync_statuses(&self) -> Vec<(String, Option<luna_sync::ChatStatsSnapshot>)> {
         let handles: Vec<Arc<ChatDocHandle>> =
             lock(&self.inner.handles).values().cloned().collect();

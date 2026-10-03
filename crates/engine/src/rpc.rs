@@ -1352,7 +1352,7 @@ impl EngineRpc {
         self.workspace.is_side_chat(owner) || self.store.is_side_chat(owner).unwrap_or(true)
     }
 
-    /// Ordinary task commands a leased side chat accepts. Everything that would
+    /// Ordinary task commands a persistent side chat accepts. Everything that would
     /// move it off the parent's checkout, provider session or lifecycle is
     /// refused with the reason the UI shows.
     fn side_chat_command_allowed(
@@ -1418,7 +1418,7 @@ impl EngineRpc {
             TaskCommandIntent::SetArchived { .. }
             | TaskCommandIntent::SetPinned { .. }
             | TaskCommandIntent::SetSettled { .. } => Err(
-                "Side chats are not sidebar tasks; unload or delete them from the side panel".into(),
+                "Side chat marks are managed from Related chats".into(),
             ),
             TaskCommandIntent::CreateChildChat { .. }
             | TaskCommandIntent::ChildOutcome { .. }
@@ -8883,10 +8883,10 @@ impl RpcService for EngineRpc {
             .and_then(|id| id.as_str())
             .filter(|id| self.is_side_chat(id))
         {
-            // A side chat with a live view lease is an ordinary local chat for
-            // per-chat RPCs; without one it is read-only history.
+            // A durably active side chat is an ordinary local chat for per-chat
+            // RPCs; explicitly ended chats use the saved-history panel.
             // Native-agent transcripts are derived documents, not side-chat
-            // metadata rows. Admit only their read through the owning lease;
+            // metadata rows. Admit only their read through the owning chat;
             // keep the original document id for the watch below. Other methods
             // retain exact-id admission, so derived ids never gain mutation.
             let admission_id = if method == methods::WATCH_DOC_MESSAGES {
@@ -9829,23 +9829,13 @@ impl RpcService for EngineRpc {
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&view)
             }
-            methods::CREATE_CHILD_THREAD => {
-                #[derive(Deserialize)]
-                #[serde(rename_all = "camelCase")]
-                struct Params {
-                    parent_task_id: String,
-                    request: luna_proto::CreateChildThreadRequest,
-                }
-                let p: Params = parse_params(params)?;
-                let receipt = self
-                    .create_child_manual(p.parent_task_id, p.request)
-                    .await?;
-                RpcReply::value(&receipt)
-            }
+            methods::CREATE_CHILD_THREAD => Err(RpcError::Failed(
+                "Child chats are created by the parent agent using create_thread. Use New side chat to fork a conversation yourself.".into(),
+            )),
             methods::EXECUTE_TASK_COMMAND => {
                 let command: TaskCommandParams = parse_params(params)?;
                 // Child lineage, outcomes and delivery marks are engine-owned.
-                // Clients use CreateChildThread; they never forge the outbox.
+                // Only the parent-agent tool path creates children; clients cannot forge the outbox.
                 if matches!(
                     command.intent,
                     TaskCommandIntent::CreateChildChat { .. }
@@ -9853,7 +9843,7 @@ impl RpcService for EngineRpc {
                         | TaskCommandIntent::ChildOutcomeDelivered { .. }
                 ) {
                     return Err(RpcError::Failed(
-                        "Child chat creation and outcomes are engine-owned; use CreateChildThread"
+                        "Child chat creation and outcomes are engine-owned; the parent agent uses create_thread"
                             .into(),
                     ));
                 }
@@ -10793,47 +10783,37 @@ impl RpcService for EngineRpc {
             methods::WATCH_CHATS => {
                 let side_chats = self.side_chats.clone();
                 let workspace = self.workspace.clone();
-                Ok(RpcReply::Stream(
-                    watch_stream(self.workspace.watch_chats())
-                        .map(move |mut value| {
-                            if let Some(items) = value.as_array_mut() {
-                                items.retain_mut(|chat| {
-                                    let Some(id) = chat
-                                        .get("id")
-                                        .and_then(|id| id.as_str())
-                                        .map(str::to_owned)
-                                    else {
-                                        return false;
-                                    };
-                                    let side = workspace.is_side_chat(&id)
-                                        || side_chats
-                                            .as_ref()
-                                            .is_some_and(|service| service.contains(&id));
-                                    if !side {
-                                        return chat
-                                            .get("spaceId")
-                                            .and_then(|id| id.as_str())
-                                            .is_some();
-                                    }
-                                    // A live side chat is published spaceless (never a
-                                    // sidebar task) with its parent, so its own pane can
-                                    // bind the full composer to the row.
-                                    let live = side_chats
-                                        .as_ref()
-                                        .is_some_and(|service| service.is_live(&id));
-                                    if let (true, Some(object)) = (live, chat.as_object_mut()) {
-                                        object.remove("spaceId");
-                                        if let Some(parent) = workspace.side_chat_parent(&id) {
-                                            object.insert("sideChatParentId".into(), parent.into());
-                                        }
-                                    }
-                                    live
-                                });
+                let changes = watch_stream(self.workspace.watch_chats()).boxed();
+                let changes = if let Some(service) = &side_chats {
+                    let workspace = workspace.clone();
+                    futures::stream::select(changes, watch_stream(service.watch_changes()).map(move |_| {
+                        serde_json::to_value(workspace.watch_chats().borrow().clone()).unwrap_or_default()
+                    })).boxed()
+                } else { changes };
+                Ok(RpcReply::Stream(changes.map(move |mut value| {
+                    // One indexed metadata read per snapshot, not a query and
+                    // document load for each row. Ended sides remain discoverable
+                    // for counts/history without becoming top-level sidebar chats.
+                    let side_states = side_chats.as_ref().and_then(|service| service.published_states().ok()).unwrap_or_default();
+                    if let Some(items) = value.as_array_mut() {
+                        items.retain_mut(|chat| {
+                            let Some(id) = chat.get("id").and_then(|id| id.as_str()).map(str::to_owned) else { return false };
+                            if let Some((parent, state)) = side_states.get(&id) {
+                                if let Some(object) = chat.as_object_mut() {
+                                    object.remove("spaceId");
+                                    object.insert("sideChatParentId".into(), parent.clone().into());
+                                    object.insert("sideChatState".into(), state.clone().into());
+                                }
+                                true
+                            } else if workspace.is_side_chat(&id) {
+                                false // deleted, remote-only or metadata unavailable
+                            } else {
+                                chat.get("spaceId").and_then(|id| id.as_str()).is_some()
                             }
-                            value
-                        })
-                        .boxed(),
-                ))
+                        });
+                    }
+                    value
+                }).boxed()))
             }
             methods::WATCH_DEVICES => Ok(RpcReply::Stream(watch_stream(
                 self.workspace.watch_devices(),

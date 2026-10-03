@@ -940,6 +940,7 @@ impl Shell {
                         archived: chat.archived,
                         pinned: chat.pinned_order.is_some(),
                         surface: ChatRowSurface::Palette,
+                        kind: None,
                         can_settle: false,
                         settled: false,
                         child_chats: 0,

@@ -223,12 +223,8 @@ async fn side_chat_lifecycle_is_durable_isolated_and_history_does_not_run() {
     let repeated: Value = client.call("CreateSideChat", create).await.unwrap();
     assert_eq!(created["meta"]["id"], repeated["meta"]["id"]);
     let id = created["meta"]["id"].as_str().unwrap();
-    let lease = created["lease"].as_str().unwrap();
-    assert_eq!(
-        created["meta"]["expiresAtMs"].as_i64().unwrap()
-            - created["meta"]["createdAtMs"].as_i64().unwrap(),
-        7_200_000
-    );
+    let lease = created["lease"].as_str().unwrap_or_default();
+    assert_eq!(created["meta"]["expiresAtMs"].as_i64().unwrap(), 0);
     let send = json!({"id":id,"lease":lease,"messageId":uuid::Uuid::new_v4().to_string(),"text":"SIDE_QUESTION"});
     client.call("SendSideChat", send.clone()).await.unwrap();
     client.call("SendSideChat", send).await.unwrap();
@@ -319,66 +315,94 @@ async fn side_chat_lifecycle_is_durable_isolated_and_history_does_not_run() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn deadline_and_restart_seal_writable_chats_without_replay() {
+async fn deadlines_and_restart_do_not_end_side_chats_or_replay_turns() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
     let core = setup(dir.path(), recorder.clone()).await;
     let client = luna_rpc::memory_client(core.rpc_service());
-    let created = client
+    let mut ids = Vec::new();
+    for _ in 0..6 {
+        let created = client
+            .call(
+                "CreateSideChat",
+                json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string()}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(created["meta"]["expiresAtMs"], 0);
+        assert!(created["lease"].is_null());
+        ids.push(created["meta"]["id"].as_str().unwrap().to_owned());
+    }
+    let db = rusqlite::Connection::open(core.side_chats.database_path()).unwrap();
+    db.execute("UPDATE side_chats SET expires_at_ms=1", [])
+        .unwrap();
+    drop(db);
+    for id in &ids {
+        let page = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+        assert_eq!(page["meta"]["state"], "active");
+    }
+    assert!(
+        recorder.0.lock().unwrap().is_empty(),
+        "opening never dispatches"
+    );
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+    let reopened = setup(dir.path(), recorder.clone()).await;
+    let client = luna_rpc::memory_client(reopened.rpc_service());
+    for id in &ids {
+        let page = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+        assert_eq!(page["meta"]["state"], "active");
+    }
+    assert!(
+        recorder.0.lock().unwrap().is_empty(),
+        "restart never dispatches"
+    );
+    client
         .call(
-            "CreateSideChat",
-            json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string()}),
+            "SendSideChat",
+            json!({"id":ids[0],"messageId":"after-restart","text":"new turn after restart"}),
         )
         .await
         .unwrap();
-    let id = created["meta"]["id"].as_str().unwrap().to_string();
-    let lease = created["lease"].as_str().unwrap();
-    // Expiry fixture changes persisted wall time, not an alternate product path.
-    let db = rusqlite::Connection::open(core.side_chats.database_path()).unwrap();
-    db.execute("UPDATE side_chats SET expires_at_ms=0 WHERE id=?1", [&id])
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while recorder.0.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    client
+        .call("UnloadSideChat", json!({"id":ids[0]}))
+        .await
         .unwrap();
     assert!(
         client
             .call(
                 "SendSideChat",
-                json!({"id":id,"lease":lease,"messageId":"expired","text":"must not run"})
+                json!({"id":ids[0],"messageId":"after-end","text":"must not run"})
             )
             .await
             .is_err()
     );
-    client
-        .call("UnloadSideChat", json!({"id":id,"lease":lease}))
-        .await
-        .unwrap();
-    let history = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
-    assert_eq!(history["meta"]["state"], "expired");
-    assert!(recorder.0.lock().unwrap().is_empty());
-    let second = client
-        .call(
-            "CreateSideChat",
-            json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string()}),
-        )
-        .await
-        .unwrap();
-    drop(db);
     drop(client);
-    core.shutdown().await;
-    let db = rusqlite::Connection::open(core.side_chats.database_path()).unwrap();
-    db.execute(
-        "UPDATE side_chats SET state='active' WHERE id=?1",
-        [second["meta"]["id"].as_str().unwrap()],
-    )
-    .unwrap();
-    drop(db);
-    drop(core);
+    reopened.shutdown().await;
+    drop(reopened);
     let reopened = setup(dir.path(), recorder.clone()).await;
-    let client = luna_rpc::memory_client(reopened.rpc_service());
-    let page = client
-        .call("ReadSideChat", json!({"id":second["meta"]["id"]}))
-        .await
-        .unwrap();
-    assert_eq!(page["meta"]["state"], "recovered");
-    assert!(recorder.0.lock().unwrap().is_empty());
+    assert_eq!(
+        reopened
+            .side_chats
+            .list("parent", None)
+            .unwrap()
+            .items
+            .iter()
+            .find(|meta| meta.id == ids[0])
+            .unwrap()
+            .state,
+        "ended"
+    );
+    assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    reopened.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -957,7 +981,7 @@ async fn fallback_side_chat_registers_managed_identity_without_starting_provider
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn abandoned_creation_reservation_expires_without_runtime_or_replay() {
+async fn abandoned_creation_is_reconciled_after_restart_without_runtime_or_replay() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
     let core = setup(dir.path(), recorder.clone()).await;
@@ -968,31 +992,22 @@ async fn abandoned_creation_reservation_expires_without_runtime_or_replay() {
         .await
         .unwrap();
     assert_eq!(reserved.meta.state, "preparing");
-    let db = rusqlite::Connection::open(core.side_chats.database_path()).unwrap();
-    db.execute(
-        "UPDATE side_chats SET expires_at_ms=0 WHERE id=?1",
-        [&reserved.meta.id],
-    )
-    .unwrap();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let page = core.side_chats.list("parent", None).unwrap();
-            if page.items[0].state == "creationFailed" {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(30)).await;
-        }
-    })
-    .await
-    .unwrap();
+    core.shutdown().await;
+    drop(core);
+    let reopened = setup(dir.path(), recorder.clone()).await;
+    assert_eq!(
+        reopened.side_chats.list("parent", None).unwrap().items[0].state,
+        "creationFailed"
+    );
     assert!(
-        core.side_chats
+        reopened
+            .side_chats
             .prepare("parent", &request, false, None, None, false)
             .await
             .is_err()
     );
     assert!(recorder.0.lock().unwrap().is_empty());
-    core.shutdown().await;
+    reopened.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1034,7 +1049,7 @@ async fn failed_unload_storage_still_stops_generation_and_can_be_repaired() {
     // Reopening saved history after a failed close must finish the stopped
     // transcript projection, without requiring a lost view's lease token.
     let history = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
-    assert_eq!(history["meta"]["state"], "unloaded");
+    assert_eq!(history["meta"]["state"], "ended");
     assert!(
         !core
             .doc_host

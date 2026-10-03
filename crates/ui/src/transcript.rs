@@ -3656,6 +3656,8 @@ impl Transcript {
             "pinned": self.pinned,
             "distanceFromBottom": self.distance_from_bottom(),
             "bottomClearance": self.bottom_clearance,
+            // Laid-out list rows (synced from the doc rows when drawn).
+            "items": self.list.item_count(),
         })
     }
 

@@ -29,7 +29,8 @@
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example related-chats-fixture
 //! Run:   target/debug/examples/related-chats-fixture ABSOLUTE_EVIDENCE_DIR
-//! Writes r01..r14 PNG captures, readback.json and related-chats.pass.
+//! Writes r01..r15 PNG captures, readback.json and related-chats.pass; a
+//! failure writes failure.txt/failure.png and exits nonzero.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -60,8 +61,10 @@ const OPEN_3: &str = "e0e0e0e0-0000-4000-8000-0000000000b3";
 const CHILD_NEW: &str = "e1e1e1e1-0000-4000-8000-000000000001";
 const CHILD_OLD: &str = "e1e1e1e1-0000-4000-8000-000000000002";
 const CHILD_ARCHIVED: &str = "e1e1e1e1-0000-4000-8000-000000000003";
+const CHILD_ACTIVE: &str = "e1e1e1e1-0000-4000-8000-000000000004";
 const SIDE_Q1: &str = "Does the cache migration need a feature flag?";
 const SIDE_Q2: &str = "Which call sites still read the old settings key?";
+const SIDE_Q3: &str = "Should the rollout flag default to off?";
 const MOCK_ANSWER: &str = "Yes; gate it behind the existing rollout flag.";
 const WIDTH: f32 = 1440.0;
 const HEIGHT: f32 = 900.0;
@@ -76,7 +79,7 @@ struct Spec {
     archived: bool,
 }
 
-const SPECS: [Spec; 10] = [
+const SPECS: [Spec; 11] = [
     Spec {
         id: PARENT,
         title: "Settings migration",
@@ -156,6 +159,15 @@ const SPECS: [Spec; 10] = [
         pin: None,
         parent: Some(PARENT),
         archived: true,
+    },
+    // Never acted on: the active child shown beside active side chats.
+    Spec {
+        id: CHILD_ACTIVE,
+        title: "Profile startup",
+        minutes_ago: 2,
+        pin: None,
+        parent: Some(PARENT),
+        archived: false,
     },
 ];
 
@@ -814,9 +826,9 @@ fn main() -> anyhow::Result<()> {
                 settle(cx, 500).await;
                 capture(window, cx, output.join("r07-child-chats.png"))?;
                 let child = readback(window, cx)?;
-                anyhow::ensure!(child["rightActive"] == "ChildChats", "child surface: {child}");
+                anyhow::ensure!(child["rightActive"] == "RelatedChats", "related surface: {child}");
                 anyhow::ensure!(
-                    sections(&child, "child") == [("Active".to_string(), CHILD_NEW.to_string()), ("Active".into(), CHILD_OLD.into()), ("Archived".into(), CHILD_ARCHIVED.into())],
+                    sections(&child, "related") == [("Active".to_string(), CHILD_ACTIVE.to_string()), ("Active".into(), CHILD_NEW.into()), ("Active".into(), CHILD_OLD.into()), ("Archived".into(), CHILD_ARCHIVED.into())],
                     "child sections: {child}"
                 );
                 record.insert("childList".into(), child);
@@ -834,7 +846,7 @@ fn main() -> anyhow::Result<()> {
                 settle(cx, 300).await;
                 draw(window, cx)?;
                 let pinned_child = readback(window, cx)?;
-                anyhow::ensure!(section_of(&pinned_child, "child", CHILD_OLD).as_deref() == Some("Pinned"), "pinned child section: {pinned_child}");
+                anyhow::ensure!(section_of(&pinned_child, "related", CHILD_OLD).as_deref() == Some("Pinned"), "pinned child section: {pinned_child}");
                 capture(window, cx, output.join("r08-child-pinned.png"))?;
 
                 let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "child-pane-chat-")?;
@@ -843,7 +855,7 @@ fn main() -> anyhow::Result<()> {
                 sync_from_engine(cx, &state, &workspace, CHILD_NEW, |row| row.settlement_override.is_some()).await?;
                 settle(cx, 300).await;
                 let settled_child = readback(window, cx)?;
-                anyhow::ensure!(section_of(&settled_child, "child", CHILD_NEW).as_deref() == Some("Settled"), "settled child section: {settled_child}");
+                anyhow::ensure!(section_of(&settled_child, "related", CHILD_NEW).as_deref() == Some("Settled"), "settled child section: {settled_child}");
                 capture(window, cx, output.join("r09-child-settled.png"))?;
 
                 let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "child-pane-chat-")?;
@@ -852,7 +864,7 @@ fn main() -> anyhow::Result<()> {
                 sync_from_engine(cx, &state, &workspace, CHILD_OLD, |row| row.archived).await?;
                 settle(cx, 300).await;
                 let archived_child = readback(window, cx)?;
-                anyhow::ensure!(section_of(&archived_child, "child", CHILD_OLD).as_deref() == Some("Archived"), "archived child section: {archived_child}");
+                anyhow::ensure!(section_of(&archived_child, "related", CHILD_OLD).as_deref() == Some("Archived"), "archived child section: {archived_child}");
                 record.insert("childActions".into(), archived_child);
 
                 // r10. Back (a real click) shows the surface menu with the
@@ -862,11 +874,11 @@ fn main() -> anyhow::Result<()> {
                 capture(window, cx, output.join("r10-back-to-menu.png"))?;
                 let back = readback(window, cx)?;
                 anyhow::ensure!(back["rightActive"] == "Picker" && back["pickerOpen"] == true, "Back must show the surface menu: {back}");
-                anyhow::ensure!(ids(&back["rightTabs"]).contains(&"ChildChats".to_string()), "Back must keep the tab: {back}");
+                anyhow::ensure!(ids(&back["rightTabs"]).contains(&"RelatedChats".to_string()), "Back must keep the tab: {back}");
                 window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
                 settle(cx, 200).await;
                 let returned = readback(window, cx)?;
-                anyhow::ensure!(returned["rightActive"] == "ChildChats" && returned["pickerOpen"] == false, "choosing the surface again returns: {returned}");
+                anyhow::ensure!(returned["rightActive"] == "RelatedChats" && returned["pickerOpen"] == false, "choosing the surface again returns: {returned}");
                 record.insert("back".into(), back);
 
                 // r11-r14. Side chats: two real side chats titled by their
@@ -876,15 +888,20 @@ fn main() -> anyhow::Result<()> {
                 let first = side_chat(window, cx, SIDE_Q1).await?;
                 let second = side_chat(window, cx, SIDE_Q2).await?;
                 settle(cx, 300).await;
-                capture(window, cx, output.join("r11-side-chats.png"))?;
+                capture(window, cx, output.join("r11-mixed-related-list.png"))?;
                 let side = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
                 let previews = side["historyPreviews"].to_string();
                 anyhow::ensure!(previews.contains(SIDE_Q1) && previews.contains(SIDE_Q2), "side chats must be titled by their questions: {side}");
                 let list = readback(window, cx)?;
                 anyhow::ensure!(
-                    sections(&list, "side") == [("Active".to_string(), second.clone()), ("Active".into(), first.clone())],
-                    "side sections (newest first): {list}"
+                    section_of(&list, "related", &first).as_deref() == Some("Active")
+                        && section_of(&list, "related", &second).as_deref() == Some("Active")
+                        && section_of(&list, "related", CHILD_ACTIVE).as_deref() == Some("Active"),
+                    "active child and side chats must list together: {list}"
                 );
+                // Non-archived: two children (one settled) and two side chats.
+                anyhow::ensure!(list["relatedCounts"][PARENT] == 4, "combined related count: {list}");
+                record.insert("mixedList".into(), list.clone());
                 record.insert("sideList".into(), side);
 
                 // Side rows have a note line: the corner sits 14 px down.
@@ -898,15 +915,15 @@ fn main() -> anyhow::Result<()> {
                 settle(cx, 200).await;
                 capture(window, cx, output.join("r12-side-pinned-settled.png"))?;
                 let marked = readback(window, cx)?;
-                anyhow::ensure!(section_of(&marked, "side", &first).as_deref() == Some("Pinned"), "side pin: {marked}");
-                anyhow::ensure!(section_of(&marked, "side", &second).as_deref() == Some("Settled"), "side settle: {marked}");
+                anyhow::ensure!(section_of(&marked, "related", &first).as_deref() == Some("Pinned"), "side pin: {marked}");
+                anyhow::ensure!(section_of(&marked, "related", &second).as_deref() == Some("Settled"), "side settle: {marked}");
 
                 let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "side-pane-chat-")?;
                 let (_, first_top, _) = span(&spans, &first)?.clone();
                 click_at(window, cx, right - 10.0, first_top + 14.0).await?;
                 settle(cx, 200).await;
                 let archived_side = readback(window, cx)?;
-                anyhow::ensure!(section_of(&archived_side, "side", &first).as_deref() == Some("Archived"), "side archive: {archived_side}");
+                anyhow::ensure!(section_of(&archived_side, "related", &first).as_deref() == Some("Archived"), "side archive: {archived_side}");
                 anyhow::ensure!(archived_side["sideMarks"][&first]["archived"] == true, "side marks: {archived_side}");
                 capture(window, cx, output.join("r13-side-archived.png"))?;
                 record.insert("sideMarks".into(), archived_side);
@@ -918,8 +935,27 @@ fn main() -> anyhow::Result<()> {
                 let side_back = readback(window, cx)?;
                 anyhow::ensure!(side_back["rightActive"] == "Picker", "side Back: {side_back}");
                 let tabs = ids(&side_back["rightTabs"]);
-                anyhow::ensure!(tabs.contains(&"SideChats".to_string()) && tabs.contains(&"ChildChats".to_string()), "both tabs kept: {side_back}");
+                anyhow::ensure!(tabs == ["RelatedChats".to_string()], "one Related chats tab, kept: {side_back}");
                 record.insert("sideBack".into(), side_back);
+
+                // r15. Final mixed list: an active child and a new active side
+                // chat together, and the sidebar's combined count on the parent.
+                window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
+                settle(cx, 300).await;
+                let third = side_chat(window, cx, SIDE_Q3).await?;
+                hover_at(window, cx, WIDTH / 2.0, HEIGHT - 4.0, None)?;
+                settle(cx, 400).await;
+                capture(window, cx, output.join("r15-final-mixed-list.png"))?;
+                let mixed = readback(window, cx)?;
+                anyhow::ensure!(
+                    section_of(&mixed, "related", CHILD_ACTIVE).as_deref() == Some("Active")
+                        && section_of(&mixed, "related", &third).as_deref() == Some("Active"),
+                    "final list must show an active child and an active side chat: {mixed}"
+                );
+                // Children: active + settled; side chats: settled + new; the
+                // archived side chat and children are not counted.
+                anyhow::ensure!(mixed["relatedCounts"][PARENT] == 4, "final combined count: {mixed}");
+                record.insert("finalMixed".into(), mixed);
                 Ok(serde_json::Value::Object(record))
             }
             .await;
@@ -929,11 +965,15 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("related-chats.pass"),
-                                "PASS: headless production Shell with real pointer input; click opens without dragging; pin drag reorders pins (optimistic + engine-applied bounds); a pin dragged over unpinned rows clamps to the end of the pins; an unpinned drag into the pins clamps below them, switches to Manual sort and keeps every unpinned task; manual order survives new activity; an outside drop is a no-op; Child chats and Side chats render sidebar task rows in Pinned/Active/Settled/Archived sections; hover Pin/Settle/Archive applied by the engine (child) and the device-local marks (side); side chats are titled by their first question; Back shows the surface menu and keeps the tabs\n",
+                                "PASS: headless production Shell with real pointer input; one Related chats list shows active child and side chats together with the combined count; click opens without dragging; pin drag reorders pins (optimistic + engine-applied bounds); a pin dragged over unpinned rows clamps to the end of the pins; an unpinned drag into the pins clamps below them, switches to Manual sort and keeps every unpinned task; manual order survives new activity; an outside drop is a no-op; Child chats and Side chats render sidebar task rows in Pinned/Active/Settled/Archived sections; hover Pin/Settle/Archive applied by the engine (child) and the device-local marks (side); side chats are titled by their first question; Back shows the surface menu and keeps the tabs\n",
                             )
                         });
                     if let Err(error) = written {
                         *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                        let _ = std::fs::write(output.join("failure.txt"), format!("{error}\n"));
+                        // AppKit's quit can end the process with status 0 before `run`
+                        // returns: leave with the failure status now.
+                        std::process::exit(1);
                     }
                 }
                 Err(error) => {
@@ -941,6 +981,9 @@ fn main() -> anyhow::Result<()> {
                     let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
                     let _ = capture(window, cx, output.join("failure.png"));
                     *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                    // AppKit's quit can end the process with status 0 before `run`
+                    // returns: leave with the failure status now.
+                    std::process::exit(1);
                 }
             }
             let _ = window.update(cx, |_, window, _| window.remove_window());

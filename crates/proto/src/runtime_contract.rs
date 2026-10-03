@@ -49,9 +49,9 @@ pub struct RuntimeContext {
 pub enum RuntimeChatRole {
     /// An ordinary top-level conversation.
     Main,
-    /// A temporary side conversation forked from a parent conversation.
+    /// A persistent user-created side conversation forked from a parent.
     Side,
-    /// A persistent child chat created by a parent chat or the user.
+    /// A persistent child chat created by a parent agent.
     Child,
 }
 
@@ -92,7 +92,7 @@ pub struct RuntimeChatCapabilities {
     pub message_other_threads: bool,
     /// Completed turns are reported to the parent (children only).
     pub reports_to_parent: bool,
-    /// Side chats are temporary; main chats and children persist.
+    /// All conversation roles persist until explicitly ended or deleted.
     pub persistent: bool,
     /// Access granted at creation (children), absent when it simply follows
     /// the chat's own permission control.

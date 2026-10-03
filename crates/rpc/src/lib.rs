@@ -85,9 +85,9 @@ pub mod methods {
     pub const SEND_SIDE_CHAT: &str = "SendSideChat";
     pub const ANSWER_SIDE_CHAT: &str = "AnswerSideChat";
     pub const UNLOAD_SIDE_CHAT: &str = "UnloadSideChat";
-    /// Stop the side chat's current turn; the view lease stays writable.
+    /// Stop the side chat's current turn without ending the conversation.
     pub const STOP_SIDE_CHAT: &str = "StopSideChat";
-    /// Renew a side chat view lease without reading a history page.
+    /// Compatibility read of side chat writability; persistent chats have no lease.
     pub const RENEW_SIDE_CHAT: &str = "RenewSideChat";
     pub const WATCH_DOC_MESSAGES: &str = "WatchDocMessages";
     /// Messages typed while the agent was busy, held on the chat doc so every

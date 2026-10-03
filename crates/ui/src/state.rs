@@ -921,6 +921,9 @@ pub(crate) struct PaneChatProjection {
     pub native_tasks: luna_proto::NativeTaskLedger,
     /// The opening `WatchDocMessages` frame has landed.
     pub replayed: bool,
+    /// The view that owns these watches (the newest to open the chat). An
+    /// older view's deferred release must not tear down a newer view's.
+    owner: u64,
     queue_task: Option<Task<()>>,
     native_tasks_task: Option<Task<()>>,
 }
@@ -953,6 +956,14 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    /// Side chats named by `WatchChats` (spaceless rows carrying
+    /// `sideChatParentId`/`sideChatState`, which [`Chat`] doesn't model),
+    /// keyed by side chat id. Captured from each raw frame.
+    pub side_chat_rows: std::collections::HashMap<String, SideChatRow>,
+    /// Side chats this engine published and then stopped publishing: deleted
+    /// (rows of every non-deleted side chat are published). A side list
+    /// loaded earlier can still name them; views drop them.
+    pub side_chat_gone: std::collections::HashSet<String>,
     pub sessions: Vec<Session>,
     session_presentation: Option<Vec<Session>>,
     /// The project the new-session canvas mints into. Healed by
@@ -1039,6 +1050,8 @@ pub struct AppState {
     sub_transcripts: HashMap<String, Vec<SessionMessageEntry>>,
     /// Chats open in the right pane's shared chat view, keyed by chat id.
     pane_chats: HashMap<String, PaneChatProjection>,
+    /// Issues [`PaneChatProjection`] owner tokens.
+    pane_chat_owners: u64,
     /// One watch task per live subagent doc (single-flight per key).
     /// Dropping a task cancels the engine-side watch and unpins the doc from
     /// the engine LRU — closing a tab MUST go through
@@ -1079,6 +1092,8 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            side_chat_rows: Default::default(),
+            side_chat_gone: Default::default(),
             sessions: Vec::new(),
             session_presentation: None,
             selected_space: None,
@@ -1114,6 +1129,7 @@ impl AppState {
             change_requests_visible: true,
             sub_transcripts: HashMap::new(),
             pane_chats: HashMap::new(),
+            pane_chat_owners: 0,
             sub_watch_tasks: HashMap::new(),
             auto_selected: false,
             chats_synced: false,
@@ -1222,6 +1238,17 @@ impl AppState {
     }
 
     // ---- reducers (pure) ----
+
+    /// Replace the side rows; a side chat whose row disappears was deleted.
+    pub fn apply_side_chat_rows(&mut self, rows: std::collections::HashMap<String, SideChatRow>) {
+        for id in self.side_chat_rows.keys() {
+            if !rows.contains_key(id) {
+                self.side_chat_gone.insert(id.clone());
+            }
+        }
+        self.side_chat_gone.retain(|id| !rows.contains_key(id));
+        self.side_chat_rows = rows;
+    }
 
     pub fn apply_chats(&mut self, mut chats: Vec<Chat>) {
         chats.retain(|chat| {
@@ -1622,12 +1649,20 @@ impl AppState {
     /// Open `chat_id` in the right pane's shared chat view: its transcript
     /// (the same keyed doc watch child chats always used), plus the queue and
     /// native-task watches the selected chat gets. Single-flight per chat.
-    pub(crate) fn watch_pane_chat(&mut self, chat_id: String, cx: &mut Context<Self>) {
+    /// Watch a chat for a pane view; returns the view's owner token. The
+    /// newest view owns the (single-flight) watches; release with the token.
+    pub(crate) fn watch_pane_chat(&mut self, chat_id: String, cx: &mut Context<Self>) -> u64 {
         self.watch_subagent_doc(chat_id.clone(), cx);
-        if self.pane_chats.contains_key(&chat_id) {
-            return;
+        self.pane_chat_owners = self.pane_chat_owners.wrapping_add(1);
+        let owner = self.pane_chat_owners;
+        if let Some(projection) = self.pane_chats.get_mut(&chat_id) {
+            projection.owner = owner;
+            return owner;
         }
-        let mut projection = PaneChatProjection::default();
+        let mut projection = PaneChatProjection {
+            owner,
+            ..Default::default()
+        };
         if let Some(handle) = self.engine.clone() {
             if handle
                 .engine_info()
@@ -1648,12 +1683,27 @@ impl AppState {
             ));
         }
         self.pane_chats.insert(chat_id, projection);
+        owner
     }
 
     /// Back, close or release: drop every pane watch for this chat.
     pub(crate) fn unwatch_pane_chat(&mut self, chat_id: &str) {
         self.pane_chats.remove(chat_id);
         self.unwatch_subagent_doc(chat_id);
+    }
+
+    /// A pane view's deferred release: drop the watches only while that
+    /// view still owns them. A newer view of the same chat (reopened, or
+    /// after a re-attach) keeps its own; a side chat that already left the
+    /// view for its saved history keeps that history (its panel cleans it up).
+    pub(crate) fn release_pane_chat(&mut self, chat_id: &str, owner: u64) {
+        if self
+            .pane_chats
+            .get(chat_id)
+            .is_some_and(|projection| projection.owner == owner)
+        {
+            self.unwatch_pane_chat(chat_id);
+        }
     }
 
     pub(crate) fn refresh_pane_queue(&mut self, chat_id: &str, cx: &mut Context<Self>) {
@@ -2163,7 +2213,12 @@ impl AppState {
         self.native_tasks = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
-        self.pane_chats.clear();
+        // Their views' releases no longer own anything: drop the doc
+        // watches and rows with the projections.
+        for (chat_id, _) in self.pane_chats.drain() {
+            self.sub_watch_tasks.remove(&chat_id);
+            self.sub_transcripts.remove(&chat_id);
+        }
         self.echoes.clear();
         self.pending_sends.clear();
         self.upload_progress = None;
@@ -2254,6 +2309,9 @@ impl AppState {
         self.local_device_id = Some(engine_info.device_id.clone());
         self.engine = Some(handle.clone());
         self.engine_generation = self.engine_generation.wrapping_add(1);
+        // Deletions are relative to one engine's rows; a re-attached (or
+        // different) engine republishes what exists.
+        self.side_chat_gone.clear();
         let mut watch_tasks = Vec::with_capacity(8);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
@@ -2656,6 +2714,45 @@ fn spawn_deferred_engine_watch(
     }))
 }
 
+/// One side chat as `WatchChats` publishes it: its parent and lifecycle state
+/// (`active`, `ended`, …). `state` is `None` from engines that publish only
+/// live side chats, all of which are active.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SideChatRow {
+    pub parent_id: String,
+    pub state: Option<String>,
+}
+
+impl SideChatRow {
+    /// Writable: binds the full composer. Ended histories are read-only.
+    pub fn active(&self) -> bool {
+        self.state.as_deref().is_none_or(|state| state == "active")
+    }
+}
+
+/// Side chat fields of a raw `WatchChats` frame, before [`Chat`] drops them.
+fn side_chat_rows(frame: &serde_json::Value) -> std::collections::HashMap<String, SideChatRow> {
+    frame
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = row.get("id")?.as_str()?;
+            let parent_id = row.get("sideChatParentId")?.as_str()?;
+            Some((
+                id.to_string(),
+                SideChatRow {
+                    parent_id: parent_id.to_string(),
+                    state: row
+                        .get("sideChatState")
+                        .and_then(|state| state.as_str())
+                        .map(str::to_string),
+                },
+            ))
+        })
+        .collect()
+}
+
 /// Chats watch. Boot selection is the shell's job (it lands on the first
 /// restored open tab, device-local state this entity can't see); this task
 /// only pumps frames.
@@ -2683,6 +2780,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                 }
             };
             while let Some(value) = rx.recv().await {
+                let side_rows = side_chat_rows(&value);
                 let parsed: Vec<Chat> = match serde_json::from_value(value) {
                     Ok(parsed) => parsed,
                     Err(err) => {
@@ -2691,6 +2789,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     }
                 };
                 let alive = this.update(cx, |state, cx| {
+                    state.apply_side_chat_rows(side_rows);
                     state.apply_chats(parsed);
                     state.apply_pending_deep_link(cx);
                     state.reconcile_change_request_watches(cx);

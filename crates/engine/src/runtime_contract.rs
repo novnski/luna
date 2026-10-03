@@ -137,7 +137,7 @@ fn role_text(context: &RuntimeContext, chat: &RuntimeChatIdentity) -> String {
             }
         ),
         RuntimeChatRole::Side => format!(
-            "Chat role: side chat. This is a temporary LUNA side conversation (thread {thread}) opened from parent conversation @thread:{parent}. {} It works in the parent's checkout and branch with the parent's permissions, so file changes here affect the parent's working tree. Its turns and Stop are independent of the parent's run and queue: the parent is not paused, and it does not see this conversation. Side chats expire and cannot create child chats.",
+            "Chat role: side chat. This is a persistent, user-created LUNA side conversation (thread {thread}) opened from parent conversation @thread:{parent}. {} It works in the parent's checkout and branch with the parent's permissions, so file changes here affect the parent's working tree. Its turns and Stop are independent of the parent's run and queue: the parent is not paused, and it does not see this conversation. This side chat survives closed views and application restarts until the user explicitly ends it. Only the user can create side chats. Side chats cannot create child chats.",
             if caps.context_origin == RuntimeContextOrigin::NativeFork {
                 "It began as a native fork of the parent conversation, so the parent's earlier context is already in this history."
             } else {

@@ -93,22 +93,15 @@ async fn queue(client: &luna_rpc::RpcClient, chat: &str, message_id: &str, text:
 }
 
 async fn create_child(
-    client: &luna_rpc::RpcClient,
+    core: &EngineCore,
     parent: &str,
     key: &str,
     title: &str,
     brief: &str,
 ) -> String {
-    let receipt = client
-        .call(
-            "CreateChildThread",
-            json!({"parentTaskId":parent,"request":{
-                "prompt":brief,"idempotencyKey":key,"title":title,
-                "reportResults":true,"continueParent":true}}),
-        )
-        .await
-        .unwrap();
-    receipt["taskId"].as_str().unwrap().to_owned()
+    core.rpc_service().seed_child_for_qa(parent.into(), serde_json::from_value(json!({
+        "prompt":brief,"idempotencyKey":key,"title":title,"reportResults":true,"continueParent":true
+    })).unwrap()).await.unwrap().task_id
 }
 
 fn entries(core: &EngineCore, chat: &str) -> Vec<SessionMessageEntry> {
@@ -246,15 +239,19 @@ async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart()
     )
     .await;
 
-    // A1/A3: manual creation on a Claude parent; same-provider child.
+    // A1/A3: fixture creation on a Claude parent; same-provider child.
     let brief = "sid:child Reply CHILD_RESULT_OK and nothing else.";
-    let child = create_child(&client, &parent, "cc09-first", "Report child", brief).await;
-    let retry = create_child(&client, &parent, "cc09-first", "Report child", brief).await;
+    let child = create_child(&core, &parent, "cc09-first", "Report child", brief).await;
+    let retry = create_child(&core, &parent, "cc09-first", "Report child", brief).await;
     assert_eq!(retry, child, "same parent+key yields the same child");
     // A7: changed payload under the same key conflicts and creates nothing.
     assert!(
-        client
-            .call("CreateChildThread", json!({"parentTaskId":parent,"request":{"prompt":"different","idempotencyKey":"cc09-first"}}))
+        core.rpc_service()
+            .seed_child_for_qa(
+                parent.clone(),
+                serde_json::from_value(json!({"prompt":"different","idempotencyKey":"cc09-first"}))
+                    .unwrap()
+            )
             .await
             .is_err()
     );
@@ -382,7 +379,7 @@ async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart()
         1
     );
     assert_eq!(
-        create_child(&client, &parent, "cc09-first", "Report child", brief).await,
+        create_child(&core, &parent, "cc09-first", "Report child", brief).await,
         child
     );
     assert_eq!(lines_with(&fake_log(&project), "sid:child").len(), 1);
@@ -525,14 +522,8 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
 
     // B5: Claude's receive policy parks LUNA's own child report. The parent
     // turn must end visibly instead of staying Working forever.
-    let held_child = create_child(
-        &client,
-        &parent,
-        "cc09-held",
-        "Held child",
-        "sid:held reply",
-    )
-    .await;
+    let held_child =
+        create_child(&core, &parent, "cc09-held", "Held child", "sid:held reply").await;
     until(
         "held report recorded",
         || {
@@ -586,18 +577,19 @@ async fn claude_native_peers_are_attributed_and_holds_never_strand_a_turn() {
             &serde_json::from_value(claude_config("full")).unwrap(),
         )
         .unwrap();
-    let parity_child = client
-        .call(
-            "CreateChildThread",
-            json!({"parentTaskId":parent,"request":{
+    let parity_child = core
+        .rpc_service()
+        .seed_child_for_qa(
+            parent.clone(),
+            serde_json::from_value(json!({
                 "prompt":"sid:parity reply","idempotencyKey":"cc09-parity","title":"Parity child",
-                "reportResults":true,"continueParent":true,"permissionMode":"ask"}}),
+                "reportResults":true,"continueParent":true,"permissionMode":"ask"
+            }))
+            .unwrap(),
         )
         .await
-        .unwrap()["taskId"]
-        .as_str()
         .unwrap()
-        .to_owned();
+        .task_id;
     let child_mode = core
         .workspace
         .chat(&parity_child)

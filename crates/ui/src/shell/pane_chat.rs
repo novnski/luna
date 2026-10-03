@@ -394,7 +394,7 @@ fn render_side_header<V: 'static>(
     .w(px(crate::surface_chrome::CONTROL_SIZE))
     .justify_center()
     .tooltip(move |_, cx| {
-        crate::pickers::ControlTooltip::view("All side chats", Some("Esc".into()), cx)
+        crate::pickers::ControlTooltip::view("All related chats", Some("Esc".into()), cx)
     })
     .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
     .child(
@@ -405,7 +405,7 @@ fn render_side_header<V: 'static>(
     let live = chrome
         .status
         .as_ref()
-        .is_none_or(|(label, _, _)| label.starts_with("Writable"));
+        .is_none_or(|(label, _, _)| label.starts_with("Writable") || label.as_ref() == "Active");
     let facts: Vec<String> = chrome
         .status
         .iter()
@@ -558,11 +558,12 @@ impl PaneChatView {
         links: LinkUi,
         cx: &mut Context<Self>,
     ) -> Self {
-        state.update(cx, |state, cx| {
-            state.watch_pane_chat(chat_id.clone(), cx);
+        let owner = state.update(cx, |state, cx| {
+            let owner = state.watch_pane_chat(chat_id.clone(), cx);
             // Reading it here is reading it: clear the unseen marker exactly
             // as opening it as the main chat would.
             state.mark_chat_seen(&chat_id, cx);
+            owner
         });
         let transcript = cx.new(|cx| Transcript::for_pane_chat(state.clone(), chat_id.clone(), cx));
         let mut links = links;
@@ -576,9 +577,12 @@ impl PaneChatView {
             cx.observe(&composer, |_, _, cx| cx.notify()),
         ];
         let release_id = chat_id.clone();
+        // Deferred until the view drops: release the watch only if it is
+        // still this view's (a side chat leaving this view for its saved
+        // history releases it first and installs that history in its place).
         cx.on_release(move |view, cx| {
             view.state
-                .update(cx, |state, _| state.unwatch_pane_chat(&release_id));
+                .update(cx, |state, _| state.release_pane_chat(&release_id, owner));
         })
         .detach();
         Self {
@@ -724,7 +728,7 @@ impl Render for PaneChatView {
                         div()
                             .id("pane-chat-unload")
                             .role(gpui::Role::Button)
-                            .aria_label("Close side chat: stop work and keep read-only history")
+                            .aria_label("End side chat: stop it and keep its history read-only")
                             .tab_index(0)
                             .size(px(crate::surface_chrome::CONTROL_SIZE))
                             .flex_none()
@@ -740,14 +744,14 @@ impl Render for PaneChatView {
                             .on_click(cx.listener(|_, _, _, cx| cx.emit(PaneChatEvent::Unload)))
                             .tooltip(|_, cx| {
                                 crate::pickers::ControlTooltip::view(
-                                    "Close side chat",
-                                    Some("Stops its work; the history stays readable.".into()),
+                                    "End side chat",
+                                    Some("Stops it for good; the history stays readable.".into()),
                                     cx,
                                 )
                             })
                             .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
                             .child(
-                                icon(icons::CLOSE)
+                                icon(icons::STOP)
                                     .size(px(crate::surface_chrome::ICON_SIZE))
                                     .text_color(theme.text_muted),
                             )

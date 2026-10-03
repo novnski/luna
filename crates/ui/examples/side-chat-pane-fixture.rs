@@ -1,4 +1,7 @@
-//! Headless GPUI E2E for side chats in the right pane's shared chat layout.
+//! Headless GPUI E2E for side chats in the right pane's shared chat layout,
+//! on the persistent side-chat contract (`side-chat-persistence-v1`): no view
+//! lease, expiry or heartbeat; Back, closing the pane, switching chats and an
+//! engine re-attach never end a side chat; only the user's End does.
 //!
 //! Drives the production `Shell` and `SideChatPanel` in a hidden window against
 //! an in-process `EngineCore` with a scripted Mock harness, attached through
@@ -12,7 +15,8 @@
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example side-chat-pane-fixture
 //! Run:   target/debug/examples/side-chat-pane-fixture ABSOLUTE_EVIDENCE_DIR
-//! Writes f01..f12 PNG captures, readback.json and side-chat-pane.pass.
+//! Writes f00..f16 PNG captures, readback.json and side-chat-pane.pass; a
+//! failure writes failure.txt and exits nonzero.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -142,6 +146,28 @@ async fn settle(cx: &mut AsyncApp, ms: u64) {
 
 fn live(value: &serde_json::Value) -> String {
     value["liveTexts"].to_string()
+}
+
+/// The saved-history view after End: its transcript draws every saved
+/// message (both questions and both answers), and no question or approval
+/// reads as awaiting an answer.
+fn rendered_history(readback: &serde_json::Value, when: &str) -> anyhow::Result<()> {
+    let texts = readback["historyTexts"].to_string();
+    anyhow::ensure!(
+        [SIDE_QUESTION, SIDE_PENDING, SIDE_ANSWER]
+            .iter()
+            .all(|text| texts.contains(text)),
+        "saved messages missing from the rendered history {when}: {readback}"
+    );
+    anyhow::ensure!(
+        readback["historyTranscript"]["items"].as_u64().unwrap_or(0) >= 4,
+        "the history transcript laid out no rows {when}: {readback}"
+    );
+    anyhow::ensure!(
+        readback["historyAwaiting"] == 0,
+        "an ended side chat still shows a question awaiting an answer {when}: {readback}"
+    );
+    Ok(())
 }
 
 fn ids(value: &serde_json::Value) -> Vec<String> {
@@ -309,6 +335,7 @@ fn main() -> anyhow::Result<()> {
             );
             composer::init(cx, settings.composer_send_behavior);
             terminal::panel::init(cx);
+            let handle_for_task = handle.clone();
             let state = cx.new(|cx| {
                 let mut state = state::AppState::new();
                 state.local_device_id = Some(device.clone());
@@ -346,6 +373,7 @@ fn main() -> anyhow::Result<()> {
                     |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
                 )
                 .unwrap();
+            let state_for_task = state.clone();
             cx.spawn(async move |cx| {
                 let result: anyhow::Result<serde_json::Value> = async {
                     let mut record = serde_json::Map::new();
@@ -359,6 +387,7 @@ fn main() -> anyhow::Result<()> {
                     let list = wait_for(window, cx, 60, |r| r["historyCount"].is_number()).await?;
                     capture(window, cx, output.join("f00-side-list.png"))?;
                     anyhow::ensure!(list["historyCount"] == 0 && list["pageId"].is_null(), "unexpected side chat list: {list}");
+                    anyhow::ensure!(list["persistent"] == true, "the engine must advertise side-chat-persistence-v1: {list}");
                     let parent_rows = list["parentTranscriptRows"].as_u64().unwrap_or(0);
                     record.insert("list".into(), list);
 
@@ -376,6 +405,8 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(created["fullComposer"]["boundChat"] == side_id.as_str(), "full composer must bind the side chat: {created}");
                     anyhow::ensure!(created["mainComposer"]["boundChat"] == PARENT, "main composer must stay on the parent: {created}");
                     anyhow::ensure!(ids(&created["paneChats"]) == [side_id.clone()], "one live pane watch for the side chat: {created}");
+                    anyhow::ensure!(created["lease"] == false && created["expiresAtMs"] == 0, "a persistent side chat has no lease or expiry: {created}");
+                    anyhow::ensure!(created["pendingCreate"].is_null(), "a completed create must drop its retry id: {created}");
                     record.insert("created".into(), created);
 
                     // f02. Send with the full composer: live transcript, parent untouched.
@@ -391,22 +422,24 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(replied["parentTranscriptRows"].as_u64().unwrap_or(0) == parent_rows, "the side chat changed the parent transcript: {replied}");
                     record.insert("replied".into(), replied);
 
-                    // f03-f04. Draft across Back: Back parks the side chat (still
-                    // writable, lease renewed), reopening restores the draft.
+                    // f03-f04. Draft across Back: Back only leaves the page. The
+                    // chat stays active (nothing parked, no unload) and reopening
+                    // restores the draft without a lease.
                     window.update(cx, |shell, _, cx| shell.fixture_side_chat("type_full", SIDE_DRAFT, cx))?;
                     settle(cx, 300).await;
                     window.update(cx, |shell, _, cx| shell.fixture_side_chat("back", "", cx))?;
-                    let parked = wait_for(window, cx, 100, |r| r["pageId"].is_null() && r["historyCount"] == 1 && r["busy"] == false).await?;
+                    let listed = wait_for(window, cx, 100, |r| r["pageId"].is_null() && r["historyCount"] == 1 && r["busy"] == false).await?;
                     settle(cx, 300).await;
-                    capture(window, cx, output.join("f03-side-parked-list.png"))?;
-                    anyhow::ensure!(ids(&parked["parked"]) == [side_id.clone()], "Back must park the writable side chat: {parked}");
-                    anyhow::ensure!(ids(&parked["paneChats"]).is_empty(), "the parked chat must release its pane watches: {parked}");
+                    capture(window, cx, output.join("f03-side-back-list.png"))?;
+                    anyhow::ensure!(ids(&listed["parked"]).is_empty(), "persistent Back must not park: {listed}");
+                    anyhow::ensure!(listed["historyStates"].to_string().contains("active"), "Back must leave the side chat active: {listed}");
+                    anyhow::ensure!(ids(&listed["paneChats"]).is_empty(), "Back must release the pane watches: {listed}");
                     window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
                     let restored = wait_for(window, cx, 150, |r| r["firstClass"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
                     settle(cx, 500).await;
                     capture(window, cx, output.join("f04-side-draft-restored.png"))?;
-                    anyhow::ensure!(restored["writable"] == true && restored["fullComposer"]["input"] == SIDE_DRAFT, "draft lost across Back: {restored}");
-                    record.insert("parked".into(), parked);
+                    anyhow::ensure!(restored["writable"] == true && restored["lease"] == false && restored["fullComposer"]["input"] == SIDE_DRAFT, "draft lost across Back: {restored}");
+                    record.insert("backList".into(), listed);
                     record.insert("draftRestored".into(), restored);
 
                     // f05. A send in flight across Back: exactly one prompt and one reply.
@@ -416,7 +449,7 @@ fn main() -> anyhow::Result<()> {
                     })?;
                     settle(cx, 50).await;
                     let in_flight = readback(window, cx)?;
-                    anyhow::ensure!(in_flight["pageId"].is_null() && ids(&in_flight["parked"]) == [side_id.clone()], "Back during the send must park: {in_flight}");
+                    anyhow::ensure!(in_flight["pageId"].is_null() && ids(&in_flight["parked"]).is_empty(), "Back during the send must just leave the page: {in_flight}");
                     settle(cx, 3000).await;
                     window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
                     let settled = wait_for(window, cx, 250, |r| live(r).contains(SIDE_PENDING) && live(r).matches(SIDE_ANSWER).count() >= 2).await?;
@@ -474,25 +507,82 @@ fn main() -> anyhow::Result<()> {
                     capture(window, cx, output.join("f10-side-full-dark-narrow.png"))?;
                     window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(520.0, cx))?;
 
-                    // f11. Heartbeat: 35 s idle (> the 30 s lease) keeps it writable
-                    // and a later send still works.
+                    // f11. No heartbeat: 35 s idle (past the old 30 s lease) stays
+                    // writable without a single RenewSideChat.
                     settle(cx, 35_000).await;
                     let idle = readback(window, cx)?;
-                    anyhow::ensure!(idle["writable"] == true && idle["error"].is_null(), "the lease lapsed while the pane was open: {idle}");
-                    anyhow::ensure!(idle["lastRenewAgoMs"].as_u64().unwrap_or(u64::MAX) < 15_000, "no recent RenewSideChat heartbeat: {idle}");
-                    anyhow::ensure!(ids(&idle["watchedDocs"]) == [side_id.clone()], "the heartbeat must not reopen or drop the live watch: {idle}");
+                    anyhow::ensure!(idle["writable"] == true && idle["error"].is_null(), "an idle persistent side chat must stay writable: {idle}");
+                    anyhow::ensure!(idle["lastRenewAgoMs"].as_u64().unwrap_or(0) >= 30_000, "a persistent side chat must not renew a lease: {idle}");
+                    anyhow::ensure!(ids(&idle["watchedDocs"]) == [side_id.clone()], "idling must not reopen or drop the live watch: {idle}");
                     record.insert("afterIdle".into(), idle);
 
-                    // f12. Unload from the header: read-only history.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("unload", "", cx))?;
-                    let back = wait_for(window, cx, 150, |r| r["pageId"].is_null() && r["busy"] == false && r["historyStates"].to_string().contains("unloaded")).await?;
+                    // f12. Close the pane (releases the side panel), reopen: the
+                    // chat is still active and writable.
+                    window.update(cx, |shell, _, cx| shell.fixture_close_right_pane(cx))?;
+                    settle(cx, 600).await;
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_open_right_pane(cx);
+                        shell.fixture_open_side_chats(cx);
+                    })?;
+                    wait_for(window, cx, 100, |r| r["historyStates"].to_string().contains("active") && r["busy"] == false).await?;
                     window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
-                    let reopened = wait_for(window, cx, 100, |r| r["pageId"] == side_id.as_str() && r["busy"] == false).await?;
+                    let reopened = wait_for(window, cx, 150, |r| r["writable"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
                     settle(cx, 400).await;
-                    capture(window, cx, output.join("f12-side-unloaded-readonly.png"))?;
-                    anyhow::ensure!(reopened["writable"] == false && reopened["fullComposer"].is_null(), "an unloaded side chat must be read-only: {reopened}");
-                    record.insert("unloaded".into(), back);
-                    record.insert("reopened".into(), reopened);
+                    capture(window, cx, output.join("f12-side-reopened-after-close.png"))?;
+                    anyhow::ensure!(reopened["lease"] == false, "reopening must not need a lease: {reopened}");
+                    record.insert("reopenedAfterClose".into(), reopened);
+
+                    // f13. Switch chats and back (releases both panels): still active.
+                    cx.update(|cx| state_for_task.update(cx, |state, cx| state.select_chat(Some(OTHER.into()), cx)));
+                    settle(cx, 600).await;
+                    cx.update(|cx| state_for_task.update(cx, |state, cx| state.select_chat(Some(PARENT.into()), cx)));
+                    settle(cx, 600).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_open_side_chats(cx))?;
+                    wait_for(window, cx, 100, |r| r["historyStates"].to_string().contains("active") && r["busy"] == false).await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
+                    let switched = wait_for(window, cx, 150, |r| r["writable"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
+                    record.insert("reopenedAfterSwitch".into(), switched);
+
+                    // f14. Engine re-attach (a reconnect: new engine generation,
+                    // fresh watches) never ends it either.
+                    let reattach = handle_for_task.clone();
+                    cx.update(|cx| state_for_task.update(cx, |state, cx| state.fixture_attach_engine(reattach, cx)));
+                    settle(cx, 1500).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_open_side_chats(cx))?;
+                    wait_for(window, cx, 150, |r| r["historyStates"].to_string().contains("active") && r["busy"] == false).await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
+                    let reattached = wait_for(window, cx, 200, |r| r["writable"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
+                    settle(cx, 400).await;
+                    capture(window, cx, output.join("f14-side-after-reattach.png"))?;
+                    anyhow::ensure!(reattached["lease"] == false && reattached["sideRowState"] != "ended", "a re-attach must keep the side chat active: {reattached}");
+                    record.insert("reopenedAfterReattach".into(), reattached);
+
+                    // f15. End (the explicit action): the saved history renders in
+                    // place, read-only, with nothing awaiting an answer.
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("unload", "", cx))?;
+                    wait_for(window, cx, 200, |r| {
+                        r["pageId"] == side_id.as_str() && r["busy"] == false && r["state"] == "ended"
+                    })
+                    .await?;
+                    settle(cx, 600).await;
+                    capture(window, cx, output.join("f15-side-ended-readonly.png"))?;
+                    let ended = readback(window, cx)?;
+                    anyhow::ensure!(ended["writable"] == false && ended["fullComposer"].is_null(), "an ended side chat must be read-only: {ended}");
+                    rendered_history(&ended, "right after End")?;
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("back", "", cx))?;
+                    let listed_ended = wait_for(window, cx, 100, |r| r["pageId"].is_null() && r["historyStates"].to_string().contains("ended")).await?;
+
+                    // f16. Reopened from the list: the same rendered history.
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
+                    wait_for(window, cx, 100, |r| r["pageId"] == side_id.as_str() && r["busy"] == false).await?;
+                    settle(cx, 600).await;
+                    capture(window, cx, output.join("f16-side-ended-reopened.png"))?;
+                    let reopened_ended = readback(window, cx)?;
+                    anyhow::ensure!(reopened_ended["writable"] == false && reopened_ended["firstClass"] == false, "an ended row must not bind the full composer: {reopened_ended}");
+                    rendered_history(&reopened_ended, "after reopening")?;
+                    record.insert("ended".into(), ended);
+                    record.insert("endedListed".into(), listed_ended);
+                    record.insert("endedReopened".into(), reopened_ended);
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -505,17 +595,24 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("side-chat-pane.pass"),
-                                "PASS: headless production Shell on the production engine boundary; engine gate side-chat-task-commands-v1 + spaceless WatchChats row -> the FULL main composer and live transcript bound to the side chat; send answered with the parent untouched; draft and an in-flight send survive Back (parked, lease renewed); provider switch refused with the engine's reason; approval card in light/dark and a 360 px pane; 35 s idle kept writable by the RenewSideChat heartbeat without reopening the watch; Unload gives read-only history\n",
+                                "PASS: headless production Shell on the production engine boundary; side-chat-persistence-v1 + side-chat-task-commands-v1 + spaceless WatchChats row -> the FULL main composer and live transcript bound to the side chat, with no lease and no expiry; send answered with the parent untouched; draft and an in-flight send survive Back without parking or unloading; provider switch refused with the engine's reason; approval card in light/dark and a 360 px pane; 35 s idle stays writable with no heartbeat; closing the pane, switching chats and an engine re-attach keep it active and writable; End leaves read-only history listed as ended that never binds the composer, rendered (every saved message laid out, no question awaiting an answer) right after End and after reopening\n",
                             )
                         });
                         if let Err(error) = written {
                             *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                            let _ = std::fs::write(output.join("failure.txt"), format!("{error}\n"));
+                            // AppKit's quit can end the process with status 0 before `run`
+                            // returns: leave with the failure status now.
+                            std::process::exit(1);
                         }
                     }
                     Err(error) => {
                         eprintln!("Side chat pane fixture failed: {error:#}");
                         let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
                         *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                        // AppKit's quit can end the process with status 0 before `run`
+                        // returns: leave with the failure status now.
+                        std::process::exit(1);
                     }
                 }
                 let _ = window.update(cx, |_, window, _| window.remove_window());

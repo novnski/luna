@@ -74,7 +74,6 @@ use crate::workspace_links::resolve_workspace_file_link;
 mod activity_center;
 mod agents;
 mod child_chats;
-mod child_create;
 mod command_palette;
 mod native_file_rewind;
 mod native_review;
@@ -550,10 +549,11 @@ pub enum RightSurface {
     /// keys [`Shell::subagent_tabs`].
     Subagent(u64),
     Agents,
-    SideChats,
-    /// This conversation's persistent child chats: a list that drills into
-    /// one child's transcript and reply composer ([`child_chats`]).
-    ChildChats,
+    /// Chats related to this conversation, in one list: child chats (started
+    /// by the parent agent with fresh context) and side chats (started by
+    /// the user from a copy of its context). A row drills into that chat's
+    /// transcript and composer ([`related_chats`]).
+    RelatedChats,
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
@@ -916,6 +916,8 @@ pub(super) struct ChatRowProps<'a> {
     pub(super) archived: bool,
     pub(super) pinned: bool,
     pub(super) surface: ChatRowSurface,
+    /// Related-chat rows name who started the chat (child or side chat).
+    pub(super) kind: Option<related_chats::RelatedKind>,
     pub(super) can_settle: bool,
     /// Settled rows offer Return to Active where Settle would be.
     pub(super) settled: bool,
@@ -2022,6 +2024,14 @@ pub struct Shell {
     pub(super) settled_shown: usize,
     pub(super) active_shown: usize,
     pub(super) sidebar_hidden_active_count: usize,
+    /// Which drill-in the Related chats surface shows when a child and a
+    /// side chat are both open (the most recently opened).
+    pub(super) related_focus: related_chats::RelatedKind,
+    /// Side chat ids per parent, from every side list loaded this run: the
+    /// related-chat counts include them after the list is closed.
+    pub(super) side_chat_index:
+        std::collections::HashMap<String, std::collections::HashSet<String>>,
+    side_chat_index_generation: u64,
     /// Live sidebar task reorder, while a row drags.
     pub(super) sidebar_drag: Option<SidebarDragState>,
     /// Draggable sidebar rows top to bottom with their reorder scope, as last
@@ -2162,7 +2172,6 @@ pub struct Shell {
     rename_dialog: Option<RenameChatDialog>,
     native_review_dialog: Option<native_review::NativeReviewDialog>,
     native_review_task: Option<Task<()>>,
-    child_thread_dialog: Option<child_create::ChildThreadDialog>,
     history_fork_dialog: Option<HistoryForkDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
     conversation_rewind_dialog: Option<ConversationRewindDialog>,
@@ -2576,6 +2585,9 @@ impl Shell {
             settled_shown: 0,
             active_shown: 20,
             sidebar_hidden_active_count: 0,
+            related_focus: related_chats::RelatedKind::Child,
+            side_chat_index: Default::default(),
+            side_chat_index_generation: 0,
             sidebar_drag: None,
             sidebar_drag_rows: Vec::new(),
             related_expanded: Default::default(),
@@ -2674,7 +2686,6 @@ impl Shell {
             rename_dialog: None,
             native_review_dialog: None,
             native_review_task: None,
-            child_thread_dialog: None,
             history_fork_dialog: None,
             edit_earlier_message_dialog: None,
             conversation_rewind_dialog: None,
@@ -3065,6 +3076,22 @@ impl Shell {
         // Healing a persisted, deleted filter above changes the effective
         // Project scope without changing AppState again.
         self.reconcile_session_history_scope(false, cx);
+        // Side lists loaded from another engine (or before a reconnect) can
+        // name chats this one never had: count only what it lists again.
+        let generation = state.read(cx).engine_generation();
+        if self.side_chat_index_generation != generation {
+            self.side_chat_index_generation = generation;
+            self.side_chat_index.clear();
+        }
+        // The open side chat was deleted (its row stopped publishing).
+        if let Some(panel) = self.side_chat_panel.clone()
+            && panel
+                .read(cx)
+                .page_id()
+                .is_some_and(|id| state.read(cx).side_chat_gone.contains(id))
+        {
+            panel.update(cx, |panel, cx| panel.close_page(cx));
+        }
         if self
             .side_chat_panel
             .as_ref()
@@ -3400,8 +3427,7 @@ impl Shell {
                     )
                 }),
                 RightSurface::Agents => Some((*surface, "Agents".into(), false, None)),
-                RightSurface::SideChats => Some((*surface, "Side chats".into(), false, None)),
-                RightSurface::ChildChats => Some((*surface, "Child chats".into(), false, None)),
+                RightSurface::RelatedChats => Some((*surface, "Related chats".into(), false, None)),
                 RightSurface::Picker => None,
             })
             .collect()
@@ -3422,8 +3448,7 @@ impl Shell {
             | RightSurface::Diff(_)
             | RightSurface::Terminal(_)
             | RightSurface::Agents
-            | RightSurface::SideChats
-            | RightSurface::ChildChats
+            | RightSurface::RelatedChats
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_) => {
                 return None;
@@ -3543,8 +3568,7 @@ impl Shell {
             RightSurface::Subagent(_)
             | RightSurface::Browser(_)
             | RightSurface::Agents
-            | RightSurface::SideChats
-            | RightSurface::ChildChats => {}
+            | RightSurface::RelatedChats => {}
             RightSurface::Picker => {}
         }
         cx.notify();
@@ -3669,16 +3693,17 @@ impl Shell {
             return LinkOutcome::Rejected;
         };
         let current_pane = match self.resolved_right_active(cx) {
-            RightSurface::ChildChats => self.child_chat_panel.as_ref().is_some_and(|panel| {
-                let panel = panel.read(cx);
-                panel.is_current(cx)
-                    && panel.parent() == self.active_chat
-                    && panel.open_chat_id() == Some(source)
-            }),
-            RightSurface::SideChats => self
-                .side_chat_panel
-                .as_ref()
-                .is_some_and(|panel| panel.read(cx).owns_link_source(source, cx)),
+            RightSurface::RelatedChats => {
+                self.child_chat_panel.as_ref().is_some_and(|panel| {
+                    let panel = panel.read(cx);
+                    panel.is_current(cx)
+                        && panel.parent() == self.active_chat
+                        && panel.open_chat_id() == Some(source)
+                }) || self
+                    .side_chat_panel
+                    .as_ref()
+                    .is_some_and(|panel| panel.read(cx).owns_link_source(source, cx))
+            }
             RightSurface::File(id) => {
                 self.right_pane_open(cx)
                     && self
@@ -4107,7 +4132,10 @@ impl Shell {
                 });
                 if self.active_chat == *task_id || visible_child {
                     self.release_side_chat(cx);
-                    self.add_work_surface(RightSurface::SideChats, cx);
+                    // The new side chat's page takes the Related chats view;
+                    // an open child stays underneath it for Back.
+                    self.related_focus = related_chats::RelatedKind::Side;
+                    self.add_work_surface(RightSurface::RelatedChats, cx);
                     self.create_side_chat_panel_for(
                         task_id.clone(),
                         Some((message_id.clone(), text.clone())),
@@ -4362,8 +4390,10 @@ impl Shell {
                         .update(cx, |s, _| s.unwatch_subagent_doc(&tab.doc_id));
                 }
             }
-            RightSurface::SideChats => self.release_side_chat(cx),
-            RightSurface::ChildChats => self.release_child_chat_panel(cx),
+            RightSurface::RelatedChats => {
+                self.release_side_chat(cx);
+                self.release_child_chat_panel(cx);
+            }
             RightSurface::Agents | RightSurface::Picker => {}
         }
         self.panels.update(&key, |p| {
@@ -5513,7 +5543,6 @@ impl Shell {
     }
 
     fn cancel_history_flow(&mut self, cx: &mut Context<Self>) {
-        self.child_thread_dialog = None;
         self.history_flow_generation = self.history_flow_generation.wrapping_add(1);
         self.native_review_dialog = None;
         self.history_fork_dialog = None;
@@ -8303,6 +8332,7 @@ impl Shell {
             archived,
             pinned,
             surface,
+            kind,
             can_settle,
             settled,
             child_chats,
@@ -8612,7 +8642,7 @@ impl Shell {
         let menu_id = id.clone();
         let child_chats_chip = (child_chats > 0 && search_query.is_none()).then(|| {
             let label: SharedString = format!(
-                "Open {child_chats} child chat{}",
+                "Open {child_chats} related chat{}",
                 if child_chats == 1 { "" } else { "s" }
             )
             .into();
@@ -8651,7 +8681,7 @@ impl Shell {
                 .tooltip_show_delay(Duration::from_millis(350))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
-                    this.open_child_chats_for(click_id.clone(), cx);
+                    this.open_related_chats_for(click_id.clone(), cx);
                 }))
                 .on_key_down(crate::swallow_activation_key)
                 .child(
@@ -8726,7 +8756,14 @@ impl Shell {
             .cursor_pointer()
             .when(surface.in_pane(), |row| {
                 row.role(gpui::Role::Button)
-                    .aria_label(title.clone())
+                    .aria_label(match kind {
+                        Some(kind) => SharedString::from(format!(
+                            "{}: {title}. {}",
+                            kind.label(),
+                            kind.description()
+                        )),
+                        None => title.clone(),
+                    })
                     .tab_index(0)
                     .on_key_down(crate::swallow_activation_key)
             })
@@ -8792,6 +8829,34 @@ impl Shell {
                     .flex_row()
                     .items_center()
                     .gap(px(Theme::SPACE_SM))
+                    // Who started a related chat, in the sidebar badge's
+                    // quiet cloth; the row's detail tooltip explains it.
+                    .when_some(kind, |el, kind| {
+                        let tone = theme.text_muted;
+                        el.child(
+                            div()
+                                .h(px(14.0))
+                                .flex_none()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(3.0))
+                                .px(px(4.0))
+                                .rounded(px(4.0))
+                                .bg(tone.opacity(0.08))
+                                .text_size(crate::typography::ui_rems(10.0))
+                                .line_height(crate::typography::ui_rems(14.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.readable_tone(tone, 0.85))
+                                .child(
+                                    icon(kind.icon())
+                                        .size(px(10.0))
+                                        .flex_none()
+                                        .text_color(theme.readable_tone(tone, 0.7)),
+                                )
+                                .child(kind.label()),
+                        )
+                    })
                     .child(sidebar_faded_label(
                         format!("{row_id}-device").into(),
                         true,
@@ -10457,11 +10522,6 @@ impl Shell {
             self.cancel_history_flow(cx);
             return true;
         }
-        if self.child_thread_dialog.is_some() {
-            self.child_thread_dialog = None;
-            cx.notify();
-            return true;
-        }
         if self.history_fork_dialog.is_some() {
             self.cancel_history_flow(cx);
             return true;
@@ -10681,7 +10741,6 @@ impl Shell {
                 .is_some_and(|config| {
                     matches!(config.harness, HarnessId::Codex | HarnessId::ClaudeCode)
                 });
-            let child_parent_id = chat_id.clone();
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();
             let recover_task_id = chat_id.clone();
@@ -10694,16 +10753,6 @@ impl Shell {
                 .flex_col();
             let menu = match menu_state.page {
                 ChatMenuPage::Root => menu
-                    .when(!archived, |menu| {
-                        menu.child(
-                            popover::menu_row(&theme, false, format!("chat-menu-child-{chat_id}"))
-                                .id("chat-menu-child")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.open_child_thread_dialog(child_parent_id.clone(), cx)
-                                }))
-                                .child(SharedString::from("New child chat…")),
-                        )
-                    })
                     .when(!archived, |menu| {
                         menu.child(
                             popover::menu_row(&theme, false, format!("chat-menu-pin-{chat_id}"))
@@ -11063,10 +11112,6 @@ impl Shell {
                 )
                 .into_any_element();
             overlays.push(popover::modal("rename-chat-dialog", viewport, card));
-        }
-
-        if let Some(dialog) = self.render_child_thread_dialog(viewport, window, cx) {
-            overlays.push(dialog);
         }
 
         if let Some(dialog) = &mut self.history_fork_dialog {
@@ -12475,8 +12520,9 @@ impl Shell {
         {
             match self.resolved_right_active(cx) {
                 RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
-                RightSurface::SideChats if self.right_pane_open(cx) => self.render_side_chats(cx),
-                RightSurface::ChildChats if self.right_pane_open(cx) => self.render_child_chats(cx),
+                RightSurface::RelatedChats if self.right_pane_open(cx) => {
+                    self.render_related_chats(cx)
+                }
                 // Rendering a Files surface activates its image. Keep it unmounted
                 // throughout the closing animation after suspending its resources.
                 RightSurface::Files | RightSurface::File(_) if !self.right_pane_open(cx) => {
@@ -12590,10 +12636,7 @@ impl Shell {
         // Side and child chats are chats: they sit on the same shell frost
         // as the main conversation (one surface for both, like the Codex
         // reference) instead of the work-surface panel tone.
-        let chat_surface = matches!(
-            self.resolved_right_active(cx),
-            RightSurface::SideChats | RightSurface::ChildChats
-        );
+        let chat_surface = matches!(self.resolved_right_active(cx), RightSurface::RelatedChats);
         let panel = div()
             .size_full()
             .flex()
@@ -12645,11 +12688,11 @@ impl Shell {
         let muted = theme.text_muted;
         let border = theme.border;
         let border_strong = theme.border_strong;
-        let (child_chat_count, _) = self.active_child_chat_count(cx);
-        let child_chat_label: SharedString = match child_chat_count {
-            0 => "Child chats".into(),
-            1 => "Child chats, 1 open".into(),
-            count => format!("Child chats, {count} open").into(),
+        let related_count = self.active_related_chat_count(cx);
+        let related_label: SharedString = match related_count {
+            0 => "Related chats".into(),
+            1 => "Related chats, 1 open".into(),
+            count => format!("Related chats, {count} open").into(),
         };
         let badge_tone = theme.text_muted;
         let badge_text = theme.readable_tone(badge_tone, 0.85);
@@ -12706,42 +12749,31 @@ impl Shell {
                                 .on_key_down(crate::swallow_activation_key),
                         )
                         .child(
-                            row("surface-card-side-chats", icons::PLUS, "Side chats")
+                            row("surface-card-related-chats", icons::DIALOG, "Related chats")
+                                .aria_label(related_label)
+                                .child(div().flex_1())
+                                .when(related_count > 0, |row| {
+                                    row.child(
+                                        div()
+                                            .h(px(18.0))
+                                            .min_w(px(18.0))
+                                            .px(px(6.0))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .rounded_full()
+                                            .bg(badge_tone.opacity(0.12))
+                                            .text_size(crate::typography::ui_rems(11.0))
+                                            .font_weight(gpui::FontWeight::MEDIUM)
+                                            .text_color(badge_text)
+                                            .child(related_count.to_string()),
+                                    )
+                                })
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.add_work_surface(RightSurface::SideChats, cx)
+                                    this.add_work_surface(RightSurface::RelatedChats, cx)
                                 }))
                                 .on_key_down(crate::swallow_activation_key),
-                        )
-                        .child(
-                            row(
-                                "surface-card-child-chats",
-                                icons::CHAT_ROUND_LINE,
-                                "Child chats",
-                            )
-                            .aria_label(child_chat_label)
-                            .child(div().flex_1())
-                            .when(child_chat_count > 0, |row| {
-                                row.child(
-                                    div()
-                                        .h(px(18.0))
-                                        .min_w(px(18.0))
-                                        .px(px(6.0))
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .bg(badge_tone.opacity(0.12))
-                                        .text_size(crate::typography::ui_rems(11.0))
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(badge_text)
-                                        .child(child_chat_count.to_string()),
-                                )
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.add_work_surface(RightSurface::ChildChats, cx)
-                            }))
-                            .on_key_down(crate::swallow_activation_key),
                         )
                     })
                     .child(
@@ -12977,8 +13009,7 @@ impl Shell {
                     })
                     .unwrap_or(icons::LIST),
                 RightSurface::Subagent(_) | RightSurface::Agents => icons::BOT,
-                RightSurface::SideChats => icons::PLUS,
-                RightSurface::ChildChats => icons::CHAT_ROUND_LINE,
+                RightSurface::RelatedChats => icons::DIALOG,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Browser(_) => icons::GLOBE,
                 RightSurface::Picker => icons::PLUS,
@@ -13313,40 +13344,22 @@ impl Shell {
                                     .child("Agents"),
                             )
                             .child(
-                                popover::menu_row(&theme, false, "right-plus-side-chats")
-                                    .id("right-plus-side-chats-row")
+                                popover::menu_row(&theme, false, "right-plus-related-chats")
+                                    .id("right-plus-related-chats-row")
                                     .role(gpui::Role::Button)
-                                    .aria_label("Side chats")
+                                    .aria_label("Related chats")
                                     .tab_index(0)
                                     .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_work_surface(RightSurface::SideChats, cx);
+                                        this.add_work_surface(RightSurface::RelatedChats, cx);
                                         this.close_right_plus(cx);
                                     }))
                                     .on_key_down(crate::swallow_activation_key)
                                     .child(
-                                        icon(icons::PLUS)
+                                        icon(icons::DIALOG)
                                             .size(px(13.0))
                                             .text_color(theme.text_muted),
                                     )
-                                    .child("Side chats"),
-                            )
-                            .child(
-                                popover::menu_row(&theme, false, "right-plus-child-chats")
-                                    .id("right-plus-child-chats-row")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("Child chats")
-                                    .tab_index(0)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_work_surface(RightSurface::ChildChats, cx);
-                                        this.close_right_plus(cx);
-                                    }))
-                                    .on_key_down(crate::swallow_activation_key)
-                                    .child(
-                                        icon(icons::CHAT_ROUND_LINE)
-                                            .size(px(13.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child("Child chats"),
+                                    .child("Related chats"),
                             )
                         })
                         .child(

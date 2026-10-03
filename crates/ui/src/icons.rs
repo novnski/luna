@@ -183,6 +183,9 @@ icon_assets![
     (INFO_CIRCLE, "info-circle"),
     (DANGER_TRIANGLE, "danger-triangle"),
     (CHAT_ROUND_LINE, "chat-round-line"),
+    // Related chats: the surface, and the side-chat (user fork) kind mark.
+    (DIALOG, "dialog"),
+    (GIT_FORK, "git-fork"),
     // Hand-drawn bot head (antenna + eyes + ears) in the Solar Linear style
     // — the embedded set has no bot/robot glyph. Subagent tabs.
     (BOT, "bot"),

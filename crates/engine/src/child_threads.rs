@@ -96,7 +96,7 @@ pub(super) fn compact_child_outcomes(child: &mut ChildThread) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) enum ChildAccessGrant {
-    /// The user's own creation dialog (`CreateChildThread`).
+    /// Legacy creation-dialog receipts and in-process QA fixtures only.
     CreationDialog,
     /// The explicit grant choice on the agent's approval card.
     ApprovalCard,
@@ -291,7 +291,11 @@ impl EngineRpc {
         }
     }
 
-    pub(super) async fn create_child_manual(
+    /// Seed a child for in-process engine/GUI integration fixtures. This trusted
+    /// host API is deliberately not exposed by RPC or the user interface; live
+    /// agent creation always uses `create_child_approved` and its turn fence.
+    #[doc(hidden)]
+    pub async fn seed_child_for_qa(
         &self,
         parent_id: String,
         request: CreateChildThreadRequest,

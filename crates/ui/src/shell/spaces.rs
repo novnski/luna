@@ -1950,7 +1950,7 @@ impl Shell {
                 })
             })
             .collect();
-        let child_counts = super::child_chats::direct_child_counts(&self.state.read(cx).chats);
+        let child_counts = self.related_chat_counts(cx);
 
         let mut groups: Vec<(Option<(String, String)>, Vec<ActiveChatRow>)> = Vec::new();
         for row in rows {
@@ -2097,6 +2097,7 @@ impl Shell {
                         } else {
                             ChatRowSurface::Sidebar
                         },
+                        kind: None,
                         can_settle,
                         settled: false,
                         child_chats: child_counts.get(&chat.id).copied().unwrap_or(0),

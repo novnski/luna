@@ -1361,7 +1361,7 @@ struct Inner {
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type SideChatLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 /// Lease-gated admission of an ordinary-path run for a side chat: checks the
-/// live view lease, applies the parent ceiling and returns frozen context.
+/// durable writable state, applies the parent ceiling and returns frozen context.
 pub(crate) type SideChatAdmission = Arc<
     dyn Fn(&str, &mut RunRequest) -> Result<Vec<luna_proto::RuntimeInstructionSection>, EngineError>
         + Send
@@ -2941,7 +2941,7 @@ impl SessionsEngine {
                         RuntimeContextOrigin::ContextSnapshot
                     },
                     checkout: RuntimeCheckoutOwnership::SharedWithParent,
-                    persistent: false,
+                    persistent: true,
                     access_capped_by_parent: true,
                     ..base
                 },
@@ -3558,7 +3558,7 @@ impl SessionsEngine {
         let _ = self.inner.side_chat_admission.set(admission);
     }
 
-    /// A side chat reaches the ordinary dispatch path only through its lease.
+    /// A side chat reaches ordinary dispatch only while durably writable.
     fn admit_side_chat_run(
         &self,
         chat_id: &str,
@@ -3573,7 +3573,7 @@ impl SessionsEngine {
             return Ok(Vec::new());
         }
         let admission = self.inner.side_chat_admission.get().ok_or_else(|| {
-            EngineError::Other("Side chats require an active side-panel lease".into())
+            EngineError::Other("Side chat admission service is unavailable".into())
         })?;
         admission(chat_id, request)
     }

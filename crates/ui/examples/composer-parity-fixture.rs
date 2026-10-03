@@ -626,12 +626,19 @@ fn main() -> anyhow::Result<()> {
                         });
                         if let Err(error) = written {
                             *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                            let _ = std::fs::write(output.join("failure.txt"), format!("{error}\n"));
+                            // AppKit's quit can end the process with status 0 before `run`
+                            // returns: leave with the failure status now.
+                            std::process::exit(1);
                         }
                     }
                     Err(error) => {
                         eprintln!("Composer parity fixture failed: {error:#}");
                         let _ = std::fs::write(output.join("failure.txt"), format!("{error:#}\n"));
                         *failure_for_ui.lock().unwrap() = Some(error.to_string());
+                        // AppKit's quit can end the process with status 0 before `run`
+                        // returns: leave with the failure status now.
+                        std::process::exit(1);
                     }
                 }
                 let _ = window.update(cx, |_, window, _| window.remove_window());

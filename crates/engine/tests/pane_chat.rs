@@ -324,14 +324,14 @@ async fn queue(client: &RpcClient, chat: &str, message_id: &str, text: &str) {
         .unwrap();
 }
 
-async fn create_child(client: &RpcClient, parent: &str, request: Value) -> Result<Value, String> {
-    client
-        .call(
-            "CreateChildThread",
-            json!({"parentTaskId": parent, "request": request}),
-        )
+async fn create_child(core: &EngineCore, parent: &str, request: Value) -> Result<Value, String> {
+    let request = serde_json::from_value(request).map_err(|error| error.to_string())?;
+    let receipt = core
+        .rpc_service()
+        .seed_child_for_qa(parent.into(), request)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    serde_json::to_value(receipt).map_err(|error| error.to_string())
 }
 
 fn contract(request: &RunRequest) -> LunaAgentRuntimeContract {
@@ -507,9 +507,7 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     for key in ["checkout", "permissionMode"] {
         assert!(reencoded.get(key).is_none(), "{reencoded}");
     }
-    let receipt = create_child(&client, &parent, legacy_request)
-        .await
-        .unwrap();
+    let receipt = create_child(&core, &parent, legacy_request).await.unwrap();
     let legacy = receipt["taskId"].as_str().unwrap().to_owned();
     let row = core.workspace.chat(&legacy).unwrap().unwrap();
     let child = row.child_thread.clone().unwrap();
@@ -577,16 +575,14 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
         json!({"prompt":"x","idempotencyKey":"smuggle-4","permissionMode":"root"}),
     ] {
         assert!(
-            create_child(&client, &parent, request.clone())
-                .await
-                .is_err(),
+            create_child(&core, &parent, request.clone()).await.is_err(),
             "{request}"
         );
     }
     let unknown_in_checkout = json!({"prompt":"x","idempotencyKey":"smuggle-5",
         "checkout":{"kind":"newWorktree","branch":"luna/ok","grant":true}});
     assert!(
-        create_child(&client, &parent, unknown_in_checkout)
+        create_child(&core, &parent, unknown_in_checkout)
             .await
             .is_err()
     );
@@ -605,7 +601,7 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
         ("bad-8", json!({"kind":"newWorktree","branch":"feature"})),
     ] {
         let error = create_child(
-            &client,
+            &core,
             &parent,
             json!({"prompt":"bad","idempotencyKey":key,"checkout":checkout}),
         )
@@ -620,13 +616,13 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     }
     let ambiguous = json!({"prompt":"bad","idempotencyKey":"bad-cwd","cwd":repo,
         "checkout":{"kind":"newWorktree"}});
-    assert!(create_child(&client, &parent, ambiguous).await.is_err());
+    assert!(create_child(&core, &parent, ambiguous).await.is_err());
     assert_eq!(child_dirs(repo_name), before_dirs);
     assert_eq!(git(&repo, &["branch", "--list"]), before_branches);
 
     // B9 B10: a new worktree on a generated branch from the parent's branch.
     let receipt = create_child(
-        &client,
+        &core,
         &parent,
         json!({"prompt":"WT_DEFAULT","idempotencyKey":"wt-default",
             "checkout":{"kind":"newWorktree"}}),
@@ -695,14 +691,14 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     // Named branch from an explicit base; a retry reuses it (B6).
     let named = json!({"prompt":"WT_NAMED","idempotencyKey":"wt-named",
         "checkout":{"kind":"newWorktree","branch":"feat/child-x","base":"feature"}});
-    let first = create_child(&client, &parent, named.clone()).await.unwrap();
+    let first = create_child(&core, &parent, named.clone()).await.unwrap();
     let named_child = first["taskId"].as_str().unwrap().to_owned();
     let named_row = core.workspace.chat(&named_child).unwrap().unwrap();
     let named_path = PathBuf::from(named_row.cwd.clone().unwrap());
     assert_eq!(named_row.branch.as_deref(), Some("feat/child-x"));
     assert_eq!(git(&named_path, &["rev-parse", "HEAD"]), feature_sha);
     let dirs = child_dirs(repo_name);
-    let again = create_child(&client, &parent, named).await.unwrap();
+    let again = create_child(&core, &parent, named).await.unwrap();
     assert_eq!(again["taskId"], first["taskId"]);
     assert_eq!(
         child_dirs(repo_name),
@@ -712,7 +708,7 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
 
     // C6: the creation dialog is the user's own grant above the ceiling.
     let granted = create_child(
-        &client,
+        &core,
         &parent,
         json!({"prompt":"GRANT_FULL","idempotencyKey":"grant-full","permissionMode":"full"}),
     )
@@ -748,7 +744,7 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
 
     // C2: a lower request is granted as asked and stays parent-capped.
     let lower = create_child(
-        &client,
+        &core,
         &parent,
         json!({"prompt":"LOWER","idempotencyKey":"lower-ask","permissionMode":"ask"}),
     )
@@ -765,7 +761,7 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
 
     // D2: explicit model and reasoning are used as given.
     let explicit = create_child(
-        &client,
+        &core,
         &parent,
         json!({"prompt":"EXPLICIT","idempotencyKey":"explicit-model",
             "model":"child-model","reasoning":"low"}),
@@ -834,7 +830,7 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     let dirs = child_dirs(repo_name);
     let branches = git(&repo, &["branch", "--list"]);
     let oversized = create_child(
-        &client,
+        &core,
         &parent,
         json!({"prompt":"€".repeat(7_000),"idempotencyKey":"oversized-wt",
             "checkout":{"kind":"newWorktree"}}),
@@ -871,7 +867,7 @@ async fn manual_children_provision_checkout_access_and_parent_defaults() {
     )
     .await;
     let error = create_child(
-        &client,
+        &core,
         &plain_parent,
         json!({"prompt":"NO_GIT","idempotencyKey":"no-git","checkout":{"kind":"newWorktree"}}),
     )
@@ -1189,7 +1185,7 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
         .unwrap();
     assert_eq!(created["meta"]["contextMode"], "nativeFork", "{created:#}");
     let side = created["meta"]["id"].as_str().unwrap().to_owned();
-    let lease = created["lease"].as_str().unwrap().to_owned();
+    let lease = created["lease"].as_str().unwrap_or_default().to_owned();
     let side_row = core.workspace.chat(&side).unwrap().unwrap();
     assert_eq!(side_row.cwd, parent_row.cwd);
     assert_eq!(side_row.cwd.as_deref(), Some(parent_wt.to_str().unwrap()));
@@ -1238,7 +1234,7 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
         identity.capabilities.checkout,
         RuntimeCheckoutOwnership::SharedWithParent
     );
-    assert!(!identity.capabilities.persistent);
+    assert!(identity.capabilities.persistent);
     assert!(!identity.capabilities.create_child_threads);
     assert!(
         !side_contract
@@ -1297,12 +1293,12 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
     assert!(!core.sessions.turn_in_flight(&parent));
     assert_eq!(entry_count(&core, &parent), parent_entries);
     assert_eq!(runs_for(&recorder, &parent).len(), 2);
-    // Stop is not unload: a wrong lease is refused, the right one still sends.
+    // Stop does not end the chat and no view token is required.
     assert!(
         client
-            .call("StopSideChat", json!({"id":side,"lease":"forged"}))
+            .call("StopSideChat", json!({"id":side}))
             .await
-            .is_err()
+            .is_ok()
     );
 
     // E4: a parent turn and its Stop leave the side chat untouched.
@@ -1572,7 +1568,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .await
         .unwrap();
     let side = created["meta"]["id"].as_str().unwrap().to_owned();
-    let lease = created["lease"].as_str().unwrap().to_owned();
+    let lease = created["lease"].as_str().unwrap_or_default().to_owned();
     let fork_session = core
         .workspace
         .chat(&side)
@@ -1925,7 +1921,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         (
             "side-archive",
             json!({"kind":"setArchived","archived":true}),
-            "not sidebar tasks",
+            "Related chats",
         ),
         (
             "side-account",

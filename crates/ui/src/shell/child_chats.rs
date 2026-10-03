@@ -2,7 +2,8 @@
 //!
 //! Persistent child chats (`Chat.child_thread`) belong to the conversation
 //! that started them. Instead of an indented sidebar tree, the parent's right
-//! pane lists them ([`RightSurface::ChildChats`]) and drills into one child as
+//! pane lists them with its side chats ([`RightSurface::RelatedChats`],
+//! [`super::related_chats`]) and drills into one child as
 //! a full chat: the shared pane chat view ([`super::pane_chat`]) with the main
 //! transcript and the main composer bound to the child.
 //!
@@ -90,6 +91,7 @@ pub(super) struct ChildChatRow {
     pub(super) children: usize,
 }
 
+#[cfg(feature = "appshots-fixture")]
 fn is_child_of(chat: &Chat, parent: &str) -> bool {
     chat.id != parent
         && chat
@@ -98,7 +100,8 @@ fn is_child_of(chat: &Chat, parent: &str) -> bool {
             .is_some_and(|child| child.parent_task_id == parent)
 }
 
-/// Non-archived direct child chats per parent id (sidebar chip, picker badge).
+/// Non-archived direct child chats per parent id (QA readback).
+#[cfg(feature = "appshots-fixture")]
 pub(super) fn direct_child_counts(chats: &[Chat]) -> std::collections::HashMap<String, usize> {
     let mut counts = std::collections::HashMap::new();
     for chat in chats.iter().filter(|chat| !chat.archived) {
@@ -325,7 +328,7 @@ impl ChildChatPanel {
                 view_id,
                 PaneIdentity::Child,
                 parent,
-                "Child chats",
+                "Related chats",
                 composer,
                 links,
                 cx,
@@ -460,6 +463,7 @@ impl Shell {
 
     /// Drill into one child in the pane (a list row's click).
     pub(super) fn open_child_chat_in_pane(&mut self, id: String, cx: &mut Context<Self>) {
+        self.related_focus = super::related_chats::RelatedKind::Child;
         let panel = self.ensure_child_chat_panel(cx);
         panel.update(cx, |panel, cx| panel.open_child(id, cx));
         cx.notify();
@@ -523,178 +527,8 @@ impl Shell {
         cx.notify();
     }
 
-    pub(super) fn render_child_chats(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let panel = self.ensure_child_chat_panel(cx);
-        if panel.read(cx).open_chat_id().is_some() {
-            return panel.into_any_element();
-        }
-        self.render_child_chat_list(cx)
-    }
-
-    /// This chat's child chats as sidebar task rows: Pinned, the active rows
-    /// by last update, then folded Settled and Archived shelves. Pin, settle,
-    /// archive and the context menu are the sidebar's own task actions.
-    fn render_child_chat_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::of(cx).clone();
-        let now = Utc::now();
-        let parent = self.active_chat.clone();
-        let mut attention = self.activity_task_keys(cx);
-        attention.extend(self.settlement_blocking_task_keys());
-        let auto_settle = self.settings.sidebar_auto_settle_after_days;
-        let (parent_title, mut chats) = {
-            let state = self.state.read(cx);
-            let title = state
-                .chats
-                .iter()
-                .find(|chat| chat.id == parent)
-                .and_then(|chat| chat.title.clone())
-                .unwrap_or_else(|| "Conversation".into());
-            let chats: Vec<Chat> = state
-                .chats
-                .iter()
-                .filter(|chat| is_child_of(chat, &parent))
-                .cloned()
-                .collect();
-            (transcript::single_line(&title), chats)
-        };
-        chats.sort_by(|left, right| {
-            spaces::compare_sidebar_chats(SidebarSort::LastUpdated, left, right)
-        });
-        let mut pinned = Vec::new();
-        let mut active = Vec::new();
-        let mut settled = Vec::new();
-        let mut archived = Vec::new();
-        for chat in chats {
-            let (status, project, device, branch, change_request) = {
-                let state = self.state.read(cx);
-                (
-                    state.display_status_for(&chat, now),
-                    state
-                        .space_for_chat(&chat)
-                        .map(|space| space.display_name().to_string())
-                        .unwrap_or_else(|| "Unknown project".into()),
-                    state
-                        .device_name(&chat.device_id)
-                        .unwrap_or("Unknown device")
-                        .to_string(),
-                    crate::change_requests::conversation_branch(&chat, &state.spaces)
-                        .map(str::trim)
-                        .filter(|branch| !branch.is_empty())
-                        .map(SharedString::from),
-                    state.change_request_for_chat(&chat).cloned(),
-                )
-            };
-            let has_attention = attention.contains(&(chat.device_id.clone(), chat.id.clone()));
-            let pending = self.pending_task_actions.get(&chat.id).copied();
-            let is_settled = matches!(pending, Some(TaskConfirmation::Settle))
-                || spaces::is_settled_chat(&chat, status, now, auto_settle, has_attention);
-            let can_settle = !is_settled
-                && spaces::can_manually_settle_chat(&chat, status, has_attention, false);
-            let title: SharedString =
-                transcript::single_line(chat.title.as_deref().unwrap_or("New child chat")).into();
-            let details = spaces::sidebar_thread_tooltip(
-                &chat,
-                title.clone(),
-                project.clone().into(),
-                device.into(),
-                branch.clone(),
-                is_settled.then(|| "Settled".into()),
-            );
-            let row = self.render_chat_row(
-                ChatRowProps {
-                    id: chat.id.clone(),
-                    title,
-                    time_ago: format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now)
-                        .into(),
-                    space_name: project.into(),
-                    branch: branch.filter(|_| self.settings.sidebar_show_branch),
-                    note: None,
-                    change_request: change_request
-                        .filter(|_| self.settings.sidebar_show_pull_request),
-                    harness: self
-                        .settings
-                        .sidebar_show_harness
-                        .then(|| chat.config.as_ref().map(|config| config.harness))
-                        .flatten(),
-                    status,
-                    status_label: None,
-                    selected: false,
-                    archived: chat.archived,
-                    pinned: chat.pinned_order.is_some(),
-                    surface: ChatRowSurface::ChildPane,
-                    can_settle,
-                    settled: is_settled && !chat.archived,
-                    // A grandchild list belongs to that child: open it there.
-                    child_chats: 0,
-                    jump_label: None,
-                    search_query: None,
-                    details: Some(details),
-                    drag: None,
-                },
-                &theme,
-                cx,
-            );
-            if chat.archived || matches!(pending, Some(TaskConfirmation::Archive)) {
-                archived.push((chat.id.clone(), row));
-            } else if chat.pinned_order.is_some() {
-                pinned.push((chat.id.clone(), row));
-            } else if is_settled {
-                settled.push((chat.id.clone(), row));
-            } else {
-                active.push((chat.id.clone(), row));
-            }
-        }
-        let empty =
-            pinned.is_empty() && active.is_empty() && settled.is_empty() && archived.is_empty();
-        let sections = self.render_related_sections(
-            "child",
-            vec![
-                (super::related_chats::RelatedSection::Pinned, pinned),
-                (super::related_chats::RelatedSection::Active, active),
-                (super::related_chats::RelatedSection::Settled, settled),
-                (super::related_chats::RelatedSection::Archived, archived),
-            ],
-            &theme,
-            cx,
-        );
-        let header = self.render_related_list_header(
-            "child-chats",
-            format!("Child chats · {parent_title}").into(),
-            Vec::new(),
-            &theme,
-            cx,
-        );
-        let mut list = div()
-            .id("child-chats-list")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px(px(Theme::SPACE_SM))
-            .pt(px(4.0))
-            .pb(px(12.0))
-            .flex()
-            .flex_col();
-        if empty {
-            list = list.child(
-                div()
-                    .px(px(Theme::SPACE_SM))
-                    .py(px(8.0))
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.text_faint)
-                    .child("No child chats yet. Use “New child chat…” in a chat's menu, or let an agent start one."),
-            );
-        }
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .text_color(theme.text)
-            .child(header)
-            .child(list.children(sections))
-            .into_any_element()
-    }
-
-    /// The current chat's non-archived child count (picker badge).
+    /// The current chat's non-archived child count (QA readback).
+    #[cfg(feature = "appshots-fixture")]
     pub(super) fn active_child_chat_count(&self, cx: &App) -> (usize, bool) {
         if self.active_chat.is_empty() {
             return (0, false);
@@ -714,21 +548,21 @@ impl Shell {
         (active, any)
     }
 
-    /// Open `parent`'s Child chats surface, selecting the parent first when
+    /// Open `parent`'s Related chats surface, selecting the parent first when
     /// needed (sidebar count chip). Pre-seeding the parent's panel state lets
     /// the chat switch restore straight into the list.
-    pub(super) fn open_child_chats_for(&mut self, parent: String, cx: &mut Context<Self>) {
+    pub(super) fn open_related_chats_for(&mut self, parent: String, cx: &mut Context<Self>) {
         if parent == self.active_chat {
-            self.add_work_surface(RightSurface::ChildChats, cx);
+            self.add_work_surface(RightSurface::RelatedChats, cx);
             return;
         }
         push_unique_right_surface(
             self.right_tabs.entry(parent.clone()).or_default(),
-            RightSurface::ChildChats,
+            RightSurface::RelatedChats,
         );
         self.panels.update(&parent, |panel| {
             panel.changes_open = true;
-            panel.right_active = RightSurface::ChildChats;
+            panel.right_active = RightSurface::RelatedChats;
             panel.picker_open = false;
         });
         self.open_chat(parent, cx);
@@ -749,11 +583,11 @@ impl Shell {
     }
 
     pub fn fixture_open_child_chats(&mut self, cx: &mut Context<Self>) {
-        self.add_work_surface(RightSurface::ChildChats, cx);
+        self.add_work_surface(RightSurface::RelatedChats, cx);
     }
 
     pub fn fixture_open_child_chats_for(&mut self, parent: String, cx: &mut Context<Self>) {
-        self.open_child_chats_for(parent, cx);
+        self.open_related_chats_for(parent, cx);
     }
 
     pub fn fixture_child_chat_open(&mut self, id: String, cx: &mut Context<Self>) {

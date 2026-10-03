@@ -421,74 +421,111 @@ impl CodexNativeClient {
         request: ProviderForkRequest,
         progress: &ProviderForkProgressReporter,
     ) -> Result<ProviderForkResult, HarnessError> {
-        let source_turns = self.thread_turns(&request.source_session_id).await?;
-        let expected_source = codex_fork_prefix(&source_turns, &request.boundary)?;
-        let params = fork_params(&request);
-        progress(ProviderForkProgress::MutationStarted)?;
-        let response = self.call("thread/fork", Value::Object(params)).await?;
-        let thread = response.get("thread").unwrap_or(&response);
-        let provider_session_id = string(thread, "id")?;
-        if provider_session_id == request.source_session_id {
-            return Err(HarnessError::Protocol(
-                "thread/fork returned the source Codex thread id".into(),
-            ));
-        }
-        progress(ProviderForkProgress::Acknowledged {
-            provider_session_id: provider_session_id.clone(),
-        })?;
-        let mut observed = None;
-        for attempt in 0..5 {
-            observed = self.observe_thread(&provider_session_id).await?;
-            if observed.is_some() {
-                break;
+        // A fork previously spawned a new app-server for every read, mutation
+        // and rename, including unrelated archive inventory scans. Keep one
+        // scoped mutation connection, then verify persisted state from a fresh
+        // process. Neither connection starts a model turn.
+        let mut mutation = self.connect(Some(&request.cwd)).await?;
+        let prepared = async {
+            let source_turns = page_turns(
+                &mutation.client,
+                &request.source_session_id,
+                false,
+                100,
+                100,
+                |_| true,
+            )
+            .await?;
+            let expected_source = codex_fork_prefix(&source_turns, &request.boundary)?;
+            progress(ProviderForkProgress::MutationStarted)?;
+            let response = mutation
+                .client
+                .request("thread/fork", Value::Object(fork_params(&request)))
+                .await?;
+            let thread = response.get("thread").unwrap_or(&response);
+            let provider_session_id = string(thread, "id")?;
+            if provider_session_id == request.source_session_id {
+                return Err(HarnessError::Protocol(
+                    "thread/fork returned the source Codex thread id".into(),
+                ));
             }
-            if attempt < 4 {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            progress(ProviderForkProgress::Acknowledged {
+                provider_session_id: provider_session_id.clone(),
+            })?;
+            if let Some(name) = request.target_name.as_deref() {
+                mutation
+                    .client
+                    .request(
+                        "thread/name/set",
+                        json!({"threadId": provider_session_id, "name": name}),
+                    )
+                    .await?;
             }
+            Ok::<_, HarnessError>((provider_session_id, expected_source))
         }
-        let Some(observed) = observed else {
-            return Err(HarnessError::Protocol(
-                "forked Codex thread was not readable after acknowledgement".into(),
-            ));
-        };
-        if observed.id != provider_session_id {
-            return Err(HarnessError::Protocol(format!(
-                "thread/read returned {} for forked Codex thread {provider_session_id}",
-                observed.id
-            )));
-        }
-        let fork_turns = self.thread_turns(&provider_session_id).await?;
-        let checkpoint_map = map_codex_fork_history(&expected_source, &fork_turns)?;
-        if let Some(name) = request.target_name.as_deref() {
-            self.set_name(&provider_session_id, name).await?;
-            let mut renamed = false;
+        .await;
+        mutation.close().await;
+        let (provider_session_id, expected_source) = prepared?;
+
+        let mut verification = self.connect(Some(&request.cwd)).await?;
+        let verified = async {
+            let mut observed = None;
             for attempt in 0..5 {
-                if self
-                    .observe_thread(&provider_session_id)
-                    .await?
-                    .is_some_and(|thread| thread.name.as_deref() == Some(name))
+                match verification
+                    .client
+                    .request(
+                        "thread/read",
+                        json!({"threadId": provider_session_id, "includeTurns": false}),
+                    )
+                    .await
                 {
-                    renamed = true;
-                    break;
+                    Ok(value) => {
+                        let thread = value.get("thread").unwrap_or(&value);
+                        if string(thread, "id")? != provider_session_id {
+                            return Err(HarnessError::Protocol(
+                                "thread/read returned a different forked Codex thread".into(),
+                            ));
+                        }
+                        if request.target_name.as_deref().is_none_or(|name| {
+                            thread.get("name").and_then(Value::as_str) == Some(name)
+                        }) {
+                            observed = Some(value);
+                            break;
+                        }
+                    }
+                    Err(error) if missing_thread(&error) => {}
+                    Err(error) => return Err(error),
                 }
                 if attempt < 4 {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
-            if !renamed {
+            if observed.is_none() {
                 return Err(HarnessError::Protocol(
-                    "forked Codex thread title did not match after rename".into(),
+                    "forked Codex thread or title was not readable after acknowledgement".into(),
                 ));
             }
+            let fork_turns = page_turns(
+                &verification.client,
+                &provider_session_id,
+                false,
+                100,
+                100,
+                |_| true,
+            )
+            .await?;
+            let checkpoint_map = map_codex_fork_history(&expected_source, &fork_turns)?;
+            Ok(ProviderForkResult {
+                provider_session_id,
+                checkpoint_map,
+            })
         }
-        Ok(ProviderForkResult {
-            provider_session_id,
-            checkpoint_map,
-        })
+        .await;
+        verification.close().await;
+        verified
     }
 
-    /// Read the entire bounded persisted history in ascending order. The
-    /// metadata read proves paginated/non-ephemeral history before mutation.
+    /// Read bounded persisted history; prove paginated/non-ephemeral before mutation.
     pub async fn prepare_rewind(
         &self,
         thread_id: &str,
@@ -590,15 +627,6 @@ impl CodexNativeClient {
         } else {
             CodexRewindObservation::Diverged
         })
-    }
-
-    /// Complete ascending history through the paginated API; `thread/read
-    /// includeTurns:true` is deprecated (`thread_processor.rs:40`).
-    async fn thread_turns(&self, thread_id: &str) -> Result<Vec<Value>, HarnessError> {
-        let mut connection = self.connect(None).await?;
-        let turns = page_turns(&connection.client, thread_id, false, 100, 100, |_| true).await;
-        connection.close().await;
-        turns
     }
 
     /// Start asynchronous native compaction and wait for the provider's

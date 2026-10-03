@@ -1,8 +1,8 @@
-//! Local, leased side conversations. History is an indexed read model, never
-//! a request to resume a native provider session.
+//! Durable, user-owned side conversations. Views do not own their lifetime.
+//! Cold history is an indexed read model; listing never starts a provider.
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -13,8 +13,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{DocHost, SessionsEngine, WorkspaceHost, device_write::DeviceWriteHandle};
 
-pub const SIDE_CHAT_LIFETIME_MS: i64 = 2 * 60 * 60 * 1000;
-const LEASE_MS: i64 = 30_000;
 const PAGE_SIZE: usize = 50;
 
 /// Native product Full derives its sandbox at dispatch; the stored legacy
@@ -43,6 +41,9 @@ pub struct SideChatMeta {
     pub parent_id: String,
     pub title: String,
     pub created_at_ms: i64,
+    #[serde(default)]
+    pub last_activity_ms: i64,
+    /// Legacy wire field: zero means the conversation never expires.
     pub expires_at_ms: i64,
     pub state: String,
     pub detail: Option<String>,
@@ -82,12 +83,6 @@ pub struct SideChatList {
     pub before: Option<i64>,
 }
 
-struct Lease {
-    token: String,
-    touched: std::time::Instant,
-    deadline: std::time::Instant,
-}
-
 struct Inner {
     db: Arc<Mutex<Connection>>,
     path: PathBuf,
@@ -95,10 +90,8 @@ struct Inner {
     sessions: SessionsEngine,
     docs: DocHost,
     workspace: WorkspaceHost,
-    gate: tokio::sync::Mutex<()>,
-    leases: Mutex<HashMap<String, Lease>>,
-    preparing: Mutex<HashMap<String, std::time::Instant>>,
-    sweeping: std::sync::atomic::AtomicBool,
+    gates: Mutex<HashMap<String, Weak<tokio::sync::Mutex<()>>>>,
+    changes: tokio::sync::watch::Sender<u64>,
 }
 
 #[derive(Clone)]
@@ -130,10 +123,34 @@ impl SideChats {
         let db = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         db.busy_timeout(Duration::from_secs(3))?;
         db.pragma_update(None, "synchronous", "FULL")?;
-        db.execute_batch("            UPDATE side_chats SET state='recovered', needs_recovery=1,
-                detail='Recovered after restart. Saved history is read-only.'
-                WHERE state IN ('active','closing','closeFailed');
-            UPDATE side_chats SET state='creationFailed', detail='Creation was interrupted. The provider outcome may be unknown; it will not be replayed.' WHERE state='preparing';")?;
+        // Upgrade automatic legacy expiry/unload states only when the durable
+        // workspace row exists. A new explicit `ended` state is never revived.
+        // A row committed just before activation proves completed creation;
+        // an unmaterialized reservation must never replay a native fork.
+        let rows: Vec<(String, String)> = {
+            let mut query = db.prepare("SELECT id,state FROM side_chats WHERE state<>'deleted' AND COALESCE(detail,'')<>'Imported saved side chat. Read-only.'")?;
+            query
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<std::result::Result<_, _>>()?
+        };
+        for (id, state) in rows {
+            let materialized = workspace.is_side_chat(&id) && workspace.chat(&id)?.is_some();
+            if matches!(
+                state.as_str(),
+                "active" | "recovered" | "expired" | "unloaded"
+            ) && materialized
+                || state == "preparing" && materialized
+            {
+                db.execute("UPDATE side_chats SET state='active',expires_at_ms=0,needs_recovery=1,detail=NULL WHERE id=?1", [&id])?;
+            } else if state == "preparing" {
+                db.execute("UPDATE side_chats SET state='creationFailed',detail='Creation was interrupted before publication. Inspect its saved receipt; it will not be replayed.' WHERE id=?1", [&id])?;
+            } else if matches!(state.as_str(), "closing" | "closeFailed") {
+                db.execute(
+                    "UPDATE side_chats SET state='ended',needs_recovery=1,detail=NULL WHERE id=?1",
+                    [&id],
+                )?;
+            }
+        }
         let this = Self(Arc::new(Inner {
             db: Arc::new(Mutex::new(db)),
             path,
@@ -141,10 +158,8 @@ impl SideChats {
             sessions,
             docs,
             workspace,
-            gate: tokio::sync::Mutex::new(()),
-            leases: Mutex::new(HashMap::new()),
-            preparing: Mutex::new(HashMap::new()),
-            sweeping: std::sync::atomic::AtomicBool::new(false),
+            gates: Mutex::new(HashMap::new()),
+            changes: tokio::sync::watch::channel(0).0,
         }));
         let db = this.0.db.clone();
         let workspace = this.0.workspace.clone();
@@ -160,8 +175,8 @@ impl SideChats {
                 )
                 .unwrap_or(true)
         }));
-        // Ordinary task commands and queue drains reach a side chat only while
-        // its view lease is live. Weak: the sessions engine must not keep the
+        // Ordinary task commands and queue drains share durable admission.
+        // Weak: the sessions engine must not keep the
         // side-chat service (which owns it) alive.
         let weak = Arc::downgrade(&this.0);
         this.0
@@ -177,40 +192,54 @@ impl SideChats {
         Ok(this)
     }
 
-    /// Ordinary-path admission: an active side chat whose owning view still
-    /// holds a live lease. Admission renews that lease; after unload, expiry
-    /// or a stale lease the side chat is read-only history.
+    /// Serialize only this chat. Slow provider work cannot block another side.
+    async fn gate(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let gate = {
+            let mut gates = lock(&self.0.gates);
+            gates.retain(|_, gate| gate.strong_count() > 0);
+            match gates.get(id).and_then(Weak::upgrade) {
+                Some(gate) => gate,
+                None => {
+                    let gate = Arc::new(tokio::sync::Mutex::new(()));
+                    gates.insert(id.into(), Arc::downgrade(&gate));
+                    gate
+                }
+            }
+        };
+        gate.lock_owned().await
+    }
+
+    /// The durable state owns writability; a view, heartbeat or wall clock does not.
     pub(crate) fn admit_ordinary(&self, id: &str) -> Result<()> {
-        let meta = self.meta(id)?;
         ensure!(
-            meta.state == "active" && now() < meta.expires_at_ms,
-            "This side chat is read-only: it was unloaded or expired. Open a new side chat to continue."
+            self.meta(id)?.state == "active",
+            "This side chat is read-only because it was ended or creation did not complete"
         );
-        let mut leases = lock(&self.0.leases);
-        let lease = leases
-            .get_mut(id)
-            .context("This side chat has no open view and is read-only")?;
-        ensure!(
-            lease.touched.elapsed() <= Duration::from_millis(LEASE_MS as u64)
-                && std::time::Instant::now() < lease.deadline,
-            "The side chat view lease expired; the side chat is read-only"
-        );
-        lease.touched = std::time::Instant::now();
         Ok(())
     }
 
-    /// Created or open (not unloaded, expired, recovered or deleted): its row
-    /// is published to clients as a spaceless side-chat row.
-    pub(crate) fn is_live(&self, id: &str) -> bool {
-        self.meta(id).is_ok_and(|meta| {
-            matches!(meta.state.as_str(), "preparing" | "active") && now() < meta.expires_at_ms
-        })
+    pub(crate) fn watch_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.0.changes.subscribe()
     }
 
-    /// Keep the owning view's lease alive without reading a history page.
-    pub async fn renew(&self, id: &str, token: &str) -> Result<SideChatMeta> {
-        let _gate = self.0.gate.lock().await;
-        self.require_lease(id, token)?;
+    pub(crate) fn published_states(&self) -> Result<HashMap<String, (String, String)>> {
+        let db = lock(&self.0.db);
+        let mut query =
+            db.prepare("SELECT id,parent_id,state FROM side_chats WHERE state<>'deleted'")?;
+        Ok(query
+            .query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?
+            .collect::<std::result::Result<_, _>>()?)
+    }
+
+    fn changed(&self) {
+        self.0
+            .changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    /// Compatibility for older clients. There is no expiring view lease.
+    pub async fn renew(&self, id: &str, _token: &str) -> Result<SideChatMeta> {
+        self.admit_ordinary(id)?;
         self.meta(id)
     }
 
@@ -315,87 +344,17 @@ impl SideChats {
         }])
     }
 
-    fn start_sweeper(&self) {
-        if self
-            .0
-            .sweeping
-            .swap(true, std::sync::atomic::Ordering::AcqRel)
-        {
-            return;
-        }
-        let weak = Arc::downgrade(&self.0);
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                let Some(inner) = weak.upgrade() else {
-                    break;
-                };
-                let service = Self(inner);
-                let _gate = service.0.gate.lock().await;
-                let mut ids: Vec<_> = lock(&service.0.leases).keys().cloned().collect();
-                ids.extend(lock(&service.0.preparing).keys().cloned());
-                ids.sort();
-                ids.dedup();
-                if ids.is_empty() {
-                    service
-                        .0
-                        .sweeping
-                        .store(false, std::sync::atomic::Ordering::Release);
-                    break;
-                }
-                for id in ids {
-                    let result = async {
-                        let meta = service.meta(&id)?;
-                        if meta.state == "preparing" {
-                            let overdue = lock(&service.0.preparing).get(&id).is_none_or(|deadline| std::time::Instant::now() >= *deadline);
-                            if overdue || meta.expires_at_ms <= now() {
-                                service.set_state(&id, "creationFailed", Some("Creation was interrupted or its outcome is unknown. It will not be replayed."))?;
-                                lock(&service.0.preparing).remove(&id);
-                            }
-                            return Ok(());
-                        }
-                        lock(&service.0.preparing).remove(&id);
-                        let stale = lock(&service.0.leases).get(&id).is_none_or(|lease| {
-                            lease.touched.elapsed() > Duration::from_millis(LEASE_MS as u64)
-                        });
-                        if meta.state != "active" || service.expired(&meta) || stale {
-                            service
-                                .seal(
-                                    &id,
-                                    if service.expired(&meta) {
-                                        "expired"
-                                    } else {
-                                        "unloaded"
-                                    },
-                                )
-                                .await?;
-                        } else {
-                            service.project(&id)?;
-                        }
-                        Ok::<_, anyhow::Error>(())
-                    }
-                    .await;
-                    if let Err(error) = result {
-                        tracing::warn!(%id, %error, "side chat maintenance failed");
-                        let _ = service.set_state(&id, "closeFailed", Some(&error.to_string()));
-                    }
-                }
-            }
-        });
-    }
-
-    fn expired(&self, meta: &SideChatMeta) -> bool {
-        meta.expires_at_ms <= now()
-            || lock(&self.0.leases)
-                .get(&meta.id)
-                .is_some_and(|lease| std::time::Instant::now() >= lease.deadline)
-    }
-
     pub fn database_path(&self) -> &Path {
         &self.0.path
     }
 
     fn meta(&self, id: &str) -> Result<SideChatMeta> {
+        let last_activity = self
+            .0
+            .workspace
+            .chat(id)?
+            .and_then(|chat| chat.last_message_at)
+            .map(|at| at.timestamp_millis());
         let db = lock(&self.0.db);
         db.query_row(
             "SELECT id,parent_id,title,created_at_ms,expires_at_ms,state,detail,config,
@@ -409,7 +368,8 @@ impl SideChats {
                     parent_id: row.get(1)?,
                     title: row.get(2)?,
                     created_at_ms: row.get(3)?,
-                    expires_at_ms: row.get(4)?,
+                    last_activity_ms: last_activity.unwrap_or(row.get(3)?),
+                    expires_at_ms: 0,
                     state: row.get(5)?,
                     detail: row.get(6)?,
                     config: serde_json::from_str(&config).map_err(|e| {
@@ -451,8 +411,8 @@ impl SideChats {
                 force_snapshot,
             ))?)
         );
-        let _gate = self.0.gate.lock().await;
-        if let Ok(meta) = self.meta(&id) {
+        let _gate = self.gate(&id).await;
+        if let Ok(mut meta) = self.meta(&id) {
             let prior_hash: String = lock(&self.0.db).query_row(
                 "SELECT creation_hash FROM side_chats WHERE id=?1",
                 [&id],
@@ -462,6 +422,16 @@ impl SideChats {
                 prior_hash == creation_hash,
                 "Creation request ID was already used with different context"
             );
+            // A verified fork may have committed its workspace row before a
+            // disconnected client saw activation. Reattach that exact result;
+            // never execute the provider operation again.
+            if matches!(meta.state.as_str(), "preparing" | "creationFailed")
+                && self.0.workspace.side_chat_parent(&id).as_deref() == Some(parent_id)
+                && self.0.workspace.chat(&id)?.is_some()
+            {
+                self.set_state(&id, "active", None)?;
+                meta = self.meta(&id)?;
+            }
             ensure!(
                 meta.state != "creationFailed" && meta.state != "preparing",
                 "{}",
@@ -477,21 +447,11 @@ impl SideChats {
                 meta.origin_message_id.as_deref() == origin_message_id,
                 "Creation request belongs to another origin message"
             );
-            return Ok(SideChatCreated {
-                meta,
-                lease: lock(&self.0.leases)
-                    .get(&id)
-                    .map(|lease| lease.token.clone()),
-            });
+            return Ok(SideChatCreated { meta, lease: None });
         }
         ensure!(
             self.0.workspace.chat(&id)?.is_none(),
             "Creation request ID belongs to an existing task"
-        );
-        let reserved: usize = lock(&self.0.db).query_row("SELECT COUNT(*) FROM side_chats WHERE state IN ('active','preparing','closing','closeFailed')", [], |row| row.get(0))?;
-        ensure!(
-            reserved < 4,
-            "Unload a side chat before creating another (maximum four active)"
         );
         ensure!(
             !self.contains(parent_id) && !self.0.workspace.is_side_chat(parent_id),
@@ -613,7 +573,7 @@ impl SideChats {
                 parent_id,
                 title,
                 created,
-                created + SIDE_CHAT_LIFETIME_MS,
+                0,
                 serde_json::to_string(&config)?,
                 cwd,
                 snapshot,
@@ -628,11 +588,6 @@ impl SideChats {
                 creation_hash
             ],
         )?;
-        lock(&self.0.preparing).insert(
-            id.clone(),
-            std::time::Instant::now() + Duration::from_secs(45),
-        );
-        self.start_sweeper();
         Ok(SideChatCreated {
             meta: self.meta(&id)?,
             lease: None,
@@ -655,56 +610,60 @@ impl SideChats {
     }
 
     pub(crate) async fn activate(&self, id: &str) -> Result<SideChatCreated> {
-        let _gate = self.0.gate.lock().await;
+        let _gate = self.gate(id).await;
         let meta = self.meta(id)?;
         ensure!(
-            meta.state == "preparing",
-            "Creation is no longer writable. Its saved outcome remains available."
+            matches!(meta.state.as_str(), "preparing" | "active"),
+            "Creation did not complete. Its saved outcome remains available."
         );
-        lock(&self.0.preparing).remove(id);
-        if meta.expires_at_ms <= now() {
-            self.set_state(id, "expired", None)?;
-            return Ok(SideChatCreated {
-                meta: self.meta(id)?,
-                lease: None,
-            });
-        }
-        let token = uuid::Uuid::new_v4().to_string();
         self.set_state(id, "active", None)?;
-        lock(&self.0.leases).insert(
-            id.into(),
-            Lease {
-                token: token.clone(),
-                touched: std::time::Instant::now(),
-                deadline: std::time::Instant::now()
-                    + Duration::from_millis(
-                        (meta.expires_at_ms - now()).clamp(0, SIDE_CHAT_LIFETIME_MS) as u64,
-                    ),
-            },
-        );
-        self.start_sweeper();
         Ok(SideChatCreated {
             meta: self.meta(id)?,
-            lease: Some(token),
+            lease: None,
         })
     }
 
     pub(crate) fn creation_failed(&self, id: &str, detail: &str) {
-        lock(&self.0.preparing).remove(id);
         let _ = self.set_state(id, "creationFailed", Some(detail));
     }
 
     pub(crate) async fn shutdown(&self) -> bool {
-        let _gate = self.0.gate.lock().await;
-        let ids: Vec<_> = lock(&self.0.leases).keys().cloned().collect();
-        let pending: Vec<_> = lock(&self.0.preparing).keys().cloned().collect();
+        let rows: Vec<(String, String)> = {
+            let db = lock(&self.0.db);
+            let Ok(mut query) = db.prepare("SELECT id,state FROM side_chats WHERE state IN ('active','preparing','closing','closeFailed')") else { return false };
+            let Ok(rows) = query.query_map([], |row| Ok((row.get(0)?, row.get(1)?))) else {
+                return false;
+            };
+            let Ok(rows) = rows.collect::<std::result::Result<_, _>>() else {
+                return false;
+            };
+            rows
+        };
         let mut clean = true;
-        for id in pending {
-            clean &= self.set_state(&id, "creationFailed", Some("Application closed during creation. The outcome may be unknown; it will not be replayed.")).is_ok();
-            lock(&self.0.preparing).remove(&id);
-        }
-        for id in ids {
-            clean &= self.seal(&id, "unloaded").await.is_ok();
+        for (id, state) in rows {
+            let _gate = self.gate(&id).await;
+            let result = async {
+                if state == "preparing" {
+                    self.set_state(&id, "creationFailed", Some("Application closed during creation. Inspect its saved receipt; the operation will not be replayed."))?;
+                } else if state != "active" {
+                    self.seal(&id, "ended").await?;
+                } else {
+                    self.0.sessions.interrupt(&id).await?;
+                    // Only loaded chats need flushing. Cold persistent chats
+                    // must not all be hydrated as part of application shutdown.
+                    if self.0.docs.loaded_chat_summary(&id).is_some() {
+                        self.project(&id)?;
+                        self.0.docs.flush_chat_checked(&id)?;
+                        self.0.sessions.release_side_chat_runtime(&id)?;
+                        self.0.docs.evict_chat(&id);
+                    }
+                }
+                Ok::<_, anyhow::Error>(())
+            }.await;
+            if let Err(error) = result {
+                clean = false;
+                tracing::warn!(%id, %error, "side chat shutdown save failed");
+            }
         }
         clean
     }
@@ -720,9 +679,9 @@ impl SideChats {
     }
 
     pub(crate) async fn seal_children(&self, parent: &str) -> Result<()> {
-        let _gate = self.0.gate.lock().await;
         for id in self.child_ids(parent)? {
-            self.seal(&id, "unloaded").await?;
+            let _gate = self.gate(&id).await;
+            self.seal(&id, "ended").await?;
         }
         Ok(())
     }
@@ -741,6 +700,8 @@ impl SideChats {
         // resurrect an old side-chat UUID after parent deletion.
         tx.execute("UPDATE side_chats SET state='deleted',title='Deleted side chat',context='',anchor_text=NULL,origin_message_id=NULL,detail=NULL,needs_recovery=0 WHERE id=?1", [id])?;
         tx.commit()?;
+        drop(db);
+        self.changed();
         Ok(())
     }
 
@@ -761,6 +722,11 @@ impl SideChats {
             .map(|(_, id)| {
                 self.meta(id).map(|mut meta| {
                     meta.preview = self.preview(&meta);
+                    if let Some((count, preview, last)) = self.0.docs.loaded_chat_summary(id) {
+                        meta.message_count = count;
+                        meta.preview = preview.or(meta.preview);
+                        meta.last_activity_ms = meta.last_activity_ms.max(last.unwrap_or_default());
+                    }
                     meta
                 })
             })
@@ -768,13 +734,10 @@ impl SideChats {
         Ok(SideChatList { items, before })
     }
 
-    /// The first user message's first line. A writable chat reads its open
-    /// document (its history is projected only on read or seal); saved
-    /// chats read the projected history.
+    /// Bounded cold-history fallback. Open chats use their scalar summary;
+    /// reading a list never opens a cold document or starts a provider.
     fn preview(&self, meta: &SideChatMeta) -> Option<String> {
-        let entries: Vec<SessionMessageEntry> = if meta.state == "active" {
-            self.0.docs.open(&meta.id).ok()?.doc().read_entries().ok()?
-        } else {
+        let entries = {
             let db = lock(&self.0.db);
             let mut stmt = db
                 .prepare(
@@ -784,7 +747,7 @@ impl SideChats {
             stmt.query_map([&meta.id], |row| row.get::<_, String>(0))
                 .ok()?
                 .filter_map(|entry| serde_json::from_str(&entry.ok()?).ok())
-                .collect()
+                .collect::<Vec<SessionMessageEntry>>()
         };
         entries
             .iter()
@@ -800,24 +763,10 @@ impl SideChats {
             })
     }
 
-    fn require_lease(&self, id: &str, token: &str) -> Result<()> {
-        let meta = self.meta(id)?;
-        ensure!(
-            meta.state == "active" && now() < meta.expires_at_ms,
-            "This side chat is read-only or expired"
-        );
-        let mut leases = lock(&self.0.leases);
-        let lease = leases
-            .get_mut(id)
-            .context("This side chat is historical and read-only")?;
-        ensure!(
-            lease.token == token
-                && lease.touched.elapsed() <= Duration::from_millis(LEASE_MS as u64)
-                && std::time::Instant::now() < lease.deadline,
-            "The side chat view lease expired"
-        );
-        lease.touched = std::time::Instant::now();
-        Ok(())
+    fn require_lease(&self, id: &str, _token: &str) -> Result<()> {
+        // The legacy parameter remains wire-compatible; local RPC admission
+        // and the agent-tool capability boundary provide authority.
+        self.admit_ordinary(id)
     }
 
     pub async fn send(&self, id: &str, token: &str, message_id: &str, text: &str) -> Result<()> {
@@ -829,7 +778,7 @@ impl SideChats {
             !message_id.is_empty() && message_id.len() <= 128,
             "Invalid message ID"
         );
-        let _gate = self.0.gate.lock().await;
+        let _gate = self.gate(id).await;
         self.require_lease(id, token)?;
         use sha2::Digest as _;
         let payload_hash = format!("{:x}", sha2::Sha256::digest(text.as_bytes()));
@@ -1007,16 +956,16 @@ impl SideChats {
                 let detail = format!(
                     "Send failed or completion is uncertain: {error}. It will not be replayed."
                 );
-                let _ = self.set_state(id, "closeFailed", Some(&detail));
+                let _ = self.set_state(id, "active", Some(&detail));
                 bail!(detail)
             }
         }
     }
 
-    /// Stop this side chat's current turn only. The lease stays writable and
+    /// Stop this side chat's current turn only. The conversation stays writable and
     /// the parent's run, queue and status are never touched.
     pub async fn stop(&self, id: &str, token: &str) -> Result<()> {
-        let _gate = self.0.gate.lock().await;
+        let _gate = self.gate(id).await;
         self.require_lease(id, token)?;
         self.0.sessions.interrupt_for_stop(id).await?;
         self.project(id)?;
@@ -1031,7 +980,7 @@ impl SideChats {
         answers: Vec<luna_proto::UserInputAnswer>,
         decision: Option<luna_proto::ApprovalDecision>,
     ) -> Result<()> {
-        let _gate = self.0.gate.lock().await;
+        let _gate = self.gate(id).await;
         self.require_lease(id, token)?;
         let resolved = if let Some(decision) = decision {
             self.0.sessions.respond_approval(id, request_id, decision)?
@@ -1055,6 +1004,7 @@ impl SideChats {
             "UPDATE side_chats SET state=?2,detail=?3 WHERE id=?1",
             params![id, state, detail],
         )?;
+        self.changed();
         Ok(())
     }
 
@@ -1095,9 +1045,6 @@ impl SideChats {
                 Some("Stopping work and saving the transcript…"),
             )
             .err();
-        if marker_error.is_some() {
-            lock(&self.0.leases).remove(id);
-        }
         self.0.sessions.interrupt(id).await?;
         ensure!(
             !self.0.sessions.has_live_run(id),
@@ -1111,25 +1058,14 @@ impl SideChats {
             return Err(error);
         }
         self.set_state(id, state, None)?;
-        lock(&self.0.leases).remove(id);
         self.0.docs.evict_chat(id);
         Ok(())
     }
 
-    pub async fn unload(&self, id: &str, token: Option<&str>) -> Result<SideChatMeta> {
-        let _gate = self.0.gate.lock().await;
-        if let Some(lease) = lock(&self.0.leases).get(id) {
-            ensure!(
-                Some(lease.token.as_str()) == token,
-                "Only the owning view can unload a writable side chat"
-            );
-        }
-        let state = if self.expired(&self.meta(id)?) {
-            "expired"
-        } else {
-            "unloaded"
-        };
-        if let Err(error) = self.seal(id, state).await {
+    /// Explicit user End action. View teardown never calls this on new clients.
+    pub async fn unload(&self, id: &str, _token: Option<&str>) -> Result<SideChatMeta> {
+        let _gate = self.gate(id).await;
+        if let Err(error) = self.seal(id, "ended").await {
             let _ = self.set_state(id, "closeFailed", Some(&error.to_string()));
             return Err(error);
         }
@@ -1139,38 +1075,17 @@ impl SideChats {
     pub async fn read(
         &self,
         id: &str,
-        token: Option<&str>,
+        _token: Option<&str>,
         before: Option<i64>,
     ) -> Result<SideChatPage> {
-        let _gate = self.0.gate.lock().await;
+        let _gate = self.gate(id).await;
         let meta = self.meta(id)?;
         ensure!(
             meta.state != "deleted",
             "Side chat was deleted with its parent"
         );
-        if meta.state == "active" {
-            if self.expired(&meta) {
-                self.seal(id, "expired").await?;
-            } else if !lock(&self.0.leases).contains_key(id) {
-                self.seal(id, "unloaded").await?;
-            } else if let Some(token) = token {
-                self.require_lease(id, token)?;
-                self.project(id)?;
-            } else {
-                bail!(
-                    "This side chat is still open in a writable view. Unload it before reading history."
-                );
-            }
-        } else if matches!(meta.state.as_str(), "closing" | "closeFailed") {
-            self.seal(
-                id,
-                if self.expired(&meta) {
-                    "expired"
-                } else {
-                    "unloaded"
-                },
-            )
-            .await?;
+        if matches!(meta.state.as_str(), "closing" | "closeFailed") {
+            self.seal(id, "ended").await?;
         }
         let recovery: bool = lock(&self.0.db).query_row(
             "SELECT needs_recovery FROM side_chats WHERE id=?1",
@@ -1178,12 +1093,35 @@ impl SideChats {
             |row| row.get(0),
         )?;
         if recovery {
-            self.0
-                .docs
-                .open(id)?
-                .mark_abandoned_streams("Side chat recovered after restart; read-only.")?;
+            self.0.docs.open(id)?.mark_abandoned_streams(
+                "Previous turn interrupted by application restart. Send a new message to continue.",
+            )?;
             self.project(id)?;
-            self.0.docs.evict_chat(id);
+            if meta.state != "active" {
+                self.0.docs.evict_chat(id);
+            }
+        }
+        if meta.state == "active" {
+            // Live documents already have incremental persistence and watches.
+            // Reading them must not rewrite a duplicate SQL transcript.
+            let entries = self.0.docs.open(id)?.doc().read_entries()?;
+            let end = before
+                .map_or(entries.len(), |before| before.max(0) as usize)
+                .min(entries.len());
+            let start = end.saturating_sub(PAGE_SIZE);
+            let mut meta = self.meta(id)?;
+            meta.message_count = entries.len();
+            return Ok(SideChatPage {
+                meta,
+                entries: entries[start..end].to_vec(),
+                before: (start > 0).then_some(start as i64),
+                working: self.0.sessions.turn_in_flight(id),
+                status: self
+                    .0
+                    .sessions
+                    .session_status(id)
+                    .map(|session| session.status),
+            });
         }
         let rows: Vec<(i64, String)> = {
             let db = lock(&self.0.db);
@@ -1217,7 +1155,8 @@ impl SideChats {
 
 /// Import is already admitted by LocalImporter; this connection performs only
 /// the side-chat portion of that same profile transfer. Existing target rows
-/// win. Imported histories are sealed and cannot acquire a writable lease.
+/// win. Imported histories stay read-only; moving a profile is not permission
+/// to resume a provider session owned by its source profile.
 pub(crate) fn import_saved(source: &Path, target: &Path) -> Result<()> {
     let source_db =
         Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;

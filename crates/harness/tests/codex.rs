@@ -422,7 +422,9 @@ async fn native_fork_reports_acknowledged_id_before_mismatch_or_timeout_and_not_
     };
 
     let home = tempfile::tempdir().unwrap();
-    let client = CodexNativeClient::new(home.path()).with_executable(fixture_path());
+    let client = CodexNativeClient::new(home.path()).with_executable(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-fork-peer.py"),
+    );
     let progress = Arc::new(Mutex::new(Vec::new()));
     let observed = progress.clone();
     let report = move |event| {
@@ -479,6 +481,60 @@ async fn native_fork_reports_acknowledged_id_before_mismatch_or_timeout_and_not_
             .count(),
         2
     );
+}
+
+#[tokio::test]
+async fn native_fork_uses_two_processes_and_verifies_persisted_history_without_inventory_scans() {
+    let home = tempfile::tempdir().unwrap();
+    let client = CodexNativeClient::new(home.path()).with_executable(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-fork-peer.py"),
+    );
+    let result = client
+        .fork_thread(ProviderForkRequest {
+            source_session_id: "fork-source-good".into(),
+            boundary: ProviderForkBoundary::Tip,
+            cwd: "/tmp".into(),
+            model: None,
+            target_name: Some("Persistent side".into()),
+            provider_home: None,
+            force_file_auth: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.provider_session_id, "forked-fork-source-good");
+    let starts = std::fs::read_to_string(home.path().join("fork-processes")).unwrap();
+    assert_eq!(
+        starts.lines().count(),
+        2,
+        "one mutation connection and one fresh persisted readback"
+    );
+    let trace = std::fs::read_to_string(home.path().join("fork-trace")).unwrap();
+    assert!(
+        !trace.contains("thread/list"),
+        "forks must not scan unrelated sessions"
+    );
+    let frames: Vec<serde_json::Value> = trace
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let mutation = frames
+        .iter()
+        .find(|frame| frame["method"] == "thread/fork")
+        .unwrap();
+    let readback = frames
+        .iter()
+        .find(|frame| frame["method"] == "thread/read")
+        .unwrap();
+    assert_ne!(
+        mutation["pid"], readback["pid"],
+        "readback must use an independent process"
+    );
+    if let Some(dir) = std::env::var_os("LUNA_QA_EVIDENCE_DIR") {
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("codex-fork-protocol.jsonl"), trace).unwrap();
+        std::fs::write(dir.join("codex-fork-processes.txt"), starts).unwrap();
+    }
 }
 
 #[tokio::test]

@@ -17,9 +17,12 @@ pub mod capabilities {
     pub const TASK_IDENTITY_V1: &str = "task-identity-v1";
     pub const SESSION_HISTORY_SEARCH_V1: &str = "session-history-search-v1";
     pub const REMOTE_AUTH_V1: &str = "remote-auth-v1";
-    /// A side chat with a live view lease accepts ordinary task commands and
+    /// A writable side chat accepts ordinary task commands and
     /// per-chat RPCs, and is published in `WatchChats` without `spaceId`.
     pub const SIDE_CHAT_TASK_COMMANDS_V1: &str = "side-chat-task-commands-v1";
+
+    /// Durable side chats have no view lease or expiry; only explicit End closes them.
+    pub const SIDE_CHAT_PERSISTENCE_V1: &str = "side-chat-persistence-v1";
 
     pub const CURRENT: &[&str] = &[
         LUNA_OWNER_IPC_V1,
@@ -31,6 +34,7 @@ pub mod capabilities {
         TASK_IDENTITY_V1,
         SESSION_HISTORY_SEARCH_V1,
         SIDE_CHAT_TASK_COMMANDS_V1,
+        SIDE_CHAT_PERSISTENCE_V1,
     ];
 
     pub fn current() -> Vec<String> {

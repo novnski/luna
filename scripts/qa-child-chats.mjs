@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Actual isolated engine/document/queue E2E with the synthetic Mock adapter, then
+// Actual isolated engine E2E rejecting manual child creation, then
 // the Codex adapter's per-process `luna` MCP endpoint driven by a deterministic
 // Codex peer (scripts/fixtures/luna-mcp-codex.py) acting as Codex's MCP client.
 // Failure expectations were recorded in docs/qa/child-chats.md before this harness.
@@ -69,59 +69,9 @@ try {
   await start(); const info = await call('EngineInfo'); save('engine-info', info);
   await call('Mutate', { op: 'createSpace', spaceId: space, deviceId: info.deviceId, path: project });
   await call('Mutate', { op: 'createChat', chatId: parent, spaceId: space, cwd: project, config });
-  const receipt = await call('CreateChildThread', { parentTaskId: parent, request }); save('creation-receipt', receipt);
-  const child = receipt.taskId;
-  await check('same request yields the same child and creation receipt', async () => {
-    const retry = await call('CreateChildThread', { parentTaskId: parent, request }); save('duplicate-receipt', retry);
-    assert.equal(retry.taskId, child); assert.equal(retry.command.commandId, receipt.command.commandId);
-    assert.equal((await call('WatchChats')).filter(chat => chat.childThread?.parentTaskId === parent).length, 1);
-  });
-  await check('same identity with changed prompt conflicts', async () => {
-    await assert.rejects(call('CreateChildThread', { parentTaskId: parent, request: { ...request, prompt: 'different payload' } }));
-  });
-  await check('lineage is distinct from fork/lifecycle ownership', async () => {
-    const identity = await call('GetTaskIdentity', { taskId: child }); save('identity', identity);
-    assert.equal(identity.task.lineage.parentTaskId, parent);
-    assert.ok(!identity.task.lineage.sourceTaskId); assert.ok(!identity.task.lineage.lifecycleOwnerTaskId);
-  });
-  await check('startup enters the durable ordinary queue', async () => {
-    const startup = await until(async () => await call('GetTaskCommandReceipt', { commandId: `child-start:${child}` })); save('startup-receipt', startup);
-    assert.equal(startup.status, 'applied'); assert.equal(startup.intent, 'queueMessage');
-    const row = (await call('WatchChats')).find(chat => chat.id === child); save('child-row', row);
-    assert.equal(row.childThread.initialMessageId, receipt.initialMessageId); assert.equal(row.cwd, project);
-    assert.equal(row.childThread.permissionCeiling, 'auto');
-  });
-  await check('outcome outbox persists before deduplicated parent display', async () => {
-    const row = await until(async () => (await call('WatchChats')).find(chat => chat.id === child && chat.childThread?.outcomes.some(outcome => outcome.delivered)));
-    save('outbox-before-restart', row.childThread.outcomes);
-    const transcript = await call('WatchDocMessages', { chatId: parent }); save('parent-transcript-before-restart', transcript);
-    const entries = transcript.frame?.reset || transcript.reset;
-    assert.ok(entries?.some(entry => entry.id.startsWith('child-outcome:')));
-    assert.ok(!entries.some(entry => entry.role === 'user'), 'display-only reporting must not start a parent turn');
-  });
-  await check('restart retains child, startup receipt and deduplicated outbox', async () => {
-    await stop(); await start();
-    const retry = await call('CreateChildThread', { parentTaskId: parent, request }); assert.equal(retry.taskId, child);
-    const row = (await call('WatchChats')).find(chat => chat.id === child); save('child-row-after-restart', row);
-    assert.equal(row.childThread.initialMessageId, receipt.initialMessageId);
-    assert.deepEqual(row.childThread.outcomes, saved['outbox-before-restart']);
-    const startup = await call('GetTaskCommandReceipt', { commandId: `child-start:${child}` }); assert.equal(startup.commandId, saved['startup-receipt'].commandId);
-    const transcript = await call('WatchDocMessages', { chatId: parent }); save('parent-transcript-after-restart', transcript);
-    const entries = transcript.frame?.reset || transcript.reset;
-    const ids = entries.map(entry => entry.id); assert.equal(ids.length, new Set(ids).size);
-  });
-  await check('four hierarchy levels allowed; fifth rejected', async () => {
-    const grand = await call('CreateChildThread', { parentTaskId: child, request: { ...request, idempotencyKey: 'grand', reportResults: false } });
-    const great = await call('CreateChildThread', { parentTaskId: grand.taskId, request: { ...request, idempotencyKey: 'great', reportResults: false } });
-    await assert.rejects(call('CreateChildThread', { parentTaskId: great.taskId, request: { ...request, idempotencyKey: 'too-deep' } }));
-  });
-  await check('archiving a parent preserves independent children', async () => {
-    const archived = await call('Mutate', { op: 'setChatArchived', chatId: parent, archived: true }); save('archive-parent-receipt', archived);
-    // WatchChats republishes asynchronously after a registry write; poll the readback.
-    const rows = await until(async () => { const current = await call('WatchChats'); return current.find(row => row.id === parent)?.archived ? current : null; });
-    save('archived-parent-readback', rows);
-    assert.ok(rows.find(row => row.id === parent).archived); assert.ok(!rows.find(row => row.id === child).archived);
-    await assert.rejects(call('CreateChildThread', { parentTaskId: parent, request: { ...request, idempotencyKey: 'archived-parent' } }));
+  await check('the user RPC cannot create a child; parent agent authority is required', async () => {
+    await assert.rejects(call('CreateChildThread', { parentTaskId: parent, request }), /parent agent/);
+    assert.ok(!(await call('WatchChats')).some(chat => chat.childThread?.parentTaskId === parent));
   });
   // ---- Codex MCP path: the same child tool reached through `luna` MCP ------
   await stop();
