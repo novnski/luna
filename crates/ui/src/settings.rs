@@ -538,6 +538,30 @@ pub enum SidebarSort {
     #[default]
     LastUpdated,
     Created,
+    /// The user's drag order ([`UiSettings::sidebar_manual_order`]). Tasks
+    /// without a saved position (new or unarchived) lead, newest first.
+    Manual,
+}
+
+/// How one side chat is filed in its parent's Side chats list. Side chats are
+/// leased engine records rather than tasks, so this is a device-local view
+/// preference: it never unloads, deletes or archives the record itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SideChatMarks {
+    /// Pin time; pins list oldest first, like task pins appended at the end.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinned_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub settled: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
+}
+
+impl SideChatMarks {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// A view preference only. It never invokes provider or LUNA archive actions.
@@ -696,6 +720,11 @@ pub struct UiSettings {
     pub sidebar_organization: SidebarOrganization,
     /// Timestamp used to order active sessions (newest first).
     pub sidebar_sort: SidebarSort,
+    /// Device-local drag order of unpinned tasks, read by
+    /// [`SidebarSort::Manual`]. Pinned tasks keep their synced pin order.
+    pub sidebar_manual_order: Vec<String>,
+    /// Pinned, settled and archived side chats, keyed by side chat id.
+    pub side_chat_marks: std::collections::HashMap<String, SideChatMarks>,
     /// Move idle, seen, unpinned tasks into Settled after this many days.
     pub sidebar_auto_settle_after_days: Option<u16>,
     /// Ask before applying these task actions. Each dialog can disable its own prompt.
@@ -850,6 +879,8 @@ impl Default for UiSettings {
             sidebar_grouped: false,
             sidebar_organization: SidebarOrganization::InOneList,
             sidebar_sort: SidebarSort::LastUpdated,
+            sidebar_manual_order: Vec::new(),
+            side_chat_marks: std::collections::HashMap::new(),
             sidebar_auto_settle_after_days: DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
             confirm_archive: true,
             confirm_settle: true,
@@ -2081,6 +2112,15 @@ mod tests {
             sidebar_grouped: true,
             sidebar_organization: SidebarOrganization::ByDevice,
             sidebar_sort: SidebarSort::Created,
+            sidebar_manual_order: vec!["task-b".into(), "task-a".into()],
+            side_chat_marks: std::collections::HashMap::from([(
+                "side-a".into(),
+                SideChatMarks {
+                    pinned_at_ms: Some(1),
+                    settled: false,
+                    archived: true,
+                },
+            )]),
             sidebar_auto_settle_after_days: Some(1),
             sidebar_show_harness: false,
             sidebar_show_branch: false,

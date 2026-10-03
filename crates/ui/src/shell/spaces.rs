@@ -238,7 +238,7 @@ fn child_indicator_priority(status: ChatIndicator) -> u8 {
     }
 }
 
-fn sidebar_thread_tooltip(
+pub(super) fn sidebar_thread_tooltip(
     chat: &luna_proto::Chat,
     title: SharedString,
     project: SharedString,
@@ -273,6 +273,30 @@ pub(super) fn compare_sidebar_chats(
     left: &luna_proto::Chat,
     right: &luna_proto::Chat,
 ) -> std::cmp::Ordering {
+    compare_sidebar_chats_ranked(sort, &ManualRanks::new(), left, right)
+}
+
+/// Saved drag positions of unpinned tasks: chat id → index in
+/// [`crate::settings::UiSettings::sidebar_manual_order`].
+pub(super) type ManualRanks = std::collections::HashMap<String, usize>;
+
+pub(super) fn manual_ranks(order: &[String]) -> ManualRanks {
+    order
+        .iter()
+        .enumerate()
+        .map(|(ix, id)| (id.clone(), ix))
+        .collect()
+}
+
+/// Pins always lead in their synced order. Manual sort follows the saved drag
+/// order; tasks it has not seen yet (new, unarchived, or unpinned since) lead
+/// newest first, so fresh work is never buried under an old arrangement.
+pub(super) fn compare_sidebar_chats_ranked(
+    sort: SidebarSort,
+    ranks: &ManualRanks,
+    left: &luna_proto::Chat,
+    right: &luna_proto::Chat,
+) -> std::cmp::Ordering {
     match (&left.pinned_order, &right.pinned_order) {
         (Some(left_order), Some(right_order)) => {
             return luna_proto::compare_pin_order(left_order, right_order)
@@ -283,6 +307,12 @@ pub(super) fn compare_sidebar_chats(
         (None, None) => {}
     }
     let primary = match sort {
+        SidebarSort::Manual => match (ranks.get(&left.id), ranks.get(&right.id)) {
+            (Some(left), Some(right)) => left.cmp(right),
+            (None, Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) => std::cmp::Ordering::Greater,
+            (None, None) => right.created_at.cmp(&left.created_at),
+        },
         SidebarSort::Created => right.created_at.cmp(&left.created_at),
         SidebarSort::LastUpdated => right
             .last_message_at
@@ -493,6 +523,7 @@ enum SidebarViewRow {
     InOneList,
     LastUpdated,
     Created,
+    Manual,
     ShowBranch,
     ShowPullRequest,
     ShowHarness,
@@ -512,6 +543,7 @@ impl SidebarViewRow {
                 | Self::InOneList
                 | Self::LastUpdated
                 | Self::Created
+                | Self::Manual
                 | Self::SettleOff
                 | Self::Settle1Day
                 | Self::Settle3Days
@@ -520,11 +552,12 @@ impl SidebarViewRow {
     }
 }
 
-const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 11] = [
+const SIDEBAR_VIEW_ROWS: [SidebarViewRow; 12] = [
     SidebarViewRow::ByDevice,
     SidebarViewRow::InOneList,
     SidebarViewRow::LastUpdated,
     SidebarViewRow::Created,
+    SidebarViewRow::Manual,
     SidebarViewRow::ShowBranch,
     SidebarViewRow::ShowPullRequest,
     SidebarViewRow::ShowHarness,
@@ -573,7 +606,11 @@ pub(super) fn sidebar_separator(theme: &Theme) -> gpui::Div {
     div().h(px(1.0)).bg(theme.border.opacity(0.6))
 }
 
-fn sidebar_disclosure_header(theme: &Theme, label: SharedString, chevron: AnyElement) -> gpui::Div {
+pub(super) fn sidebar_disclosure_header(
+    theme: &Theme,
+    label: SharedString,
+    chevron: AnyElement,
+) -> gpui::Div {
     div()
         .flex()
         .flex_row()
@@ -780,7 +817,12 @@ impl Shell {
             .into_any_element()
     }
 
-    fn sidebar_disclosure_chevron(&self, key: &str, open: bool, theme: &Theme) -> AnyElement {
+    pub(super) fn sidebar_disclosure_chevron(
+        &self,
+        key: &str,
+        open: bool,
+        theme: &Theme,
+    ) -> AnyElement {
         let resting_reveal = if open { 1.0 } else { 0.0 };
         let chevron = icon(icons::ALT_ARROW_RIGHT).size(px(12.0)).text_color(
             if theme.appearance.is_light() {
@@ -1045,6 +1087,7 @@ impl Shell {
             }
             SidebarViewRow::LastUpdated => self.settings.sidebar_sort = SidebarSort::LastUpdated,
             SidebarViewRow::Created => self.settings.sidebar_sort = SidebarSort::Created,
+            SidebarViewRow::Manual => self.settings.sidebar_sort = SidebarSort::Manual,
             SidebarViewRow::ShowBranch => {
                 self.settings.sidebar_show_branch = !self.settings.sidebar_show_branch
             }
@@ -1120,6 +1163,7 @@ impl Shell {
             "In one list",
             "Last updated",
             "Created",
+            "Manual",
             "Branch",
             "Pull request",
             "Harness",
@@ -1133,6 +1177,7 @@ impl Shell {
             icons::LIST,
             icons::CLOCK_CIRCLE,
             icons::CALENDAR,
+            icons::SORT_VERTICAL,
             icons::GIT_BRANCH,
             icons::PULL_REQUEST,
             icons::BOT,
@@ -1146,6 +1191,7 @@ impl Shell {
             organization == SidebarOrganization::InOneList,
             sort == SidebarSort::LastUpdated,
             sort == SidebarSort::Created,
+            sort == SidebarSort::Manual,
             show_branch,
             show_pr,
             show_harness,
@@ -1189,8 +1235,8 @@ impl Shell {
                 .into_any_element()
             })
             .collect();
-        let settle_rows = rows.split_off(7);
-        let show_rows = rows.split_off(4);
+        let settle_rows = rows.split_off(8);
+        let show_rows = rows.split_off(5);
         let sort_rows = rows.split_off(2);
         let organization_rows = rows;
 
@@ -1671,6 +1717,15 @@ impl Shell {
     /// promotion applied. The jump shortcuts and session cycling read THIS
     /// order (not the raw recency list) so keyboard order never drifts from
     /// the screen.
+    /// Drag positions for [`SidebarSort::Manual`]; empty under other sorts.
+    pub(super) fn sidebar_manual_ranks(&self) -> ManualRanks {
+        if self.settings.sidebar_sort == SidebarSort::Manual {
+            manual_ranks(&self.settings.sidebar_manual_order)
+        } else {
+            ManualRanks::new()
+        }
+    }
+
     pub(super) fn sidebar_visible_order(&self, cx: &Context<Self>) -> Vec<String> {
         let filter = self.settings.space_filter.clone();
         let attention_task_keys = self.activity_task_keys(cx);
@@ -1695,8 +1750,9 @@ impl Shell {
             .collect()
         } else {
             let mut chats = fold_child_chats(state.sidebar_chats(now, filter.as_deref()), selected);
+            let ranks = self.sidebar_manual_ranks();
             chats.sort_by(|left, right| {
-                compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
+                compare_sidebar_chats_ranked(self.settings.sidebar_sort, &ranks, left.1, right.1)
             });
             let available = chats.clone();
             let selected = active_page(
@@ -1787,8 +1843,14 @@ impl Shell {
             } else {
                 let mut chats =
                     fold_child_chats(state.sidebar_chats(now, filter.as_deref()), selected);
+                let ranks = self.sidebar_manual_ranks();
                 chats.sort_by(|left, right| {
-                    compare_sidebar_chats(self.settings.sidebar_sort, left.1, right.1)
+                    compare_sidebar_chats_ranked(
+                        self.settings.sidebar_sort,
+                        &ranks,
+                        left.1,
+                        right.1,
+                    )
                 });
                 let available = chats.clone();
                 let (selected, hidden) = active_page(
@@ -1922,6 +1984,18 @@ impl Shell {
         // `sidebar_visible_order` hands the jump shortcuts and cycling, so a
         // chip always names the key that opens its row.
         let mut slot = 0usize;
+        // A drop released outside every row ends GPUI's drag without our
+        // `on_drop`; never leave the source row dimmed with a stale slot.
+        if self.sidebar_drag.is_some() && !cx.has_active_drag() {
+            self.sidebar_drag = None;
+        }
+        let organization = self.settings.sidebar_organization;
+        let mut drag_rows: Vec<(String, SidebarDragScope)> = Vec::new();
+        let mut drag_root: Option<String> = None;
+        let drop_slot = self
+            .sidebar_drag
+            .as_ref()
+            .and_then(|state| state.target.clone());
         let has_unpinned_rows = groups.iter().any(|(group, _)| {
             !group
                 .as_ref()
@@ -1978,32 +2052,112 @@ impl Shell {
                     None
                 };
                 slot += 1;
+                // Only root rows reorder. The selected chat's nested lineage
+                // drops after its root, where the tree keeps it anyway.
+                let scope = (!activity_view).then(|| {
+                    if chat.pinned_order.is_some() {
+                        SidebarDragScope::Pinned
+                    } else {
+                        SidebarDragScope::Unpinned(
+                            (organization == SidebarOrganization::ByDevice)
+                                .then(|| chat.device_id.clone()),
+                        )
+                    }
+                });
+                if depth == 0 {
+                    drag_root = Some(chat.id.clone());
+                    if let Some(scope) = &scope {
+                        drag_rows.push((chat.id.clone(), scope.clone()));
+                    }
+                }
+                let drag = scope.filter(|_| depth == 0).map(|scope| SidebarChatDrag {
+                    chat_id: chat.id.clone(),
+                    scope,
+                    title: title.clone(),
+                    project: folder.clone().into(),
+                    harness: chat.config.as_ref().map(|config| config.harness),
+                });
                 let element = self.render_chat_row(
-                    chat.id.clone(),
-                    title,
-                    time_ago,
-                    folder.into(),
-                    branch.map(SharedString::from),
-                    change_request,
-                    harness,
-                    status,
-                    is_selected,
-                    false,
-                    chat.pinned_order.is_some(),
-                    activity_view,
-                    can_settle,
-                    child_counts.get(&chat.id).copied().unwrap_or(0),
-                    jump_label,
-                    None,
-                    Some(details),
+                    ChatRowProps {
+                        id: chat.id.clone(),
+                        title,
+                        time_ago,
+                        space_name: folder.into(),
+                        branch: branch.map(SharedString::from),
+                        note: None,
+                        change_request,
+                        harness,
+                        status,
+                        status_label: None,
+                        selected: is_selected,
+                        archived: false,
+                        pinned: chat.pinned_order.is_some(),
+                        surface: if activity_view {
+                            ChatRowSurface::Activity
+                        } else {
+                            ChatRowSurface::Sidebar
+                        },
+                        can_settle,
+                        settled: false,
+                        child_chats: child_counts.get(&chat.id).copied().unwrap_or(0),
+                        jump_label,
+                        search_query: None,
+                        details: Some(details),
+                        drag,
+                    },
                     theme,
                     cx,
                 );
+                let slot_place = drop_slot
+                    .as_ref()
+                    .filter(|(anchor, _)| depth == 0 && *anchor == chat.id)
+                    .map(|(_, place)| *place);
+                let target_row = if depth == 0 {
+                    Some(chat.id.clone())
+                } else {
+                    drag_root.clone()
+                };
                 // Only the selected chat's lineage is nested now; the rest of
                 // a parent's children live in its right-pane Child chats list.
                 let element = div()
+                    .id(SharedString::from(format!("sidebar-row-{}", chat.id)))
+                    .relative()
                     .pl(px((depth.min(4) * 14) as f32))
                     .child(element)
+                    .when_some(target_row.filter(|_| !activity_view), |row, target| {
+                        let nested = depth > 0;
+                        row.on_drag_move::<SidebarChatDrag>(cx.listener(
+                            move |this, event: &gpui::DragMoveEvent<SidebarChatDrag>, _, cx| {
+                                if !event.bounds.contains(&event.event.position) {
+                                    return;
+                                }
+                                let lower =
+                                    nested || event.event.position.y > event.bounds.center().y;
+                                let drag = event.drag(cx).clone();
+                                this.update_sidebar_drag(&drag, &target, lower, cx);
+                            },
+                        ))
+                        .on_drop::<SidebarChatDrag>(cx.listener(
+                            |this, drag: &SidebarChatDrag, _, cx| {
+                                this.finish_sidebar_drag(drag, cx);
+                            },
+                        ))
+                    })
+                    .when_some(slot_place, |row, place| {
+                        row.child(
+                            div()
+                                .absolute()
+                                .left(px(Theme::SPACE_SM))
+                                .right(px(Theme::SPACE_SM))
+                                .h(px(2.0))
+                                .rounded_full()
+                                .bg(theme.accent)
+                                .map(|line| match place {
+                                    SidebarDropPlace::Before => line.top(px(-1.0)),
+                                    SidebarDropPlace::After => line.bottom(px(-1.0)),
+                                }),
+                        )
+                    })
                     .into_any_element();
                 rendered_rows.push((format!("c:{}", chat.id), height, element));
             }
@@ -2089,6 +2243,7 @@ impl Shell {
                 rendered.push(("divider:pinned".into(), 17.0, divider));
             }
         }
+        self.sidebar_drag_rows = drag_rows;
         if self.sidebar_hidden_active_count > 0 {
             let remaining = self.sidebar_hidden_active_count.min(ACTIVE_PAGE);
             let more = div()
@@ -2369,7 +2524,12 @@ impl Shell {
                 .cloned()
                 .collect()
         };
-        rows.sort_by(|left, right| compare_sidebar_chats(self.settings.sidebar_sort, left, right));
+        // A drag order describes the active list; the shelf stays by recency.
+        let sort = match self.settings.sidebar_sort {
+            SidebarSort::Manual => SidebarSort::LastUpdated,
+            sort => sort,
+        };
+        rows.sort_by(|left, right| compare_sidebar_chats(sort, left, right));
         if rows.is_empty() {
             return None;
         }

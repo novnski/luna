@@ -4,6 +4,7 @@ use super::pane_chat::{
 use super::*;
 use crate::state::EngineHandle;
 use luna_engine::side_chats::{SideChatCreated, SideChatList, SideChatPage};
+use luna_proto::ChatIndicator;
 use serde_json::{Value, json};
 use std::rc::Rc;
 
@@ -41,6 +42,14 @@ enum PanelAction {
     Back,
     /// Stop only the side chat's current turn; the lease stays writable.
     Stop,
+}
+
+/// A list action on one side chat ([`Shell::set_side_chat_flag`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SideChatFlag {
+    Pinned(bool),
+    Settled(bool),
+    Archived(bool),
 }
 
 pub(super) enum SideChatEvent {
@@ -1377,100 +1386,12 @@ impl SideChatPanel {
 impl Render for SideChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
-        if let Some(page) = self.page.clone() {
-            return self.render_page(page, window, &theme, cx);
+        match self.page.clone() {
+            Some(page) => self.render_page(page, window, &theme, cx),
+            // The list is the shell's ([`Shell::render_side_chat_list`]): it
+            // shares the sidebar's task rows.
+            None => Empty.into_any_element(),
         }
-        let mut root = div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .text_size(crate::typography::ui_rems(12.0))
-            .text_color(theme.text)
-            .child(
-                crate::surface_chrome::toolbar(&theme).child(
-                    div()
-                        .truncate()
-                        .child(format!("Side chats · {}", self.parent_title)),
-                ),
-            );
-        root = root.child(
-            div()
-                .h(px(24.0))
-                .flex_none()
-                .px(px(16.0))
-                .text_color(theme.text_muted)
-                .text_size(crate::typography::ui_rems(11.0))
-                .child(self.operation_label.unwrap_or("")),
-        );
-        if let Some(error) = self.error.clone() {
-            root = root
-                .child(
-                    div()
-                        .px(px(16.0))
-                        .child(crate::settings::widgets::error_strip(&theme, error)),
-                )
-                .child(self.button(
-                    "side-refresh",
-                    "Refresh saved state",
-                    PanelAction::Refresh,
-                    cx,
-                ));
-        }
-        root = root.child(div().p(px(16.0)).flex().flex_col().gap(px(12.0))
-            .child(self.button("side-new", "Start side chat", PanelAction::New, cx))
-            .when(self.snapshot_alternative, |el| el.child(self.button("side-new-snapshot", "Start with recent context", PanelAction::NewSnapshot, cx)))
-            .child(self.button("side-refresh-history", "Refresh history", PanelAction::Refresh, cx))
-            .child(div().text_color(theme.text_muted).child("A separate conversation with this parent's context. Writable for two hours; saved history remains available."))
-            .child(div().text_color(theme.text_muted).child("Previous side chats · open to read")));
-        let mut list = div()
-            .id("side-history")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .px(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(8.0));
-        if let Some(history) = &self.history {
-            if history.items.is_empty() {
-                list = list.child(
-                    div()
-                        .text_color(theme.text_muted)
-                        .child("No previous side chats"),
-                );
-            }
-            for meta in &history.items {
-                let stamp = chrono::DateTime::from_timestamp_millis(meta.created_at_ms)
-                    .map(|date| {
-                        date.with_timezone(&chrono::Local)
-                            .format("%b %d · %H:%M")
-                            .to_string()
-                    })
-                    .unwrap_or_default();
-                list = list.child(self.button(
-                    format!("side-history-{}", meta.id),
-                    format!(
-                        "{stamp} · {} · {} messages",
-                        state_label(&meta.state),
-                        meta.message_count
-                    ),
-                    PanelAction::Open(meta.id.clone()),
-                    cx,
-                ));
-            }
-            if history.before.is_some() {
-                list = list.child(self.button(
-                    "side-more-history",
-                    "Earlier side chats",
-                    PanelAction::MoreHistory,
-                    cx,
-                ));
-            }
-        } else {
-            list = list.child("Loading saved side chats…");
-        }
-        root = root.child(list);
-        root.into_any_element()
     }
 }
 
@@ -1480,6 +1401,8 @@ impl Shell {
             return;
         };
         self.side_chat_events = None;
+        self.side_chat_observation = None;
+        self.side_chat_listing = false;
         let request = panel.read(cx).release_request();
         // Parked first-class side chats end with the panel, quietly: their
         // leases would lapse within 30 s anyway, this just saves promptly.
@@ -1632,6 +1555,16 @@ impl Shell {
             }));
             cx.notify();
         }));
+        // The list renders here, from the panel's history; repaint the shell
+        // while it lists, and once when a page opens or closes.
+        self.side_chat_listing = false;
+        self.side_chat_observation = Some(cx.observe(&panel, |shell, panel, cx| {
+            let listing = panel.read(cx).page.is_none();
+            if listing || shell.side_chat_listing != listing {
+                shell.side_chat_listing = listing;
+                cx.notify();
+            }
+        }));
         self.side_chat_panel = Some(panel);
     }
 
@@ -1639,10 +1572,332 @@ impl Shell {
         if self.side_chat_panel.is_none() {
             self.create_side_chat_panel(None, cx);
         }
-        self.side_chat_panel
-            .as_ref()
-            .unwrap()
-            .clone()
+        let panel = self.side_chat_panel.clone().expect("created above");
+        if panel.read(cx).page.is_some() {
+            return panel.into_any_element();
+        }
+        self.render_side_chat_list(&panel, cx)
+    }
+
+    /// Open a saved or parked side chat from the list.
+    pub(super) fn open_side_chat_in_pane(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(panel) = self.side_chat_panel.clone() {
+            panel.update(cx, |panel, cx| panel.action(PanelAction::Open(id), cx));
+        }
+    }
+
+    /// File a side chat under Pinned, Settled or Archived in this device's
+    /// list. Only the list placement changes; the record and its lease don't.
+    pub(super) fn set_side_chat_flag(
+        &mut self,
+        id: String,
+        flag: SideChatFlag,
+        cx: &mut Context<Self>,
+    ) {
+        let marks = self.settings.side_chat_marks.entry(id.clone()).or_default();
+        match flag {
+            SideChatFlag::Pinned(pinned) => {
+                marks.pinned_at_ms = pinned.then(|| Utc::now().timestamp_millis());
+                if pinned {
+                    marks.settled = false;
+                }
+            }
+            SideChatFlag::Settled(settled) => marks.settled = settled,
+            SideChatFlag::Archived(archived) => marks.archived = archived,
+        }
+        if marks.is_empty() {
+            self.settings.side_chat_marks.remove(&id);
+        }
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
+    /// This chat's side chats as sidebar task rows: Pinned, the rest newest
+    /// first, then folded Settled and Archived shelves.
+    fn render_side_chat_list(
+        &mut self,
+        panel: &Entity<SideChatPanel>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use super::related_chats::RelatedSection;
+        let theme = Theme::of(cx).clone();
+        let now = Utc::now();
+        let (parent_title, items, more, loading, busy, error, operation, snapshot, parked) = {
+            let panel = panel.read(cx);
+            (
+                transcript::single_line(&panel.parent_title),
+                panel
+                    .history
+                    .as_ref()
+                    .map(|history| history.items.clone())
+                    .unwrap_or_default(),
+                panel
+                    .history
+                    .as_ref()
+                    .is_some_and(|history| history.before.is_some()),
+                panel.history.is_none(),
+                panel.busy,
+                panel.error.clone(),
+                panel.operation_label,
+                panel.snapshot_alternative,
+                panel
+                    .parked
+                    .keys()
+                    .cloned()
+                    .collect::<std::collections::HashSet<_>>(),
+            )
+        };
+        let (project, device) = {
+            let state = self.state.read(cx);
+            let parent = state.chats.iter().find(|chat| chat.id == self.active_chat);
+            (
+                parent
+                    .and_then(|chat| state.space_for_chat(chat))
+                    .map(|space| space.display_name().to_string())
+                    .unwrap_or_else(|| "Unknown project".into()),
+                state
+                    .local_device_id
+                    .as_deref()
+                    .and_then(|id| state.device_name(id))
+                    .unwrap_or("This device")
+                    .to_string(),
+            )
+        };
+        let mut pinned = Vec::new();
+        let mut active = Vec::new();
+        let mut settled = Vec::new();
+        let mut archived = Vec::new();
+        for meta in items {
+            let marks = self
+                .settings
+                .side_chat_marks
+                .get(&meta.id)
+                .copied()
+                .unwrap_or_default();
+            let live = matches!(meta.state.as_str(), "active" | "preparing")
+                && now.timestamp_millis() < meta.expires_at_ms;
+            let (status, status_label) = match meta.state.as_str() {
+                "preparing" => (ChatIndicator::Working, Some("Preparing")),
+                "closing" => (ChatIndicator::Working, Some("Saving")),
+                "creationFailed" | "closeFailed" => (ChatIndicator::Errored, Some("Failed")),
+                _ => (ChatIndicator::Idle, None),
+            };
+            let lease = if parked.contains(&meta.id) {
+                "Writable"
+            } else {
+                state_label(&meta.state)
+            };
+            let note: SharedString = match meta.message_count {
+                0 => lease.to_string(),
+                1 => format!("{lease} · 1 message"),
+                count => format!("{lease} · {count} messages"),
+            }
+            .into();
+            let title: SharedString = meta
+                .preview
+                .clone()
+                .or_else(|| {
+                    meta.anchor_text
+                        .as_deref()
+                        .map(transcript::single_line)
+                        .filter(|text| !text.trim().is_empty())
+                        .map(|text| format!("“{}”", text.trim()))
+                })
+                .unwrap_or_else(|| meta.title.clone())
+                .into();
+            let created =
+                chrono::DateTime::from_timestamp_millis(meta.created_at_ms).unwrap_or(now);
+            let model: SharedString = {
+                let provider = super::child_chats::provider_label(meta.config.harness);
+                match meta
+                    .config
+                    .model
+                    .as_deref()
+                    .filter(|model| !model.is_empty())
+                {
+                    Some(model) => format!("{provider} · {model}").into(),
+                    None => provider.into(),
+                }
+            };
+            let details = SidebarThreadTooltip {
+                title: title.clone(),
+                project: project.clone().into(),
+                device: device.clone().into(),
+                model: Some(model),
+                branch: None,
+                status: Some(note.clone()),
+            };
+            let pinned_at = marks.pinned_at_ms;
+            let row = self.render_chat_row(
+                ChatRowProps {
+                    id: meta.id.clone(),
+                    title,
+                    time_ago: format_time_ago(created, now).into(),
+                    space_name: project.clone().into(),
+                    branch: None,
+                    note: Some(note),
+                    change_request: None,
+                    harness: self
+                        .settings
+                        .sidebar_show_harness
+                        .then_some(meta.config.harness),
+                    status,
+                    status_label,
+                    selected: false,
+                    archived: marks.archived,
+                    pinned: pinned_at.is_some(),
+                    surface: ChatRowSurface::SidePane,
+                    can_settle: !live
+                        && !marks.settled
+                        && !marks.archived
+                        && pinned_at.is_none()
+                        && status == ChatIndicator::Idle,
+                    settled: marks.settled && !marks.archived,
+                    child_chats: 0,
+                    jump_label: None,
+                    search_query: None,
+                    details: Some(details),
+                    drag: None,
+                },
+                &theme,
+                cx,
+            );
+            if marks.archived {
+                archived.push((meta.id.clone(), row));
+            } else if let Some(at) = pinned_at {
+                pinned.push((at, (meta.id.clone(), row)));
+            } else if marks.settled {
+                settled.push((meta.id.clone(), row));
+            } else {
+                active.push((meta.id.clone(), row));
+            }
+        }
+        pinned.sort_by_key(|(at, _)| *at);
+        let pinned: Vec<(String, AnyElement)> = pinned.into_iter().map(|(_, row)| row).collect();
+        let empty =
+            pinned.is_empty() && active.is_empty() && settled.is_empty() && archived.is_empty();
+        let sections = self.render_related_sections(
+            "side",
+            vec![
+                (RelatedSection::Pinned, pinned),
+                (RelatedSection::Active, active),
+                (RelatedSection::Settled, settled),
+                (RelatedSection::Archived, archived),
+            ],
+            &theme,
+            cx,
+        );
+        let action = |action: PanelAction| {
+            let panel = panel.clone();
+            move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+                panel.update(cx, |panel, cx| panel.action(action.clone(), cx));
+            }
+        };
+        let refresh =
+            Self::related_header_button("side-chats-refresh", icons::REFRESH, "Refresh", &theme)
+                .when(busy, |el| el.opacity(0.5))
+                .on_click(action(PanelAction::Refresh))
+                .into_any_element();
+        let new = Self::related_header_button("side-chats-new", icons::PLUS, "New", &theme)
+            .when(busy, |el| el.opacity(0.5))
+            .on_click(action(PanelAction::New))
+            .into_any_element();
+        let header = self.render_related_list_header(
+            "side-chats",
+            format!("Side chats · {parent_title}").into(),
+            vec![refresh, new],
+            &theme,
+            cx,
+        );
+        let mut list = div()
+            .id("side-history")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px(px(Theme::SPACE_SM))
+            .pt(px(4.0))
+            .pb(px(12.0))
+            .flex()
+            .flex_col();
+        if let Some(label) = operation {
+            list = list.child(
+                div()
+                    .px(px(Theme::SPACE_SM))
+                    .py(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .child(label),
+            );
+        }
+        if let Some(error) = error {
+            list = list.child(
+                div()
+                    .px(px(Theme::SPACE_SM))
+                    .py(px(6.0))
+                    .child(crate::settings::widgets::error_strip(&theme, error)),
+            );
+        }
+        if snapshot {
+            list = list.child(
+                div().px(px(Theme::SPACE_SM)).py(px(4.0)).child(
+                    Self::related_header_button(
+                        "side-new-snapshot",
+                        icons::PLUS,
+                        "Start with recent context",
+                        &theme,
+                    )
+                    .on_click(action(PanelAction::NewSnapshot)),
+                ),
+            );
+        }
+        if loading {
+            list = list.child(
+                div()
+                    .px(px(Theme::SPACE_SM))
+                    .py(px(8.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text_faint)
+                    .child("Loading saved side chats…"),
+            );
+        } else if empty {
+            list = list.child(
+                div()
+                    .px(px(Theme::SPACE_SM))
+                    .py(px(8.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .text_color(theme.text_faint)
+                    .child("No side chats yet. Use New to ask something on the side; it starts with this chat's context and stays writable for two hours."),
+            );
+        }
+        list = list.children(sections);
+        if more {
+            list = list.child(
+                div()
+                    .id("side-more-history")
+                    .mt(px(4.0))
+                    .h(px(36.0))
+                    .px(px(Theme::SPACE_SM))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(7.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .text_size(crate::typography::ui_rems(13.0))
+                    .text_color(theme.text_muted)
+                    .hover(|el| el.bg(theme.glass_hover()).text_color(theme.text))
+                    .on_click(action(PanelAction::MoreHistory))
+                    .child(icon(icons::PLUS).size(px(14.0)))
+                    .child("Earlier side chats"),
+            );
+        }
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .text_color(theme.text)
+            .child(header)
+            .child(list)
             .into_any_element()
     }
 }
@@ -1741,6 +1996,8 @@ impl Shell {
             "question": panel.pending_question().map(|(id, _)| id),
             "historyCount": panel.history.as_ref().map(|history| history.items.len()),
             "historyStates": panel.history.as_ref().map(|history| history.items.iter().map(|meta| meta.state.clone()).collect::<Vec<_>>()),
+            "historyIds": panel.history.as_ref().map(|history| history.items.iter().map(|meta| meta.id.clone()).collect::<Vec<_>>()),
+            "historyPreviews": panel.history.as_ref().map(|history| history.items.iter().map(|meta| meta.preview.clone()).collect::<Vec<_>>()),
             "texts": page.map(|page| page.entries.iter().flat_map(|entry| entry.parts.iter()).filter_map(|part| match part {
                 luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
                 _ => None,

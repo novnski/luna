@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use luna_doc::{MessagePart, SessionMessageEntry};
+use luna_doc::{MessagePart, MessageRole, SessionMessageEntry};
 use luna_proto::{ChatConfig, RunRequest};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,10 @@ pub struct SideChatMeta {
     pub context_mode: String,
     pub origin_message_id: Option<String>,
     pub anchor_text: Option<String>,
+    /// The first user message, set by [`SideChats::list`] so a list can tell
+    /// side chats apart: every title repeats the parent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -419,6 +423,7 @@ impl SideChats {
                     context_mode: row.get(9)?,
                     origin_message_id: row.get(10)?,
                     anchor_text: row.get(11)?,
+                    preview: None,
                 })
             },
         )
@@ -753,9 +758,46 @@ impl SideChats {
         let before = more.then(|| selected.last().unwrap().0);
         let items = selected
             .iter()
-            .map(|(_, id)| self.meta(id))
+            .map(|(_, id)| {
+                self.meta(id).map(|mut meta| {
+                    meta.preview = self.preview(&meta);
+                    meta
+                })
+            })
             .collect::<Result<_>>()?;
         Ok(SideChatList { items, before })
+    }
+
+    /// The first user message's first line. A writable chat reads its open
+    /// document (its history is projected only on read or seal); saved
+    /// chats read the projected history.
+    fn preview(&self, meta: &SideChatMeta) -> Option<String> {
+        let entries: Vec<SessionMessageEntry> = if meta.state == "active" {
+            self.0.docs.open(&meta.id).ok()?.doc().read_entries().ok()?
+        } else {
+            let db = lock(&self.0.db);
+            let mut stmt = db
+                .prepare(
+                    "SELECT entry FROM side_chat_entries WHERE chat_id=?1 ORDER BY seq LIMIT 16",
+                )
+                .ok()?;
+            stmt.query_map([&meta.id], |row| row.get::<_, String>(0))
+                .ok()?
+                .filter_map(|entry| serde_json::from_str(&entry.ok()?).ok())
+                .collect()
+        };
+        entries
+            .iter()
+            .filter(|entry| entry.role == MessageRole::User)
+            .flat_map(|entry| entry.parts.iter())
+            .find_map(|part| match part {
+                MessagePart::Text { text, .. } => text
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(|line| line.chars().take(200).collect()),
+                _ => None,
+            })
     }
 
     fn require_lease(&self, id: &str, token: &str) -> Result<()> {

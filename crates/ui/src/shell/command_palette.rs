@@ -918,24 +918,36 @@ impl Shell {
                     .then(|| chat.config.as_ref().map(|c| c.harness))
                     .flatten();
                 self.render_chat_row(
-                    id.clone(),
-                    transcript::single_line(chat.title.as_deref().unwrap_or("New session")).into(),
-                    format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), Utc::now())
+                    ChatRowProps {
+                        id: id.clone(),
+                        title: transcript::single_line(
+                            chat.title.as_deref().unwrap_or("New session"),
+                        )
                         .into(),
-                    folder.into(),
-                    branch,
-                    pr,
-                    harness,
-                    state.display_status_for(chat, Utc::now()),
-                    active == Some(ix),
-                    chat.archived,
-                    chat.pinned_order.is_some(),
-                    false,
-                    false,
-                    0,
-                    None,
-                    Some(&query),
-                    None,
+                        time_ago: format_time_ago(
+                            chat.last_message_at.unwrap_or(chat.created_at),
+                            Utc::now(),
+                        )
+                        .into(),
+                        space_name: folder.into(),
+                        branch,
+                        note: None,
+                        change_request: pr,
+                        harness,
+                        status: state.display_status_for(chat, Utc::now()),
+                        status_label: None,
+                        selected: active == Some(ix),
+                        archived: chat.archived,
+                        pinned: chat.pinned_order.is_some(),
+                        surface: ChatRowSurface::Palette,
+                        can_settle: false,
+                        settled: false,
+                        child_chats: 0,
+                        jump_label: None,
+                        search_query: Some(&query),
+                        details: None,
+                        drag: None,
+                    },
                     &theme,
                     cx,
                 )

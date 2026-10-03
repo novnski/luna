@@ -79,6 +79,7 @@ mod command_palette;
 mod native_file_rewind;
 mod native_review;
 mod pane_chat;
+mod related_chats;
 mod side_chats;
 mod spaces;
 mod tabs;
@@ -584,6 +585,9 @@ pub struct ChatPanels {
     /// Which surface tab renders; validated against the live tab list each
     /// frame (a closed tab falls back gracefully).
     pub right_active: RightSurface,
+    /// The surface menu is showing over existing tabs (a pane's Back). Any
+    /// tab activation leaves it; the tabs themselves stay open.
+    pub picker_open: bool,
 }
 
 /// The session-scoped panel map. Keys are chat ids; the new-chat canvas uses
@@ -865,12 +869,166 @@ impl Render for SurfaceTabGhost {
     }
 }
 
+/// Which list a task row lives in. Every list shares one row: the surface
+/// only picks what a click, the hover actions and the context menu reach.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ChatRowSurface {
+    Sidebar,
+    Activity,
+    Palette,
+    /// A child chat in its parent's right-pane list; opens there.
+    ChildPane,
+    /// A side chat in its parent's right-pane list. Side chats are leased
+    /// engine records, not tasks: actions go to the side-chat service.
+    SidePane,
+}
+
+impl ChatRowSurface {
+    fn id_prefix(self) -> &'static str {
+        match self {
+            Self::Sidebar | Self::Activity => "chat",
+            Self::Palette => "palette-chat",
+            Self::ChildPane => "child-pane-chat",
+            Self::SidePane => "side-pane-chat",
+        }
+    }
+
+    fn in_pane(self) -> bool {
+        matches!(self, Self::ChildPane | Self::SidePane)
+    }
+}
+
+/// One task row ([`Shell::render_chat_row`]).
+pub(super) struct ChatRowProps<'a> {
+    pub(super) id: String,
+    pub(super) title: SharedString,
+    pub(super) time_ago: SharedString,
+    pub(super) space_name: SharedString,
+    pub(super) branch: Option<SharedString>,
+    /// Third-line text without the branch glyph (side chats).
+    pub(super) note: Option<SharedString>,
+    pub(super) change_request: Option<luna_proto::ChangeRequestSummary>,
+    pub(super) harness: Option<luna_proto::HarnessId>,
+    pub(super) status: luna_proto::ChatIndicator,
+    /// Overrides the status word in the corner (side-chat lease states).
+    pub(super) status_label: Option<&'static str>,
+    pub(super) selected: bool,
+    pub(super) archived: bool,
+    pub(super) pinned: bool,
+    pub(super) surface: ChatRowSurface,
+    pub(super) can_settle: bool,
+    /// Settled rows offer Return to Active where Settle would be.
+    pub(super) settled: bool,
+    /// Non-archived direct child chats, reached through the count chip.
+    pub(super) child_chats: usize,
+    /// This row's jump combo while the hint overlay is up.
+    pub(super) jump_label: Option<SharedString>,
+    pub(super) search_query: Option<&'a str>,
+    pub(super) details: Option<SidebarThreadTooltip>,
+    /// Reorder payload; `None` keeps the row fixed.
+    pub(super) drag: Option<SidebarChatDrag>,
+}
+
+/// Where a dragged sidebar task may land. Pins reorder only among pins, and
+/// unpinned tasks only within their own device group (`None` = one list).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum SidebarDragScope {
+    Pinned,
+    Unpinned(Option<String>),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SidebarDropPlace {
+    Before,
+    After,
+}
+
+/// The dragged sidebar task.
+#[derive(Clone)]
+pub(super) struct SidebarChatDrag {
+    pub(super) chat_id: String,
+    pub(super) scope: SidebarDragScope,
+    pub(super) title: SharedString,
+    pub(super) project: SharedString,
+    pub(super) harness: Option<luna_proto::HarnessId>,
+}
+
+/// Live sidebar reorder: the dragged task and its clamped drop slot.
+pub(super) struct SidebarDragState {
+    pub(super) chat_id: String,
+    pub(super) target: Option<(String, SidebarDropPlace)>,
+}
+
+/// Ghost row following the pointer while a sidebar task drags. It keeps the
+/// row's height so it stays under the point where the row was grabbed.
+struct SidebarChatGhost {
+    title: SharedString,
+    project: SharedString,
+    harness: Option<luna_proto::HarnessId>,
+    width: f32,
+}
+
+impl Render for SidebarChatGhost {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx);
+        let card = div()
+            .h(px(chat_row_height(false, false)))
+            .w(px(self.width))
+            .px(px(Theme::SPACE_SM))
+            .flex()
+            .flex_col()
+            .justify_center()
+            .gap(px(2.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .bg(crate::popover::surface_bg(theme))
+            .shadow_md()
+            .child(
+                div()
+                    .truncate()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .line_height(crate::typography::ui_rems(14.0))
+                    .text_color(theme.text_muted)
+                    .child(self.project.clone()),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(SIDEBAR_ACTIVE_HARNESS_TITLE_GAP))
+                    .when_some(
+                        self.harness.map(crate::pickers::harness_brand_icon),
+                        |el, (path, tint)| {
+                            el.child(
+                                icon(path)
+                                    .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
+                                    .flex_none()
+                                    .text_color(tint.unwrap_or(theme.text_muted)),
+                            )
+                        },
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .line_height(crate::typography::ui_rems(17.0))
+                            .text_color(theme.text)
+                            .child(self.title.clone()),
+                    ),
+            );
+        crate::frost::frosted(8.0, crate::frost::MENU_BLUR, card)
+    }
+}
+
 struct SurfaceTabTooltip {
     text: SharedString,
 }
 
 #[derive(Clone)]
-struct SidebarThreadTooltip {
+pub(super) struct SidebarThreadTooltip {
     title: SharedString,
     project: SharedString,
     device: SharedString,
@@ -1864,6 +2022,24 @@ pub struct Shell {
     pub(super) settled_shown: usize,
     pub(super) active_shown: usize,
     pub(super) sidebar_hidden_active_count: usize,
+    /// Live sidebar task reorder, while a row drags.
+    pub(super) sidebar_drag: Option<SidebarDragState>,
+    /// Draggable sidebar rows top to bottom with their reorder scope, as last
+    /// rendered; drag-over clamps drop slots against it.
+    pub(super) sidebar_drag_rows: Vec<(String, SidebarDragScope)>,
+    /// Unfolded Settled/Archived sections of the right-pane related-chat
+    /// lists, keyed `list:section` (folded by default).
+    pub(super) related_expanded: std::collections::HashSet<String>,
+    /// The Child chats surface shows an open child (not the list); the shell
+    /// re-renders when the panel flips between them.
+    child_chat_open_shown: bool,
+    child_chat_observation: Option<Subscription>,
+    /// The Side chats surface shows the list (no page); the shell renders it.
+    side_chat_listing: bool,
+    side_chat_observation: Option<Subscription>,
+    /// Last rendered related-list rows, `list → [(section, id)]`, for QA.
+    #[cfg(feature = "appshots-fixture")]
+    fixture_related_rows: std::collections::HashMap<&'static str, Vec<(String, String)>>,
     /// Archived slim row under the pointer — swaps its time label for the
     /// Unarchive affordance and restores the dimmed harness mark (t3code's
     /// settled-row hover).
@@ -2400,6 +2576,15 @@ impl Shell {
             settled_shown: 0,
             active_shown: 20,
             sidebar_hidden_active_count: 0,
+            sidebar_drag: None,
+            sidebar_drag_rows: Vec::new(),
+            related_expanded: Default::default(),
+            child_chat_open_shown: false,
+            child_chat_observation: None,
+            side_chat_listing: false,
+            side_chat_observation: None,
+            #[cfg(feature = "appshots-fixture")]
+            fixture_related_rows: Default::default(),
             archived_hover: None,
             sidebar_collapsed_groups: std::collections::HashSet::new(),
             sidebar_disclosure_motion: std::collections::HashMap::new(),
@@ -3136,6 +3321,7 @@ impl Shell {
                     // re-entering that entity; the next shell paint mounts it.
                     self.panels.update(chat_id, |panel| {
                         panel.right_active = RightSurface::Terminal(*first);
+                        panel.picker_open = false;
                     });
                 }
             } else {
@@ -3287,7 +3473,11 @@ impl Shell {
     /// exists, else the first remaining tab, else the picker. Terminal keys
     /// go stale when their tab closes/exits — never render a dead surface.
     fn resolved_right_active(&self, cx: &App) -> RightSurface {
-        let picked = self.panels.get(&self.panel_key(cx)).right_active;
+        let panel = self.panels.get(&self.panel_key(cx));
+        if panel.picker_open {
+            return RightSurface::Picker;
+        }
+        let picked = panel.right_active;
         let rows = self.right_surface_rows(cx);
         let exists = match picked {
             RightSurface::Picker => false,
@@ -3317,7 +3507,10 @@ impl Shell {
             self.suspend_file_images(cx);
         }
         let key = self.panel_key(cx);
-        self.panels.update(&key, |p| p.right_active = surface);
+        self.panels.update(&key, |p| {
+            p.right_active = surface;
+            p.picker_open = false;
+        });
         match surface {
             RightSurface::Files => {
                 if let Some(files) = self.files.get(&key).cloned() {
@@ -3865,8 +4058,10 @@ impl Shell {
     fn add_terminal_surface(&mut self, cx: &mut Context<Self>) {
         self.terminal_picker_notice = None;
         let key = self.panel_key(cx);
-        self.panels
-            .update(&key, |panel| panel.right_active = RightSurface::Picker);
+        self.panels.update(&key, |panel| {
+            panel.right_active = RightSurface::Picker;
+            panel.picker_open = false;
+        });
         let panel = self.right_terminal_panel(cx);
         panel.update(cx, |panel, cx| {
             panel.set_open(true, cx);
@@ -4300,6 +4495,7 @@ impl Shell {
             self.panels.update(&key, |panel| {
                 panel.changes_open = true;
                 panel.right_active = surface;
+                panel.picker_open = false;
             });
             self.apply_nav(NavEntry::Chat(key), cx);
         }
@@ -6080,6 +6276,260 @@ impl Shell {
         );
     }
 
+    fn activate_chat_row(&mut self, surface: ChatRowSurface, id: String, cx: &mut Context<Self>) {
+        match surface {
+            ChatRowSurface::Sidebar | ChatRowSurface::Palette => self.open_chat(id, cx),
+            ChatRowSurface::Activity => self.open_activity_chat(id, cx),
+            ChatRowSurface::ChildPane => self.open_child_chat_in_pane(id, cx),
+            ChatRowSurface::SidePane => self.open_side_chat_in_pane(id, cx),
+        }
+    }
+
+    fn chat_row_set_pinned(
+        &mut self,
+        surface: ChatRowSurface,
+        id: String,
+        pinned: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match surface {
+            ChatRowSurface::SidePane => {
+                self.set_side_chat_flag(id, side_chats::SideChatFlag::Pinned(pinned), cx)
+            }
+            _ => self.set_chat_pinned(id, pinned, cx),
+        }
+    }
+
+    fn chat_row_set_settled(
+        &mut self,
+        surface: ChatRowSurface,
+        id: String,
+        settled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match surface {
+            ChatRowSurface::SidePane => {
+                self.set_side_chat_flag(id, side_chats::SideChatFlag::Settled(settled), cx)
+            }
+            _ => self.set_chat_settled(id, settled, cx),
+        }
+    }
+
+    fn chat_row_set_archived(
+        &mut self,
+        surface: ChatRowSurface,
+        id: String,
+        archived: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match surface {
+            ChatRowSurface::SidePane => {
+                self.set_side_chat_flag(id, side_chats::SideChatFlag::Archived(archived), cx)
+            }
+            _ => self.set_chat_archived(id, archived, cx),
+        }
+    }
+
+    /// Move a pinned task next to `anchor` in the global pin order. The
+    /// sidebar may show a filtered subset, so neighbors come from every pin:
+    /// the engine requires the two bounds to be adjacent.
+    fn move_pinned_chat(
+        &mut self,
+        chat_id: String,
+        anchor: &str,
+        place: SidebarDropPlace,
+        cx: &mut Context<Self>,
+    ) {
+        let mut pinned: Vec<_> = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .filter(|chat| !chat.archived && chat.pinned_order.is_some())
+            .cloned()
+            .collect();
+        pinned.sort_by(|left, right| {
+            luna_proto::compare_pin_order(
+                left.pinned_order.as_deref().expect("filtered pin key"),
+                right.pinned_order.as_deref().expect("filtered pin key"),
+            )
+            .then_with(|| left.id.cmp(&right.id))
+        });
+        let Some(from) = pinned.iter().position(|chat| chat.id == chat_id) else {
+            return;
+        };
+        let moved = pinned.remove(from);
+        let Some(anchor_ix) = pinned.iter().position(|chat| chat.id == anchor) else {
+            return;
+        };
+        let target = match place {
+            SidebarDropPlace::Before => anchor_ix,
+            SidebarDropPlace::After => anchor_ix + 1,
+        };
+        if target == from {
+            return;
+        }
+        let after = target.checked_sub(1).and_then(|ix| pinned.get(ix));
+        let before = pinned.get(target);
+        // Optimistic: the engine derives the same key from the same bounds,
+        // so its frame confirms this order instead of bouncing the row back.
+        if let Ok(order) = luna_proto::pin_order_between(
+            after.and_then(|chat| chat.pinned_order.as_deref()),
+            before.and_then(|chat| chat.pinned_order.as_deref()),
+        ) {
+            self.state.update(cx, |state, cx| {
+                if let Some(chat) = state.chats.iter_mut().find(|chat| chat.id == moved.id) {
+                    chat.pinned_order = Some(order);
+                    cx.notify();
+                }
+            });
+        }
+        self.mutate_task(
+            chat_id,
+            serde_json::json!({
+                "kind": "setPinned",
+                "pinned": true,
+                "afterTaskId": after.map(|chat| chat.id.clone()),
+                "beforeTaskId": before.map(|chat| chat.id.clone()),
+            }),
+            cx,
+        );
+    }
+
+    /// Move an unpinned task next to `anchor`. The first drag freezes the
+    /// current order (every unpinned task, not just the visible page) as the
+    /// manual order and switches the sidebar to Manual sort.
+    fn move_unpinned_chat(
+        &mut self,
+        chat_id: String,
+        anchor: &str,
+        place: SidebarDropPlace,
+        cx: &mut Context<Self>,
+    ) {
+        let switching = self.settings.sidebar_sort != SidebarSort::Manual;
+        let mut order: Vec<String> = {
+            let ranks = spaces::manual_ranks(&self.settings.sidebar_manual_order);
+            let mut chats: Vec<&luna_proto::Chat> = self
+                .state
+                .read(cx)
+                .chats
+                .iter()
+                .filter(|chat| !chat.archived && chat.pinned_order.is_none())
+                .collect();
+            chats.sort_by(|left, right| {
+                spaces::compare_sidebar_chats_ranked(
+                    self.settings.sidebar_sort,
+                    &ranks,
+                    left,
+                    right,
+                )
+            });
+            chats.into_iter().map(|chat| chat.id.clone()).collect()
+        };
+        let Some(from) = order.iter().position(|id| *id == chat_id) else {
+            return;
+        };
+        let moved = order.remove(from);
+        let Some(anchor_ix) = order.iter().position(|id| id == anchor) else {
+            return;
+        };
+        let target = match place {
+            SidebarDropPlace::Before => anchor_ix,
+            SidebarDropPlace::After => anchor_ix + 1,
+        };
+        if target == from && !switching {
+            return;
+        }
+        order.insert(target, moved);
+        self.settings.sidebar_manual_order = order;
+        self.settings.sidebar_sort = SidebarSort::Manual;
+        if switching {
+            self.sidebar_notice = Some(SidebarNotice::transient_status(
+                "Sidebar sorted manually. Choose a sort in View options to undo.",
+            ));
+        }
+        self.schedule_save(cx);
+        cx.notify();
+    }
+
+    /// Track the drop slot while a sidebar task drags over `row`. A slot
+    /// outside the dragged task's scope clamps to that scope's nearest edge,
+    /// so pins never land among unpinned tasks or the reverse.
+    pub(super) fn update_sidebar_drag(
+        &mut self,
+        drag: &SidebarChatDrag,
+        row: &str,
+        lower_half: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let rows = &self.sidebar_drag_rows;
+        let Some(over) = rows.iter().position(|(id, _)| id == row) else {
+            return;
+        };
+        let in_scope: Vec<usize> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, (_, scope))| *scope == drag.scope)
+            .map(|(ix, _)| ix)
+            .collect();
+        let (Some(&first), Some(&last)) = (in_scope.first(), in_scope.last()) else {
+            return;
+        };
+        let target = if rows[over].1 == drag.scope {
+            let place = if lower_half {
+                SidebarDropPlace::After
+            } else {
+                SidebarDropPlace::Before
+            };
+            (rows[over].0.clone(), place)
+        } else if over < first {
+            (rows[first].0.clone(), SidebarDropPlace::Before)
+        } else {
+            (rows[last].0.clone(), SidebarDropPlace::After)
+        };
+        // Over its own slot the task would not move: show no line.
+        let target = Some(target).filter(|(anchor, _)| *anchor != drag.chat_id);
+        match &mut self.sidebar_drag {
+            Some(state) if state.chat_id == drag.chat_id => {
+                if state.target != target {
+                    state.target = target;
+                    cx.notify();
+                }
+            }
+            _ => {
+                self.sidebar_drag = Some(SidebarDragState {
+                    chat_id: drag.chat_id.clone(),
+                    target,
+                });
+                cx.notify();
+            }
+        }
+    }
+
+    /// Apply the tracked drop slot. Dropping a task on itself is a no-op.
+    pub(super) fn finish_sidebar_drag(&mut self, drag: &SidebarChatDrag, cx: &mut Context<Self>) {
+        let target = self
+            .sidebar_drag
+            .take()
+            .filter(|state| state.chat_id == drag.chat_id)
+            .and_then(|state| state.target);
+        cx.notify();
+        let Some((anchor, place)) = target else {
+            return;
+        };
+        if anchor == drag.chat_id {
+            return;
+        }
+        match drag.scope {
+            SidebarDragScope::Pinned => {
+                self.move_pinned_chat(drag.chat_id.clone(), &anchor, place, cx)
+            }
+            SidebarDragScope::Unpinned(_) => {
+                self.move_unpinned_chat(drag.chat_id.clone(), &anchor, place, cx)
+            }
+        }
+    }
+
     fn reorder_pinned_chat(&mut self, chat_id: String, delta: isize, cx: &mut Context<Self>) {
         let mut pinned: Vec<_> = self
             .state
@@ -7834,42 +8284,51 @@ impl Shell {
     #[allow(clippy::too_many_arguments)]
     fn render_chat_row(
         &self,
-        id: String,
-        title: SharedString,
-        time_ago: SharedString,
-        space_name: SharedString,
-        branch: Option<SharedString>,
-        change_request: Option<luna_proto::ChangeRequestSummary>,
-        harness: Option<luna_proto::HarnessId>,
-        status: luna_proto::ChatIndicator,
-        selected: bool,
-        archived: bool,
-        pinned: bool,
-        activity_row: bool,
-        can_settle: bool,
-        // Non-archived direct child chats. They are listed in this chat's
-        // right-pane Child chats surface, reached through the count chip.
-        child_chats: usize,
-        // This row's jump combo while the hint overlay is up. It takes the
-        // corner outright — above hover and above the status word — so all
-        // nine chips appear together instead of leaving a hole on whichever
-        // row is busy or under the pointer.
-        jump_label: Option<SharedString>,
-        search_query: Option<&str>,
-        details: Option<SidebarThreadTooltip>,
+        row: ChatRowProps<'_>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let ChatRowProps {
+            id,
+            title,
+            time_ago,
+            space_name,
+            branch,
+            note,
+            change_request,
+            harness,
+            status,
+            status_label: status_label_override,
+            selected,
+            archived,
+            pinned,
+            surface,
+            can_settle,
+            settled,
+            child_chats,
+            jump_label,
+            search_query,
+            details,
+            drag,
+        } = row;
         // The status and hover actions share a fixed-size corner. Changing its
         // width used to squeeze the project label and make neighboring rows
         // appear to jump when the pointer crossed them.
-        // A chat can appear on both surfaces at once. Namespace every hover
-        // key and child id so the palette never animates the sidebar copy.
-        let row_id = if search_query.is_some() {
-            format!("palette-chat-{id}")
+        // A chat can appear on several surfaces at once. Namespace every hover
+        // key and child id so one list never animates another's copy.
+        let row_id = format!("{}-{id}", surface.id_prefix());
+        // Pane rows render with the shell; sidebar and palette rows with the
+        // cached sidebar view, which owns their animation frames.
+        let animation_view = if surface.in_pane() {
+            cx.entity_id()
         } else {
-            format!("chat-{id}")
+            self.sidebar_pane.entity_id()
         };
+        let dragging = drag.is_some()
+            && self
+                .sidebar_drag
+                .as_ref()
+                .is_some_and(|state| state.chat_id == id);
         let corner_hovered = self.chat_status_hover.as_deref() == Some(row_id.as_str());
         let pin_control = (!archived && (pinned || (corner_hovered && search_query.is_none())))
             .then(|| {
@@ -7895,7 +8354,7 @@ impl Shell {
                     .tooltip_show_delay(Duration::from_millis(350))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
-                        this.set_chat_pinned(pin_id.clone(), !pinned, cx);
+                        this.chat_row_set_pinned(surface, pin_id.clone(), !pinned, cx);
                     }))
                     .child(icon(icons::PIN).size(px(12.0)).text_color(theme.text_muted))
                     .into_any_element()
@@ -7923,6 +8382,8 @@ impl Shell {
             Some("Failed")
         } else if queued {
             Some("Queued")
+        } else if status_label_override.is_some() {
+            status_label_override
         } else {
             match status {
                 luna_proto::ChatIndicator::Working => Some("Working"),
@@ -7933,7 +8394,7 @@ impl Shell {
                 luna_proto::ChatIndicator::Idle => None,
             }
         };
-        let shows_metadata = branch.is_some() || change_request.is_some();
+        let shows_metadata = branch.is_some() || change_request.is_some() || note.is_some();
         let queued = queued && !undelivered;
         let working = status == luna_proto::ChatIndicator::Working && !queued && !undelivered;
         let corner_body: AnyElement = if let Some(label) = jump_label {
@@ -7972,12 +8433,17 @@ impl Shell {
                 .gap(px(2.0))
                 .h(px(18.0))
                 .when_some(pin_control, |el, control| el.child(control))
-                .when(can_settle, |el| {
+                .when(can_settle || settled, |el| {
+                    let settle_label = if settled {
+                        "Return to Active"
+                    } else {
+                        "Settle task"
+                    };
                     el.child(
                         div()
                             .id(SharedString::from(format!("{row_id}-settle")))
                             .role(gpui::Role::Button)
-                            .aria_label("Settle task")
+                            .aria_label(settle_label)
                             .size(px(20.0))
                             .flex_none()
                             .flex()
@@ -7986,21 +8452,25 @@ impl Shell {
                             .rounded(px(4.0))
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.glass_hover()))
-                            .tooltip(|_, cx| {
+                            .tooltip(move |_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
-                                    text: "Settle task".into(),
+                                    text: settle_label.into(),
                                 })
                                 .into()
                             })
                             .tooltip_show_delay(Duration::from_millis(350))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
-                                this.set_chat_settled(settle_id.clone(), true, cx);
+                                this.chat_row_set_settled(surface, settle_id.clone(), !settled, cx);
                             }))
                             .child(
-                                icon(icons::CHECK)
-                                    .size(px(13.0))
-                                    .text_color(theme.text_muted),
+                                icon(if settled {
+                                    icons::RESTART
+                                } else {
+                                    icons::CHECK
+                                })
+                                .size(px(13.0))
+                                .text_color(theme.text_muted),
                             ),
                     )
                 })
@@ -8035,7 +8505,7 @@ impl Shell {
                         .tooltip_show_delay(Duration::from_millis(350))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                            this.set_chat_archived(archive_id.clone(), !archived, cx);
+                            this.chat_row_set_archived(surface, archive_id.clone(), !archived, cx);
                         }))
                         .child(
                             icon(if archived {
@@ -8059,7 +8529,7 @@ impl Shell {
                             format!("{row_id}-working"),
                             2.0,
                             theme.glyph,
-                            self.sidebar_pane.entity_id(),
+                            animation_view,
                             cx,
                         )
                         .into_any_element()
@@ -8254,23 +8724,45 @@ impl Shell {
                 })
             })
             .cursor_pointer()
+            .when(surface.in_pane(), |row| {
+                row.role(gpui::Role::Button)
+                    .aria_label(title.clone())
+                    .tab_index(0)
+                    .on_key_down(crate::swallow_activation_key)
+            })
             .on_click(cx.listener(move |this, _, _, cx| {
-                if activity_row {
-                    this.open_activity_chat(select_id.clone(), cx);
-                } else {
-                    this.open_chat(select_id.clone(), cx);
-                }
+                this.activate_chat_row(surface, select_id.clone(), cx);
             }))
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    this.chat_menu.open(ChatMenuState {
-                        chat_id: menu_id.clone(),
-                        position: event.position,
-                        page: ChatMenuPage::Root,
-                    });
-                    cx.notify();
-                }),
+            // Side chats are not tasks: the task menu has nothing to offer.
+            .when(surface != ChatRowSurface::SidePane, |row| {
+                row.on_mouse_down(
+                    MouseButton::Right,
+                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                        this.chat_menu.open(ChatMenuState {
+                            chat_id: menu_id.clone(),
+                            position: event.position,
+                            page: ChatMenuPage::Root,
+                        });
+                        cx.notify();
+                    }),
+                )
+            })
+            // Reorder by dragging the whole row (Windows click jitter would
+            // turn clicks into drags; see `click_activation_drag_enabled`).
+            .when(dragging, |row| row.opacity(0.35))
+            .when_some(
+                drag.filter(|_| crate::click_activation_drag_enabled()),
+                |row, payload| {
+                    let width = self.settings.sidebar_width - 2.0 * Theme::SPACE_SM;
+                    row.on_drag(payload, move |payload, _offset, _window, cx| {
+                        cx.new(|_| SidebarChatGhost {
+                            title: payload.title.clone(),
+                            project: payload.project.clone(),
+                            harness: payload.harness,
+                            width,
+                        })
+                    })
+                },
             )
             .when_some(details, |row, details| {
                 let height = details.estimated_height();
@@ -8301,7 +8793,7 @@ impl Shell {
                     .items_center()
                     .gap(px(Theme::SPACE_SM))
                     .child(sidebar_faded_label(
-                        format!("chat-device-{id}").into(),
+                        format!("{row_id}-device").into(),
                         true,
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
@@ -8336,7 +8828,7 @@ impl Shell {
                         },
                     )
                     .child(sidebar_faded_label(
-                        format!("chat-title-{id}").into(),
+                        format!("{row_id}-title").into(),
                         true,
                         div()
                             .text_size(crate::typography::ui_rems(13.0))
@@ -8355,6 +8847,23 @@ impl Shell {
                         .flex_row()
                         .items_center()
                         .gap(px(4.0))
+                        .when_some(note, |el, note| {
+                            el.child(
+                                icon(icons::CHAT_ROUND_LINE)
+                                    .size(px(11.0))
+                                    .flex_none()
+                                    .text_color(subline),
+                            )
+                            .child(sidebar_faded_label(
+                                format!("{row_id}-note").into(),
+                                false,
+                                div()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .line_height(crate::typography::ui_rems(14.0))
+                                    .text_color(subline)
+                                    .child(note),
+                            ))
+                        })
                         .when_some(branch, |el, branch| {
                             el.child(
                                 icon(icons::GIT_BRANCH)
@@ -8363,7 +8872,7 @@ impl Shell {
                                     .text_color(subline),
                             )
                             .child(sidebar_faded_label(
-                                format!("chat-branch-{id}").into(),
+                                format!("{row_id}-branch").into(),
                                 false,
                                 div()
                                     .text_size(crate::typography::ui_rems(11.0))
@@ -12136,7 +12645,7 @@ impl Shell {
         let muted = theme.text_muted;
         let border = theme.border;
         let border_strong = theme.border_strong;
-        let (child_chat_count, has_child_chats) = self.active_child_chat_count(cx);
+        let (child_chat_count, _) = self.active_child_chat_count(cx);
         let child_chat_label: SharedString = match child_chat_count {
             0 => "Child chats".into(),
             1 => "Child chats, 1 open".into(),
@@ -12186,6 +12695,8 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
+                    // The conversation's own surfaces lead; side and child
+                    // chats sit together as the two kinds of related chat.
                     .when(!self.active_chat.is_empty(), |el| {
                         el.child(
                             row("surface-card-agents", icons::BOT, "Agents")
@@ -12200,6 +12711,37 @@ impl Shell {
                                     this.add_work_surface(RightSurface::SideChats, cx)
                                 }))
                                 .on_key_down(crate::swallow_activation_key),
+                        )
+                        .child(
+                            row(
+                                "surface-card-child-chats",
+                                icons::CHAT_ROUND_LINE,
+                                "Child chats",
+                            )
+                            .aria_label(child_chat_label)
+                            .child(div().flex_1())
+                            .when(child_chat_count > 0, |row| {
+                                row.child(
+                                    div()
+                                        .h(px(18.0))
+                                        .min_w(px(18.0))
+                                        .px(px(6.0))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .bg(badge_tone.opacity(0.12))
+                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(badge_text)
+                                        .child(child_chat_count.to_string()),
+                                )
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.add_work_surface(RightSurface::ChildChats, cx)
+                            }))
+                            .on_key_down(crate::swallow_activation_key),
                         )
                     })
                     .child(
@@ -12244,42 +12786,6 @@ impl Shell {
                                     this.add_history_surface(cx);
                                 }),
                             ),
-                        )
-                    })
-                    // Persistent chats this conversation started: listed
-                    // here instead of the sidebar tree. Shown only when the
-                    // chat has any, like the Git rows above.
-                    .when(has_child_chats, |el| {
-                        el.child(
-                            row(
-                                "surface-card-child-chats",
-                                icons::CHAT_ROUND_LINE,
-                                "Child chats",
-                            )
-                            .aria_label(child_chat_label)
-                            .child(div().flex_1())
-                            .when(child_chat_count > 0, |row| {
-                                row.child(
-                                    div()
-                                        .h(px(18.0))
-                                        .min_w(px(18.0))
-                                        .px(px(6.0))
-                                        .flex_none()
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded_full()
-                                        .bg(badge_tone.opacity(0.12))
-                                        .text_size(crate::typography::ui_rems(11.0))
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(badge_text)
-                                        .child(child_chat_count.to_string()),
-                                )
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.add_work_surface(RightSurface::ChildChats, cx)
-                            }))
-                            .on_key_down(crate::swallow_activation_key),
                         )
                     }),
             )
@@ -12824,6 +13330,24 @@ impl Shell {
                                     )
                                     .child("Side chats"),
                             )
+                            .child(
+                                popover::menu_row(&theme, false, "right-plus-child-chats")
+                                    .id("right-plus-child-chats-row")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Child chats")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_work_surface(RightSurface::ChildChats, cx);
+                                        this.close_right_plus(cx);
+                                    }))
+                                    .on_key_down(crate::swallow_activation_key)
+                                    .child(
+                                        icon(icons::CHAT_ROUND_LINE)
+                                            .size(px(13.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Child chats"),
+                            )
                         })
                         .child(
                             popover::menu_row(&theme, false, "right-plus-terminal")
@@ -12867,26 +13391,6 @@ impl Shell {
                                             .text_color(theme.text_muted),
                                     )
                                     .child(SharedString::from("History")),
-                            )
-                        })
-                        .when(self.active_child_chat_count(cx).1, |menu| {
-                            menu.child(
-                                popover::menu_row(&theme, false, "right-plus-child-chats")
-                                    .id("right-plus-child-chats-row")
-                                    .role(gpui::Role::Button)
-                                    .aria_label("Child chats")
-                                    .tab_index(0)
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.add_work_surface(RightSurface::ChildChats, cx);
-                                        this.close_right_plus(cx);
-                                    }))
-                                    .on_key_down(crate::swallow_activation_key)
-                                    .child(
-                                        icon(icons::CHAT_ROUND_LINE)
-                                            .size(px(13.0))
-                                            .text_color(theme.text_muted),
-                                    )
-                                    .child("Child chats"),
                             )
                         }),
                 )
