@@ -342,12 +342,6 @@ fn permission_preview(
     )
 }
 
-fn stage_permission_request(config: &mut ChatConfig, requested: PermissionMode) {
-    // Requested policy may update immediately, but effective/ceiling fields
-    // describe the currently active host policy until authoritative sync.
-    config.permission_mode = requested;
-}
-
 // ---------------------------------------------------------------------------
 // Pure: default resolution (no "Default" placeholders — a concrete pick always)
 // ---------------------------------------------------------------------------
@@ -938,6 +932,7 @@ pub struct Pickers {
     /// Last mid-session switch failure (shown in the ref popover).
     switch_error: Option<String>,
     account_error: Option<String>,
+    permission_error: Option<String>,
     context_error: Option<String>,
     clear_context_confirmation: bool,
     provider_switch_target: Option<HarnessId>,
@@ -1048,6 +1043,7 @@ impl Pickers {
                 this.config.model_options.clear();
                 this.switch_error = None;
                 this.context_error = None;
+                this.permission_error = None;
                 this.clear_context_confirmation = false;
                 this.provider_switch_target = None;
                 this.provider_switch_handoff = false;
@@ -1191,6 +1187,7 @@ impl Pickers {
             switch_task: None,
             switch_error: None,
             account_error: None,
+            permission_error: None,
             context_error: None,
             clear_context_confirmation: false,
             provider_switch_target: None,
@@ -2628,32 +2625,21 @@ impl Pickers {
         else {
             return;
         };
-        let Some(mut config) = self
-            .binding
-            .chat_row(self.state.read(cx))
-            .and_then(|chat| chat.config.clone())
-            .or_else(|| self.resolved(cx).chat_config())
-        else {
+        let Some(engine) = self.engine(cx) else {
+            self.permission_error = Some("Engine not connected. Access was not changed.".into());
+            cx.notify();
             return;
         };
-        stage_permission_request(&mut config, mode);
-        // Preserve the host-authoritative effective policy while this mutate
-        // is pending. Active work keeps that policy until a safe boundary;
-        // the engine's synced ChatConfig updates effective/ceiling afterward.
-        self.state.update(cx, |state, cx| {
-            state.apply_chat_config(&chat_id, config);
-            cx.notify();
-        });
+        // Both requested and effective policy come from the host. Optimistic
+        // staging left rejected/offline requests looking like pending grants.
+        self.permission_error = None;
         let actor = self
             .state
             .read(cx)
             .local_device_id
             .clone()
             .unwrap_or_else(|| "local-user".into());
-        let Some(engine) = self.engine(cx) else {
-            return;
-        };
-        self.mutate_task = Some(cx.spawn(async move |_, _| {
+        self.mutate_task = Some(cx.spawn(async move |this, cx| {
             let intent = serde_json::json!({
                 "kind": "setPermission",
                 "mode": mode,
@@ -2661,6 +2647,13 @@ impl Pickers {
             });
             if let Err(error) = crate::task_commands::execute(&engine, &chat_id, intent).await {
                 tracing::warn!(%error, "setThreadPermissionMode mutate failed");
+                this.update(cx, |pickers, cx| {
+                    if pickers.binding.chat_id(pickers.state.read(cx)) == Some(chat_id.as_str()) {
+                        pickers.permission_error = Some(error.to_string());
+                        cx.notify();
+                    }
+                })
+                .ok();
             }
         }));
     }
@@ -3678,6 +3671,15 @@ impl Pickers {
     /// still waiting to apply keeps the effective icon and adds a corner dot;
     /// the tooltip names both.
     fn access_chip_content(&self, theme: &Theme, cx: &App) -> AccessChip {
+        if let Some(error) = &self.permission_error {
+            return AccessChip {
+                icon: crate::icons::SHIELD_WARNING,
+                tint: Some(theme.warning),
+                title: "Access change failed".into(),
+                detail: error.clone().into(),
+                attention: true,
+            };
+        }
         let choice = self.permission_choice_state(cx);
         let requested = self.requested_permission_mode(cx);
         let effective = self.effective_permission_preview(cx, requested);
@@ -3736,14 +3738,34 @@ impl Pickers {
             (PermissionChoiceState::Selected(_), EffectivePermissionPreview::Known(mode)) => {
                 let (icon, tint, title, _) = level(mode);
                 let (_, _, requested_title, _) = level(requested);
+                let ceiling = self
+                    .binding
+                    .chat_row(self.state.read(cx))
+                    .and_then(|chat| chat.config.as_ref())
+                    .and_then(|config| config.permission_ceiling_source)
+                    .map(|source| match source {
+                        luna_proto::PermissionCeilingSource::ParentThread => "its parent chat",
+                        luna_proto::PermissionCeilingSource::Machine => "this machine's policy",
+                        luna_proto::PermissionCeilingSource::Environment => {
+                            "this environment's policy"
+                        }
+                        luna_proto::PermissionCeilingSource::Provider => {
+                            "the provider or selected model"
+                        }
+                    });
+                let detail = match ceiling {
+                    Some(ceiling) => format!(
+                        "{requested_title} was requested, but access is limited by {ceiling}."
+                    ),
+                    None => format!(
+                        "{requested_title} is requested and applies at the next safe point."
+                    ),
+                };
                 AccessChip {
                     icon,
                     tint,
                     title: title.into(),
-                    detail: format!(
-                        "{requested_title} is requested and applies at the next safe point."
-                    )
-                    .into(),
+                    detail: detail.into(),
                     attention: true,
                 }
             }
@@ -4710,6 +4732,16 @@ impl Pickers {
                     )
                 },
             ))
+            .when_some(self.permission_error.clone(), |panel, error| {
+                panel.child(
+                    div()
+                        .px(px(10.0))
+                        .py(px(6.0))
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.warning)
+                        .child(error),
+                )
+            })
             .into_any_element()
     }
 
@@ -6789,22 +6821,47 @@ mod tests {
             EffectivePermissionPreview::Pending,
             "a remote draft must not infer Full from provider capability alone"
         );
-        let mut config = ResolvedRunConfig {
-            harness: Some(HarnessId::Codex),
-            permission_mode: PermissionMode::Ask,
-            effective_permission_mode: PermissionMode::Ask,
-            ..Default::default()
-        }
-        .chat_config()
-        .unwrap();
-        config.permission_ceiling_source = Some(luna_proto::PermissionCeilingSource::Machine);
-        stage_permission_request(&mut config, PermissionMode::Full);
-        assert_eq!(config.permission_mode, PermissionMode::Full);
-        assert_eq!(config.effective_permission_mode, PermissionMode::Ask);
-        assert_eq!(
-            config.permission_ceiling_source,
-            Some(luna_proto::PermissionCeilingSource::Machine)
-        );
+    }
+
+    #[gpui::test]
+    fn permission_chip_and_disconnected_change_preserve_authoritative_access(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.chats = vec![serde_json::from_value(serde_json::json!({
+                "id":"permission-chat", "deviceId":"device", "archived":false,
+                "createdAt":"2026-10-03T00:00:00Z", "config": {
+                    "harness":"codex", "modelOptions":{}, "sandbox":"workspace-write",
+                    "permissionMode":"full", "effectivePermissionMode":"auto",
+                    "permissionCeilingSource":"parentThread", "permissionDegradationReason":"parentCeiling"
+                }
+            })).unwrap()];
+            state.selected_chat = Some("permission-chat".into());
+            state
+        });
+        let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+        pickers.update(cx, |pickers, cx| {
+            let chip = pickers.access_chip_content(&Theme::dark(), cx);
+            assert_eq!(chip.title.as_ref(), "Approve for me");
+            assert!(
+                chip.detail.contains("parent"),
+                "explain the ceiling: {}",
+                chip.detail
+            );
+            assert!(!chip.detail.contains("next safe point"));
+            let original = state.read(cx).chats[0].config.clone();
+            pickers.update_chat_permission(PermissionMode::Auto, cx);
+            assert_eq!(
+                state.read(cx).chats[0].config,
+                original,
+                "disconnected mutation must not stage a request"
+            );
+            assert!(
+                pickers.permission_error.is_some(),
+                "connection failure must be visible"
+            );
+        });
     }
 
     #[gpui::test]

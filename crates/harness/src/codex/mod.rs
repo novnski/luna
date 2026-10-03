@@ -1493,6 +1493,15 @@ async fn run_session(session: Session) {
         p.insert("approvalPolicy".into(), approval_policy.into());
         p.insert("approvalsReviewer".into(), approvals_reviewer.into());
         p.insert("sandbox".into(), sandbox_mode(request.sandbox).into());
+        if !title_only && request.sandbox == luna_proto::SandboxLevel::WorkspaceWrite {
+            // Review/goal turns can start in the provider before LUNA sends a
+            // turn/start. Pin their network policy too, including on resume.
+            p.entry("config".to_string())
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("thread config is an object")
+                .insert("sandbox_workspace_write.network_access".into(), true.into());
+        }
         if let Some(model) = &request.model {
             p.insert("model".into(), Value::String(model.clone()));
         }

@@ -3278,8 +3278,19 @@ impl SessionsEngine {
         };
         let mut config = original.clone();
         let harness = config.harness;
-        let policy =
-            crate::permissions::resolve_preview_for(harness, config.model.as_deref(), mode);
+        let mut preview =
+            crate::permissions::preview_request_for(harness, config.model.as_deref(), mode);
+        preview.cwd = expand_home(chat.cwd.as_deref().unwrap_or("."));
+        preview.sandbox = config.sandbox;
+        preview.parent_permission_ceiling = chat
+            .child_thread
+            .as_ref()
+            .map(|child| self.child_permission_ceiling(child));
+        self.admit_side_chat_run(chat_id, &mut preview)?;
+        // Admission caps a side-chat run's requested mode. Keep the original
+        // picker intent so the audit names the ceiling and hidden Ask rejects.
+        preview.permission_mode = mode;
+        let policy = crate::permissions::resolve_run_policy(harness, &mut preview);
         if crate::permissions::hidden_ask_fallback(&policy) {
             return Err(EngineError::Other(
                 "this provider, model, or execution ceiling cannot enforce Approve for me or Full access; choose an available mode"
@@ -3347,6 +3358,31 @@ impl SessionsEngine {
             _account_transition: None,
             _chat_transition: transition,
         })
+    }
+
+    /// Picker publication and dispatch use the same durable child boundary.
+    /// A user grant replaces the parent's ceiling, but never a stricter saved
+    /// child sandbox. Legacy workspace ceilings must not report Full while
+    /// the adapter still receives workspace-write.
+    fn child_permission_ceiling(&self, child: &luna_proto::ChildThread) -> PermissionMode {
+        let user_granted = child
+            .provisioning
+            .as_ref()
+            .is_some_and(|p| p.granted_by_user);
+        let parent = self
+            .inner
+            .workspace()
+            .and_then(|workspace| workspace.chat(&child.parent_task_id).ok().flatten())
+            .and_then(|parent| parent.config)
+            .filter(|_| !user_granted)
+            .map(|config| config.effective_permission_mode)
+            .unwrap_or(child.permission_ceiling);
+        let sandbox = match child.sandbox_ceiling {
+            Some(SandboxLevel::ReadOnly) => PermissionMode::Ask,
+            Some(SandboxLevel::WorkspaceWrite) => PermissionMode::Auto,
+            Some(SandboxLevel::DangerFullAccess) | None => PermissionMode::Full,
+        };
+        child.permission_ceiling.min(parent).min(sandbox)
     }
 
     /// Establish a provider-wide lifecycle boundary. Active turns are never
@@ -4144,21 +4180,7 @@ impl SessionsEngine {
             .and_then(|workspace| workspace.chat(chat_id).ok().flatten())
             .and_then(|chat| chat.child_thread);
         if let Some(child) = &child {
-            // A user-granted child keeps the access the user granted; every
-            // other child stays capped by its parent's current access.
-            let user_granted = child
-                .provisioning
-                .as_ref()
-                .is_some_and(|provisioning| provisioning.granted_by_user);
-            let current_parent_ceiling = self
-                .inner
-                .workspace()
-                .and_then(|workspace| workspace.chat(&child.parent_task_id).ok().flatten())
-                .and_then(|parent| parent.config)
-                .map(|config| config.effective_permission_mode)
-                .filter(|_| !user_granted)
-                .unwrap_or(child.permission_ceiling);
-            let ceiling = std::cmp::min(child.permission_ceiling, current_parent_ceiling);
+            let ceiling = self.child_permission_ceiling(child);
             request.parent_permission_ceiling = Some(
                 request
                     .parent_permission_ceiling
@@ -4186,7 +4208,8 @@ impl SessionsEngine {
             }
             request.permission_mode = PermissionMode::Ask;
         }
-        let permission_policy = crate::permissions::resolve_run_policy(harness_id, &mut request);
+        let mut permission_policy =
+            crate::permissions::resolve_run_policy(harness_id, &mut request);
         if let Some(sandbox) = side_sandbox {
             if sandbox == SandboxLevel::ReadOnly
                 || (sandbox == SandboxLevel::WorkspaceWrite
@@ -4194,6 +4217,12 @@ impl SessionsEngine {
             {
                 request.sandbox = sandbox;
             }
+        }
+        if harness_id == HarnessId::Codex && request.sandbox == SandboxLevel::ReadOnly {
+            // A legacy child/side-chat read-only ceiling also keeps Codex's
+            // read-only network policy; do not report workspace networking.
+            permission_policy.network_policy = luna_proto::PermissionNetworkPolicy::Restricted;
+            request.permission_policy = Some(permission_policy.clone());
         }
         if crate::permissions::hidden_ask_fallback(&permission_policy) {
             return Err(EngineError::Other(

@@ -219,6 +219,255 @@ fn binding_session(core: &EngineCore, chat: &str) -> Option<String> {
         .map(|binding| binding.provider_task_id)
 }
 
+/// RPC mode changes, durable child provisioning and actual Claude subprocess
+/// startup must agree on access. See docs/qa/thread-approvals-2026-10-03.md.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_permission_changes_obey_creation_and_current_parent_ceilings() {
+    use luna_proto::{PermissionCeilingSource, PermissionMode, SandboxLevel};
+
+    for (case, initial, parent_mode, explicit_grant, expected) in [
+        ("creation-cap", "auto", "full", false, PermissionMode::Auto),
+        (
+            "current-parent-cap",
+            "full",
+            "auto",
+            false,
+            PermissionMode::Auto,
+        ),
+        ("explicit-grant", "auto", "auto", true, PermissionMode::Full),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().canonicalize().unwrap().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let core = engine(root.path());
+        let client = luna_rpc::memory_client(core.rpc_service());
+        let parent = uuid::Uuid::new_v4().to_string();
+        create_parent(&core, &client, &parent, &project).await;
+        let mut config = claude_config(initial);
+        config["model"] = json!("claude-opus-4-6");
+        core.workspace
+            .set_chat_config(&parent, &serde_json::from_value(config).unwrap())
+            .unwrap();
+        queue(&client, &parent, "parent-first", "sid:parent hello").await;
+        until(
+            "parent identity",
+            || {
+                binding_session(&core, &parent).is_some()
+                    && core
+                        .sessions
+                        .session_status(&parent)
+                        .is_some_and(|s| s.status == SessionStatus::Idle)
+            },
+            || diag(&core, &[&parent], &project),
+        )
+        .await;
+        let mut request = json!({
+            "prompt":"sid:child-permission Reply CHILD_RESULT_OK and nothing else.", "idempotencyKey":case, "title":"Permission fixture",
+            "reportResults":false, "continueParent":false
+        });
+        if explicit_grant {
+            request["permissionMode"] = json!("full");
+        }
+        let child = core
+            .rpc_service()
+            .seed_child_for_qa(parent.clone(), serde_json::from_value(request).unwrap())
+            .await
+            .unwrap()
+            .task_id;
+        until(
+            "child becomes idle",
+            || {
+                has_text(&core, &child, MessageRole::Assistant, "CHILD_RESULT_OK")
+                    && core
+                        .sessions
+                        .session_status(&child)
+                        .is_some_and(|s| s.status == SessionStatus::Idle)
+            },
+            || diag(&core, &[&parent, &child], &project),
+        )
+        .await;
+
+        if initial == "full" {
+            assert_eq!(
+                core.workspace
+                    .chat(&child)
+                    .unwrap()
+                    .unwrap()
+                    .child_thread
+                    .unwrap()
+                    .sandbox_ceiling,
+                Some(SandboxLevel::DangerFullAccess),
+                "Full parent must not leak its old workspace sandbox into the child"
+            );
+        }
+        client
+            .call(
+                "Mutate",
+                json!({"op":"setThreadPermissionMode", "chatId":parent, "mode":parent_mode}),
+            )
+            .await
+            .unwrap();
+        client
+            .call(
+                "Mutate",
+                json!({"op":"setThreadPermissionMode", "chatId":child, "mode":"full"}),
+            )
+            .await
+            .unwrap();
+        let config = core
+            .workspace
+            .chat(&child)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap();
+        assert_eq!(
+            config.permission_mode,
+            PermissionMode::Full,
+            "{case}: requested mode"
+        );
+        assert_eq!(
+            config.effective_permission_mode, expected,
+            "{case}: effective mode"
+        );
+        assert_eq!(
+            config.permission_ceiling_source,
+            (expected != PermissionMode::Full).then_some(PermissionCeilingSource::ParentThread),
+            "{case}: ceiling"
+        );
+        assert_eq!(
+            config.permission_audit.last().unwrap().effective_mode,
+            expected,
+            "{case}: audit"
+        );
+        queue(
+            &client,
+            &child,
+            "permission-follow-up",
+            "sid:child-permission follow-up",
+        )
+        .await;
+        until(
+            "follow-up completes",
+            || {
+                entries(&core, &child)
+                    .iter()
+                    .filter(|entry| {
+                        entry.role == MessageRole::Assistant
+                            && text(entry).contains("CHILD_RESULT_OK")
+                    })
+                    .count()
+                    >= 2
+                    && core
+                        .sessions
+                        .session_status(&child)
+                        .is_some_and(|s| s.status == SessionStatus::Idle)
+            },
+            || diag(&core, &[&parent, &child], &project),
+        )
+        .await;
+        let applied = core
+            .workspace
+            .chat(&child)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap();
+        assert_eq!(
+            applied.effective_permission_mode, expected,
+            "{case}: dispatch agrees with picker"
+        );
+        let argv = std::fs::read_to_string(project.join(".cc09-fake.log")).unwrap();
+        let last_launch = argv
+            .lines()
+            .filter(|line| line.starts_with("ARGV "))
+            .last()
+            .unwrap();
+        assert!(
+            last_launch.contains(if expected == PermissionMode::Full {
+                "--permission-mode bypassPermissions"
+            } else {
+                "--permission-mode auto"
+            }),
+            "{case}: {last_launch}"
+        );
+        core.sessions.interrupt(&child).await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn child_permission_change_rejects_hidden_ask_without_mutation() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().canonicalize().unwrap().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let core = engine(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let parent = uuid::Uuid::new_v4().to_string();
+    create_parent(&core, &client, &parent, &project).await;
+    queue(&client, &parent, "parent-first", "sid:ask-parent hello").await;
+    until(
+        "Ask parent identity",
+        || {
+            binding_session(&core, &parent).is_some()
+                && core
+                    .sessions
+                    .session_status(&parent)
+                    .is_some_and(|s| s.status == SessionStatus::Idle)
+        },
+        || diag(&core, &[&parent], &project),
+    )
+    .await;
+    let child = create_child(
+        &core,
+        &parent,
+        "ask-ceiling",
+        "Ask child",
+        "sid:ask-child CHILD_RESULT_OK",
+    )
+    .await;
+    until(
+        "Ask child idle",
+        || {
+            core.sessions
+                .session_status(&child)
+                .is_some_and(|s| s.status == SessionStatus::Idle)
+        },
+        || diag(&core, &[&child], &project),
+    )
+    .await;
+    let before = core
+        .workspace
+        .chat(&child)
+        .unwrap()
+        .unwrap()
+        .config
+        .unwrap();
+    let result = client
+        .call(
+            "Mutate",
+            json!({"op":"setThreadPermissionMode", "chatId":child, "mode":"full"}),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(
+            result["receipt"]["status"].as_str(),
+            Some("rejected" | "failed")
+        ),
+        "Full must not publish above the Ask parent ceiling: {result}"
+    );
+    assert_eq!(
+        core.workspace
+            .chat(&child)
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap(),
+        before
+    );
+    core.sessions.interrupt(&child).await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn claude_manual_child_runs_fresh_reports_as_a_peer_and_survives_restart() {
     let root = tempfile::tempdir().unwrap();

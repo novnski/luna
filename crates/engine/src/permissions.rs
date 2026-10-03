@@ -143,6 +143,20 @@ pub fn machine_name() -> String {
         })
 }
 
+/// Product Full access supersedes the native providers' legacy sandbox field.
+/// Preserve explicit legacy restrictions for other modes and test harnesses.
+pub(crate) fn effective_sandbox(
+    harness: HarnessId,
+    sandbox: SandboxLevel,
+    mode: PermissionMode,
+) -> SandboxLevel {
+    if matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode) && mode == PermissionMode::Full {
+        SandboxLevel::DangerFullAccess
+    } else {
+        sandbox
+    }
+}
+
 trait Pipe: Sized {
     fn pipe<T>(self, f: impl FnOnce(Self) -> T) -> T {
         f(self)
@@ -264,7 +278,11 @@ pub fn resolve_run_policy(harness: HarnessId, request: &mut RunRequest) -> Permi
     };
     let network_policy = match (harness, effective) {
         (_, PermissionMode::Full) => PermissionNetworkPolicy::Unrestricted,
-        (HarnessId::Codex | HarnessId::ClaudeCode, _) => PermissionNetworkPolicy::Restricted,
+        // Codex workspace-write deliberately enables network access, matching
+        // the adapter's thread config and turn policy. The workspace boundary
+        // applies to filesystem writes, not a network deny policy.
+        (HarnessId::Codex, _) => PermissionNetworkPolicy::Unrestricted,
+        (HarnessId::ClaudeCode, _) => PermissionNetworkPolicy::Restricted,
         _ => PermissionNetworkPolicy::ProviderDefault,
     };
     let policy = PermissionPolicy {
@@ -314,7 +332,18 @@ pub fn resolve_preview_for(
     model: Option<&str>,
     requested: PermissionMode,
 ) -> PermissionPolicy {
-    let mut request = RunRequest {
+    let mut request = preview_request_for(harness, model, requested);
+    resolve_run_policy(harness, &mut request)
+}
+
+/// A preview request can pass through the same inherited-access admission as
+/// dispatch before its policy is resolved, without starting a provider.
+pub(crate) fn preview_request_for(
+    harness: HarnessId,
+    model: Option<&str>,
+    requested: PermissionMode,
+) -> RunRequest {
+    RunRequest {
         review: None,
         goal: None,
         input_items: Vec::new(),
@@ -334,8 +363,7 @@ pub fn resolve_preview_for(
         resume: None,
         attachments: Vec::new(),
         worktree: None,
-    };
-    resolve_run_policy(harness, &mut request)
+    }
 }
 
 #[cfg(test)]
@@ -371,7 +399,7 @@ mod tests {
         let mut request = request(PermissionMode::Ask);
         let policy = resolve_run_policy(HarnessId::Codex, &mut request);
         assert_eq!(policy.effective_mode, PermissionMode::Ask);
-        assert_eq!(policy.network_policy, PermissionNetworkPolicy::Restricted);
+        assert_eq!(policy.network_policy, PermissionNetworkPolicy::Unrestricted);
         assert_eq!(request.sandbox, SandboxLevel::WorkspaceWrite);
         assert!(!request.auto_approve);
     }
@@ -422,7 +450,7 @@ mod tests {
         let policy = resolve_run_policy(HarnessId::Codex, &mut request);
         assert_eq!(policy.effective_mode, PermissionMode::Ask);
         assert!(hidden_ask_fallback(&policy));
-        assert_eq!(policy.network_policy, PermissionNetworkPolicy::Restricted);
+        assert_eq!(policy.network_policy, PermissionNetworkPolicy::Unrestricted);
         assert_ne!(request.sandbox, SandboxLevel::DangerFullAccess);
     }
 

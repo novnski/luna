@@ -640,6 +640,35 @@ async fn side_chat_permission_ceiling_preserves_legacy_and_full_boundaries() {
             )
             .await
             .unwrap();
+        let side_id = created["meta"]["id"].as_str().unwrap();
+        let changed = client
+            .call(
+                "Mutate",
+                json!({
+                    "op":"setThreadPermissionMode", "chatId":side_id, "mode":"full"
+                }),
+            )
+            .await
+            .unwrap();
+        if expected_mode == PermissionMode::Ask {
+            assert_eq!(
+                changed["receipt"]["status"], "failed",
+                "an Ask-only side chat must refuse Full: {changed}"
+            );
+        } else {
+            assert_eq!(changed["receipt"]["status"], "applied", "{changed}");
+        }
+        assert_eq!(
+            core.workspace
+                .chat(side_id)
+                .unwrap()
+                .unwrap()
+                .config
+                .unwrap()
+                .effective_permission_mode,
+            expected_mode,
+            "the side-chat picker must publish the same ceiling as dispatch"
+        );
         client.call("SendSideChat", json!({"id":created["meta"]["id"],"lease":created["lease"],"messageId":uuid::Uuid::new_v4().to_string(),"text":"PERMISSION_BOUNDARY_ONLY"})).await.unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
             while recorder.0.lock().unwrap().len() <= index {

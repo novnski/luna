@@ -11,28 +11,10 @@ use luna_proto::{ChatConfig, RunRequest};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
+use crate::permissions::effective_sandbox;
 use crate::{DocHost, SessionsEngine, WorkspaceHost, device_write::DeviceWriteHandle};
 
 const PAGE_SIZE: usize = 50;
-
-/// Native product Full derives its sandbox at dispatch; the stored legacy
-/// field is unchanged by the permission picker. Follow the effective policy
-/// rather than treating that old WorkspaceWrite value as an Auto ceiling.
-fn effective_sandbox(
-    harness: luna_proto::HarnessId,
-    sandbox: luna_proto::SandboxLevel,
-    mode: luna_proto::PermissionMode,
-) -> luna_proto::SandboxLevel {
-    if matches!(
-        harness,
-        luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode
-    ) && mode == luna_proto::PermissionMode::Full
-    {
-        luna_proto::SandboxLevel::DangerFullAccess
-    } else {
-        sandbox
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

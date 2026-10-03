@@ -869,7 +869,13 @@ impl EngineRpc {
             parent_task_id: parent_id.into(),
             creation_command_id: command_id.into(),
             permission_ceiling: if granted_by_user { granted } else { ceiling },
-            sandbox_ceiling: (!granted_by_user).then_some(parent_config.sandbox),
+            sandbox_ceiling: (!granted_by_user).then(|| {
+                crate::permissions::effective_sandbox(
+                    parent_config.harness,
+                    parent_config.sandbox,
+                    parent_config.effective_permission_mode,
+                )
+            }),
             initial_message_id: format!("child-initial:{task_id}"),
             initial_prompt: request.prompt,
             report_results: request.report_results,
