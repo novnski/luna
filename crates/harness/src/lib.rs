@@ -339,6 +339,15 @@ pub trait Harness: Send + Sync {
     async fn models_live(&self) -> Result<Vec<Model>, HarnessError> {
         self.models().await
     }
+    /// Discovery for the same account/executable a child will execute with.
+    /// The default keeps custom/test adapters injectable through the registry.
+    async fn models_for_execution(
+        &self,
+        _provider_home: Option<&std::path::Path>,
+        _force_file_auth: bool,
+    ) -> Result<Vec<Model>, HarnessError> {
+        self.models_live().await
+    }
     /// Installed-use native inputs scoped to the execution account and workspace.
     async fn composer_catalog(
         &self,

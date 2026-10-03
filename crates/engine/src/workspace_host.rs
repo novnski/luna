@@ -823,6 +823,23 @@ impl WorkspaceHost {
         }
     }
 
+    /// Device-local UI state must distinguish account profiles sharing one
+    /// device root. Hash the immutable registry identity; expose no paths or
+    /// raw organization/user identifiers over the handshake.
+    pub(crate) fn profile_id(&self, scope: luna_proto::WorkspaceScope) -> String {
+        use sha2::Digest as _;
+        let config = &self.inner.config;
+        let identity = serde_json::to_vec(&(
+            "luna-profile-v1",
+            &config.device_id,
+            scope,
+            &config.org_id,
+            &config.user_id,
+        ))
+        .expect("profile identity serializes");
+        crate::repos::hex(&sha2::Sha256::digest(identity))
+    }
+
     pub fn device_id(&self) -> &str {
         &self.inner.config.device_id
     }

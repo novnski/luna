@@ -27,6 +27,9 @@ use crate::markdown::render::LinkUi;
 pub(super) enum PaneIdentity {
     Side,
     Child,
+    /// An ordinary chat the user listed beside the host chat: it has no
+    /// parent, so the pane names its host plainly and links nowhere.
+    Alongside,
 }
 
 impl PaneIdentity {
@@ -34,6 +37,7 @@ impl PaneIdentity {
         match self {
             Self::Side => "Side chat",
             Self::Child => "Child chat",
+            Self::Alongside => "Alongside",
         }
     }
 }
@@ -296,7 +300,10 @@ pub(super) fn render_pane_header<V: 'static>(
             ),
         );
     }
-    let parent_label: SharedString = format!("from {}", chrome.parent_title).into();
+    let parent_label: SharedString = match chrome.identity {
+        PaneIdentity::Alongside => format!("beside {}", chrome.parent_title).into(),
+        _ => format!("from {}", chrome.parent_title).into(),
+    };
     let parent = match actions.show_parent {
         Some(show_parent) => header_control(
             "pane-chat-parent",
@@ -612,6 +619,11 @@ impl PaneChatView {
         }
     }
 
+    #[cfg(feature = "appshots-fixture")]
+    pub(super) fn identity(&self) -> PaneIdentity {
+        self.identity
+    }
+
     pub(super) fn transcript(&self) -> &Entity<Transcript> {
         &self.transcript
     }
@@ -648,14 +660,14 @@ impl PaneChatView {
                 })
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or_else(|| "New side chat".into()),
-            PaneIdentity::Child => chat
+            PaneIdentity::Child | PaneIdentity::Alongside => chat
                 .and_then(|chat| chat.title.clone())
                 .map(|title| transcript::single_line(&title))
                 .unwrap_or_else(|| self.identity.label().to_string()),
         };
         let theme = Theme::of(cx);
         let (status, archived) = match (self.identity, chat) {
-            (PaneIdentity::Child, Some(chat)) => {
+            (PaneIdentity::Child | PaneIdentity::Alongside, Some(chat)) => {
                 let status = super::child_chats::child_chat_status(state, chat, now);
                 (
                     Some((
@@ -712,15 +724,20 @@ impl Render for PaneChatView {
                 back_label: self.back_label,
                 // (Side chats: Back parks the side chat; see SideChatPanel.)
                 back: Rc::new(|_, cx| cx.emit(PaneChatEvent::Back)),
-                // A side chat is never a main chat; a child can be promoted.
-                open_main: (self.identity == PaneIdentity::Child).then(|| {
+                // A side chat is never a main chat; a child or an alongside
+                // chat opens as one.
+                open_main: (self.identity != PaneIdentity::Side).then(|| {
                     Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
                         cx.emit(PaneChatEvent::OpenAsMain(open_id.clone()))
                     }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
                 }),
-                show_parent: Some(Rc::new(move |_, cx| {
-                    cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
-                })),
+                // An alongside chat has no parent to show; its host is named
+                // as text only.
+                show_parent: (self.identity != PaneIdentity::Alongside).then(|| {
+                    Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
+                        cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
+                    }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
+                }),
                 extra: if self.identity == PaneIdentity::Side {
                     let border_strong = theme.border_strong;
                     let hover = crate::theme::ink(0.06);

@@ -221,12 +221,19 @@ pub struct CreateChildThreadRequest {
     pub idempotency_key: String,
     #[serde(default)]
     pub title: Option<String>,
-    /// Absent: the parent's model.
+    /// Absent: the parent's provider. Another provider starts a fresh session
+    /// using its own account/defaults, never the parent's native binding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<crate::HarnessId>,
+    /// Absent: the parent's model for the same provider; otherwise provider default.
     #[serde(default)]
     pub model: Option<String>,
-    /// Absent: the parent's reasoning level.
+    /// Absent: inherited only when provider and model are unchanged.
     #[serde(default)]
     pub reasoning: Option<crate::ReasoningLevel>,
+    /// Provider-advertised option ID -> choice ID. Never internal runtime keys.
+    #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub model_options: serde_json::Map<String, serde_json::Value>,
     /// Explicit existing directory. Only valid with `checkout` absent or
     /// `current`; absent means the parent's current checkout.
     #[serde(default)]
@@ -241,11 +248,54 @@ pub struct CreateChildThreadRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checkout: Option<ChildCheckoutRequest>,
     /// Requested access level. Absent: the parent's effective access. Access
-    /// above the parent's ceiling needs an explicit user grant: the manual
-    /// creation dialog is that grant; a model request is shown on the
-    /// approval card and capped unless the user picks the grant choice.
+    /// above the parent's ceiling needs an explicit user grant on the approval
+    /// card and is capped unless the user picks the grant choice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<crate::PermissionMode>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChildModelCatalogRequest {
+    #[serde(default)]
+    pub provider: Option<crate::HarnessId>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default)]
+    pub offset: usize,
+    #[serde(default = "child_model_page_size")]
+    pub limit: usize,
+}
+fn child_model_page_size() -> usize {
+    10
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildModelCatalog {
+    pub provider: crate::HarnessId,
+    pub models: Vec<crate::Model>,
+    pub next_offset: Option<usize>,
+}
+
+/// Configured execution choice, not proof that the provider accepted startup.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildExecutionSelection {
+    pub provider: crate::HarnessId,
+    pub model: Option<String>,
+    pub reasoning: Option<crate::ReasoningLevel>,
+    pub model_options: serde_json::Map<String, serde_json::Value>,
+}
+impl From<&crate::ChatConfig> for ChildExecutionSelection {
+    fn from(config: &crate::ChatConfig) -> Self {
+        Self {
+            provider: config.harness,
+            model: config.model.clone(),
+            reasoning: config.reasoning,
+            model_options: config.model_options.clone(),
+        }
+    }
 }
 fn child_reports_default() -> bool {
     true
@@ -282,6 +332,8 @@ pub struct ChildThreadReceipt {
     /// What was actually provisioned (checkout, branch, granted access).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provisioning: Option<ChildProvisioning>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ChildExecutionSelection>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

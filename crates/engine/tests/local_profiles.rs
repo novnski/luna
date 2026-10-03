@@ -61,6 +61,47 @@ async fn shutdown(core: EngineCore) {
     drop(core);
 }
 
+#[tokio::test]
+async fn resolved_profile_ids_separate_accounts_on_one_device_and_survive_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let first = assemble(EngineProfile::development(root.path(), "org-a", "user-a"));
+    let a = luna_rpc::memory_client(first.rpc_service())
+        .call("EngineInfo", serde_json::json!({}))
+        .await
+        .unwrap();
+    shutdown(first).await;
+    let second = assemble(EngineProfile::development(root.path(), "org-b", "user-b"));
+    let b = luna_rpc::memory_client(second.rpc_service())
+        .call("EngineInfo", serde_json::json!({}))
+        .await
+        .unwrap();
+    shutdown(second).await;
+    let reopened = assemble(EngineProfile::development(root.path(), "org-a", "user-a"));
+    let restored = luna_rpc::memory_client(reopened.rpc_service())
+        .call("EngineInfo", serde_json::json!({}))
+        .await
+        .unwrap();
+    assert_eq!(a["deviceId"], b["deviceId"]);
+    assert_eq!(a["workspaceScope"], b["workspaceScope"]);
+    assert_ne!(a["profileId"], b["profileId"]);
+    assert_eq!(a["profileId"], restored["profileId"]);
+    let id = a["profileId"].as_str().unwrap();
+    assert_eq!(id.len(), 64);
+    assert!(id.bytes().all(|byte| byte.is_ascii_hexdigit()));
+    if let Ok(dir) = std::env::var("PANE_ENGINE_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            Path::new(&dir).join("profile-placement-identities.json"),
+            serde_json::to_vec_pretty(
+                &serde_json::json!({"first":a,"otherAccount":b,"reopened":restored}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    shutdown(reopened).await;
+}
+
 fn concurrent_engine_info(
     config: Arc<EngineConfig>,
     workers: usize,

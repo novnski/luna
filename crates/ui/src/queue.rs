@@ -2594,6 +2594,7 @@ mod tests {
                         device_id: "local".into(),
                         workspace_scope: luna_proto::WorkspaceScope::Local,
                         capabilities: vec![luna_proto::capabilities::MESSAGE_QUEUE_V1.into()],
+                        profile_id: None,
                     },
                     "memory://owner-rollback".into(),
                 ));

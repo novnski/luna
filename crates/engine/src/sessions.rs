@@ -209,8 +209,11 @@ struct ChildCardPlan {
     /// Requested access above the ceiling: the explicit grant choice.
     escalation: Option<PermissionMode>,
     checkout: String,
+    provider: String,
+    account: String,
     model: String,
     reasoning: String,
+    model_options: String,
 }
 
 /// "Ask access", "Auto access", "Full access".
@@ -322,14 +325,17 @@ impl LunaSendProposal {
                 id: format!("question-{}", self.request_id),
                 header: "LUNA approval".into(),
                 question: format!(
-                    "Create a fresh persistent child {} under {} in project {} on {}?\nCheckout: {}\nModel: {}; reasoning: {}; title: {}\nAccess: {}\nResults: {}; queue parent continuation: {}. Only the explicit prompt is copied.\n\n{}",
+                    "Create a fresh persistent child {} under {} in project {} on {}?\nCheckout: {}\nProvider: {}; account: {}; model: {}; reasoning: {}; options: {}; title: {}\nAccess: {}\nResults: {}; queue parent continuation: {}. Only the explicit prompt is copied.\n\n{}",
                     self.fence.request.task_id,
                     self.claim.source_task_id,
                     self.project_id,
                     self.environment_id,
                     plan.checkout,
+                    plan.provider,
+                    plan.account,
                     plan.model,
                     plan.reasoning,
+                    plan.model_options,
                     request.title.as_deref().unwrap_or("untitled"),
                     access,
                     request.report_results,
@@ -1544,20 +1550,19 @@ impl SessionsEngine {
             crate::cross_task_tools::CrossTaskAuthority::from_context(context, delivery, false);
         let (mut tools, mut omitted) =
             crate::cross_task_tools::CrossTaskTools::new(backend).catalog(&authority);
-        // The backend rejects children of side chats; never advertise it.
+        // The backend rejects children of side chats; never advertise their
+        // creation or its model-discovery helper on this role.
         if context
             .chat
             .as_ref()
             .is_some_and(|chat| chat.role == luna_proto::RuntimeChatRole::Side)
-            && let Some(index) = tools.iter().position(|tool| tool.name == "create_thread")
         {
-            tools.remove(index);
-            omitted.push(luna_proto::OmittedRuntimeTool {
-                name: "create_thread".into(),
-                reason:
-                    "side chats cannot create child chats; create them from the main conversation"
-                        .into(),
-            });
+            for name in ["create_thread", "list_child_models"] {
+                if let Some(index) = tools.iter().position(|tool| tool.name == name) {
+                    tools.remove(index);
+                    omitted.push(luna_proto::OmittedRuntimeTool { name: name.into(), reason: "side chats cannot create child chats; create them from the main conversation".into() });
+                }
+            }
         }
         (tools, omitted)
     }
@@ -1820,6 +1825,7 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         request: &luna_proto::CreateChildThreadRequest,
+        execution: Option<&ChatConfig>,
     ) -> ChildCardPlan {
         let parent = self
             .inner
@@ -1830,7 +1836,11 @@ impl SessionsEngine {
             .as_ref()
             .map(|config| config.effective_permission_mode)
             .unwrap_or_default();
-        let requested = request.permission_mode.unwrap_or(ceiling);
+        let requested = request.permission_mode.unwrap_or_else(|| {
+            execution
+                .map(|config| config.permission_mode)
+                .unwrap_or(ceiling)
+        });
         let parent_branch = parent.as_ref().and_then(|parent| parent.branch.clone());
         let checkout = match (&request.checkout, &request.cwd) {
             (Some(luna_proto::ChildCheckoutRequest::NewWorktree { branch, base }), _) => format!(
@@ -1854,21 +1864,37 @@ impl SessionsEngine {
                     .unwrap_or_default()
             ),
         };
+        let selected = execution.or(config.as_ref());
         ChildCardPlan {
             ceiling,
-            capped: std::cmp::min(requested, ceiling),
+            capped: execution
+                .map(|config| config.effective_permission_mode)
+                .unwrap_or(std::cmp::min(requested, ceiling)),
             escalation: (requested > ceiling).then_some(requested),
             checkout,
-            model: request
-                .model
-                .clone()
-                .or_else(|| config.as_ref().and_then(|config| config.model.clone()))
+            provider: selected
+                .map(|config| match config.harness {
+                    HarnessId::Codex => "Codex",
+                    HarnessId::ClaudeCode => "Claude Code",
+                    HarnessId::Opencode => "OpenCode",
+                    HarnessId::Mock => "Mock",
+                    _ => "Unavailable",
+                })
+                .unwrap_or("Unavailable")
+                .into(),
+            account: selected
+                .and_then(|config| config.provider_account_id.clone())
                 .unwrap_or_else(|| "provider default".into()),
-            reasoning: request
-                .reasoning
-                .or_else(|| config.as_ref().and_then(|config| config.reasoning))
+            model: selected
+                .and_then(|config| config.model.clone())
+                .unwrap_or_else(|| "provider default".into()),
+            reasoning: selected
+                .and_then(|config| config.reasoning)
                 .map(|level| format!("{level:?}").to_lowercase())
                 .unwrap_or_else(|| "provider default".into()),
+            model_options: selected
+                .map(|config| serde_json::to_string(&config.model_options).unwrap_or_default())
+                .unwrap_or_else(|| "{}".into()),
         }
     }
 
@@ -1950,34 +1976,44 @@ impl SessionsEngine {
             )
             .await
             .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
-        let (claim, target_snapshot, project_id, environment_id) =
-            if let Some(child) = &child_request {
-                let snapshot = backend
-                    .child_creation_snapshot(child, &authority)
-                    .await
-                    .map_err(fail)?;
-                (
-                    claim,
-                    snapshot,
-                    contract
-                        .context
-                        .project_id
-                        .clone()
-                        .ok_or_else(|| fail(CrossTaskError::TargetScope))?,
-                    contract.context.environment_id.clone(),
-                )
-            } else {
-                let evidence = self
-                    .prepare_luna_control_evidence(claim, &authority, &request.task_id)
-                    .await
-                    .map_err(fail)?;
-                (
-                    evidence.claim,
-                    evidence.target_snapshot,
-                    evidence.source_project_id,
-                    evidence.source_environment_id,
-                )
-            };
+        let (
+            claim,
+            target_snapshot,
+            project_id,
+            environment_id,
+            child_execution,
+            child_auth_instance,
+        ) = if let Some(child) = &child_request {
+            let prepared = backend
+                .child_creation_snapshot(child, &authority)
+                .await
+                .map_err(fail)?;
+            (
+                claim,
+                prepared.snapshot,
+                contract
+                    .context
+                    .project_id
+                    .clone()
+                    .ok_or_else(|| fail(CrossTaskError::TargetScope))?,
+                contract.context.environment_id.clone(),
+                Some(prepared.execution),
+                prepared.auth_instance,
+            )
+        } else {
+            let evidence = self
+                .prepare_luna_control_evidence(claim, &authority, &request.task_id)
+                .await
+                .map_err(fail)?;
+            (
+                evidence.claim,
+                evidence.target_snapshot,
+                evidence.source_project_id,
+                evidence.source_environment_id,
+                None,
+                None,
+            )
+        };
         // Like Codex-native approvals, the card has no deadline: it ends on
         // an answer or Stop here, and the shared resolver watch retires it
         // when the adapter abandons the call (MCP cancel or disconnect, turn
@@ -1995,10 +2031,12 @@ impl SessionsEngine {
             request: request.clone(),
             expires_at_ms,
             child_access_grant: false,
+            child_execution: child_execution.clone(),
+            child_auth_instance,
         };
         let child_plan = child_request
             .as_ref()
-            .map(|child| self.child_card_plan(chat_id, child));
+            .map(|child| self.child_card_plan(chat_id, child, child_execution.as_ref()));
         let proposal = LunaSendProposal {
             child_request: child_request.clone(),
             child_plan,
@@ -11462,6 +11500,8 @@ mod tests {
             },
             expires_at_ms: crate::now_ms() + 30_000,
             child_access_grant: false,
+            child_execution: None,
+            child_auth_instance: None,
         };
         core.sessions
             .with_live_approved_send(&fence, || Ok(()))
@@ -11540,6 +11580,8 @@ mod tests {
             request: request.clone(),
             expires_at_ms: crate::now_ms() + 30_000,
             child_access_grant: false,
+            child_execution: None,
+            child_auth_instance: None,
         };
         core.doc_host.fail_next_approved_queue_install_for_test();
         let rpc = core.rpc_service();
@@ -14101,6 +14143,7 @@ mod tests {
                 approved_queue: false,
                 event_wait: false,
                 child_creation: false,
+                child_models: false,
             }
         }
 

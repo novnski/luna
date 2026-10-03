@@ -60,6 +60,10 @@ pub enum WorkspaceScope {
 pub struct EngineInfo {
     pub device_id: String,
     pub workspace_scope: WorkspaceScope,
+    /// Stable opaque identity for the resolved profile, not just this device.
+    /// Absent on older engines and before an account/local profile is resolved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<String>,
     /// Supported protocol/document features. Missing on older engines.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub capabilities: Vec<String>,
@@ -95,6 +99,7 @@ mod tests {
         let info = EngineInfo {
             device_id: "device-1".into(),
             workspace_scope: WorkspaceScope::Local,
+            profile_id: None,
             capabilities: capabilities::current(),
         };
         assert_eq!(

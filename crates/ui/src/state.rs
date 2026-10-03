@@ -746,6 +746,7 @@ impl EngineHandle {
                 device_id: "local".into(),
                 workspace_scope: WorkspaceScope::Local,
                 capabilities: Vec::new(),
+                profile_id: None,
             },
             deferred_state: None,
         }
@@ -819,6 +820,7 @@ async fn query_engine_info(client: &RpcClient) -> Result<EngineInfo, RpcError> {
                 device_id: legacy.device_id,
                 workspace_scope: WorkspaceScope::Synced,
                 capabilities: Vec::new(),
+                profile_id: None,
             })
         }
         Err(err) => Err(err),
@@ -3350,6 +3352,7 @@ mod tests {
                 device_id: "remote-test".into(),
                 workspace_scope: WorkspaceScope::Development,
                 capabilities: luna_proto::capabilities::current(),
+                profile_id: None,
             },
             "ssh://synthetic-host".into(),
         );
@@ -3609,6 +3612,7 @@ mod tests {
                     device_id: "owner-device".into(),
                     workspace_scope: WorkspaceScope::Local,
                     capabilities: luna_proto::capabilities::current(),
+                    profile_id: None,
                 },
                 state: state_rx,
             }),

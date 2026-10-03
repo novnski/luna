@@ -1200,6 +1200,7 @@ impl Engine {
         Ok(EngineInfo {
             device_id: load_or_create_device_id(&config.data_dir)?,
             workspace_scope,
+            profile_id: None,
             capabilities: luna_proto::capabilities::current(),
         })
     }

@@ -256,6 +256,14 @@ impl ChildChatPanel {
         self.open.as_ref().map(|open| open.id.as_str())
     }
 
+    /// The open chat's pane identity label (Child chat or Alongside), for QA.
+    #[cfg(feature = "appshots-fixture")]
+    pub(super) fn open_identity(&self, cx: &App) -> Option<&'static str> {
+        self.open
+            .as_ref()
+            .map(|open| open.view.read(cx).identity().label())
+    }
+
     pub(super) fn reveal_message(&mut self, id: String, message: String, cx: &mut Context<Self>) {
         self.open_child(id.clone(), cx);
         if let Some(open) = &self.open {
@@ -322,11 +330,25 @@ impl ChildChatPanel {
         links.source_session = Some(id.clone());
         let parent = self.parent.clone();
         let view_id = id.clone();
+        // Its own child, or an ordinary chat listed alongside (no parent).
+        let identity = if self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == id)
+            .and_then(super::placement::lineage_parent_id)
+            == Some(parent.as_str())
+        {
+            PaneIdentity::Child
+        } else {
+            PaneIdentity::Alongside
+        };
         let view = cx.new(|cx| {
             PaneChatView::new(
                 state,
                 view_id,
-                PaneIdentity::Child,
+                identity,
                 parent,
                 "Related chats",
                 composer,

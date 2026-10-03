@@ -113,6 +113,238 @@ pub(super) struct ProvisionedChildWorktree {
 }
 
 impl EngineRpc {
+    fn child_base_config(
+        &self,
+        parent: &ChatConfig,
+        request: &CreateChildThreadRequest,
+    ) -> Result<ChatConfig, crate::EngineError> {
+        let provider = request.provider.unwrap_or(parent.harness);
+        let same_provider = provider == parent.harness;
+        if provider != HarnessId::Mock
+            && !self.registry.descriptors().iter().any(|entry| {
+                entry.id == provider
+                    && entry.installed
+                    && crate::registry::descriptor_enabled(entry)
+            })
+        {
+            return Err(crate::EngineError::Other(format!(
+                "The {provider:?} provider is not installed or enabled on this device"
+            )));
+        }
+        self.registry.resolve(provider)?;
+        let mut config = parent.clone();
+        config.harness = provider;
+        if !same_provider {
+            config.provider_account_id = None;
+            config.model = None;
+            config.reasoning = None;
+        }
+        if let Some(model) = &request.model {
+            if config.model.as_ref() != Some(model) {
+                config.reasoning = None;
+            }
+            config.model = Some(model.clone());
+        }
+        if let Some(reasoning) = request.reasoning {
+            config.reasoning = Some(reasoning);
+        }
+        config.model_options = request.model_options.clone();
+        config.permission_audit.clear();
+        let capabilities =
+            crate::permissions::provider_capabilities_for(provider, config.model.as_deref());
+        let requested = request
+            .permission_mode
+            .unwrap_or(parent.effective_permission_mode);
+        if request.permission_mode.is_some() && !capabilities.supports(requested) {
+            return Err(crate::EngineError::Other(format!(
+                "Provider {provider:?} with this model does not support {requested:?} access; choose {:?}",
+                capabilities.supported_modes
+            )));
+        }
+        let capped = std::cmp::min(requested, parent.effective_permission_mode);
+        let effective = capabilities
+            .supported_modes
+            .iter()
+            .copied()
+            .filter(|mode| *mode <= capped)
+            .max()
+            .ok_or_else(|| {
+                crate::EngineError::Other(
+                    "No supported child access mode fits the parent's ceiling".into(),
+                )
+            })?;
+        config.permission_mode = request.permission_mode.unwrap_or(effective);
+        config.effective_permission_mode = effective;
+        if effective != capped {
+            config.permission_ceiling_source = Some(luna_proto::PermissionCeilingSource::Provider);
+            config.permission_degradation_reason =
+                Some(luna_proto::PermissionDegradationReason::ProviderUnsupported);
+        }
+        if config.sandbox == luna_proto::SandboxLevel::ReadOnly
+            && !matches!(provider, HarnessId::Codex | HarnessId::Mock)
+            && requested <= parent.effective_permission_mode
+        {
+            return Err(crate::EngineError::Other("This provider cannot preserve the parent's read-only sandbox; choose a compatible provider or request an explicit access grant".into()));
+        }
+        if matches!(provider, HarnessId::Codex | HarnessId::ClaudeCode) {
+            config.provider_account_id = Some(
+                self.agent_accounts
+                    .resolve_execution(provider, config.provider_account_id.as_deref())?
+                    .account_id,
+            );
+        }
+        Ok(config)
+    }
+
+    /// Read-only preflight, before an approval or any checkout/identity write.
+    /// Its exact account/model/options ride the private approval fence.
+    pub(super) async fn prepare_child_execution(
+        &self,
+        parent_id: &str,
+        request: &CreateChildThreadRequest,
+    ) -> Result<ChatConfig, crate::EngineError> {
+        validate_child_request(request)
+            .map_err(|error| crate::EngineError::Other(error.to_string()))?;
+        let parent = self.validate_child_parent(parent_id)?;
+        let parent_config = parent.config.as_ref().ok_or_else(|| {
+            crate::EngineError::Other("Parent execution configuration is unavailable".into())
+        })?;
+        let config = self.child_base_config(parent_config, request)?;
+        if request.model.is_some()
+            || request.reasoning.is_some()
+            || !request.model_options.is_empty()
+        {
+            let selected = config.model.as_deref().ok_or_else(|| crate::EngineError::Other("Choose an explicit model before setting reasoning or model options for another provider; use list_child_models".into()))?;
+            let models = self
+                .model_cache
+                .list(config.harness, config.provider_account_id.as_deref(), false)
+                .await
+                .map_err(crate::EngineError::Other)?;
+            let model = models.iter().find(|model| model.id == selected).ok_or_else(|| crate::EngineError::Other(format!("Model {selected:?} is unavailable for {:?}; use list_child_models to choose a supported model", config.harness)))?;
+            if let Some(reasoning) = config.reasoning
+                && !model.reasoning_levels.contains(&reasoning)
+            {
+                return Err(crate::EngineError::Other(format!(
+                    "Model {selected:?} does not support {reasoning:?} reasoning; use list_child_models for its supported levels"
+                )));
+            }
+            for (key, value) in &request.model_options {
+                let option = model
+                    .options
+                    .iter()
+                    .find(|option| option.id == *key)
+                    .ok_or_else(|| {
+                        crate::EngineError::Other(format!(
+                            "Model {selected:?} does not support option {key:?}"
+                        ))
+                    })?;
+                if !option
+                    .choices
+                    .iter()
+                    .any(|choice| value.as_str() == Some(choice.id.as_str()))
+                {
+                    return Err(crate::EngineError::Other(format!(
+                        "Unsupported value for model option {key:?}; choose one of {}",
+                        option
+                            .choices
+                            .iter()
+                            .map(|choice| choice.id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )));
+                }
+            }
+        }
+        Ok(config)
+    }
+
+    pub(super) async fn child_models(
+        &self,
+        request: luna_proto::ChildModelCatalogRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<luna_proto::ChildModelCatalog, CrossTaskError> {
+        if !authority.delivery.attaches_luna_tools()
+            || authority.local_environment_id != self.engine_info.device_id
+            || !authority.granted_scopes.contains("threads.read")
+            || authority.allow_projectless
+            || authority.visible_project_ids.len() != 1
+        {
+            return Err(CrossTaskError::Scope);
+        }
+        if request.limit == 0
+            || request.limit > 20
+            || request.offset > 10_000
+            || request
+                .query
+                .as_ref()
+                .is_some_and(|query| query.len() > 128)
+            || request
+                .provider
+                .is_some_and(|provider| provider.is_retired() || provider == HarnessId::Mock)
+        {
+            return Err(CrossTaskError::Input);
+        }
+        let parent = self
+            .validate_child_parent(&authority.caller_task_id)
+            .map_err(|error| CrossTaskError::Backend(error.to_string()))?;
+        if !parent
+            .space_id
+            .as_ref()
+            .is_some_and(|id| authority.visible_project_ids.contains(id))
+        {
+            return Err(CrossTaskError::TargetScope);
+        }
+        let parent_config = parent.config.as_ref().ok_or(CrossTaskError::Unavailable)?;
+        let provider = request.provider.unwrap_or(parent_config.harness);
+        if !self.registry.descriptors().iter().any(|entry| {
+            entry.id == provider && entry.installed && crate::registry::descriptor_enabled(entry)
+        }) {
+            return Err(CrossTaskError::Backend(format!(
+                "Provider {provider:?} is not installed or enabled"
+            )));
+        }
+        let account = (provider == parent_config.harness)
+            .then_some(parent_config.provider_account_id.as_deref())
+            .flatten();
+        let mut models = self
+            .model_cache
+            .list(provider, account, false)
+            .await
+            .map_err(CrossTaskError::Backend)?;
+        if let Some(query) = request.query.as_deref() {
+            let query = query.to_lowercase();
+            models.retain(|model| {
+                model.id.to_lowercase().contains(&query)
+                    || model.label.to_lowercase().contains(&query)
+            });
+        }
+        let total = models.len();
+        let mut page = models
+            .into_iter()
+            .skip(request.offset)
+            .take(request.limit)
+            .collect::<Vec<_>>();
+        while !page.is_empty()
+            && serde_json::to_vec(&page)
+                .map_err(|_| CrossTaskError::InvalidBackendResult)?
+                .len()
+                > 12_000
+        {
+            page.pop();
+        }
+        if page.is_empty() && request.offset < total {
+            return Err(CrossTaskError::Backend(
+                "Model catalog entry exceeds the bounded tool response".into(),
+            ));
+        }
+        let next = request.offset + page.len();
+        Ok(luna_proto::ChildModelCatalog {
+            provider,
+            models: page,
+            next_offset: (next < total).then_some(next),
+        })
+    }
+
     pub(super) fn validate_child_authority(
         &self,
         request: &CreateChildThreadRequest,
@@ -301,6 +533,16 @@ impl EngineRpc {
         request: CreateChildThreadRequest,
     ) -> Result<ChildThreadReceipt, RpcError> {
         let child_id = child_task_id(&parent_id, &request.idempotency_key);
+        if self
+            .store
+            .task_command_receipt(&format!("child-create:{child_id}"))
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .is_none()
+        {
+            self.prepare_child_execution(&parent_id, &request)
+                .await
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+        }
         // The dialog is the user's own explicit choice. Only a request that
         // names an access level carries the grant marker, so legacy payloads
         // keep their durable payload hash.
@@ -327,16 +569,17 @@ impl EngineRpc {
         if receipt.status != CommandReceiptStatus::Applied {
             return Err(RpcError::Failed(child_creation_failure(&receipt)));
         }
-        let child = self
+        let chat = self
             .workspace
             .chat(&child_id)
-            .map_err(|error| RpcError::Failed(error.to_string()))?
-            .and_then(|chat| chat.child_thread)
-            .ok_or_else(|| {
-                RpcError::Failed(
-                    "Child projection is unavailable; inspect the same request ID".into(),
-                )
-            })?;
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let execution = chat
+            .as_ref()
+            .and_then(|chat| chat.config.as_ref())
+            .map(luna_proto::ChildExecutionSelection::from);
+        let child = chat.and_then(|chat| chat.child_thread).ok_or_else(|| {
+            RpcError::Failed("Child projection is unavailable; inspect the same request ID".into())
+        })?;
         Ok(ChildThreadReceipt {
             task_id: child_id.clone(),
             parent_task_id: parent_id,
@@ -344,6 +587,7 @@ impl EngineRpc {
             initial_message_id: child.initial_message_id.clone(),
             startup_state: self.child_startup_state(&child_id, &child),
             provisioning: child.provisioning.clone(),
+            execution,
         })
     }
 
@@ -361,6 +605,21 @@ impl EngineRpc {
             || fence.source.request.message != request.prompt
         {
             return Err(CrossTaskError::UserRequest);
+        }
+        if let (Some(execution), Some(expected)) = (
+            &fence.source.child_execution,
+            &fence.source.child_auth_instance,
+        ) {
+            let account = self
+                .agent_accounts
+                .resolve_execution(execution.harness, execution.provider_account_id.as_deref())
+                .map_err(|error| CrossTaskError::Backend(error.to_string()))?;
+            if account.auth_instance_id != *expected {
+                return Err(CrossTaskError::Backend(
+                    "The child provider account changed after approval; request a new approval"
+                        .into(),
+                ));
+            }
         }
         let provisioned = self
             .provision_child_checkout(&authority.caller_task_id, &child_id, &request)
@@ -395,6 +654,10 @@ impl EngineRpc {
             .chat(&child_id)
             .map_err(|error| CrossTaskError::Backend(error.to_string()))?
             .ok_or(CrossTaskError::InvalidBackendResult)?;
+        let execution = chat
+            .config
+            .as_ref()
+            .map(luna_proto::ChildExecutionSelection::from);
         let child = chat
             .child_thread
             .ok_or(CrossTaskError::InvalidBackendResult)?;
@@ -405,6 +668,7 @@ impl EngineRpc {
             initial_message_id: child.initial_message_id.clone(),
             startup_state: self.child_startup_state(&child_id, &child),
             provisioning: child.provisioning.clone(),
+            execution,
         })
     }
 
@@ -437,25 +701,61 @@ impl EngineRpc {
             .config
             .clone()
             .ok_or_else(|| fail("Parent execution configuration is unavailable".into()))?;
-        // Model, reasoning and access default from the parent; the provider
-        // and provider account are always the parent's.
+        // The approved selection is private engine evidence, never a client
+        // command field. Retries keep the original request hash; an already
+        // committed child keeps its own persisted selection.
         let ceiling = parent_config.effective_permission_mode;
-        let mut config = parent_config.clone();
-        if let Some(model) = request.model.clone() {
-            config.model = Some(model);
+        let mut config = match fence.and_then(|fence| fence.child_execution.as_ref()) {
+            Some(config) => config.clone(),
+            None => self
+                .child_base_config(&parent_config, &request)
+                .map_err(TaskProjectionError::Mutation)?,
+        };
+        if config.harness != request.provider.unwrap_or(parent_config.harness) {
+            return Err(fail(
+                "The parent/provider changed after child approval".into(),
+            ));
         }
-        if let Some(reasoning) = request.reasoning {
-            config.reasoning = Some(reasoning);
+        if config.harness != HarnessId::Mock
+            && !self.registry.descriptors().iter().any(|entry| {
+                entry.id == config.harness
+                    && entry.installed
+                    && crate::registry::descriptor_enabled(entry)
+            })
+        {
+            return Err(fail(
+                "The child provider was disabled after approval".into(),
+            ));
         }
-        config.model_options.clear();
-        config.permission_audit.clear();
-        let requested = request.permission_mode.unwrap_or(ceiling);
+        if let Some(expected) = fence.and_then(|fence| fence.child_auth_instance.as_deref()) {
+            let account = self
+                .agent_accounts
+                .resolve_execution(config.harness, config.provider_account_id.as_deref())
+                .map_err(TaskProjectionError::Mutation)?;
+            if account.auth_instance_id != expected {
+                return Err(fail("The child provider account changed during provisioning; request a new approval".into()));
+            }
+        }
+        let requested = request
+            .permission_mode
+            .unwrap_or(config.effective_permission_mode);
+        let supported =
+            crate::permissions::provider_capabilities_for(config.harness, config.model.as_deref());
+        let capped = supported
+            .supported_modes
+            .iter()
+            .copied()
+            .filter(|mode| *mode <= std::cmp::min(requested, ceiling))
+            .max()
+            .ok_or_else(|| {
+                fail("No supported child access mode fits the parent's current ceiling".into())
+            })?;
         let (granted, granted_by_user, escalation_denied) = if requested <= ceiling {
-            (requested, false, false)
+            (capped, false, false)
         } else if access_grant.is_some() {
             (requested, true, false)
         } else {
-            (ceiling, false, true)
+            (capped, false, true)
         };
         config.permission_mode = granted;
         config.effective_permission_mode = granted;
@@ -473,6 +773,11 @@ impl EngineRpc {
                 Some(luna_proto::PermissionCeilingSource::ParentThread);
             config.permission_degradation_reason =
                 Some(luna_proto::PermissionDegradationReason::ParentCeiling);
+        }
+        if config.sandbox == luna_proto::SandboxLevel::ReadOnly
+            && !matches!(config.harness, HarnessId::Codex | HarnessId::Mock)
+        {
+            return Err(fail("This child provider cannot preserve the parent's read-only sandbox; choose a compatible provider or explicitly grant supported access".into()));
         }
         let parent_cwd = parent.cwd.clone().unwrap_or_else(|| space.path.clone());
         let (checkout_kind, cwd, branch, checkout_id, worktree_path, base) = match &request.checkout

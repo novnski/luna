@@ -74,6 +74,10 @@ name = "related-chats-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "chat-placement-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "composer-parity-fixture"
 required-features = ["appshots-fixture"]
 

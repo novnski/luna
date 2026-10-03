@@ -120,6 +120,7 @@ pub(crate) fn handle(runtime: &Runtime, rpc: Arc<HeldRpc>) -> EngineHandle {
         device_id: rpc.device_id.clone(),
         workspace_scope: WorkspaceScope::Local,
         capabilities: vec![],
+        profile_id: None,
     };
     let url = format!("memory://epoch-fixture/{}", rpc.label);
     EngineHandle::from_authenticated_remote(memory_client(rpc), info, url)

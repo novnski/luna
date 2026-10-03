@@ -543,6 +543,28 @@ pub enum SidebarSort {
     Manual,
 }
 
+/// Where chats sit across the two sidebars, for one engine profile. It is
+/// presentation only: a chat's lineage, owner, provider and history never
+/// change, and every move is reversible.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChatPlacements {
+    /// Child chats listed in the left sidebar as their own rows instead of in
+    /// their parent's Related chats.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub promoted: Vec<String>,
+    /// Ordinary chats listed alongside another chat in its Related chats
+    /// (chat id → host chat id) instead of in the left sidebar.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub docked: std::collections::BTreeMap<String, String>,
+}
+
+impl ChatPlacements {
+    pub fn is_empty(&self) -> bool {
+        self.promoted.is_empty() && self.docked.is_empty()
+    }
+}
+
 /// How one side chat is filed in its parent's Side chats list. Side chats are
 /// leased engine records rather than tasks, so this is a device-local view
 /// preference: it never unloads, deletes or archives the record itself.
@@ -725,6 +747,10 @@ pub struct UiSettings {
     pub sidebar_manual_order: Vec<String>,
     /// Pinned, settled and archived side chats, keyed by side chat id.
     pub side_chat_marks: std::collections::HashMap<String, SideChatMarks>,
+    /// Chat placement across the sidebars, keyed by the engine's opaque
+    /// `profileId` so profiles (even on one device and scope) never share or
+    /// prune each other's placements.
+    pub chat_placements: std::collections::HashMap<String, ChatPlacements>,
     /// Move idle, seen, unpinned tasks into Settled after this many days.
     pub sidebar_auto_settle_after_days: Option<u16>,
     /// Ask before applying these task actions. Each dialog can disable its own prompt.
@@ -881,6 +907,7 @@ impl Default for UiSettings {
             sidebar_sort: SidebarSort::LastUpdated,
             sidebar_manual_order: Vec::new(),
             side_chat_marks: std::collections::HashMap::new(),
+            chat_placements: std::collections::HashMap::new(),
             sidebar_auto_settle_after_days: DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
             confirm_archive: true,
             confirm_settle: true,
@@ -2113,6 +2140,7 @@ mod tests {
             sidebar_organization: SidebarOrganization::ByDevice,
             sidebar_sort: SidebarSort::Created,
             sidebar_manual_order: vec!["task-b".into(), "task-a".into()],
+            chat_placements: std::collections::HashMap::new(),
             side_chat_marks: std::collections::HashMap::from([(
                 "side-a".into(),
                 SideChatMarks {

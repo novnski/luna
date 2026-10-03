@@ -743,6 +743,14 @@ impl Harness for CodexHarness {
         self.discover_models(None, false).await
     }
 
+    async fn models_for_execution(
+        &self,
+        provider_home: Option<&std::path::Path>,
+        force_file_auth: bool,
+    ) -> Result<Vec<Model>, HarnessError> {
+        self.discover_models(provider_home, force_file_auth).await
+    }
+
     async fn composer_catalog(
         &self,
         cwd: &std::path::Path,

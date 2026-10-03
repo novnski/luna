@@ -667,6 +667,7 @@ pub async fn run_goal_card_e2e(
             device_id: "local".into(),
             workspace_scope: luna_proto::WorkspaceScope::Local,
             capabilities: Vec::new(),
+            profile_id: None,
         },
         "memory://goal-card-fixture".into(),
     );

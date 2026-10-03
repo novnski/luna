@@ -194,30 +194,20 @@ impl ModelCache {
             return Ok(models);
         }
 
-        let fetched = if let Some(execution) = codex_execution.as_ref() {
-            let home = execution
-                .codex_home
-                .as_deref()
-                .ok_or_else(|| "Codex account has no execution home".to_string())?;
-            luna_harness::codex::CodexHarness::new()
-                .live_models_for_home(home, execution.codex_file_auth)
-                .await
-                .map_err(|error| error.to_string())
-        } else if harness == HarnessId::ClaudeCode {
-            luna_harness::claude::ClaudeHarness::new()
-                .live_models()
-                .await
-                .map_err(|error| error.to_string())
-        } else {
-            let provider = self
-                .registry
-                .resolve(harness)
-                .map_err(|error| error.to_string())?;
-            provider
-                .models_live()
-                .await
-                .map_err(|error| error.to_string())
-        };
+        let provider = self
+            .registry
+            .resolve(harness)
+            .map_err(|error| error.to_string())?;
+        let home = codex_execution
+            .as_ref()
+            .and_then(|execution| execution.codex_home.as_deref());
+        let force_file_auth = codex_execution
+            .as_ref()
+            .is_some_and(|execution| execution.codex_file_auth);
+        let fetched = provider
+            .models_for_execution(home, force_file_auth)
+            .await
+            .map_err(|error| error.to_string());
         match fetched {
             Ok(models) if harness == HarnessId::Codex && models.is_empty() => {
                 // An authoritative empty `model/list` must replace an older

@@ -189,6 +189,85 @@ impl Shell {
         cx.notify();
     }
 
+    /// "Child of ‹parent›" ahead of a child's title: opens that actual
+    /// parent. A parent that no longer exists is named, not linked.
+    fn render_parent_breadcrumb(
+        &self,
+        (parent_id, title, archived): (Option<String>, SharedString, bool),
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let muted = theme.text_muted;
+        let border_strong = theme.border_strong;
+        let tooltip_title: SharedString = format!("Child of {title}").into();
+        let crumb = div()
+            .id("parent-breadcrumb")
+            .max_w(px(240.0))
+            .min_w_0()
+            .flex_none()
+            .h(px(22.0))
+            .px(px(6.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.0))
+            .rounded(px(6.0))
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .bg(crate::theme::wash(0.06))
+            .text_size(crate::typography::ui_rems(11.5))
+            .text_color(theme.readable_muted(0.8))
+            // Inside the titlebar drag region: carve out its rect.
+            .occlude()
+            .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
+            .tooltip(move |_, cx| {
+                crate::pickers::ControlTooltip::view(
+                    tooltip_title.clone(),
+                    Some("This chat's parent: the chat whose agent started it".into()),
+                    cx,
+                )
+            })
+            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+            .child(
+                icon(icons::BOT)
+                    .size(px(12.0))
+                    .flex_none()
+                    .text_color(muted),
+            )
+            .child(div().flex_none().child("Child of"))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text.opacity(0.85))
+                    .child(title.clone()),
+            )
+            .when(archived, |el| {
+                el.child(div().flex_none().child("· archived"))
+            });
+        match parent_id {
+            Some(parent_id) => crumb
+                .role(gpui::Role::Button)
+                .aria_label(SharedString::from(format!("Open parent chat: {title}")))
+                .tab_index(0)
+                .cursor_pointer()
+                .hover(|style| style.bg(crate::theme::wash(0.11)))
+                .focus_visible(move |style| style.border_color(border_strong))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.open_chat(parent_id.clone(), cx);
+                }))
+                .on_key_down(crate::swallow_activation_key)
+                .into_any_element(),
+            None => crumb
+                .aria_label(SharedString::from(
+                    "Child of a chat that is no longer available",
+                ))
+                .into_any_element(),
+        }
+    }
+
     /// The unified titlebar in chat mode:
     /// `[new-session +] [harness icon + session title] … [toggle-changes]`.
     /// Replaces the tab strip; inherits its titlebar duties (drag region,
@@ -200,6 +279,28 @@ impl Shell {
         // drag region, and buttons. A session appends its target as a muted
         // "project @ device" tag right of the title (the composer footer no
         // longer carries it).
+        // A child opened as the main chat names its actual parent (from its
+        // record's lineage, never a placement): `(parent id if it still
+        // exists, title, archived)`.
+        let parent_crumb: Option<(Option<String>, SharedString, bool)> = {
+            let state = self.state.read(cx);
+            state
+                .selected_chat_row()
+                .and_then(super::placement::lineage_parent_id)
+                .map(
+                    |parent_id| match state.chats.iter().find(|chat| chat.id == parent_id) {
+                        Some(parent) => (
+                            Some(parent_id.to_string()),
+                            transcript::single_line(
+                                parent.title.as_deref().unwrap_or("Untitled chat"),
+                            )
+                            .into(),
+                            parent.archived,
+                        ),
+                        None => (None, "an unavailable chat".into(), false),
+                    },
+                )
+        };
         let (title, target, harness, on_canvas): (
             SharedString,
             Option<SharedString>,
@@ -373,6 +474,16 @@ impl Shell {
                         .flex_row()
                         .items_center()
                         .gap(px(6.0))
+                        .when_some(parent_crumb, |el, crumb| {
+                            el.child(self.render_parent_breadcrumb(crumb, &theme, cx))
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_color(theme.readable_muted(0.4))
+                                        .child("›"),
+                                )
+                        })
                         .when_some(
                             harness.map(crate::pickers::harness_brand_icon),
                             |el, (path, tint)| {

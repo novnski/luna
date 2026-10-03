@@ -38,6 +38,7 @@ pub struct CrossTaskCapabilities {
     pub approved_queue: bool,
     pub event_wait: bool,
     pub child_creation: bool,
+    pub child_models: bool,
 }
 
 /// Populated only from the active, engine-resolved run and its actual grants.
@@ -101,6 +102,17 @@ pub struct ApprovedSendFence {
     /// Set only by the server-owned approval responder when the user picks a
     /// child card's explicit access-grant choice. Never from tool input.
     pub(crate) child_access_grant: bool,
+    /// Exact destination execution approved by the user, never deserialized.
+    pub(crate) child_execution: Option<luna_proto::ChatConfig>,
+    pub(crate) child_auth_instance: Option<String>,
+}
+
+/// Read-only child preflight. The execution selection is carried unchanged
+/// into the approval card/fence, independent of later default-account changes.
+pub struct PreparedChildCreation {
+    pub snapshot: TaskCommandSnapshot,
+    pub execution: luna_proto::ChatConfig,
+    pub auth_instance: Option<String>,
 }
 
 /// Bound to an exact approved provider call; never deserialized from input.
@@ -145,6 +157,23 @@ pub(crate) fn validate_child_request(
             .as_ref()
             .is_some_and(|s| s.len() > 4096 || !std::path::Path::new(s).is_absolute())
         || request.continue_parent && !request.report_results
+    {
+        return Err(CrossTaskError::Input);
+    }
+    if request
+        .provider
+        .is_some_and(|provider| provider.is_retired() || provider == luna_proto::HarnessId::Mock)
+        || request.model_options.len() > 16
+        || serde_json::to_vec(&request.model_options).map_or(true, |bytes| bytes.len() > 4096)
+        || request.model_options.iter().any(|(key, value)| {
+            key.is_empty()
+                || key.len() > 64
+                || key.to_ascii_lowercase().starts_with("luna")
+                || key.starts_with('_')
+                || !value
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty() && value.len() <= 256)
+        })
     {
         return Err(CrossTaskError::Input);
     }
@@ -229,7 +258,14 @@ pub trait CrossTaskBackend: Send + Sync {
         &self,
         _request: &luna_proto::CreateChildThreadRequest,
         _authority: &CrossTaskAuthority,
-    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+    ) -> Result<PreparedChildCreation, CrossTaskError> {
+        Err(CrossTaskError::Unavailable)
+    }
+    async fn child_model_catalog(
+        &self,
+        _request: luna_proto::ChildModelCatalogRequest,
+        _authority: &CrossTaskAuthority,
+    ) -> Result<luna_proto::ChildModelCatalog, CrossTaskError> {
         Err(CrossTaskError::Unavailable)
     }
     async fn create_child(
@@ -310,8 +346,15 @@ impl<T: CrossTaskBackend + ?Sized> CrossTaskBackend for Arc<T> {
         &self,
         request: &luna_proto::CreateChildThreadRequest,
         authority: &CrossTaskAuthority,
-    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+    ) -> Result<PreparedChildCreation, CrossTaskError> {
         (**self).child_creation_snapshot(request, authority).await
+    }
+    async fn child_model_catalog(
+        &self,
+        request: luna_proto::ChildModelCatalogRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<luna_proto::ChildModelCatalog, CrossTaskError> {
+        (**self).child_model_catalog(request, authority).await
     }
     async fn create_child(
         &self,
@@ -614,6 +657,15 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
         cancel: &CancellationToken,
     ) -> Result<serde_json::Value, CrossTaskError> {
         let output = match name {
+            "list_child_models" => {
+                self.check(authority, "threads.read", self.backend.capabilities().child_models)?;
+                let request: luna_proto::ChildModelCatalogRequest = parse(arguments)?;
+                let catalog = tokio::select! {
+                    _ = cancel.cancelled() => return Err(CrossTaskError::Cancelled),
+                    result = tokio::time::timeout(Duration::from_secs(15), self.backend.child_model_catalog(request, authority)) => result.map_err(|_| CrossTaskError::Deadline)??,
+                };
+                serde_json::to_value(catalog)
+            }
             "list_threads" => {
                 serde_json::to_value(self.list(authority, parse(arguments)?, cancel).await?)
             }
@@ -639,6 +691,13 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
     ) -> (Vec<RuntimeToolDefinition>, Vec<OmittedRuntimeTool>) {
         let capabilities = self.backend.capabilities();
         let candidates = [
+            (
+                "list_child_models",
+                "threads.read",
+                capabilities.child_models,
+                "read-only",
+                15_000,
+            ),
             (
                 "create_thread",
                 "threads.read",
@@ -682,8 +741,10 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
                 Some("the provider has no verified LUNA tool delivery")
             } else if !authority.granted_scopes.contains(scope) {
                 Some("required LUNA scope is missing")
-            } else if matches!(name, "send_message_to_thread" | "create_thread")
-                && (authority.allow_projectless || authority.visible_project_ids.len() != 1)
+            } else if matches!(
+                name,
+                "send_message_to_thread" | "create_thread" | "list_child_models"
+            ) && (authority.allow_projectless || authority.visible_project_ids.len() != 1)
             {
                 Some("approved send requires one exact local project")
             } else if !supported {
@@ -1079,8 +1140,11 @@ async fn with_cancel<T>(
 
 fn tool_description(name: &str) -> &'static str {
     match name {
+        "list_child_models" => {
+            "List account-visible models, supported reasoning levels and model option choice IDs for a child provider on this device. Defaults to this chat's provider; use provider to discover another. Read-only and paginated; no child is created. Use these IDs in create_thread, not internal runtime keys."
+        }
         "create_thread" => {
-            "Create a persistent visible child chat in this project with fresh context. Only the supplied prompt is copied. checkout {kind:current} (default) shares this chat's checkout; {kind:newWorktree, branch?, base?} gives the child its own new git worktree and branch (base defaults to this chat's branch). model, reasoning and permissionMode default to this chat's. permissionMode above this chat's access is shown to the user and capped unless the user explicitly grants it. Requires exact one-use local user approval. Reuse the same idempotencyKey on retries; acceptance means durable startup, not provider acceptance. Results are displayed by default; continueParent explicitly queues parent continuation."
+            "Create a persistent visible child chat in this project with fresh context. Only the supplied prompt is copied. checkout {kind:current} (default) shares this chat's checkout; {kind:newWorktree, branch?, base?} gives the child its own new git worktree and branch (base defaults to this chat's branch). provider defaults to this chat's; a different provider starts with its own default account and no inherited model or reasoning. Use list_child_models to choose valid model, reasoning and modelOptions (option ID to string choice ID). With provider/model unchanged, model and reasoning inherit this chat; otherwise omitted values use provider defaults. permissionMode defaults to this chat's. permissionMode above this chat's access is shown to the user and capped unless the user explicitly grants it. Requires exact one-use local user approval. Reuse the same idempotencyKey on retries; acceptance means durable startup, not provider acceptance. Results are displayed by default; continueParent explicitly queues parent continuation."
         }
         "list_threads" => "List visible local LUNA tasks with bounded metadata and opaque paging.",
         "read_thread" => "Read bounded, untrusted turn summaries for one local LUNA task.",
@@ -1094,10 +1158,17 @@ fn tool_description(name: &str) -> &'static str {
 
 fn input_schema(name: &str) -> serde_json::Value {
     match name {
+        "list_child_models" => serde_json::json!({"type":"object","properties":{
+            "provider":{"type":"string","enum":["codex","claude-code","opencode"]},
+            "query":{"type":"string","maxLength":128},"offset":{"type":"integer","minimum":0,"maximum":10000},
+            "limit":{"type":"integer","minimum":1,"maximum":20}
+        },"additionalProperties":false}),
         "create_thread" => serde_json::json!({"type":"object","properties":{
             "prompt":{"type":"string","minLength":1,"maxLength":8000},
             "idempotencyKey":{"type":"string","minLength":1,"maxLength":128},
             "title":{"type":"string","maxLength":160},"model":{"type":"string","maxLength":512},
+            "provider":{"type":"string","enum":["codex","claude-code","opencode"]},
+            "modelOptions":{"type":"object","maxProperties":16,"additionalProperties":{"type":"string","minLength":1,"maxLength":256}},
             "reasoning":{"type":"string","enum":["minimal","low","medium","high","xhigh","max","ultra","ultracode","ultrathink"]},
             "cwd":{"type":"string","maxLength":4096},"reportResults":{"type":"boolean"},"continueParent":{"type":"boolean"},
             "checkout":{"oneOf":[
@@ -1140,8 +1211,12 @@ fn output_schema(name: &str) -> serde_json::Value {
     },"required":["taskId","projectId","environmentId","title","status","archived","updatedAtMs"],
     "additionalProperties":false});
     match name {
+        "list_child_models" => serde_json::json!({"type":"object","properties":{
+            "provider":{"type":"string"},"models":{"type":"array","maxItems":20,"items":{"type":"object"}},
+            "nextOffset":{"type":["integer","null"]}
+        },"required":["provider","models","nextOffset"],"additionalProperties":false}),
         "create_thread" => {
-            serde_json::json!({"type":"object","properties":{"taskId":{"type":"string"},"parentTaskId":{"type":"string"},"command":{"type":"object"},"initialMessageId":{"type":"string"},"startupState":{"type":"string"},"provisioning":{"type":"object"}},"required":["taskId","parentTaskId","command","initialMessageId","startupState"],"additionalProperties":false})
+            serde_json::json!({"type":"object","properties":{"taskId":{"type":"string"},"parentTaskId":{"type":"string"},"command":{"type":"object"},"initialMessageId":{"type":"string"},"startupState":{"type":"string"},"provisioning":{"type":"object"},"execution":{"type":"object"}},"required":["taskId","parentTaskId","command","initialMessageId","startupState"],"additionalProperties":false})
         }
         "list_threads" => serde_json::json!({"type":"object","properties":{
             "tasks":{"type":"array","maxItems":20,"items":task},
@@ -1250,6 +1325,7 @@ mod tests {
                 approved_queue: false,
                 event_wait: true,
                 child_creation: false,
+                child_models: false,
             }
         }
 

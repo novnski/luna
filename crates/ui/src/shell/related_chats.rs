@@ -23,6 +23,8 @@ pub(crate) enum RelatedKind {
     Child,
     /// Started by the user from a copy of the parent's context.
     Side,
+    /// An ordinary chat the user listed beside this one: no lineage.
+    Alongside,
 }
 
 impl RelatedKind {
@@ -30,6 +32,7 @@ impl RelatedKind {
         match self {
             Self::Child => "Child chat",
             Self::Side => "Side chat",
+            Self::Alongside => "Alongside",
         }
     }
 
@@ -37,6 +40,7 @@ impl RelatedKind {
         match self {
             Self::Child => icons::BOT,
             Self::Side => icons::GIT_FORK,
+            Self::Alongside => icons::SPLIT_COLUMNS,
         }
     }
 
@@ -44,6 +48,7 @@ impl RelatedKind {
         match self {
             Self::Child => "Started by this chat's agent, with fresh context",
             Self::Side => "Started by you from a copy of this chat's context",
+            Self::Alongside => "Your own chat, listed beside this one (not its child)",
         }
     }
 }
@@ -279,11 +284,14 @@ impl Shell {
 }
 
 impl Shell {
-    /// Non-archived child and side chats per parent, deduplicated by id. Side
-    /// chats come from `WatchChats` side rows (every non-deleted one, active
-    /// or ended, on current engines) and every side list loaded this run.
+    /// Non-archived rows each chat's Related chats lists, deduplicated by id:
+    /// its children (except those listed in the sidebar), its side chats and
+    /// the chats placed alongside it. Side chats come from `WatchChats` side
+    /// rows (every non-deleted one, active or ended, on current engines) and
+    /// every side list loaded this run.
     pub(super) fn related_chat_counts(&self, cx: &App) -> std::collections::HashMap<String, usize> {
         use std::collections::{HashMap, HashSet};
+        let placed = self.effective_placements(cx);
         let mut ids: HashMap<&str, HashSet<&str>> = HashMap::new();
         for chat in self
             .state
@@ -292,12 +300,13 @@ impl Shell {
             .iter()
             .filter(|chat| !chat.archived)
         {
-            if let Some(child) = &chat.child_thread
-                && child.parent_task_id != chat.id
-            {
-                ids.entry(child.parent_task_id.as_str())
-                    .or_default()
-                    .insert(chat.id.as_str());
+            // Effective docks already name an existing, unarchived host.
+            let lists_under = match super::placement::lineage_parent_id(chat) {
+                Some(parent) => (!placed.is_promoted(&chat.id)).then_some(parent),
+                None => placed.host(&chat.id),
+            };
+            if let Some(parent) = lists_under {
+                ids.entry(parent).or_default().insert(chat.id.as_str());
             }
         }
         let side_rows = self
@@ -333,7 +342,8 @@ impl Shell {
     /// id with the side rows `WatchChats` publishes for it.
     fn side_items(&self, side: &SideListSnapshot, parent: &str, cx: &App) -> Vec<SideItem> {
         let state = self.state.read(cx);
-        let chat = |id: &str| state.chats.iter().find(|chat| chat.id == id);
+        let index = super::placement::chat_index(&state.chats);
+        let chat = |id: &str| index.get(id).copied();
         let activity = |id: &str| {
             chat(id).map(|chat| {
                 chat.last_message_at
@@ -439,6 +449,8 @@ impl Shell {
         attention.extend(self.settlement_blocking_task_keys());
         let auto_settle = self.settings.sidebar_auto_settle_after_days;
         let show_harness = self.settings.sidebar_show_harness;
+        let placed = self.effective_placements(cx);
+        let by_device = self.settings.sidebar_organization == SidebarOrganization::ByDevice;
         let (parent_title, parent_project, device, children) = {
             let state = self.state.read(cx);
             let parent_chat = state.chats.iter().find(|chat| chat.id == parent);
@@ -455,23 +467,28 @@ impl Shell {
                 .and_then(|id| state.device_name(id))
                 .unwrap_or("This device")
                 .to_string();
-            let children: Vec<luna_proto::Chat> = state
+            // Its children (unless listed in the sidebar) and the chats the
+            // user placed alongside it.
+            let children: Vec<(luna_proto::Chat, RelatedKind)> = state
                 .chats
                 .iter()
-                .filter(|chat| {
-                    chat.id != parent
-                        && chat
-                            .child_thread
-                            .as_ref()
-                            .is_some_and(|child| child.parent_task_id == parent)
+                .filter_map(|chat| {
+                    if chat.id == parent {
+                        return None;
+                    }
+                    if super::placement::lineage_parent_id(chat) == Some(parent.as_str()) {
+                        return (!placed.is_promoted(&chat.id))
+                            .then(|| (chat.clone(), RelatedKind::Child));
+                    }
+                    (placed.host(&chat.id) == Some(parent.as_str()))
+                        .then(|| (chat.clone(), RelatedKind::Alongside))
                 })
-                .cloned()
                 .collect();
             (transcript::single_line(&title), project, device, children)
         };
         let mut entries: Vec<RelatedEntry> = Vec::new();
 
-        for chat in children {
+        for (chat, kind) in children {
             let (status, project, device, branch, change_request) = {
                 let state = self.state.read(cx);
                 (
@@ -506,7 +523,7 @@ impl Shell {
                 project.clone().into(),
                 device.into(),
                 branch.clone(),
-                Some(RelatedKind::Child.description().into()),
+                Some(kind.description().into()),
             );
             let element = self.render_chat_row(
                 ChatRowProps {
@@ -528,7 +545,7 @@ impl Shell {
                     archived: chat.archived,
                     pinned: chat.pinned_order.is_some(),
                     surface: ChatRowSurface::ChildPane,
-                    kind: Some(RelatedKind::Child),
+                    kind: Some(kind),
                     can_settle,
                     settled: settled && !chat.archived,
                     // A grandchild list belongs to that child: open it there.
@@ -536,7 +553,23 @@ impl Shell {
                     jump_label: None,
                     search_query: None,
                     details: Some(details),
-                    drag: None,
+                    // Drag to the left sidebar: a child is listed there (still
+                    // this chat's child); an alongside chat returns there.
+                    drag: Some(SidebarChatDrag {
+                        chat_id: chat.id.clone(),
+                        origin: DragOrigin::Related(kind),
+                        scope: if chat.pinned_order.is_some() {
+                            SidebarDragScope::Pinned
+                        } else {
+                            SidebarDragScope::Unpinned(by_device.then(|| chat.device_id.clone()))
+                        },
+                        title: transcript::single_line(
+                            chat.title.as_deref().unwrap_or("New child chat"),
+                        )
+                        .into(),
+                        project: parent_project.clone().into(),
+                        harness: chat.config.as_ref().map(|config| config.harness),
+                    }),
                 },
                 &theme,
                 cx,
@@ -624,7 +657,7 @@ impl Shell {
             let element = self.render_chat_row(
                 ChatRowProps {
                     id: item.id.clone(),
-                    title: item.title,
+                    title: item.title.clone(),
                     time_ago: format_time_ago(at, now).into(),
                     space_name: parent_project.clone().into(),
                     branch: None,
@@ -648,7 +681,16 @@ impl Shell {
                     jump_label: None,
                     search_query: None,
                     details: Some(details),
-                    drag: None,
+                    // Draggable so a drop on the sidebar can say why it
+                    // stays: side chats never leave their chat.
+                    drag: Some(SidebarChatDrag {
+                        chat_id: item.id.clone(),
+                        origin: DragOrigin::Related(RelatedKind::Side),
+                        scope: SidebarDragScope::Unpinned(None),
+                        title: item.title.clone(),
+                        project: parent_project.clone().into(),
+                        harness: item.harness,
+                    }),
                 },
                 &theme,
                 cx,
@@ -751,8 +793,25 @@ impl Shell {
                 .text_color(theme.text_muted)
                 .child(text)
         };
+        // Drop a sidebar row here to list it alongside this chat (a child
+        // listed in the sidebar returns to its parent's list).
+        let drop_tint = theme.accent.opacity(0.06);
         let mut list = div()
             .id("related-chats-list")
+            .on_drop::<SidebarChatDrag>(cx.listener(|this, drag: &SidebarChatDrag, _, cx| {
+                this.sidebar_drag = None;
+                if drag.origin == DragOrigin::Sidebar {
+                    this.dock_beside_active(drag, cx);
+                }
+                cx.notify();
+            }))
+            .drag_over::<SidebarChatDrag>(move |style, drag, _, _| {
+                if drag.origin == DragOrigin::Sidebar {
+                    style.bg(drop_tint)
+                } else {
+                    style
+                }
+            })
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -967,6 +1026,20 @@ impl Shell {
 /// navigation state through this hook.
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
+    /// Write this profile's saved placements as-is (no validation or
+    /// pruning), to exercise recovery from a saved invalid state.
+    pub fn fixture_set_chat_placements(
+        &mut self,
+        placements: crate::settings::ChatPlacements,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(scope) = self.placement_scope(cx) {
+            self.settings.chat_placements.insert(scope, placements);
+            self.schedule_save(cx);
+            cx.notify();
+        }
+    }
+
     pub fn fixture_related_readback(&self, cx: &Context<Self>) -> serde_json::Value {
         let key = self.panel_key(cx);
         let state = self.state.read(cx);
@@ -1015,6 +1088,35 @@ impl Shell {
                 .as_ref()
                 .and_then(|panel| panel.read(cx).open_chat_id().map(str::to_string)),
             "sideMarks": self.settings.side_chat_marks,
+            "placementScope": self.placement_scope(cx),
+            "placements": self
+                .placement_scope(cx)
+                .and_then(|scope| self.settings.chat_placements.get(&scope).cloned()),
+            "sidebarChildRows": self
+                .sidebar_visible_order(cx)
+                .into_iter()
+                .filter(|id| {
+                    state
+                        .chats
+                        .iter()
+                        .find(|chat| chat.id == *id)
+                        .and_then(super::placement::lineage_parent_id)
+                        .is_some()
+                })
+                .collect::<Vec<_>>(),
+            "lineage": state
+                .chats
+                .iter()
+                .filter_map(|chat| {
+                    super::placement::lineage_parent_id(chat)
+                        .map(|parent| (chat.id.clone(), serde_json::json!(parent)))
+                })
+                .collect::<serde_json::Map<_, _>>(),
+            "selected": state.selected_chat,
+            "paneIdentity": self
+                .child_chat_panel
+                .as_ref()
+                .and_then(|panel| panel.read(cx).open_identity(cx)),
             "relatedCounts": self.related_chat_counts(cx),
             "pendingActions": self.pending_task_actions.keys().cloned().collect::<Vec<_>>(),
         })

@@ -1634,6 +1634,7 @@ impl EngineRpc {
         let engine_info = EngineInfo {
             device_id: doc_host.device_id().to_string(),
             workspace_scope,
+            profile_id: Some(workspace.profile_id(workspace_scope)),
             capabilities: luna_proto::capabilities::current(),
         };
         let rpc = Self {
@@ -8328,6 +8329,7 @@ impl CrossTaskBackend for EngineRpc {
             approved_queue: true,
             event_wait: true,
             child_creation: true,
+            child_models: true,
         }
     }
 
@@ -8335,13 +8337,54 @@ impl CrossTaskBackend for EngineRpc {
         &self,
         request: &luna_proto::CreateChildThreadRequest,
         authority: &CrossTaskAuthority,
-    ) -> Result<TaskCommandSnapshot, CrossTaskError> {
+    ) -> Result<crate::cross_task_tools::PreparedChildCreation, CrossTaskError> {
         self.validate_child_authority(request, authority)?;
-        self.current_task_command_snapshot(&crate::cross_task_tools::child_task_id(
+        let child_id = crate::cross_task_tools::child_task_id(
             &authority.caller_task_id,
             &request.idempotency_key,
-        ))
-        .map_err(|_| CrossTaskError::Backend("child snapshot unavailable".into()))
+        );
+        let execution = if self
+            .store
+            .task_command_receipt(&format!("child-create:{child_id}"))
+            .map_err(|error| CrossTaskError::Backend(error.to_string()))?
+            .is_some()
+        {
+            self.workspace
+                .chat(&child_id)
+                .map_err(|error| CrossTaskError::Backend(error.to_string()))?
+                .and_then(|chat| chat.config)
+                .ok_or(CrossTaskError::InvalidBackendResult)?
+        } else {
+            self.prepare_child_execution(&authority.caller_task_id, request)
+                .await
+                .map_err(|error| CrossTaskError::Backend(error.to_string()))?
+        };
+        let snapshot = self
+            .current_task_command_snapshot(&child_id)
+            .map_err(|_| CrossTaskError::Backend("child snapshot unavailable".into()))?;
+        let auth_instance = if matches!(execution.harness, HarnessId::Codex | HarnessId::ClaudeCode)
+        {
+            Some(
+                self.agent_accounts
+                    .resolve_execution(execution.harness, execution.provider_account_id.as_deref())
+                    .map_err(|error| CrossTaskError::Backend(error.to_string()))?
+                    .auth_instance_id,
+            )
+        } else {
+            None
+        };
+        Ok(crate::cross_task_tools::PreparedChildCreation {
+            snapshot,
+            execution,
+            auth_instance,
+        })
+    }
+    async fn child_model_catalog(
+        &self,
+        request: luna_proto::ChildModelCatalogRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<luna_proto::ChildModelCatalog, CrossTaskError> {
+        self.child_models(request, authority).await
     }
     async fn create_child(
         &self,

@@ -78,6 +78,7 @@ mod command_palette;
 mod native_file_rewind;
 mod native_review;
 mod pane_chat;
+mod placement;
 mod related_chats;
 mod side_chats;
 mod spaces;
@@ -945,10 +946,19 @@ pub(super) enum SidebarDropPlace {
     After,
 }
 
+/// Where a dragged task row came from: the left sidebar, or a Related chats
+/// row of that kind (dropping it on the sidebar lists it there).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DragOrigin {
+    Sidebar,
+    Related(related_chats::RelatedKind),
+}
+
 /// The dragged sidebar task.
 #[derive(Clone)]
 pub(super) struct SidebarChatDrag {
     pub(super) chat_id: String,
+    pub(super) origin: DragOrigin,
     pub(super) scope: SidebarDragScope,
     pub(super) title: SharedString,
     pub(super) project: SharedString,
@@ -959,6 +969,34 @@ pub(super) struct SidebarChatDrag {
 pub(super) struct SidebarDragState {
     pub(super) chat_id: String,
     pub(super) target: Option<(String, SidebarDropPlace)>,
+}
+
+/// Who started a related chat (or that it sits alongside), in the sidebar
+/// badge's quiet cloth: on every Related chats row and every child listed in
+/// the left sidebar. The row's detail tooltip explains it.
+pub(super) fn related_kind_badge(kind: related_chats::RelatedKind, theme: &Theme) -> gpui::Div {
+    let tone = theme.text_muted;
+    div()
+        .h(px(14.0))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(3.0))
+        .px(px(4.0))
+        .rounded(px(4.0))
+        .bg(tone.opacity(0.08))
+        .text_size(crate::typography::ui_rems(10.0))
+        .line_height(crate::typography::ui_rems(14.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.readable_tone(tone, 0.85))
+        .child(
+            icon(kind.icon())
+                .size(px(10.0))
+                .flex_none()
+                .text_color(theme.readable_tone(tone, 0.7)),
+        )
+        .child(kind.label())
 }
 
 /// Ghost row following the pointer while a sidebar task drags. It keeps the
@@ -3083,6 +3121,7 @@ impl Shell {
             self.side_chat_index_generation = generation;
             self.side_chat_index.clear();
         }
+        self.prune_placements(cx);
         // The open side chat was deleted (its row stopped publishing).
         if let Some(panel) = self.side_chat_panel.clone()
             && panel
@@ -6543,6 +6582,10 @@ impl Shell {
             .filter(|state| state.chat_id == drag.chat_id)
             .and_then(|state| state.target);
         cx.notify();
+        if let DragOrigin::Related(kind) = drag.origin {
+            self.place_in_sidebar(drag, kind, target, cx);
+            return;
+        }
         let Some((anchor, place)) = target else {
             return;
         };
@@ -6557,6 +6600,16 @@ impl Shell {
                 self.move_unpinned_chat(drag.chat_id.clone(), &anchor, place, cx)
             }
         }
+    }
+
+    /// A drop on the sidebar list outside every row: a related row is listed
+    /// in the sidebar (no slot); a sidebar row is simply let go.
+    pub(super) fn drop_on_sidebar_list(&mut self, drag: &SidebarChatDrag, cx: &mut Context<Self>) {
+        self.sidebar_drag = None;
+        if let DragOrigin::Related(kind) = drag.origin {
+            self.place_in_sidebar(drag, kind, None, cx);
+        }
+        cx.notify();
     }
 
     fn reorder_pinned_chat(&mut self, chat_id: String, delta: isize, cx: &mut Context<Self>) {
@@ -8831,32 +8884,7 @@ impl Shell {
                     .gap(px(Theme::SPACE_SM))
                     // Who started a related chat, in the sidebar badge's
                     // quiet cloth; the row's detail tooltip explains it.
-                    .when_some(kind, |el, kind| {
-                        let tone = theme.text_muted;
-                        el.child(
-                            div()
-                                .h(px(14.0))
-                                .flex_none()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(3.0))
-                                .px(px(4.0))
-                                .rounded(px(4.0))
-                                .bg(tone.opacity(0.08))
-                                .text_size(crate::typography::ui_rems(10.0))
-                                .line_height(crate::typography::ui_rems(14.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(theme.readable_tone(tone, 0.85))
-                                .child(
-                                    icon(kind.icon())
-                                        .size(px(10.0))
-                                        .flex_none()
-                                        .text_color(theme.readable_tone(tone, 0.7)),
-                                )
-                                .child(kind.label()),
-                        )
-                    })
+                    .when_some(kind, |el, kind| el.child(related_kind_badge(kind, theme)))
                     .child(sidebar_faded_label(
                         format!("{row_id}-device").into(),
                         true,
@@ -9323,6 +9351,11 @@ impl Shell {
             div().relative().flex_1().min_h_0().child(
                 div()
                     .id("sidebar-lists")
+                    // A Related chats row dropped between rows (or below them)
+                    // is listed here without a slot; rows take their own drops.
+                    .on_drop::<SidebarChatDrag>(cx.listener(
+                        |this, drag: &SidebarChatDrag, _, cx| this.drop_on_sidebar_list(drag, cx),
+                    ))
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&sidebar_scroll)

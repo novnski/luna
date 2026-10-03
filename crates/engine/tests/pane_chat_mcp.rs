@@ -197,6 +197,14 @@ fn child_with_prompt(core: &EngineCore, prompt: &str) -> Option<luna_proto::Chat
 }
 
 fn schema_has_new_fields(schema: &Value) {
+    assert_eq!(
+        schema["properties"]["provider"]["enum"],
+        json!(["codex", "claude-code", "opencode"])
+    );
+    assert_eq!(
+        schema["properties"]["modelOptions"]["additionalProperties"]["type"],
+        "string"
+    );
     let properties = &schema["properties"];
     assert!(properties["checkout"]["oneOf"].is_array(), "{schema:#}");
     assert_eq!(

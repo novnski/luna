@@ -15,6 +15,10 @@ use luna_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing,
 
 struct ActiveChatRow {
     depth: usize,
+    /// The chat's actual parent title when it is a child (from the record's
+    /// lineage, not this row's display copy): every child in the sidebar is
+    /// marked as one.
+    parent: Option<String>,
     status: ChatIndicator,
     chat: luna_proto::Chat,
     can_settle: bool,
@@ -226,6 +230,47 @@ fn include_child_families<'a>(
         }
     }
     selected
+}
+
+/// Placement on sidebar rows (see [`super::placement`]): a promoted child
+/// lists as its own root, so this display copy drops its lineage. The chat
+/// record (and every other view of it) keeps its parent.
+fn promote_rows<'a>(
+    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    placed: &super::placement::EffectivePlacements,
+) -> Vec<(ChatIndicator, std::borrow::Cow<'a, luna_proto::Chat>)> {
+    rows.into_iter()
+        .map(|(status, chat)| {
+            if placed.is_promoted(&chat.id) {
+                let mut copy = chat.clone();
+                copy.child_thread = None;
+                (status, std::borrow::Cow::Owned(copy))
+            } else {
+                (status, std::borrow::Cow::Borrowed(chat))
+            }
+        })
+        .collect()
+}
+
+fn borrow_rows<'a>(
+    rows: &'a [(ChatIndicator, std::borrow::Cow<'_, luna_proto::Chat>)],
+) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
+    rows.iter()
+        .map(|(status, chat)| (*status, chat.as_ref()))
+        .collect()
+}
+
+/// Docked chats list beside their host, not here. Applied after folding so
+/// a docked chat's own children stay folded into it. The selected chat
+/// stays reachable.
+fn hide_docked<'a>(
+    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    placed: &super::placement::EffectivePlacements,
+    selected: Option<&str>,
+) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
+    rows.into_iter()
+        .filter(|(_, chat)| placed.host(&chat.id).is_none() || Some(chat.id.as_str()) == selected)
+        .collect()
 }
 
 fn child_indicator_priority(status: ChatIndicator) -> u8 {
@@ -1732,13 +1777,25 @@ impl Shell {
         let recent_completion_keys = self.activity_recent_completion_keys();
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
+        let placed = self.effective_placements(cx);
         let state = self.state.read(cx);
         let now = Utc::now();
         let selected = state.selected_chat.as_deref();
+        let store = promote_rows(
+            state.sidebar_chats(
+                now,
+                if self.activity.view_active {
+                    None
+                } else {
+                    filter.as_deref()
+                },
+            ),
+            &placed,
+        );
         let mut chats: Vec<luna_proto::Chat> = if self.activity.view_active {
             fold_child_chats(
                 activity_sidebar_chats_with_recent(
-                    state.sidebar_chats(now, None),
+                    borrow_rows(&store),
                     &attention_task_keys,
                     &recent_completion_keys,
                 ),
@@ -1749,7 +1806,11 @@ impl Shell {
             .map(|(_, chat)| chat.clone())
             .collect()
         } else {
-            let mut chats = fold_child_chats(state.sidebar_chats(now, filter.as_deref()), selected);
+            let mut chats = hide_docked(
+                fold_child_chats(borrow_rows(&store), selected),
+                &placed,
+                selected,
+            );
             let ranks = self.sidebar_manual_ranks();
             chats.sort_by(|left, right| {
                 compare_sidebar_chats_ranked(self.settings.sidebar_sort, &ranks, left.1, right.1)
@@ -1802,7 +1863,12 @@ impl Shell {
         );
         let chats: Vec<_> = ordered
             .iter()
-            .filter_map(|id| state.chats.iter().find(|chat| &chat.id == id).cloned())
+            .filter_map(|id| {
+                store
+                    .iter()
+                    .find(|(_, chat)| &chat.id == id)
+                    .map(|(_, chat)| chat.as_ref().clone())
+            })
             .collect();
         child_visible_tree(&chats)
             .into_iter()
@@ -1825,14 +1891,26 @@ impl Shell {
         let recent_completion_keys = self.activity_recent_completion_keys();
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
+        let placed = self.effective_placements(cx);
         let mut rows: Vec<ActiveChatRow> = {
             let state = self.state.read(cx);
             let selected = state.selected_chat.as_deref();
+            let store = promote_rows(
+                state.sidebar_chats(
+                    now,
+                    if activity_view {
+                        None
+                    } else {
+                        filter.as_deref()
+                    },
+                ),
+                &placed,
+            );
             let (chats, hidden_count): (Vec<_>, usize) = if activity_view {
                 (
                     fold_child_chats(
                         activity_sidebar_chats_with_recent(
-                            state.sidebar_chats(now, None),
+                            borrow_rows(&store),
                             &attention_task_keys,
                             &recent_completion_keys,
                         ),
@@ -1841,8 +1919,11 @@ impl Shell {
                     0,
                 )
             } else {
-                let mut chats =
-                    fold_child_chats(state.sidebar_chats(now, filter.as_deref()), selected);
+                let mut chats = hide_docked(
+                    fold_child_chats(borrow_rows(&store), selected),
+                    &placed,
+                    selected,
+                );
                 let ranks = self.sidebar_manual_ranks();
                 chats.sort_by(|left, right| {
                     compare_sidebar_chats_ranked(
@@ -1865,6 +1946,7 @@ impl Shell {
                 (include_child_families(selected, available), hidden)
             };
             self.sidebar_hidden_active_count = hidden_count;
+            let records = super::placement::chat_index(&state.chats);
             chats
                 .into_iter()
                 .filter(|(_, chat)| {
@@ -1901,6 +1983,8 @@ impl Shell {
                         .filter(|b| !b.is_empty())
                         .map(str::to_string);
                     let change_request = state.change_request_for_chat(&chat).cloned();
+                    // From the untouched record, never this row's display copy.
+                    let parent = super::placement::parent_title(&records, &chat.id);
                     let group = if activity_view {
                         None
                     } else if chat.pinned_order.is_some() {
@@ -1913,6 +1997,7 @@ impl Shell {
                     };
                     ActiveChatRow {
                         depth: 0,
+                        parent,
                         status,
                         chat: chat.clone(),
                         can_settle,
@@ -2007,6 +2092,7 @@ impl Shell {
             for row in rows {
                 let ActiveChatRow {
                     depth,
+                    parent,
                     status,
                     chat,
                     can_settle,
@@ -2035,7 +2121,10 @@ impl Shell {
                     folder.clone().into(),
                     device,
                     branch.clone().map(SharedString::from),
-                    (status == ChatIndicator::Completed).then(|| "Done".into()),
+                    match &parent {
+                        Some(parent) => Some(format!("Child of {parent}").into()),
+                        None => (status == ChatIndicator::Completed).then(|| "Done".into()),
+                    },
                 );
                 let harness = self
                     .settings
@@ -2072,6 +2161,7 @@ impl Shell {
                 }
                 let drag = scope.filter(|_| depth == 0).map(|scope| SidebarChatDrag {
                     chat_id: chat.id.clone(),
+                    origin: DragOrigin::Sidebar,
                     scope,
                     title: title.clone(),
                     project: folder.clone().into(),
@@ -2097,7 +2187,10 @@ impl Shell {
                         } else {
                             ChatRowSurface::Sidebar
                         },
-                        kind: None,
+                        // Every child listed here wears its kind.
+                        kind: parent
+                            .is_some()
+                            .then_some(super::related_chats::RelatedKind::Child),
                         can_settle,
                         settled: false,
                         child_chats: child_counts.get(&chat.id).copied().unwrap_or(0),
@@ -2275,6 +2368,20 @@ impl Shell {
         rendered
     }
 
+    /// Actual-parent titles for the shelf rows shown (one index per render).
+    fn shelf_parent_titles<'a>(
+        &self,
+        rows: impl Iterator<Item = &'a luna_proto::Chat>,
+        cx: &App,
+    ) -> std::collections::HashMap<String, String> {
+        let state = self.state.read(cx);
+        let index = super::placement::chat_index(&state.chats);
+        rows.filter_map(|chat| {
+            super::placement::parent_title(&index, &chat.id).map(|title| (chat.id.clone(), title))
+        })
+        .collect()
+    }
+
     /// Settled tasks stay in the synced task list; automatic settling is a
     /// derived view, while deliberate overrides live on the task record.
     pub(super) fn render_settled_section(
@@ -2285,13 +2392,20 @@ impl Shell {
         let now = Utc::now();
         let mut attention_task_keys = self.activity_task_keys(cx);
         attention_task_keys.extend(self.settlement_blocking_task_keys());
+        let placed = self.effective_placements(cx);
         let mut rows: Vec<luna_proto::Chat> = {
             let state = self.state.read(cx);
-            // Same folding as the active list, so a child never shows in
-            // Settled while its parent is listed in either section.
-            fold_child_chats(
+            // Same folding and placement as the active list, so a child never
+            // shows in Settled while its parent is listed in either section.
+            let store = promote_rows(
                 state.sidebar_chats(now, self.settings.space_filter.as_deref()),
-                state.selected_chat.as_deref(),
+                &placed,
+            );
+            let selected = state.selected_chat.as_deref();
+            hide_docked(
+                fold_child_chats(borrow_rows(&store), selected),
+                &placed,
+                selected,
             )
             .into_iter()
             .filter(
@@ -2354,6 +2468,7 @@ impl Shell {
             .flex_col()
             .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET))
             .gap(px(SIDEBAR_LIST_GAP));
+        let parents = self.shelf_parent_titles(rows.iter().take(shown), cx);
         for chat in rows.into_iter().take(shown) {
             let id = chat.id.clone();
             let menu_id = id.clone();
@@ -2362,6 +2477,7 @@ impl Shell {
             );
             let time_ago = format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now);
             let selected_row = selected.as_deref() == Some(id.as_str());
+            let parent = parents.get(&id).cloned();
             let details = {
                 let state = self.state.read(cx);
                 sidebar_thread_tooltip(
@@ -2378,7 +2494,10 @@ impl Shell {
                         .to_string()
                         .into(),
                     chat.branch.clone().map(SharedString::from),
-                    Some("Settled".into()),
+                    Some(match &parent {
+                        Some(parent) => format!("Settled · child of {parent}").into(),
+                        None => "Settled".into(),
+                    }),
                 )
             };
             let tooltip_height = details.estimated_height();
@@ -2420,6 +2539,12 @@ impl Shell {
                             cx.notify();
                         }),
                     )
+                    .when(parent.is_some(), |el| {
+                        el.child(super::related_kind_badge(
+                            super::related_chats::RelatedKind::Child,
+                            theme,
+                        ))
+                    })
                     .child(sidebar_faded_label(
                         format!("settled-title-{}", chat.id).into(),
                         true,
@@ -2496,6 +2621,7 @@ impl Shell {
         const PAGE: usize = 25;
         let now = Utc::now();
         let filter = self.settings.space_filter.clone();
+        let placed = self.effective_placements(cx);
         let mut rows: Vec<luna_proto::Chat> = {
             let state = self.state.read(cx);
             let rows_by_id: std::collections::HashMap<&str, &luna_proto::Chat> = state
@@ -2507,9 +2633,14 @@ impl Shell {
                 .chats
                 .iter()
                 .filter(|c| c.archived)
-                // An archived child stays listed in its parent's Child chats
-                // pane; only children whose parent is gone keep a shelf row.
-                .filter(|chat| lineage_parent(&rows_by_id, chat).is_none())
+                // An archived child stays listed in its parent's Related
+                // chats; only children whose parent is gone, or that are
+                // listed in the sidebar, keep a shelf row. A docked chat's
+                // archive is its host's Related chats.
+                .filter(|chat| {
+                    placed.is_promoted(&chat.id) || lineage_parent(&rows_by_id, chat).is_none()
+                })
+                .filter(|chat| placed.host(&chat.id).is_none())
                 .filter(|chat| {
                     self.pending_task_actions.get(&chat.id) != Some(&TaskConfirmation::Delete)
                 })
@@ -2578,6 +2709,7 @@ impl Shell {
                 .flex_col()
                 .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET))
                 .gap(px(SIDEBAR_LIST_GAP));
+            let parents = self.shelf_parent_titles(rows.iter().take(shown), cx);
             for chat in rows.into_iter().take(shown) {
                 let id = chat.id.clone();
                 let hovered = self.archived_hover.as_deref() == Some(id.as_str());
@@ -2588,6 +2720,7 @@ impl Shell {
                 .into();
                 let time_ago: SharedString =
                     format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now).into();
+                let parent = parents.get(&id).cloned();
                 let details = {
                     let state = self.state.read(cx);
                     sidebar_thread_tooltip(
@@ -2604,7 +2737,10 @@ impl Shell {
                             .to_string()
                             .into(),
                         chat.branch.clone().map(SharedString::from),
-                        Some("Archived".into()),
+                        Some(match &parent {
+                            Some(parent) => format!("Archived · child of {parent}").into(),
+                            None => "Archived".into(),
+                        }),
                     )
                 };
                 let brand = if self.settings.sidebar_show_harness {
@@ -2726,6 +2862,12 @@ impl Shell {
                                         tint.unwrap_or(theme.text_muted).opacity(0.4)
                                     }),
                             )
+                        })
+                        .when(parent.is_some(), |el| {
+                            el.child(super::related_kind_badge(
+                                super::related_chats::RelatedKind::Child,
+                                theme,
+                            ))
                         })
                         .child(super::sidebar_faded_label(
                             format!("archived-title-{id}").into(),

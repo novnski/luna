@@ -103,7 +103,34 @@ impl Harness for Synthetic {
         })
     }
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
-        Ok(Vec::new())
+        Ok(["parent-model", "child-model", "cross-provider-model"]
+            .into_iter()
+            .map(|id| Model {
+                id: id.into(),
+                label: id.into(),
+                description: None,
+                reasoning_levels: vec![
+                    ReasoningLevel::Low,
+                    ReasoningLevel::Medium,
+                    ReasoningLevel::High,
+                ],
+                options: vec![luna_proto::ModelOption {
+                    id: "fastMode".into(),
+                    label: "Fast mode".into(),
+                    default_choice: "off".into(),
+                    choices: vec![
+                        luna_proto::ModelOptionChoice {
+                            id: "off".into(),
+                            label: "Off".into(),
+                        },
+                        luna_proto::ModelOptionChoice {
+                            id: "on".into(),
+                            label: "On".into(),
+                        },
+                    ],
+                }],
+            })
+            .collect())
     }
     async fn run(
         &self,
@@ -2088,4 +2115,269 @@ fn legacy_child_rows_contracts_and_requests_decode_unchanged() {
         assert_eq!(decoded.checkout, None);
         assert_eq!(decoded.permission_mode, None);
     }
+}
+
+// Placement/model follow-up: failure cases were recorded before implementation
+// in docs/reference/chat-placement-and-child-models.md. Real engine/document/
+// startup integration with two recording native-provider boundaries.
+fn assemble_multi_provider(root: &Path) -> (EngineCore, Recorder) {
+    worktrees_root();
+    let recorder = Recorder::default();
+    let registry = Arc::new(HarnessRegistry::new());
+    for id in [HarnessId::Codex, HarnessId::ClaudeCode] {
+        registry.register(Arc::new(Synthetic {
+            id,
+            recorder: recorder.clone(),
+        }));
+    }
+    let core = EngineCore::assemble_with_profile_and_agent_accounts_config_without_codex_metadata(
+        EngineProfile::development(&root.join("engine"), "execution-org", "execution-user"),
+        registry,
+        HarnessId::Codex,
+        None,
+        account_config(root),
+    )
+    .unwrap();
+    (core, recorder)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_execution_selects_provider_model_options_and_keeps_fresh_history_after_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("execution-project");
+    init_repo(&project);
+    let (core, recorder) = assemble_multi_provider(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    core.workspace
+        .create_space(
+            "execution-space",
+            &core.device_id,
+            project.to_str().unwrap(),
+            None,
+            true,
+        )
+        .unwrap();
+    let codex_parent = uuid::Uuid::new_v4().to_string();
+    let claude_parent = uuid::Uuid::new_v4().to_string();
+    for (id, provider) in [
+        (&codex_parent, HarnessId::Codex),
+        (&claude_parent, HarnessId::ClaudeCode),
+    ] {
+        create_chat(
+            &client,
+            id,
+            "execution-space",
+            &project,
+            config(provider, "auto", "parent-model", "high"),
+        )
+        .await;
+        core.doc_host
+            .open(id)
+            .unwrap()
+            .write_user_message("parent-private-context", "PARENT_HISTORY_DO_NOT_COPY", 1)
+            .unwrap();
+    }
+    let request = json!({"prompt":"CHILD_ONLY_EXECUTION_PROBE","idempotencyKey":"cross-claude","provider":"claude-code",
+        "model":"cross-provider-model","reasoning":"low","modelOptions":{"fastMode":"off"},"reportResults":false});
+    let receipt = create_child(&core, &codex_parent, request.clone())
+        .await
+        .unwrap();
+    let id = receipt["taskId"].as_str().unwrap().to_owned();
+    assert_eq!(receipt["execution"]["provider"], "claude-code");
+    let row = core.workspace.chat(&id).unwrap().unwrap();
+    let selected = row.config.as_ref().unwrap();
+    assert_eq!(selected.harness, HarnessId::ClaudeCode);
+    assert_eq!(selected.model.as_deref(), Some("cross-provider-model"));
+    assert_eq!(selected.reasoning, Some(ReasoningLevel::Low));
+    assert_eq!(selected.model_options.get("fastMode"), Some(&json!("off")));
+    assert_eq!(
+        row.child_thread.as_ref().unwrap().parent_task_id,
+        codex_parent
+    );
+    assert!(
+        row.harness_session_id
+            .as_deref()
+            .is_none_or(|session| !session.contains("codex"))
+    );
+    let retry = create_child(&core, &codex_parent, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(retry["taskId"], id);
+    let mut conflict = request.clone();
+    conflict["modelOptions"]["fastMode"] = json!("on");
+    assert!(create_child(&core, &codex_parent, conflict).await.is_err());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    evidence(
+        "child-execution-dispatch-state.json",
+        &json!({"receipt":receipt,"row":core.workspace.chat(&id).unwrap(),"queue":core.doc_host.open(&id).unwrap().doc().read_queue().unwrap(),"entries":core.doc_host.open(&id).unwrap().doc().read_entries().unwrap(),"status":core.sessions.session_status(&id)}),
+    );
+    until("cross-provider child dispatch", || {
+        recorder
+            .runs
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|run| run.prompt.contains("CHILD_ONLY_EXECUTION_PROBE"))
+    })
+    .await;
+    let runs = recorder.runs.lock().unwrap();
+    let run = runs
+        .iter()
+        .find(|run| run.prompt.contains("CHILD_ONLY_EXECUTION_PROBE"))
+        .unwrap();
+    assert_eq!(run.harness, Some(HarnessId::ClaudeCode));
+    assert!(run.resume.is_none());
+    assert!(
+        !serde_json::to_string(run)
+            .unwrap()
+            .contains("PARENT_HISTORY_DO_NOT_COPY")
+    );
+    drop(runs);
+    let inverse = create_child(&core, &claude_parent, json!({"prompt":"INVERSE_ONLY","idempotencyKey":"cross-codex",
+        "provider":"codex","model":"child-model","reasoning":"high","modelOptions":{"fastMode":"on"},"reportResults":false})).await.unwrap();
+    assert_eq!(
+        core.workspace
+            .chat(inverse["taskId"].as_str().unwrap())
+            .unwrap()
+            .unwrap()
+            .config
+            .unwrap()
+            .harness,
+        HarnessId::Codex
+    );
+    let defaults = create_child(&core, &codex_parent, json!({"prompt":"DEFAULTS_ONLY","idempotencyKey":"cross-defaults","provider":"claude-code","reportResults":false})).await.unwrap();
+    let default_config = core
+        .workspace
+        .chat(defaults["taskId"].as_str().unwrap())
+        .unwrap()
+        .unwrap()
+        .config
+        .unwrap();
+    assert_eq!(default_config.harness, HarnessId::ClaudeCode);
+    assert!(
+        default_config.model.is_none()
+            && default_config.reasoning.is_none()
+            && default_config.model_options.is_empty()
+    );
+    evidence(
+        "child-execution-before-restart.json",
+        &json!({"receipt":receipt,"row":row,"inverse":inverse,"defaults":defaults}),
+    );
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+    let (reopened, _) = assemble_multi_provider(root.path());
+    let restored = reopened.workspace.chat(&id).unwrap().unwrap();
+    assert_eq!(
+        luna_proto::ChildExecutionSelection::from(restored.config.as_ref().unwrap()),
+        luna_proto::ChildExecutionSelection::from(row.config.as_ref().unwrap())
+    );
+    assert_eq!(
+        restored.config.as_ref().unwrap().provider_account_id,
+        row.config.as_ref().unwrap().provider_account_id
+    );
+    assert_eq!(
+        restored.config.as_ref().unwrap().effective_permission_mode,
+        PermissionMode::Ask
+    );
+    assert_eq!(
+        restored.child_thread.as_ref().unwrap().parent_task_id,
+        codex_parent
+    );
+    assert_eq!(
+        create_child(&reopened, &codex_parent, request)
+            .await
+            .unwrap()["taskId"],
+        id
+    );
+    evidence(
+        "child-execution-after-restart.json",
+        &serde_json::to_value(restored).unwrap(),
+    );
+    reopened.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn child_execution_rejects_invalid_choices_before_identity_or_worktree_creation() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("invalid-execution-project");
+    init_repo(&project);
+    let (core, _) = assemble_multi_provider(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    core.workspace
+        .create_space(
+            "execution-space",
+            &core.device_id,
+            project.to_str().unwrap(),
+            None,
+            true,
+        )
+        .unwrap();
+    let parent = uuid::Uuid::new_v4().to_string();
+    create_chat(
+        &client,
+        &parent,
+        "execution-space",
+        &project,
+        config(HarnessId::Codex, "auto", "parent-model", "high"),
+    )
+    .await;
+    use luna_engine::cross_task_tools::{CrossTaskAuthority, CrossTaskBackend};
+    let authority = CrossTaskAuthority {
+        caller_task_id: parent.clone(),
+        local_environment_id: core.device_id.clone(),
+        visible_project_ids: ["execution-space".into()].into_iter().collect(),
+        allow_projectless: false,
+        granted_scopes: ["threads.read".into()].into_iter().collect(),
+        explicit_user_request: false,
+        delivery: RuntimeDelivery::CodexMcpTools,
+    };
+    let catalog = core
+        .rpc_service()
+        .child_model_catalog(
+            serde_json::from_value(json!({"provider":"claude-code","limit":1})).unwrap(),
+            &authority,
+        )
+        .await
+        .unwrap();
+    assert_eq!(catalog.models.len(), 1);
+    assert_eq!(catalog.next_offset, Some(1));
+    evidence(
+        "child-model-catalog.json",
+        &serde_json::to_value(catalog).unwrap(),
+    );
+    let cases = [
+        json!({"provider":"cursor"}),
+        json!({"provider":"mock"}),
+        json!({"provider":"claude-code","model":"missing-model"}),
+        json!({"provider":"claude-code","model":"child-model","reasoning":"ultra"}),
+        json!({"provider":"claude-code","model":"child-model","modelOptions":{"fastMode":"invalid"}}),
+        json!({"provider":"claude-code","model":"child-model","modelOptions":{"lunaRuntimeContract":"forged"}}),
+        json!({"provider":"claude-code","modelOptions":{"fastMode":"on"}}),
+        json!({"provider":"claude-code","model":"child-model","modelOptions":{"fastMode":true}}),
+        json!({"provider":"claude-code","model":"child-model","permissionMode":"auto"}),
+    ];
+    let mut errors = Vec::new();
+    for (index, fields) in cases.into_iter().enumerate() {
+        let mut request = json!({"prompt":"never run","idempotencyKey":format!("bad-{index}"),"checkout":{"kind":"newWorktree","branch":format!("invalid-execution-{index}")}});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        errors.push(create_child(&core, &parent, request).await.unwrap_err());
+    }
+    assert!(errors[2].contains("missing-model"), "{:?}", errors);
+    assert!(errors[3].contains("reasoning"), "{:?}", errors);
+    assert!(errors[4].contains("fastMode"), "{:?}", errors);
+    assert_eq!(core.workspace.read_chats().unwrap().len(), 1);
+    assert!(!project.join(".git/worktrees").exists());
+    let decoded: luna_proto::CreateChildThreadRequest =
+        serde_json::from_value(json!({"prompt":"legacy","idempotencyKey":"legacy"})).unwrap();
+    let encoded = serde_json::to_value(decoded).unwrap();
+    assert!(encoded.get("provider").is_none() && encoded.get("modelOptions").is_none());
+    evidence(
+        "child-execution-invalid.json",
+        &json!({"errors":errors,"chats":1,"worktreesCreated":false}),
+    );
+    core.shutdown().await;
 }
