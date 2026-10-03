@@ -30,7 +30,7 @@ fn command_settings_button(
         .aria_label(label.into())
         .when(enabled, |el| {
             el.tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(accent))
+                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
         })
 }
 
@@ -685,7 +685,7 @@ impl Render for ProjectCommandPanel {
                                     "Show captured command"
                                 })
                                 .tab_index(0)
-                                .focus_visible(move |style| style.border_2().border_color(accent))
+                                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                                 .when(cfg!(test), |el| {
                                     el.debug_selector(|| format!("qa-command-disclose-{}", run.id))
                                 })

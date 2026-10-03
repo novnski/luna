@@ -326,6 +326,9 @@ const MIGRATIONS: &[&str] = &[
      ) STRICT;
      CREATE INDEX prompt_stash_recent
        ON prompt_stash(device_id,created_at DESC,id DESC);",
+    // v17 — compare retry configuration with the original task defaults,
+    // rather than the resolved per-turn request. NULL preserves legacy guards.
+    "ALTER TABLE task_execution_lineage ADD COLUMN configuration BLOB;",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

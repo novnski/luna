@@ -20,6 +20,7 @@ use luna_proto::{
 };
 use luna_rpc::methods;
 
+use crate::AccessibleButton as _;
 use crate::popover::{self, Loadable};
 use crate::settings::widgets;
 use crate::state::AppState;
@@ -58,7 +59,7 @@ fn skill_button(
         .aria_label(label.into())
         .when(enabled, |el| {
             el.tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(accent))
+                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
         })
         .when(!enabled, |el| el.cursor_default())
 }
@@ -875,6 +876,7 @@ impl HarnessesPage {
             .child(widgets::page_subtitle(theme,
                 "Redacted readback for the selected task. Instruction text and provider credentials are never shown here."))
             .child(widgets::ghost_action(theme).id("refresh-effective-session")
+                .accessible_button("Refresh effective session", theme.accent)
                 .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
                 .on_click(cx.listener(|page, _, _, cx| { page.load_runtime_contract(cx); cx.notify(); }))
                 .child("Refresh"));
@@ -1405,6 +1407,7 @@ impl HarnessesPage {
             .child(widgets::page_subtitle(theme,
                 "Global instructions precede project instructions. Provider-native files remain with their provider. Changes apply at the next safe turn or a new provider session."))
             .child(widgets::ghost_action(theme).id("reload-luna-instructions")
+                .accessible_button("Reload LUNA instructions", theme.accent)
                 .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
                 .on_click(cx.listener(|page, _, _, cx| { page.load_instructions(cx); cx.notify(); }))
                 .child("Reload"));
@@ -1422,6 +1425,9 @@ impl HarnessesPage {
                     .child(
                         widgets::ghost_action(theme)
                             .id("save-global-instructions")
+                            .when(!self.instruction_saving, |el| {
+                                el.accessible_button("Save global instructions", theme.accent)
+                            })
                             .mt(px(8.0))
                             .hover(|s| widgets::ghost_hover(theme, s))
                             .when(!self.instruction_saving, |el| {
@@ -1444,6 +1450,9 @@ impl HarnessesPage {
                         .child(
                             widgets::ghost_action(theme)
                                 .id("save-project-instructions")
+                                .when(!self.instruction_saving, |el| {
+                                    el.accessible_button("Save project instructions", theme.accent)
+                                })
                                 .mt(px(8.0))
                                 .hover(|s| widgets::ghost_hover(theme, s))
                                 .when(!self.instruction_saving, |el| {
@@ -1507,6 +1516,14 @@ impl HarnessesPage {
                     .unwrap_or_else(|| "Automatic (session agent when supported)".into())
             };
             let interactive = !self.title_saving && (!is_model || settings.harness.is_some());
+            let title_aria = format!(
+                "{}: {label}",
+                if is_model {
+                    "Title model"
+                } else {
+                    "Title harness"
+                }
+            );
             let mut row = div()
                 .mt(px(12.0))
                 .child(widgets::row_title(
@@ -1523,6 +1540,9 @@ impl HarnessesPage {
                             "title-model"
                         } else {
                             "title-harness"
+                        })
+                        .when(interactive, |el| {
+                            el.accessible_button(title_aria.clone(), theme.accent)
                         })
                         .when(interactive, |el| {
                             el.cursor_pointer()
@@ -1765,6 +1785,7 @@ impl HarnessesPage {
             .child(
                 widgets::ghost_action(theme)
                     .id("refresh-model-cache")
+                    .when(!self.model_refresh_running, |el| el.accessible_button("Refresh model cache", theme.accent))
                     .mt(px(8.0))
                     .when(!self.model_refresh_running, |element| {
                         element

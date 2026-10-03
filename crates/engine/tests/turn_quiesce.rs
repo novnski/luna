@@ -360,15 +360,21 @@ async fn missing_turn_end_settles_instead_of_working_forever() {
     )
     .await;
 
-    // "what about now" — routed into the live run's mailbox; the harness
-    // confirms it with a Steered boundary, which re-arms Working.
+    // Explicit steering requires an active turn; an idle warm runtime accepts
+    // a follow-up through dispatch. Exercise that public path before losing
+    // its completion event, rather than the retired idle-steer behavior.
     let outcome = rig
         .core
         .sessions
         .steer(CHAT, "what about now", None)
         .await
         .expect("steer");
-    assert!(matches!(outcome, SteerOutcome::Accepted));
+    assert!(matches!(outcome, SteerOutcome::NotSteerable));
+    rig.core
+        .sessions
+        .dispatch(CHAT, HarnessId::Mock, run_request("what about now"), None)
+        .await
+        .expect("warm follow-up dispatch");
     wait_for(
         || status(&rig.core) == Some(SessionStatus::Working),
         "steer boundary re-arms Working",

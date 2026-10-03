@@ -258,6 +258,43 @@ impl DocsStore {
         workspace_repair_revision_in(&self.conn(), task_id)
     }
 
+    pub fn execution_configuration(
+        &self,
+        task_id: &str,
+        message_id: &str,
+    ) -> Result<Option<Vec<u8>>, StoreError> {
+        Ok(self.conn().query_row(
+            "SELECT configuration FROM task_execution_lineage WHERE task_id=?1 AND message_id=?2",
+            params![task_id, message_id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        ).optional()?.flatten())
+    }
+
+    /// Freeze once alongside the original message lineage, before provider
+    /// effects. A continuation must never renew the original configuration.
+    pub fn record_execution_configuration(
+        &self,
+        task_id: &str,
+        message_id: &str,
+        configuration: &[u8],
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        ensure_task_not_cleaning(&tx, task_id)?;
+        let changed = tx.execute(
+            "UPDATE task_execution_lineage SET configuration=COALESCE(configuration,?3)
+             WHERE task_id=?1 AND message_id=?2",
+            params![task_id, message_id, configuration],
+        )?;
+        if changed != 1 {
+            return Err(StoreError::WorkspaceRepairConflict(
+                "original execution lineage is missing before configuration capture".into(),
+            ));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Read the original admission stamp, never the task's current stamp.
     pub fn command_workspace_repair_revision(
         &self,

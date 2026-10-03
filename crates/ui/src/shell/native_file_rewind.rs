@@ -49,27 +49,19 @@ pub(super) fn rewind_copy(provider: Option<HarnessId>, pending: bool) -> &'stati
 }
 
 fn accessible_button(
-    button: gpui::Div,
+    button: popover::DialogButton,
     id: &'static str,
     label: &'static str,
     on_activate: impl Fn(&mut Shell, &mut Context<Shell>) + Clone + 'static,
     cx: &mut Context<Shell>,
 ) -> gpui::Stateful<gpui::Div> {
-    let keyboard = on_activate.clone();
     button
         .id(id)
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
         .on_click(cx.listener(move |shell, _, _, cx| on_activate(shell, cx)))
-        .on_key_down(
-            cx.listener(move |shell, event: &gpui::KeyDownEvent, _, cx| {
-                if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    keyboard(shell, cx);
-                    cx.stop_propagation();
-                }
-            }),
-        )
+        .on_key_down(crate::swallow_activation_key)
 }
 
 /// The Claude file-checkpoint section of the rewind dialog.

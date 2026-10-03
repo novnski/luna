@@ -14,6 +14,20 @@ use tokio_tungstenite::tungstenite::http::StatusCode;
 
 use crate::{ClientFrame, RpcError, RpcReply, RpcService, ServerFrame};
 
+#[derive(Default)]
+struct RunningRequests(HashMap<u64, tokio::task::AbortHandle>);
+
+impl Drop for RunningRequests {
+    fn drop(&mut self) {
+        // A relay/owner may cancel serve_connection before inbound reaches
+        // EOF. AbortHandle itself does not abort on drop, so cleanup must be
+        // scoped to the connection future, not only its normal return path.
+        for task in self.0.values() {
+            task.abort();
+        }
+    }
+}
+
 /// Serve one connection: read client frames from `inbound`, write server frames to `out`.
 /// Returns when `inbound` closes; all in-flight request tasks are aborted on exit.
 pub async fn serve_connection(
@@ -21,7 +35,7 @@ pub async fn serve_connection(
     out: mpsc::Sender<String>,
     mut inbound: mpsc::Receiver<String>,
 ) {
-    let mut running: HashMap<u64, tokio::task::AbortHandle> = HashMap::new();
+    let mut running = RunningRequests::default();
     while let Some(payload) = inbound.recv().await {
         // ndjson: a transport may batch several frames per message.
         for line in payload.lines() {
@@ -36,9 +50,9 @@ pub async fn serve_connection(
                     continue;
                 }
             };
-            running.retain(|_, task| !task.is_finished());
+            running.0.retain(|_, task| !task.is_finished());
             if frame.cancel {
-                if let Some(task) = running.remove(&frame.id) {
+                if let Some(task) = running.0.remove(&frame.id) {
                     task.abort();
                 }
                 continue;
@@ -54,11 +68,8 @@ pub async fn serve_connection(
                 method,
                 frame.params,
             ));
-            running.insert(frame.id, task.abort_handle());
+            running.0.insert(frame.id, task.abort_handle());
         }
-    }
-    for (_, task) in running {
-        task.abort();
     }
 }
 

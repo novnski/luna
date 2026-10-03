@@ -348,7 +348,8 @@ async fn wait_for_recovery(core: &EngineCore, status: RecoveryStatus) -> luna_pr
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "recovery status timeout"
+            "recovery status timeout: expected {status:?}; current {:?}",
+            core.sessions.session_status(TASK)
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -620,6 +621,105 @@ async fn confirmed_rejection_resends_the_frozen_request_once() {
         assert_eq!(logged[0].sandbox, logged[1].sandbox);
     }
     assert_eq!(runs.load(Ordering::SeqCst), 2);
+    core.shutdown().await;
+}
+
+// Recovery configuration failure modes: inherited defaults can differ from the
+// resolved request; the original baseline must survive restart; a later explicit
+// config/cwd edit must still fence dispatch (including an edit back to None);
+// retrying must not renew that baseline; old rows without a baseline must retain
+// the conservative guard; persistence failure must precede provider effects.
+#[tokio::test]
+async fn unchanged_task_defaults_allow_frozen_recovery_before_and_after_restart() {
+    for restart in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let attachment = root.path().join("frozen.png");
+        std::fs::write(&attachment, b"synthetic").unwrap();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let mut core = assemble(
+            root.path(),
+            FirstOutcome::AcceptedOverload,
+            runs.clone(),
+            requests.clone(),
+        );
+        let mut config = changed_config();
+        config.model = None;
+        config.reasoning = None;
+        core.workspace.set_chat_config(TASK, &config).unwrap();
+        let client = luna_rpc::memory_client(core.rpc_service());
+        send_original(&client, request(attachment.to_str().unwrap())).await;
+        let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+        core.sessions
+            .hold_recovery(TASK, "hold for explicit retry")
+            .unwrap();
+        drop(client);
+        if restart {
+            core.shutdown().await;
+            drop(core);
+            core = assemble(
+                root.path(),
+                FirstOutcome::AcceptedOverload,
+                runs.clone(),
+                requests.clone(),
+            );
+        }
+        let client = luna_rpc::memory_client(core.rpc_service());
+        let receipt = command(
+            &client,
+            "l10-inherited-default-retry",
+            serde_json::json!({"kind":"retryRecovery","chainId":scheduled.chain_id}),
+        )
+        .await;
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+        let completed = wait_for_recovery(&core, RecoveryStatus::Completed).await;
+        assert_eq!(completed.attempt_count, 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 2, "restart={restart}");
+        {
+            let logged = requests.lock().unwrap();
+            assert_eq!(logged[1].reasoning, Some(ReasoningLevel::Medium));
+            assert_eq!(logged[1].model.as_deref(), Some("mock-1"));
+            assert_eq!(logged[1].resume.as_deref(), Some("l10-provider-session"));
+        }
+        core.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn changing_task_config_to_inherited_defaults_still_fences_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let attachment = root.path().join("frozen.png");
+    std::fs::write(&attachment, b"synthetic").unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let core = assemble(
+        root.path(),
+        FirstOutcome::AcceptedOverload,
+        runs.clone(),
+        Arc::new(Mutex::new(Vec::new())),
+    );
+    let original = request(attachment.to_str().unwrap());
+    let mut config = changed_config();
+    config.model = original.model.clone();
+    config.reasoning = original.reasoning;
+    config.model_options = original.model_options.clone();
+    core.workspace.set_chat_config(TASK, &config).unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    send_original(&client, original).await;
+    let scheduled = wait_for_recovery(&core, RecoveryStatus::Scheduled).await;
+    core.sessions
+        .hold_recovery(TASK, "hold for explicit retry")
+        .unwrap();
+    // A synced projection can change without this host's SetConfig command.
+    config.reasoning = None;
+    core.workspace.set_chat_config(TASK, &config).unwrap();
+    command(
+        &client,
+        "l10-changed-default-retry",
+        serde_json::json!({"kind":"retryRecovery","chainId":scheduled.chain_id}),
+    )
+    .await;
+    wait_for_recovery(&core, RecoveryStatus::Superseded).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
     core.shutdown().await;
 }
 

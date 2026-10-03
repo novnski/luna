@@ -73,9 +73,6 @@ impl Shell {
             } else {
                 metrics
             };
-            let key_title = title.clone();
-            let key_doc = doc_id.clone();
-            let key_parent = parent.clone();
             content = content.child(
                 div()
                     .id(SharedString::from(format!("agent-{id}")))
@@ -129,25 +126,7 @@ impl Shell {
                                     );
                                 }
                             }))
-                            .on_key_down(cx.listener(
-                                move |shell, event: &gpui::KeyDownEvent, _, cx| {
-                                    if is_settings_nav_activation(
-                                        &event.keystroke.key,
-                                        event.is_held,
-                                    ) {
-                                        if let Some(doc) = key_doc.clone() {
-                                            shell.add_subagent_surface(
-                                                key_parent.clone(),
-                                                doc,
-                                                key_title.clone(),
-                                                frozen,
-                                                cx,
-                                            );
-                                        }
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            ))
+                            .on_key_down(crate::swallow_activation_key)
                     }),
             );
         }

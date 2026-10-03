@@ -57,7 +57,7 @@ fn action(
         .aria_label(label.into())
         .when(enabled, |el| {
             el.tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(accent))
+                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
         })
         .when(!enabled, |el| el.cursor_default())
 }

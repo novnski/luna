@@ -42,7 +42,9 @@ const CHUNK: usize = 64 * 1024;
 // v13 adds device-owned project commands and their execution receipts.
 // v14 adds local side-chat metadata, transcript pages and send admission records.
 // v15 keeps workspace repair authority; v16 adds local prompt stash records.
-const CURRENT_SCHEMA: i64 = 16;
+// v17 keeps the original task defaults in local execution lineage. Preserve
+// that immutable snapshot so recovery still detects later configuration edits.
+const CURRENT_SCHEMA: i64 = 17;
 
 // Serialized legacy labels are part of archive validation. The credentials/
 // directory, including the new device-local key, remains outside the allowlist.
@@ -1208,6 +1210,20 @@ fn database_counts(conn: &Connection, path: String) -> Result<DatabaseCounts> {
                     "database schema requires missing column {table}.workspace_repair_revision"
                 )));
             }
+        }
+    }
+    if schema_version >= 17 {
+        let present: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('task_execution_lineage')
+             WHERE name='configuration')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !present {
+            return Err(BackupError::Invalid(
+                "database schema requires missing column task_execution_lineage.configuration"
+                    .into(),
+            ));
         }
     }
     Ok(DatabaseCounts {

@@ -48,7 +48,7 @@ impl ShortcutsPage {
                     gpui::Toggled::False
                 })
                 .tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(accent))
+                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
         };
         let capture = toggle(
             "appshots-enabled",
@@ -85,7 +85,7 @@ impl ShortcutsPage {
                         gpui::Toggled::False
                     })
                     .tab_index(0)
-                    .focus_visible(move |style| style.border_2().border_color(accent))
+                    .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                     .px(px(10.0))
                     .py(px(7.0))
                     .rounded(px(7.0))
@@ -144,7 +144,7 @@ impl ShortcutsPage {
                 .role(gpui::Role::Button)
                 .aria_label(label)
                 .tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(accent))
+                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                 .cursor_pointer()
                 .child(label)
         };

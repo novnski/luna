@@ -264,6 +264,19 @@ async fn non_codex_managed_tasks_continue_and_keep_local_metadata_behavior() {
     assert_eq!(chat.title.as_deref(), Some("Local metadata still works"));
     assert!(chat.archived);
 
+    // Background continuations cannot revive an archived task. Explicitly
+    // reopen it through the same metadata action before exercising resume.
+    core.rpc_service()
+        .handle(
+            methods::MUTATE,
+            serde_json::json!({
+                "op": "setChatArchived", "chatId": &task_id, "archived": false
+            }),
+        )
+        .await
+        .unwrap();
+    assert!(!core.workspace.chat(&task_id).unwrap().unwrap().archived);
+
     core.sessions
         .dispatch(
             &task_id,
@@ -396,7 +409,14 @@ async fn restart_replays_lineage_dedup_and_immutable_binding_generations() {
     assert_eq!(replacement.generation, 2);
     let before_restart = fixture.service.view(&task_a).unwrap();
     assert_eq!(before_restart.task.lineage, lineage);
-    assert_eq!(before_restart.workspace.workspace_id, space_id);
+    assert_eq!(
+        before_restart.workspace.source_space_id.as_deref(),
+        Some(space_id.as_str())
+    );
+    assert_eq!(
+        before_restart.task.workspace_id,
+        before_restart.workspace.workspace_id
+    );
     assert_eq!(
         before_restart.bindings[0].provider_task_id,
         "provider-thread-1"
@@ -484,6 +504,7 @@ async fn reconciliation_reports_missing_foreign_active_and_unsupported_truthfull
     }
     let task_id = uuid::Uuid::new_v4().to_string();
     let missing_workspace = fixture._temp.path().join("removed-workspace");
+    std::fs::create_dir(&missing_workspace).unwrap();
     fixture
         .service
         .register_new_task(
@@ -503,6 +524,7 @@ async fn reconciliation_reports_missing_foreign_active_and_unsupported_truthfull
             missing_workspace.to_str().unwrap(),
         )
         .unwrap();
+    std::fs::remove_dir(&missing_workspace).unwrap();
     let missing_environment = fixture
         .service
         .reconcile_task(&task_id, false)

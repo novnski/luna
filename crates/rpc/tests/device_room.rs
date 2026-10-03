@@ -578,6 +578,17 @@ async fn token_rotation_does_not_interrupt_a_live_peer_link() {
 
 #[tokio::test]
 async fn sign_out_closes_cached_peer_links() {
+    assert_sign_out_closes_cached_peer_links(false).await;
+}
+
+// A burst of successful dials can overflow the process-wide four-event bus.
+// Missing duplicate network hints must not disable future token revocation.
+#[tokio::test]
+async fn sign_out_still_closes_links_after_network_event_lag() {
+    assert_sign_out_closes_cached_peer_links(true).await;
+}
+
+async fn assert_sign_out_closes_cached_peer_links(lag_network_events: bool) {
     let relay = FakeRelay::start().await;
     let _host = HostRelay::spawn(
         relay_config(&relay.edge_url(), 100),
@@ -599,6 +610,12 @@ async fn sign_out_closes_cached_peer_links() {
         .await
         .expect("link is live before sign-out");
 
+    if lag_network_events {
+        for _ in 0..32 {
+            luna_sync::wake::notify_online();
+        }
+        tokio::task::yield_now().await;
+    }
     token.clear();
 
     tokio::time::timeout(Duration::from_secs(5), async {

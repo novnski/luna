@@ -71,6 +71,7 @@ fn workspace_footer_row() -> gpui::Div {
         .gap(px(4.0))
 }
 
+use crate::AccessibleButton as _;
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::motion;
 use crate::popover::{self, Loadable, MenuKey};
@@ -4792,7 +4793,7 @@ impl Pickers {
                     div()
                         .text_size(crate::typography::ui_rems(11.5))
                         .text_color(theme.text_muted)
-                        .child("No Codex login — use Settings → Accounts")
+                        .child("No Codex login — use Settings → Providers")
                         .into_any_element()
                 } else {
                     div()
@@ -4994,7 +4995,7 @@ impl Pickers {
                         .text_color(theme.text_muted)
                         .text_center()
                         .child(SharedString::from(
-                            "Enable an installed agent in Settings → Agents, \
+                            "Enable an installed agent in Settings → Providers, \
                              or install an agent CLI.",
                         )),
                 )
@@ -5173,6 +5174,7 @@ impl Pickers {
                         .child(
                             div()
                                 .id("provider-switch-cancel")
+                                .accessible_button("Cancel provider switch", theme.accent)
                                 .px(px(10.0))
                                 .h(px(28.0))
                                 .rounded(px(6.0))
@@ -5189,6 +5191,7 @@ impl Pickers {
                         .child(
                             div()
                                 .id("provider-switch-confirm")
+                                .accessible_button("Switch provider", theme.accent)
                                 .px(px(10.0))
                                 .h(px(28.0))
                                 .rounded(px(6.0))

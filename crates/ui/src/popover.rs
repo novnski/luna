@@ -1102,57 +1102,90 @@ pub fn dialog_field(input: AnyElement) -> gpui::Div {
         .child(input)
 }
 
+/// A dialog button from [`btn_ghost`], [`btn_primary`] or [`btn_danger`],
+/// waiting for its stable id. Every caller already names the button with
+/// `.id(..)` before wiring its click, so that call is where the accessible
+/// identity lands: the returned element is an announced, focusable Button
+/// labelled by its visible text. Enter/Space reach the caller's `on_click`
+/// once, through GPUI's keyboard click.
+pub struct DialogButton {
+    div: Div,
+    label: SharedString,
+}
+
+impl DialogButton {
+    pub fn id(self, id: impl Into<ElementId>) -> Stateful<Div> {
+        self.div
+            .id(id)
+            .role(gpui::Role::Button)
+            .aria_label(self.label)
+    }
+}
+
+/// The frame every dialog button shares. The resting 1px transparent border
+/// (padding trimmed to match the original 12×6) means keyboard focus only
+/// recolors it and never resizes the button row.
+fn button_frame(theme: &Theme, label: &str) -> (Div, SharedString) {
+    let label = SharedString::from(label.to_string());
+    let focus = theme.accent;
+    let frame = div()
+        .tab_index(0)
+        .px(px(11.0))
+        .py(px(5.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .focus_visible(move |style| style.border_color(focus))
+        .text_size(crate::typography::ui_rems(13.0))
+        .cursor_pointer()
+        .on_key_down(crate::swallow_activation_key)
+        .child(label.clone());
+    (frame, label)
+}
+
 /// Ghost button (`btnGhost`): quiet text, hover wash fading over
 /// `transition-colors` (luna dialogs.tsx). Caller adds id + click; `fade_key`
 /// as in [`menu_row`].
-pub fn btn_ghost(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) -> gpui::Div {
+pub fn btn_ghost(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) -> DialogButton {
     let fade_key = fade_key.into();
-    let mut btn = div()
-        .px(px(12.0))
-        .py(px(6.0))
-        .rounded(px(8.0))
-        .text_size(crate::typography::ui_rems(13.0))
+    let (frame, label) = button_frame(theme, label);
+    let mut frame = frame
         .text_color(motion::hover_blend(&fade_key, theme.text_muted, theme.text))
         .bg(motion::hover_blend(
             &fade_key,
             crate::theme::wash(0.0),
             ink(0.06),
-        ))
-        .cursor_pointer()
-        .child(SharedString::from(label.to_string()));
-    btn.interactivity()
+        ));
+    frame
+        .interactivity()
         .on_hover(motion::hover_listener(fade_key));
-    btn
+    DialogButton { div: frame, label }
 }
 
 /// Primary button (`btnPrimary`): white fill, near-black text.
-pub fn btn_primary(theme: &Theme, label: &str) -> gpui::Div {
-    div()
-        .px(px(12.0))
-        .py(px(6.0))
-        .rounded(px(8.0))
-        .bg(theme.text)
-        .text_size(crate::typography::ui_rems(13.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.on_solid)
-        .cursor_pointer()
-        .hover(|s| s.opacity(0.9))
-        .child(SharedString::from(label.to_string()))
+pub fn btn_primary(theme: &Theme, label: &str) -> DialogButton {
+    let (frame, label) = button_frame(theme, label);
+    DialogButton {
+        div: frame
+            .bg(theme.text)
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.on_solid)
+            .hover(|s| s.opacity(0.9)),
+        label,
+    }
 }
 
 /// Destructive button (`btnDestructive`): the muted red fill.
-pub fn btn_danger(theme: &Theme, label: &str) -> gpui::Div {
-    div()
-        .px(px(12.0))
-        .py(px(6.0))
-        .rounded(px(8.0))
-        .bg(theme.danger_strong)
-        .text_size(crate::typography::ui_rems(13.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(gpui::white())
-        .cursor_pointer()
-        .hover(|s| s.opacity(0.9))
-        .child(SharedString::from(label.to_string()))
+pub fn btn_danger(theme: &Theme, label: &str) -> DialogButton {
+    let (frame, label) = button_frame(theme, label);
+    DialogButton {
+        div: frame
+            .bg(theme.danger_strong)
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(gpui::white())
+            .hover(|s| s.opacity(0.9)),
+        label,
+    }
 }
 
 /// Pulsing skeleton rows shown while a list loads (luna:

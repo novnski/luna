@@ -1407,26 +1407,30 @@ impl Shell {
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, _| this.sidebar_view_menu.note_trigger_press()),
             )
-            .on_click(cx.listener(|this, _, window, cx| {
-                if this.sidebar_view_menu.take_press_was_open() {
+            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
+                // Enter/Space arrive as GPUI's key-up keyboard click, which
+                // has no mouse-down press note: toggle on the open state.
+                let close = if event.is_keyboard() {
+                    this.sidebar_view_menu.is_open()
+                } else {
+                    this.sidebar_view_menu.take_press_was_open()
+                };
+                if close {
                     this.close_sidebar_view_menu(cx);
                 } else {
                     this.open_sidebar_view_menu(window, cx);
                 }
             }))
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if matches!(
-                    event.keystroke.key.to_ascii_lowercase().as_str(),
-                    "enter" | "space" | "arrowdown"
-                ) {
-                    cx.stop_propagation();
-                    if this.sidebar_view_menu.is_open()
-                        && !event.keystroke.key.eq_ignore_ascii_case("arrowdown")
-                    {
-                        this.close_sidebar_view_menu(cx);
-                    } else if !this.sidebar_view_menu.is_open() {
-                        this.open_sidebar_view_menu(window, cx);
+                match event.keystroke.key.to_ascii_lowercase().as_str() {
+                    "enter" | "space" => cx.stop_propagation(),
+                    "arrowdown" => {
+                        cx.stop_propagation();
+                        if !this.sidebar_view_menu.is_open() {
+                            this.open_sidebar_view_menu(window, cx);
+                        }
                     }
+                    _ => {}
                 }
             }))
             .tooltip(|_, cx| cx.new(|_| SidebarViewOptionsTooltip).into())
@@ -4131,7 +4135,11 @@ impl Shell {
                         ),
                 )
                 .into_any_element();
-            overlays.push(popover::modal("delete-space-dialog", viewport, card));
+            overlays.push(popover::modal(
+                "delete-space-dialog",
+                viewport,
+                self.confirmation_card(card, cx),
+            ));
         }
 
         overlays

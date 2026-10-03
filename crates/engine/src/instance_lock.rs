@@ -202,6 +202,13 @@ mod tests {
         // The probe must not have stolen the lock from the holder.
         InstanceLock::acquire(dir.path()).expect_err("still held after probe");
         drop(lock);
+        // Other tests spawn subprocesses concurrently. A fork can briefly
+        // inherit this fd before CLOEXEC releases it; holder is deliberately
+        // a single conservative probe, unlike acquire's bounded retry loop.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while InstanceLock::holder(dir.path()).is_some() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert_eq!(InstanceLock::holder(dir.path()), None, "released");
     }
 

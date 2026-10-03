@@ -445,6 +445,42 @@ pub fn toggle_switch(theme: &Theme, on: bool) -> gpui::Div {
         )
 }
 
+/// [`toggle_switch`] as a complete control: an announced, focusable Switch
+/// labelled `label`. GPUI's keyboard click delivers Enter/Space to the same
+/// `toggle` as the pointer, exactly once. The focus ring is a transparent 2px
+/// border pulled back by a matching negative margin, so focusing the switch
+/// never moves its row.
+pub fn switch_control<V: 'static>(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    on: bool,
+    theme: &Theme,
+    cx: &mut Context<V>,
+    toggle: impl Fn(&mut V, &mut Context<V>) + 'static,
+) -> gpui::Stateful<gpui::Div> {
+    let accent = theme.accent;
+    div()
+        .id(id)
+        .role(gpui::Role::Switch)
+        .aria_label(label)
+        .aria_toggled(if on {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .tab_index(0)
+        .flex_none()
+        .m(px(-2.0))
+        .rounded_full()
+        .border_2()
+        .border_color(gpui::transparent_black())
+        .focus_visible(move |style| style.border_color(accent))
+        .cursor_pointer()
+        .on_click(cx.listener(move |view, _, _, cx| toggle(view, cx)))
+        .on_key_down(crate::swallow_activation_key)
+        .child(toggle_switch(theme, on))
+}
+
 /// A small quiet ghost action (`rounded-lg px-2.5 py-1.5 text-[12px]
 /// text-muted-foreground`). Caller adds id + click + leading icon child AND
 /// its own `.hover(..)` — gpui panics on a second hover, and the pages vary

@@ -118,6 +118,42 @@ pub(crate) const fn click_activation_drag_enabled() -> bool {
     !cfg!(target_os = "windows")
 }
 
+/// Key-down listener for a focusable `on_click` control. GPUI already turns
+/// Enter/Space on the focused element into exactly one keyboard click on
+/// key-up (`ClickEvent::Keyboard`), and its key-down recorder runs before any
+/// element listener, so a key-down handler that also activated fired the
+/// action twice: switches and checkboxes flipped back, retries sent twice.
+/// This only keeps the activation key from reaching ancestor handlers.
+pub(crate) fn swallow_activation_key(
+    event: &gpui::KeyDownEvent,
+    _window: &mut gpui::Window,
+    cx: &mut App,
+) {
+    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+        cx.stop_propagation();
+    }
+}
+
+/// Turns a clickable element into a real control: an announced Button named
+/// `label`, a tab stop with the layout-neutral [`theme::focus_ring`], and
+/// Enter/Space through GPUI's single keyboard click (see
+/// [`swallow_activation_key`]). Apply it after `.id(..)`, and only while the
+/// control is enabled.
+pub(crate) trait AccessibleButton: Sized {
+    fn accessible_button(self, label: impl Into<gpui::SharedString>, focus: gpui::Hsla) -> Self;
+}
+
+impl AccessibleButton for gpui::Stateful<gpui::Div> {
+    fn accessible_button(self, label: impl Into<gpui::SharedString>, focus: gpui::Hsla) -> Self {
+        use gpui::{InteractiveElement as _, StatefulInteractiveElement as _};
+        self.role(gpui::Role::Button)
+            .aria_label(label)
+            .tab_index(0)
+            .focus_visible(move |style| theme::focus_ring(style, focus))
+            .on_key_down(swallow_activation_key)
+    }
+}
+
 /// Everything the headed binary passes in (config/env resolution lives in
 /// `apps/luna`, not here).
 #[derive(Clone)]

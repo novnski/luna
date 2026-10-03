@@ -36,6 +36,7 @@ use preview::FilePreviewState;
 use search::FileSearchState;
 
 static NEXT_REVIEW_COMMENT_FLUSH_SOURCE: AtomicU64 = AtomicU64::new(1);
+use crate::AccessibleButton as _;
 use crate::surface_chrome::{
     CONTROL_RADIUS as TOOLBAR_BUTTON_RADIUS, CONTROL_SIZE as TOOLBAR_BUTTON_SIZE, toolbar,
 };
@@ -231,6 +232,7 @@ impl Render for FilesSurface {
                 .child(
                     div()
                         .id("files-retry-root")
+                        .accessible_button("Retry loading workspace files", theme.accent)
                         .h(px(28.0))
                         .px(px(12.0))
                         .rounded(px(7.0))

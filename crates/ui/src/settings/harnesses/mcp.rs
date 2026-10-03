@@ -76,7 +76,7 @@ fn mcp_button(
             button
                 .cursor_pointer()
                 .hover(move |style| style.bg(wash).text_color(text_color))
-                .focus_visible(move |style| style.border_2().border_color(accent))
+                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
         })
         .when(!enabled, |button| {
             button.opacity(0.45).aria_description(BUSY_REASON)

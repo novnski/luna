@@ -191,7 +191,6 @@ impl GeneralPage {
                 "general-confirm-delete-toggle",
             ),
         };
-        let accent = theme.accent;
         widgets::card_row(theme, first)
             .min_h(px(76.0))
             .child(
@@ -211,30 +210,14 @@ impl GeneralPage {
                             .child(SharedString::from(description)),
                     ),
             )
-            .child(
-                div()
-                    .id(id)
-                    .role(gpui::Role::Switch)
-                    .aria_label(title)
-                    .aria_toggled(if enabled {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .tab_index(0)
-                    .focus_visible(move |style| style.border_2().border_color(accent))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle(toggle, cx)))
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if !event.is_held
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
-                            cx.stop_propagation();
-                            this.toggle(toggle, cx);
-                        }
-                    }))
-                    .child(widgets::toggle_switch(theme, enabled)),
-            )
+            .child(widgets::switch_control(
+                id,
+                title,
+                enabled,
+                theme,
+                cx,
+                move |this, cx| this.toggle(toggle, cx),
+            ))
     }
 
     fn on_scroll_hovered(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
@@ -310,7 +293,7 @@ impl Render for GeneralPage {
                                     gpui::Toggled::False
                                 })
                                 .tab_index(0)
-                                .focus_visible(move |style| style.border_2().border_color(accent))
+                                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                                 .min_w(px(78.0))
                                 .px(px(10.0))
                                 .py(px(6.0))
@@ -334,19 +317,7 @@ impl Render for GeneralPage {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.set_composer_send_behavior(behavior, cx)
                                 }))
-                                .on_key_down(cx.listener(
-                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if !event.is_held
-                                            && matches!(
-                                                event.keystroke.key.as_str(),
-                                                "enter" | "space"
-                                            )
-                                        {
-                                            cx.stop_propagation();
-                                            this.set_composer_send_behavior(behavior, cx);
-                                        }
-                                    },
-                                ))
+                                .on_key_down(crate::swallow_activation_key)
                                 .child(label)
                         }),
                     ),
@@ -393,7 +364,7 @@ impl Render for GeneralPage {
                                     .aria_label(format!("Follow-up behavior: {label}"))
                                     .aria_toggled(if selected { gpui::Toggled::True } else { gpui::Toggled::False })
                                     .tab_index(0)
-                                    .focus_visible(move |style| style.border_2().border_color(accent))
+                                    .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                                     .min_w(px(72.0))
                                     .px(px(12.0))
                                     .py(px(6.0))
@@ -407,12 +378,7 @@ impl Render for GeneralPage {
                                     .cursor_pointer()
                                     .hover(|s| s.text_color(theme.text))
                                     .on_click(cx.listener(move |this, _, _, cx| this.set_follow_up_behavior(behavior, cx)))
-                                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                            cx.stop_propagation();
-                                            this.set_follow_up_behavior(behavior, cx);
-                                        }
-                                    }))
+                                    .on_key_down(crate::swallow_activation_key)
                                     .child(label)
                             }),
                     ),

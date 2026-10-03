@@ -88,10 +88,6 @@ enum NotificationPreference {
     BackgroundOnly,
 }
 
-fn is_switch_activation(key: &str, is_held: bool) -> bool {
-    !is_held && matches!(key, "enter" | "space")
-}
-
 fn interactive_switch(
     element: gpui::Stateful<gpui::Div>,
     accent: gpui::Hsla,
@@ -100,17 +96,12 @@ fn interactive_switch(
 ) -> gpui::Stateful<gpui::Div> {
     element
         .tab_index(0)
-        .focus_visible(move |style| style.border_2().border_color(accent))
+        .focus_visible(move |style| crate::theme::focus_ring(style, accent))
         .cursor_pointer()
         .on_click(cx.listener(move |this, _, _, cx| {
             this.toggle(preference, cx);
         }))
-        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-            if is_switch_activation(&event.keystroke.key, event.is_held) {
-                cx.stop_propagation();
-                this.toggle(preference, cx);
-            }
-        }))
+        .on_key_down(crate::swallow_activation_key)
 }
 
 impl NotificationsPage {
@@ -459,9 +450,7 @@ impl Render for NotificationsPage {
         let task_card = widgets::section_card(&theme).children(tasks.into_iter().enumerate().map(
             |(index, task)| {
                 let policy_id = task.id.clone();
-                let policy_key_id = task.id.clone();
                 let awake_id = task.id.clone();
-                let awake_key_id = task.id.clone();
                 let label = task.title.clone();
                 widgets::card_row(&theme, index > 0)
                     .child(
@@ -491,12 +480,7 @@ impl Render for NotificationsPage {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.cycle_task_policy(&policy_id, cx)
                         }))
-                        .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                            if is_switch_activation(&event.keystroke.key, event.is_held) {
-                                this.cycle_task_policy(&policy_key_id, cx);
-                                cx.stop_propagation();
-                            }
-                        })),
+                        .on_key_down(crate::swallow_activation_key),
                     )
                     .child(
                         div()
@@ -513,12 +497,7 @@ impl Render for NotificationsPage {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.toggle_task_awake(&awake_id, cx)
                             }))
-                            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                if is_switch_activation(&event.keystroke.key, event.is_held) {
-                                    this.toggle_task_awake(&awake_key_id, cx);
-                                    cx.stop_propagation();
-                                }
-                            }))
+                            .on_key_down(crate::swallow_activation_key)
                             .child(widgets::toggle_switch(&theme, task.keep_awake)),
                     )
             },
@@ -554,18 +533,5 @@ impl Render for NotificationsPage {
                     ),
             )
             .children(scrollbar)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::is_switch_activation;
-
-    #[test]
-    fn switches_accept_enter_or_space_once_per_press() {
-        assert!(is_switch_activation("enter", false));
-        assert!(is_switch_activation("space", false));
-        assert!(!is_switch_activation("escape", false));
-        assert!(!is_switch_activation("space", true));
     }
 }

@@ -3056,13 +3056,27 @@ fn spawn_native_tasks_watch(
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
         loop {
             let params = serde_json::json!({ "chatId": chat_id });
-            let Ok(mut rx) = handle
+            // Only an engine that cannot serve the watch ends it. A transport
+            // error while the daemon restarts must retry, or the workflows and
+            // teammates ledger froze for this chat until it was reselected.
+            let mut rx = match handle
                 .client()
                 .subscribe_checked(methods::WATCH_NATIVE_TASKS, params)
                 .await
-            else {
-                tracing::debug!(%chat_id, "native task watch unavailable");
-                return;
+            {
+                Ok(rx) => rx,
+                Err(err @ (RpcError::UnknownMethod(_) | RpcError::BadParams(_))) => {
+                    tracing::debug!(%chat_id, error = %err, "native task watch unavailable");
+                    return;
+                }
+                Err(err) => {
+                    tracing::debug!(%chat_id, error = %err, "native task watch failed; retrying");
+                    if this.update(cx, |_, _| {}).is_err() {
+                        return;
+                    }
+                    cx.background_executor().timer(RETRY_DELAY).await;
+                    continue;
+                }
             };
             while let Some(value) = rx.recv().await {
                 let Ok(ledger) = serde_json::from_value::<luna_proto::NativeTaskLedger>(value)

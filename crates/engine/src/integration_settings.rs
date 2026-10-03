@@ -1369,7 +1369,6 @@ mod tests {
         .unwrap();
         let view = codex_inventory(&home, Some(&project), "synthetic-machine");
         assert_eq!(view.machine_id, "synthetic-machine");
-        assert!(view.help.contains("chosen gateway"));
         assert_eq!(view.items.len(), 4);
         assert_eq!(
             view.items

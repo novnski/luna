@@ -1351,7 +1351,6 @@ impl SideChatPanel {
     ) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let title = title.into();
-        let key_action = action.clone();
         div()
             .id(id.into())
             .role(gpui::Role::Button)
@@ -1370,14 +1369,7 @@ impl SideChatPanel {
             .when(self.busy, |style| style.opacity(0.5))
             .child(title)
             .on_click(cx.listener(move |panel, _, _, cx| panel.action(action.clone(), cx)))
-            .on_key_down(
-                cx.listener(move |panel, event: &gpui::KeyDownEvent, _, cx| {
-                    if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                        panel.action(key_action.clone(), cx);
-                        cx.stop_propagation();
-                    }
-                }),
-            )
+            .on_key_down(crate::swallow_activation_key)
             .into_any_element()
     }
 }

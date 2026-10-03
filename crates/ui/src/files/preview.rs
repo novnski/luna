@@ -2157,38 +2157,39 @@ impl FilesSurface {
                         .when(lifecycle_blocked || self.target_change_pending, |banner| {
                             banner
                                 .child(
-                                    div()
-                                        .id("files-retry-close-save")
-                                        .when(self.target_change_pending, |button| button.hidden())
-                                        .ml_auto()
-                                        .cursor_pointer()
-                                        .text_color(theme.text)
-                                        .child("Retry")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.retry_pending_close(cx)
-                                        })),
+                                    banner_action(
+                                        "files-retry-close-save",
+                                        "Retry",
+                                        theme.text,
+                                        &theme,
+                                    )
+                                    .when(self.target_change_pending, |button| button.hidden())
+                                    .ml_auto()
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.retry_pending_close(cx)),
+                                    ),
                                 )
                                 .when(!self.target_change_pending, |banner| {
                                     banner.child(
-                                        div()
-                                            .id("files-keep-open")
-                                            .cursor_pointer()
-                                            .text_color(theme.text_muted)
-                                            .child("Keep Open")
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.keep_open(cx)),
-                                            ),
+                                        banner_action(
+                                            "files-keep-open",
+                                            "Keep open",
+                                            theme.text_muted,
+                                            &theme,
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| this.keep_open(cx))),
                                     )
                                 })
                                 .child(
-                                    div()
-                                        .id("files-discard-close-changes")
-                                        .cursor_pointer()
-                                        .text_color(theme.danger_muted)
-                                        .child("Discard Changes")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.discard_changes_and_close(cx)
-                                        })),
+                                    banner_action(
+                                        "files-discard-close-changes",
+                                        "Discard changes",
+                                        theme.danger_muted,
+                                        &theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| this.discard_changes_and_close(cx),
+                                    )),
                                 )
                         }),
                 )
@@ -2228,47 +2229,51 @@ impl FilesSurface {
                                     .when(!confirming_reload, |actions| {
                                         actions
                                             .child(
-                                                div()
-                                                    .id("files-keep-external-edits")
-                                                    .cursor_pointer()
-                                                    .text_color(theme.text_muted)
-                                                    .child("Keep Editing")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.keep_external_edits(cx)
-                                                    })),
+                                                banner_action(
+                                                    "files-keep-external-edits",
+                                                    "Keep editing",
+                                                    theme.text_muted,
+                                                    &theme,
+                                                )
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.keep_external_edits(cx)
+                                                })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("files-reload-external")
-                                                    .cursor_pointer()
-                                                    .text_color(theme.text)
-                                                    .child("Reload from Disk")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.request_reload_active_document(cx)
-                                                    })),
+                                                banner_action(
+                                                    "files-reload-external",
+                                                    "Reload from disk",
+                                                    theme.text,
+                                                    &theme,
+                                                )
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.request_reload_active_document(cx)
+                                                })),
                                             )
                                     })
                                     .when(confirming_reload, |actions| {
                                         actions
                                             .child(
-                                                div()
-                                                    .id("files-cancel-reload")
-                                                    .cursor_pointer()
-                                                    .text_color(theme.text_muted)
-                                                    .child("Cancel")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.cancel_reload_confirmation(cx)
-                                                    })),
+                                                banner_action(
+                                                    "files-cancel-reload",
+                                                    "Cancel",
+                                                    theme.text_muted,
+                                                    &theme,
+                                                )
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.cancel_reload_confirmation(cx)
+                                                })),
                                             )
                                             .child(
-                                                div()
-                                                    .id("files-confirm-reload")
-                                                    .cursor_pointer()
-                                                    .text_color(theme.text)
-                                                    .child("Discard & Reload")
-                                                    .on_click(cx.listener(|this, _, _, cx| {
-                                                        this.confirm_reload_active_document(cx)
-                                                    })),
+                                                banner_action(
+                                                    "files-confirm-reload",
+                                                    "Discard and reload",
+                                                    theme.text,
+                                                    &theme,
+                                                )
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.confirm_reload_active_document(cx)
+                                                })),
                                             )
                                     }),
                             ),
@@ -3377,8 +3382,14 @@ fn editor_comment_action(
     primary: bool,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
+    let focus = theme.accent;
     div()
         .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .focus_visible(move |style| crate::theme::focus_ring(style, focus))
+        .on_key_down(crate::swallow_activation_key)
         .h(px(22.0))
         .px(px(10.0))
         .flex()
@@ -3401,6 +3412,32 @@ fn editor_comment_action(
                 .on_hover(crate::motion::hover_listener(id))
         })
         .child(SharedString::from(label))
+}
+
+/// A text action on an editor banner (close-save failure, outside change,
+/// reload confirmation). These settle unsaved work, so they are focusable
+/// buttons; GPUI's keyboard click delivers Enter/Space to the caller's
+/// `on_click` once.
+fn banner_action(
+    id: &'static str,
+    label: &'static str,
+    color: gpui::Hsla,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let focus = theme.accent;
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .px(px(4.0))
+        .rounded(px(Theme::CONTROL_RADIUS))
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|style| style.bg(crate::theme::ink(0.06)))
+        .focus_visible(move |style| crate::theme::focus_ring(style, focus))
+        .on_key_down(crate::swallow_activation_key)
+        .child(label)
 }
 
 fn centered_state(message: impl Into<SharedString>, color: gpui::Hsla) -> AnyElement {

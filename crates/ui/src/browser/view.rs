@@ -228,7 +228,9 @@ impl BrowserSurface {
             );
         }
         if snapshot.services.is_empty() {
-            let message = if self.previews_loading {
+            let message = if self.previews_unsupported {
+                "Preview discovery isn't available on this device's version of LUNA. Enter an address to open a page."
+            } else if self.previews_loading {
                 "Looking for dev servers…"
             } else if snapshot.remote {
                 "Start a dev server in this project on your other device. Its preview will appear here when that device is online."

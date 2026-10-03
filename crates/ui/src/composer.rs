@@ -617,10 +617,6 @@ fn wizard_escape_goes_back(key: &str, input_focused: bool, input_empty: bool) ->
     key == "escape" && (!input_focused || input_empty)
 }
 
-fn wizard_option_activates(key: &str, is_held: bool, modified: bool) -> bool {
-    !is_held && !modified && matches!(key, "enter" | "space")
-}
-
 fn wizard_number_shortcut(key: &str, modified: bool, answer_focused: bool) -> Option<usize> {
     if modified || answer_focused {
         return None;
@@ -8183,11 +8179,9 @@ impl Composer {
                 appshot.screenshot.name.clone(),
                 appshot.screenshot.image.clone(),
             );
-            let preview_on_key = preview.clone();
             let preview_on_a11y = preview.clone();
             let composer_for_preview = cx.entity().downgrade();
             let remove_id = appshot.id.clone();
-            let remove_on_key_id = remove_id.clone();
             let remove_on_a11y_id = remove_id.clone();
             let composer_for_remove = cx.entity().downgrade();
             let source: SharedString = appshot
@@ -8231,15 +8225,7 @@ impl Composer {
                         .border_1()
                         .border_color(theme.accent)
                 })
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        cx.stop_propagation();
-                        preview_on_key.viewer.reset();
-                        this.preview = Some(preview_on_key.clone());
-                        this.preview_focus_pending = true;
-                        cx.notify();
-                    }
-                }))
+                .on_key_down(crate::swallow_activation_key)
                 .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
                     composer_for_preview
                         .update(cx, |this, cx| {
@@ -8344,12 +8330,9 @@ impl Composer {
                     .aria_label(remove_aria)
                     .tab_index(0)
                     .focus_visible(|style| style.opacity(1.0).border_1().border_color(theme.accent))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            cx.stop_propagation();
-                            this.remove_appshot(&remove_on_key_id, cx);
-                        }
-                    }))
+                    // A key-down removal let the next appshot inherit this
+                    // index's focus and pending key, so key-up removed it too.
+                    .on_key_down(crate::swallow_activation_key)
                     .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
                         composer_for_remove
                             .update(cx, |this, cx| {
@@ -11397,16 +11380,10 @@ impl Composer {
                 })
                 .on_hover(motion::hover_listener(format!("wizard-option-{ix}")))
                 .cursor_pointer()
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    if wizard_option_activates(
-                        &event.keystroke.key,
-                        event.is_held,
-                        event.keystroke.modifiers.modified(),
-                    ) {
-                        cx.stop_propagation();
-                        this.wizard_select(ix, cx);
-                    }
-                }))
+                // Selection rides GPUI's key-up keyboard click. Selecting on
+                // key-down too toggled checkboxes back, and a single-select
+                // advance let key-up answer the next question's same row.
+                .on_key_down(crate::swallow_activation_key)
                 .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
                     composer_for_a11y
                         .update(cx, |this, cx| this.wizard_select(ix, cx))
@@ -11799,7 +11776,7 @@ impl Composer {
                                 button
                                     .tab_index(0)
                                     .focus_visible(move |style| {
-                                        style.border_2().border_color(popup_focus)
+                                        crate::theme::focus_ring(style, popup_focus)
                                     })
                                     .cursor_pointer()
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -11842,7 +11819,7 @@ impl Composer {
                                 button
                                     .tab_index(0)
                                     .focus_visible(move |style| {
-                                        style.border_2().border_color(popup_focus)
+                                        crate::theme::focus_ring(style, popup_focus)
                                     })
                                     .cursor_pointer()
                                     .hover(|style| style.text_color(theme.danger_muted))
@@ -12082,9 +12059,7 @@ impl Render for Composer {
                     let offline = message.as_ref() == "Engine not connected";
                     let warning = offline || delivery_unconfirmed || draft_merge_saving;
                     let action_message = message.clone();
-                    let action_message_key = message.clone();
                     let key_for_click = retry_draft_key.clone();
-                    let key_for_key = retry_draft_key.clone();
                     el.child(
                         notice_chip(
                             &theme,
@@ -12129,21 +12104,7 @@ impl Render for Composer {
                                         cx,
                                     );
                                 }))
-                                .on_key_down(cx.listener(
-                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                            && !event.is_held
-                                        {
-                                            cx.stop_propagation();
-                                            this.activate_failure_notice(
-                                                &key_for_key,
-                                                &action_message_key,
-                                                draft_save_failed,
-                                                cx,
-                                            );
-                                        }
-                                    },
-                                )),
+                                .on_key_down(crate::swallow_activation_key),
                         )
                         .id("composer-failure")
                         .mx(px(4.0))
@@ -12203,18 +12164,7 @@ impl Render for Composer {
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.discard_latest_submission(cx);
                                             }))
-                                            .on_key_down(cx.listener(
-                                                |this, event: &gpui::KeyDownEvent, _, cx| {
-                                                    if matches!(
-                                                        event.keystroke.key.as_str(),
-                                                        "enter" | "space"
-                                                    ) && !event.is_held
-                                                    {
-                                                        cx.stop_propagation();
-                                                        this.discard_latest_submission(cx);
-                                                    }
-                                                },
-                                            )),
+                                            .on_key_down(crate::swallow_activation_key),
                                     )
                                     .child(
                                         div()
@@ -12230,18 +12180,7 @@ impl Render for Composer {
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.recover_latest_submission(cx);
                                             }))
-                                            .on_key_down(cx.listener(
-                                                |this, event: &gpui::KeyDownEvent, _, cx| {
-                                                    if matches!(
-                                                        event.keystroke.key.as_str(),
-                                                        "enter" | "space"
-                                                    ) && !event.is_held
-                                                    {
-                                                        cx.stop_propagation();
-                                                        this.recover_latest_submission(cx);
-                                                    }
-                                                },
-                                            )),
+                                            .on_key_down(crate::swallow_activation_key),
                                     ),
                             ),
                     )
@@ -13138,6 +13077,7 @@ mod tests {
         (state, composer)
     }
 
+    #[track_caller]
     fn pump_until(
         cx: &mut gpui::TestAppContext,
         runtime: &tokio::runtime::Runtime,
@@ -13641,7 +13581,24 @@ mod tests {
             reopened_task.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
                 && service.submissions.lock().unwrap().is_empty()
         });
-        assert!(!service.drafts.lock().unwrap().contains_key(task));
+        // Settlement deletes the submitted snapshot; the composer then fences
+        // it with an empty row one revision above (`finish_applied_draft`), so
+        // a late save of the sent text is rejected as stale. Either way the
+        // sent message must never come back as this task's draft.
+        let drafts = service.drafts.lock().unwrap();
+        assert!(
+            drafts.get(task).is_none_or(|draft| {
+                draft.text.is_empty()
+                    && draft.attachments.is_empty()
+                    && draft.appshots.is_empty()
+                    && draft.revision > submitted_revision
+            }),
+            "the applied message came back as a draft: {:?}",
+            drafts
+                .get(task)
+                .map(|draft| (draft.revision, draft.text.clone()))
+        );
+        drop(drafts);
         assert_eq!(service.command_calls.load(Ordering::SeqCst), calls);
     }
 
@@ -13763,7 +13720,7 @@ mod tests {
                 composer
                     .failure
                     .as_deref()
-                    .is_some_and(|message| message.contains("still in this window"))
+                    .is_some_and(|message| message.contains("Your text is still here"))
             );
         });
     }
@@ -14361,15 +14318,6 @@ mod tests {
             enter_outcome(false, EnterOutcome::Newline),
             EnterOutcome::Newline
         );
-    }
-
-    #[test]
-    fn wizard_option_keyboard_activation_requires_bare_single_press() {
-        assert!(wizard_option_activates("enter", false, false));
-        assert!(wizard_option_activates("space", false, false));
-        assert!(!wizard_option_activates("enter", true, false));
-        assert!(!wizard_option_activates("space", false, true));
-        assert!(!wizard_option_activates("tab", false, false));
     }
 
     #[test]

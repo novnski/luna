@@ -406,7 +406,6 @@ impl ChildChatPanel {
         .collect::<Vec<_>>();
         let status_color = row.status.color(theme);
         let open_id = row.id.clone();
-        let key_id = row.id.clone();
         let border_strong = theme.border_strong;
         let hover = crate::theme::ink(0.05);
         let muted = theme.text_muted;
@@ -430,14 +429,7 @@ impl ChildChatPanel {
             .hover(move |style| style.bg(hover).border_color(border_strong))
             .focus_visible(move |style| style.border_color(border_strong))
             .on_click(cx.listener(move |panel, _, _, cx| panel.open_child(open_id.clone(), cx)))
-            .on_key_down(
-                cx.listener(move |panel, event: &gpui::KeyDownEvent, _, cx| {
-                    if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                        panel.open_child(key_id.clone(), cx);
-                        cx.stop_propagation();
-                    }
-                }),
-            )
+            .on_key_down(crate::swallow_activation_key)
             .child(
                 div()
                     .w_full()

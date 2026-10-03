@@ -9,6 +9,7 @@ use luna_proto::{
 use luna_rpc::methods;
 
 use super::widgets;
+use crate::AccessibleButton as _;
 use crate::popover::{self, Loadable};
 use crate::state::AppState;
 use crate::theme::Theme;
@@ -369,24 +370,28 @@ impl Render for BackupsPage {
                             .child(div().mt(px(16.0)).flex().flex_row().flex_wrap().gap(px(8.0))
                                 .child(widgets::ghost_action(&theme)
                                     .id("backup-now")
+                                    .when(ready, |button| button.accessible_button("Back up now", theme.accent))
                                     .opacity(if ready { 1.0 } else { 0.45 })
                                     .hover(|s| s.bg(theme::wash(0.06)))
                                     .child("Back up now")
                                     .when(ready, |button| button.on_click(cx.listener(|page, _, _, cx| page.run_backup(false, cx)))))
                                 .child(widgets::ghost_action(&theme)
                                     .id("backup-export")
+                                    .when(ready, |button| button.accessible_button("Export to backup folder", theme.accent))
                                     .opacity(if ready { 1.0 } else { 0.45 })
                                     .hover(|s| s.bg(theme::wash(0.06)))
                                     .child("Export to backup folder")
                                     .when(ready, |button| button.on_click(cx.listener(|page, _, _, cx| page.run_backup(true, cx)))))
                                 .child(widgets::ghost_action(&theme)
                                     .id("backup-inspect")
+                                    .when(can_inspect, |button| button.accessible_button("Inspect last backup", theme.accent))
                                     .opacity(if can_inspect { 1.0 } else { 0.45 })
                                     .hover(|s| s.bg(theme::wash(0.06)))
                                     .child("Inspect last backup")
                                     .when(can_inspect, |button| button.on_click(cx.listener(|page, _, _, cx| page.inspect_latest(cx)))))
                                 .child(widgets::ghost_action(&theme)
                                     .id("backup-stage")
+                                    .when(can_stage, |button| button.accessible_button(if has_stage { "Verify staged copy" } else { "Stage restore" }, theme.accent))
                                     .opacity(if can_stage { 1.0 } else { 0.45 })
                                     .hover(|s| s.bg(theme::wash(0.06)))
                                     .child(if has_stage { "Verify staged copy" } else { "Stage restore" })

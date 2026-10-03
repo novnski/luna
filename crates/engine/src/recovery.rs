@@ -352,6 +352,30 @@ impl RecoveryStore {
         Self { store }
     }
 
+    pub fn execution_configuration(
+        &self,
+        task_id: &str,
+        message_id: &str,
+    ) -> Result<Option<serde_json::Value>, EngineError> {
+        self.store
+            .execution_configuration(task_id, message_id)?
+            .map(|bytes| serde_json::from_slice(&bytes).map_err(EngineError::from))
+            .transpose()
+    }
+
+    pub fn record_execution_configuration(
+        &self,
+        task_id: &str,
+        message_id: &str,
+        configuration: &serde_json::Value,
+    ) -> Result<(), EngineError> {
+        Ok(self.store.record_execution_configuration(
+            task_id,
+            message_id,
+            &serde_json::to_vec(configuration)?,
+        )?)
+    }
+
     fn status(status: RecoveryStatus) -> Result<String, EngineError> {
         Ok(serde_json::to_value(status)?
             .as_str()

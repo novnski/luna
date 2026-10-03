@@ -84,6 +84,7 @@ mod spaces;
 mod tabs;
 mod usage;
 
+use crate::AccessibleButton as _;
 use spaces::{AddSpaceFlow, RenameSpaceDialog};
 
 actions!(
@@ -478,6 +479,8 @@ impl SettingsSection {
             "settings/devices" => Self::Devices,
             "settings/harnesses" | "settings/agents" | "settings/providers" => Self::Providers,
             "settings/appearance" => Self::Appearance,
+            "settings/files" => Self::Files,
+            "settings/backups" => Self::Backups,
             "settings/notifications" => Self::Notifications,
             "settings/shortcuts" => Self::Shortcuts,
             "settings/appshots" => Self::Appshots,
@@ -514,10 +517,6 @@ impl SettingsSection {
 pub enum Route {
     Chat,
     Settings(SettingsSection),
-}
-
-fn is_settings_nav_activation(key: &str, is_held: bool) -> bool {
-    !is_held && matches!(key, "enter" | "space")
 }
 
 /// Maximum width the right pane may occupy while retaining the conversation
@@ -2177,6 +2176,13 @@ pub struct Shell {
     shortcut_focus: FocusHandle,
     /// Neutral shortcut target after clicking away from an input.
     unfocused: FocusHandle,
+    /// Held by a visible confirmation dialog's card (see
+    /// [`Shell::sync_confirmation_focus`]) so keys cannot reach the controls
+    /// behind its scrim.
+    confirmation_focus: FocusHandle,
+    /// Focus to hand back once the confirmation closes; `Some` while one is
+    /// open (the inner `None` means nothing was focused before it).
+    confirmation_return_focus: Option<Option<FocusHandle>>,
     /// Clears the jump hints when the window deactivates: a Cmd+Tab away
     /// swallows the key-up, so without this the chips stay on screen for good.
     activation_sub: Option<Subscription>,
@@ -2584,6 +2590,8 @@ impl Shell {
             focus_sub: None,
             shortcut_focus: cx.focus_handle(),
             unfocused: cx.focus_handle(),
+            confirmation_focus: cx.focus_handle(),
+            confirmation_return_focus: None,
             activation_sub: None,
             _ticker: ticker,
             _state_observation: observation,
@@ -6626,11 +6634,17 @@ impl Shell {
             if let Ok(Err(error)) = stream.await {
                 this.update(cx, |shell, cx| {
                     shell.import_task = None;
-                    if matches!(shell.sync_flow, SyncFlow::Importing { .. }) {
-                        shell.sync_flow = SyncFlow::ImportFailed { notice_open: true };
-                        shell.runtime_change_error = Some(error.into());
-                        cx.notify();
+                    match shell.sync_flow {
+                        SyncFlow::Importing { .. } => {
+                            shell.sync_flow = SyncFlow::ImportFailed { notice_open: true };
+                        }
+                        // The bridge channel always closes first and reports a
+                        // generic early end; name the real cause instead.
+                        SyncFlow::ImportFailed { .. } => {}
+                        _ => return,
                     }
+                    shell.runtime_change_error = Some(error.into());
+                    cx.notify();
                 })
                 .ok();
             }
@@ -7618,7 +7632,7 @@ impl Shell {
                     .role(gpui::Role::Button)
                     .aria_label(label)
                     .tab_index(0)
-                    .focus_visible(move |style| style.border_2().border_color(focus_border))
+                    .focus_visible(move |style| crate::theme::focus_ring(style, focus_border))
                     .flex()
                     .items_center()
                     .gap(px(6.0))
@@ -7632,12 +7646,7 @@ impl Shell {
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.activate_account_action(action, cx)),
                     )
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                            cx.stop_propagation();
-                            this.activate_account_action(action, cx);
-                        }
-                    }))
+                    .on_key_down(crate::swallow_activation_key)
                     .child(icon(mark).size(px(16.0)).text_color(theme.text_muted))
                     .child(SharedString::from(label))
                     .into_any_element(),
@@ -7653,7 +7662,8 @@ impl Shell {
             SettingsSection::Backups => icons::ARCHIVE_UP_MINIMALISTIC,
             SettingsSection::Notifications => icons::BELL,
             SettingsSection::Shortcuts => icons::KEYBOARD,
-            SettingsSection::Appshots => icons::MONITOR,
+            // Appshots are captured window images; Devices keeps the monitor.
+            SettingsSection::Appshots => icons::FILE_IMAGE,
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
             SettingsSection::Usage => icons::CHART,
             SettingsSection::Updates => icons::RESTART,
@@ -7702,68 +7712,58 @@ impl Shell {
                                         .map(|item| {
                                             let selected = item == section;
                                             div()
-                                            .id(SharedString::from(format!(
-                                                "settings-nav-{}",
-                                                item.label()
-                                            )))
-                                            .role(gpui::Role::Button)
-                                            .aria_label(format!("{} settings", item.label()))
-                                            .aria_selected(selected)
-                                            .tab_index(0)
-                                            .focus_visible(move |style| {
-                                                style.border_2().border_color(focus_border)
-                                            })
-                                            .when(
-                                                matches!(
-                                                    item,
-                                                    SettingsSection::Files
-                                                        | SettingsSection::Archived
-                                                ),
-                                                |el| el.mt(px(Theme::SPACE_LG)),
-                                            )
-                                            .flex()
-                                            .flex_row()
-                                            .items_center()
-                                            .gap(px(8.0))
-                                            .rounded(px(8.0))
-                                            .px(px(Theme::SPACE_SM))
-                                            .py(px(6.0))
-                                            .text_size(crate::typography::ui_rems(13.0))
-                                            .when(selected, |el| {
-                                                // Same tokens as the main sidebar's session
-                                                // rows — the two sidebars must feel alike.
-                                                el.bg(crate::theme::glass_selected_bg())
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                            })
-                                            .text_color(if selected {
-                                                theme.text
-                                            } else {
-                                                theme.text_muted
-                                            })
-                                            .cursor_pointer()
-                                            .hover(|s| {
-                                                s.bg(theme.glass_hover()).text_color(theme.text)
-                                            })
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.open_settings(item, cx)
-                                            }))
-                                            .on_key_down(cx.listener(
-                                                move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                                    if is_settings_nav_activation(
-                                                        &event.keystroke.key,
-                                                        event.is_held,
-                                                    ) {
-                                                        cx.stop_propagation();
-                                                        this.open_settings(item, cx);
-                                                    }
-                                                },
-                                            ))
-                                            .child(
-                                                icon(section_icon(item))
-                                                    .size(px(16.0))
-                                                    .text_color(theme.text_muted),
-                                            )
-                                            .child(SharedString::from(item.label()))
+                                                .id(SharedString::from(format!(
+                                                    "settings-nav-{}",
+                                                    item.label()
+                                                )))
+                                                .role(gpui::Role::Button)
+                                                .aria_label(format!("{} settings", item.label()))
+                                                .aria_selected(selected)
+                                                .tab_index(0)
+                                                .focus_visible(move |style| {
+                                                    crate::theme::focus_ring(style, focus_border)
+                                                })
+                                                .when(
+                                                    matches!(
+                                                        item,
+                                                        SettingsSection::Files
+                                                            | SettingsSection::Archived
+                                                    ),
+                                                    |el| el.mt(px(Theme::SPACE_LG)),
+                                                )
+                                                .flex()
+                                                .flex_row()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .rounded(px(8.0))
+                                                .px(px(Theme::SPACE_SM))
+                                                .py(px(6.0))
+                                                .text_size(crate::typography::ui_rems(13.0))
+                                                .when(selected, |el| {
+                                                    // Same tokens as the main sidebar's session
+                                                    // rows — the two sidebars must feel alike.
+                                                    el.bg(crate::theme::glass_selected_bg())
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                })
+                                                .text_color(if selected {
+                                                    theme.text
+                                                } else {
+                                                    theme.text_muted
+                                                })
+                                                .cursor_pointer()
+                                                .hover(|s| {
+                                                    s.bg(theme.glass_hover()).text_color(theme.text)
+                                                })
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.open_settings(item, cx)
+                                                }))
+                                                .on_key_down(crate::swallow_activation_key)
+                                                .child(
+                                                    icon(section_icon(item))
+                                                        .size(px(16.0))
+                                                        .text_color(theme.text_muted),
+                                                )
+                                                .child(SharedString::from(item.label()))
                                         }),
                                 ),
                             ),
@@ -7790,7 +7790,9 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label("Back to chat")
                             .tab_index(0)
-                            .focus_visible(move |style| style.border_2().border_color(focus_border))
+                            .focus_visible(move |style| {
+                                crate::theme::focus_ring(style, focus_border)
+                            })
                             .flex()
                             .flex_row()
                             .items_center()
@@ -7803,12 +7805,7 @@ impl Shell {
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
                             .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                                    cx.stop_propagation();
-                                    this.close_settings(cx);
-                                }
-                            }))
+                            .on_key_down(crate::swallow_activation_key)
                             .child(
                                 // AltArrowLeft chevron (luna settings-sidebar.tsx),
                                 // not the straight history arrow.
@@ -8152,7 +8149,6 @@ impl Shell {
             let tone = theme.text_muted;
             let border_strong = theme.border_strong;
             let click_id = id.clone();
-            let key_id = id.clone();
             let tooltip = label.clone();
             div()
                 .id(SharedString::from(format!("{row_id}-child-chats")))
@@ -8187,12 +8183,7 @@ impl Shell {
                     cx.stop_propagation();
                     this.open_child_chats_for(click_id.clone(), cx);
                 }))
-                .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                    if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                        this.open_child_chats_for(key_id.clone(), cx);
-                        cx.stop_propagation();
-                    }
-                }))
+                .on_key_down(crate::swallow_activation_key)
                 .child(
                     icon(icons::CHAT_ROUND_LINE)
                         .size(px(10.0))
@@ -8866,23 +8857,7 @@ impl Shell {
                                         cx.notify();
                                     }
                                 }))
-                                .on_key_down(cx.listener(
-                                    move |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                            && !event.is_held
-                                        {
-                                            cx.stop_propagation();
-                                            if this
-                                                .sidebar_notice
-                                                .as_ref()
-                                                .is_some_and(|current| current.id == notice_id)
-                                            {
-                                                this.sidebar_notice = None;
-                                                cx.notify();
-                                            }
-                                        }
-                                    },
-                                )),
+                                .on_key_down(crate::swallow_activation_key),
                         ),
                 )
             })
@@ -9188,14 +9163,8 @@ impl Shell {
                     .role(gpui::Role::Button)
                     .aria_label("Check GitHub Releases for updates")
                     .tab_index(0)
-                    .focus_visible(move |style| style.border_2().border_color(focus_border))
-                    .on_click(cx.listener(|this, _, _, cx| this.begin_update_check(cx)))
-                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                        if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                            cx.stop_propagation();
-                            this.begin_update_check(cx);
-                        }
-                    })),
+                    .focus_visible(move |style| style.border_color(focus_border))
+                    .on_click(cx.listener(|this, _, _, cx| this.begin_update_check(cx))),
             );
         }
         if available && !self.update_checking {
@@ -9213,14 +9182,8 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label(label)
                             .tab_index(0)
-                            .focus_visible(move |style| style.border_2().border_color(focus_accent))
-                            .on_click(cx.listener(|this, _, _, cx| this.on_update_page_action(cx)))
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                                    cx.stop_propagation();
-                                    this.on_update_page_action(cx);
-                                }
-                            })),
+                            .focus_visible(move |style| style.border_color(focus_accent))
+                            .on_click(cx.listener(|this, _, _, cx| this.on_update_page_action(cx))),
                     );
                 }
             } else {
@@ -9230,7 +9193,7 @@ impl Shell {
                         .role(gpui::Role::Button)
                         .aria_label("View latest LUNA release on GitHub")
                         .tab_index(0)
-                        .focus_visible(move |style| style.border_2().border_color(focus_accent))
+                        .focus_visible(move |style| style.border_color(focus_accent))
                         .on_click(cx.listener(|_, _, _, cx| {
                             cx.open_url("https://github.com/novnski/luna/releases/latest");
                         })),
@@ -9849,7 +9812,11 @@ impl Shell {
             | SyncFlow::SignedOutRestartRequired => return None,
         };
 
-        Some(popover::modal("sync-lifecycle-dialog", viewport, card))
+        Some(popover::modal(
+            "sync-lifecycle-dialog",
+            viewport,
+            self.confirmation_card(card, cx),
+        ))
     }
 
     fn active_changes(&self, cx: &App) -> Option<Entity<Changes>> {
@@ -9864,13 +9831,109 @@ impl Shell {
 
     /// Resolve shell-owned Escape surfaces in capture phase, before focused
     /// descendants such as an integrated terminal can consume the key.
-    fn capture_escape_surface(&mut self, cx: &mut Context<Self>) -> bool {
-        // Modals and context menus sit above the rest of the shell. Preserve
-        // their existing behavior: only surfaces that already have a Cancel
-        // path close here; the others remain explicit blockers.
-        if self.sync_flow.has_visible_overlay()
-            || self.task_action_confirm.is_some()
+    /// A visible task, remove-project or sign-out/sync confirmation. None of
+    /// these has a text field to focus, so without this the keyboard stayed
+    /// on the composer behind the scrim: typed keys landed in the draft and
+    /// Enter could submit it while the dialog asked for confirmation.
+    fn confirmation_open(&self) -> bool {
+        self.task_action_confirm.is_some()
             || self.delete_space_confirm.is_some()
+            || self.sync_flow.has_visible_overlay()
+    }
+
+    /// Move focus onto the open confirmation's card, and hand it back to the
+    /// previous owner once it closes (unless the user moved it meanwhile).
+    /// Tab then starts inside the dialog; Escape still cancels it.
+    fn sync_confirmation_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match (
+            self.confirmation_open(),
+            self.confirmation_return_focus.is_some(),
+        ) {
+            (true, false) => {
+                self.confirmation_return_focus = Some(window.focused(cx));
+                window.focus(&self.confirmation_focus, cx);
+            }
+            (false, true) => {
+                let previous = self.confirmation_return_focus.take().flatten();
+                // The card or any control inside it: Tab or a mouse press on
+                // Cancel leaves focus on a child button. The rendered frame
+                // still holds the dialog here, so containment is current.
+                if self.confirmation_focus.contains_focused(window, cx) {
+                    window.focus(previous.as_ref().unwrap_or(&self.unfocused), cx);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Wrap a confirmation dialog's card so it owns the confirmation focus
+    /// and keeps Tab inside it.
+    pub(super) fn confirmation_card(&self, card: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .track_focus(&self.confirmation_focus)
+            .on_key_down(cx.listener(Self::trap_confirmation_tab))
+            .child(card)
+            .into_any_element()
+    }
+
+    /// Tab and Shift+Tab cycle within the open confirmation. The dialog paints
+    /// last, so the window's tab order wrapped from its last button to the
+    /// sidebar, and Shift+Tab walked back into the conversation behind the
+    /// scrim. GPUI has no container-scoped step, so step the window order
+    /// until focus is inside the card again (focus listeners only compare
+    /// rendered frames, so the intermediate hops are never observed). Runs in
+    /// the bubble phase before `Shell::on_key_down`'s window-wide Tab.
+    fn trap_confirmation_tab(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let modifiers = event.keystroke.modifiers;
+        if event.keystroke.key != "tab" || modifiers.control || modifiers.alt || modifiers.platform
+        {
+            return;
+        }
+        cx.stop_propagation();
+        // Bounded: a dialog without a focusable control (an in-flight sync
+        // step) must not spin, and keeps focus on its card.
+        for _ in 0..512 {
+            if modifiers.shift {
+                window.focus_prev(cx);
+            } else {
+                window.focus_next(cx);
+            }
+            if self.confirmation_focus.contains_focused(window, cx) {
+                return;
+            }
+        }
+        window.focus(&self.confirmation_focus, cx);
+    }
+
+    fn capture_escape_surface(&mut self, cx: &mut Context<Self>) -> bool {
+        // Modals and context menus sit above the rest of the shell. Surfaces
+        // with a Cancel/Later path take it here, the same as pressing that
+        // button. In-flight sync steps and context menus remain explicit
+        // blockers.
+        match self.sync_flow {
+            SyncFlow::SignOutConfirm | SyncFlow::ImportDone { .. } => {
+                self.sync_flow = SyncFlow::Idle;
+                cx.notify();
+                return true;
+            }
+            SyncFlow::SwitchOffer { notice_open: true }
+            | SyncFlow::ImportFailed { notice_open: true }
+            | SyncFlow::RestartPending { notice_open: true } => {
+                self.postpone_sync_restart(cx);
+                return true;
+            }
+            _ => {}
+        }
+        if self.task_action_confirm.take().is_some() || self.delete_space_confirm.take().is_some() {
+            cx.notify();
+            return true;
+        }
+        if self.sync_flow.has_visible_overlay()
             || self.chat_menu.get().is_some()
             || self.space_menu.get().is_some()
         {
@@ -11042,18 +11105,18 @@ impl Shell {
                         .aria_label("Don't show this confirmation again")
                         .aria_toggled(if checked { gpui::Toggled::True } else { gpui::Toggled::False })
                         .tab_index(0)
+                        // Same inset ring as the dialog's buttons; the 4px inset
+                        // (cancelled by the margin) keeps it off the checkbox.
+                        .rounded(px(6.0))
+                        .px(px(4.0))
+                        .mx(px(-4.0))
+                        .focus_visible(move |style| crate::theme::focus_ring(style, theme.accent))
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.task_action_dont_show_again = !this.task_action_dont_show_again;
                             cx.notify();
                         }))
-                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                            if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                cx.stop_propagation();
-                                this.task_action_dont_show_again = !this.task_action_dont_show_again;
-                                cx.notify();
-                            }
-                        }))
+                        .on_key_down(crate::swallow_activation_key)
                         .child(
                             div()
                                 .size(px(16.0))
@@ -11090,7 +11153,11 @@ impl Shell {
                         ),
                 )
                 .into_any_element();
-            overlays.push(popover::modal("task-action-dialog", viewport, card));
+            overlays.push(popover::modal(
+                "task-action-dialog",
+                viewport,
+                self.confirmation_card(card, cx),
+            ));
         }
 
         if let Some(sync) = self.render_sync_overlay(viewport, cx) {
@@ -12125,34 +12192,14 @@ impl Shell {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.add_work_surface(RightSurface::Agents, cx)
                                 }))
-                                .on_key_down(cx.listener(
-                                    |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if is_settings_nav_activation(
-                                            &event.keystroke.key,
-                                            event.is_held,
-                                        ) {
-                                            this.add_work_surface(RightSurface::Agents, cx);
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                )),
+                                .on_key_down(crate::swallow_activation_key),
                         )
                         .child(
                             row("surface-card-side-chats", icons::PLUS, "Side chats")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.add_work_surface(RightSurface::SideChats, cx)
                                 }))
-                                .on_key_down(cx.listener(
-                                    |this, event: &gpui::KeyDownEvent, _, cx| {
-                                        if is_settings_nav_activation(
-                                            &event.keystroke.key,
-                                            event.is_held,
-                                        ) {
-                                            this.add_work_surface(RightSurface::SideChats, cx);
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                )),
+                                .on_key_down(crate::swallow_activation_key),
                         )
                     })
                     .child(
@@ -12232,17 +12279,7 @@ impl Shell {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.add_work_surface(RightSurface::ChildChats, cx)
                             }))
-                            .on_key_down(cx.listener(
-                                |this, event: &gpui::KeyDownEvent, _, cx| {
-                                    if is_settings_nav_activation(
-                                        &event.keystroke.key,
-                                        event.is_held,
-                                    ) {
-                                        this.add_work_surface(RightSurface::ChildChats, cx);
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            )),
+                            .on_key_down(crate::swallow_activation_key),
                         )
                     }),
             )
@@ -12761,18 +12798,7 @@ impl Shell {
                                         this.add_work_surface(RightSurface::Agents, cx);
                                         this.close_right_plus(cx);
                                     }))
-                                    .on_key_down(cx.listener(
-                                        |this, event: &gpui::KeyDownEvent, _, cx| {
-                                            if is_settings_nav_activation(
-                                                &event.keystroke.key,
-                                                event.is_held,
-                                            ) {
-                                                this.add_work_surface(RightSurface::Agents, cx);
-                                                this.close_right_plus(cx);
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
+                                    .on_key_down(crate::swallow_activation_key)
                                     .child(
                                         icon(icons::BOT)
                                             .size(px(13.0))
@@ -12790,18 +12816,7 @@ impl Shell {
                                         this.add_work_surface(RightSurface::SideChats, cx);
                                         this.close_right_plus(cx);
                                     }))
-                                    .on_key_down(cx.listener(
-                                        |this, event: &gpui::KeyDownEvent, _, cx| {
-                                            if is_settings_nav_activation(
-                                                &event.keystroke.key,
-                                                event.is_held,
-                                            ) {
-                                                this.add_work_surface(RightSurface::SideChats, cx);
-                                                this.close_right_plus(cx);
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
+                                    .on_key_down(crate::swallow_activation_key)
                                     .child(
                                         icon(icons::PLUS)
                                             .size(px(13.0))
@@ -12865,18 +12880,7 @@ impl Shell {
                                         this.add_work_surface(RightSurface::ChildChats, cx);
                                         this.close_right_plus(cx);
                                     }))
-                                    .on_key_down(cx.listener(
-                                        |this, event: &gpui::KeyDownEvent, _, cx| {
-                                            if is_settings_nav_activation(
-                                                &event.keystroke.key,
-                                                event.is_held,
-                                            ) {
-                                                this.add_work_surface(RightSurface::ChildChats, cx);
-                                                this.close_right_plus(cx);
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    ))
+                                    .on_key_down(crate::swallow_activation_key)
                                     .child(
                                         icon(icons::CHAT_ROUND_LINE)
                                             .size(px(13.0))
@@ -12991,6 +12995,7 @@ impl Shell {
                 .child(
                     div()
                         .id("retry-engine")
+                        .accessible_button("Retry connecting to the engine", theme.accent)
                         .px(px(12.0))
                         .py(px(6.0))
                         .rounded(px(8.0))
@@ -13128,6 +13133,7 @@ impl Shell {
                         popover::error_row(&theme, message).child(
                             div()
                                 .id("orgs-retry")
+                                .accessible_button("Retry loading workspaces", theme.accent)
                                 .px(px(Theme::SPACE_SM))
                                 .py(px(3.0))
                                 .rounded(px(Theme::CONTROL_RADIUS))
@@ -13631,6 +13637,7 @@ fn header_icon_button(
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_time = Some(std::time::Instant::now());
+        self.sync_confirmation_focus(window, cx);
         if self.all_file_edits_flushed(cx)
             && self.composer.read(cx).draft_flush_complete()
             && self.pane_composers.read(cx).flush_complete(cx)
@@ -14258,15 +14265,6 @@ impl Render for Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn settings_sidebar_keyboard_activation_ignores_repeats_and_other_keys() {
-        assert!(is_settings_nav_activation("enter", false));
-        assert!(is_settings_nav_activation("space", false));
-        assert!(!is_settings_nav_activation("enter", true));
-        assert!(!is_settings_nav_activation("space", true));
-        assert!(!is_settings_nav_activation("escape", false));
-    }
 
     #[test]
     fn settings_entry_and_fixture_routes_keep_their_targets() {
@@ -16150,7 +16148,27 @@ mod exit_regressions {
                 state.set_test_engine(crate::state::EngineHandle::from_test_client(
                     luna_rpc::memory_client(service),
                 ));
-                state.chats = vec![handoff_chat(HANDOFF_SOURCE), handoff_chat("other")];
+                // Sessions require a project (`select_chat` refuses a
+                // projectless chat), so the fixture chats live in one.
+                state.spaces = vec![luna_proto::Space {
+                    execution_defaults: Default::default(),
+                    id: "handoff-project".into(),
+                    device_id: "local".into(),
+                    path: "/tmp".into(),
+                    name: Some("Handoff".into()),
+                    git_detected: false,
+                    git_checked_at: None,
+                    checkout_id: None,
+                    created_at: Utc::now(),
+                }];
+                state.chats = [HANDOFF_SOURCE, "other"]
+                    .into_iter()
+                    .map(|id| {
+                        let mut chat = handoff_chat(id);
+                        chat.space_id = Some("handoff-project".into());
+                        chat
+                    })
+                    .collect();
                 state.selected_chat = selected.map(str::to_string);
                 state.transcript = selected
                     .is_some_and(|id| id == HANDOFF_SOURCE)
@@ -16174,6 +16192,7 @@ mod exit_regressions {
         })
     }
 
+    #[track_caller]
     fn pump_shell_until(
         cx: &mut TestAppContext,
         runtime: &tokio::runtime::Runtime,
@@ -17545,11 +17564,22 @@ mod exit_regressions {
                         matches!(entry, command_palette::Entry::Chat { id, .. } if id == "stable-b")
                     })
                     .unwrap();
-                assert_ne!(new_target, target_index);
-                assert!(!matches!(
-                    entries.get(target_index),
-                    Some(command_palette::Entry::Chat { id, .. }) if id == "stable-b"
-                ));
+                // The async event is the canonical row for its task and takes
+                // the suppressed title row's ranked slot, so the keyboard
+                // target does not move under the user.
+                assert!(
+                    matches!(
+                        entries.get(default_index),
+                        Some(command_palette::Entry::History { event_id, .. })
+                            if event_id == "stable-a-event"
+                    ),
+                    "the async event did not replace the stable-a title row"
+                );
+                assert!(!entries.iter().any(|entry| matches!(
+                    entry,
+                    command_palette::Entry::Chat { id, .. } if id == "stable-a"
+                )));
+                assert_eq!(new_target, target_index);
             })
             .unwrap();
         palette_key(&window, "enter", cx);
@@ -19507,7 +19537,15 @@ mod right_tab_mouse_regressions {
         });
         let (host, cx) = cx.add_window_view(|_, cx| {
             let shell = cx.new(|cx| {
-                let state = cx.new(|_| AppState::new());
+                // Production keeps `active_chat` mirroring the selected chat:
+                // the second tab's watch suspension notifies AppState, and a
+                // fixture selecting nothing was reset to the empty canvas
+                // (its tabs then belonged to another panel key).
+                let state = cx.new(|_| {
+                    let mut state = AppState::new();
+                    state.selected_chat = Some("parent".into());
+                    state
+                });
                 let mut shell = Shell::new(
                     state,
                     EngineBootConfig {

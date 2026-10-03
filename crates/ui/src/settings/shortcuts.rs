@@ -13,6 +13,7 @@ use crate::popover::{self, ScrollRailHost};
 
 #[path = "appshots.rs"]
 mod appshots_page;
+use crate::AccessibleButton as _;
 use crate::settings::widgets;
 use crate::settings::{
     ComposerSendBehavior, KeymapConfig, ShortcutId, combo_from_keystroke, display_combo,
@@ -369,7 +370,7 @@ impl ShortcutsPage {
                         .aria_label(format!("Reset {} shortcut", id.label()))
                         .min_h(px(24.0))
                         .tab_index(0)
-                        .focus_visible(move |style| style.border_2().border_color(accent))
+                        .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_muted(0.7))
                         .cursor_pointer()
@@ -392,7 +393,7 @@ impl ShortcutsPage {
                         display_combo(&combo)
                     ))
                     .tab_index(0)
-                    .focus_visible(move |style| style.border_2().border_color(accent))
+                    .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                     .min_w(px(96.0))
                     .px(px(12.0))
                     .py(px(6.0))
@@ -589,14 +590,16 @@ impl Render for ShortcutsPage {
                                 )),
                         ),
                 )
-                .child(
-                    widgets::toggle_switch(&theme, escape_stops_active_agent)
-                        .id("escape-stops-active-agent-toggle")
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.set_escape_stops_active_agent(!escape_stops_active_agent, cx);
-                        })),
-                ),
+                .child(widgets::switch_control(
+                    "escape-stops-active-agent-toggle",
+                    "Stop active agent with Escape",
+                    escape_stops_active_agent,
+                    &theme,
+                    cx,
+                    move |this, cx| {
+                        this.set_escape_stops_active_agent(!escape_stops_active_agent, cx);
+                    },
+                )),
         );
 
         let send_behavior_control = div()
@@ -790,6 +793,7 @@ impl Render for ShortcutsPage {
                                         let disabled = !customized || recording.is_some();
                                         widgets::ghost_action(&theme)
                                             .id("shortcuts-restore-defaults")
+                                            .when(!disabled, |el| el.accessible_button("Restore default shortcuts", theme.accent))
                                             .flex_none()
                                             .when(disabled, |el| el.opacity(0.35))
                                             .when(!disabled, |el| {

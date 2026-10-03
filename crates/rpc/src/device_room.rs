@@ -848,14 +848,20 @@ impl LinkCache {
                 loop {
                     tokio::select! {
                         result = wake.recv() => {
-                            if result.is_err() { return; }
+                            if matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                                return;
+                            }
+                            // Lag only loses duplicate hints. Keep the supervisor
+                            // alive so later credential revocation still closes links.
                             let Some(cache) = weak.upgrade() else { return };
                             lock(&cache.links).clear();
                             lock(&cache.dial_state).clear();
                             tracing::info!("peer: links + cooldowns cleared after wake");
                         }
                         result = online.recv() => {
-                            if result.is_err() { return; }
+                            if matches!(result, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                                return;
+                            }
                             let Some(cache) = weak.upgrade() else { return };
                             lock(&cache.dial_state).clear();
                         }

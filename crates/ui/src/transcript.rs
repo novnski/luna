@@ -3125,6 +3125,9 @@ pub struct Transcript {
     /// the companion task after ~1.2s.
     copied_code: Option<(SharedString, usize)>,
     copied_clear: Option<Task<()>>,
+    /// Re-renders the recovery trailer's "Retrying in Ns" once a second while
+    /// a scheduled retry is ahead; nothing else animates that row.
+    recovery_tick: Option<Task<()>>,
     /// Per-visible-fence horizontal offsets and scrollbar hover/drag state.
     /// Keys use the transcript's stable row identity, so streaming → settled
     /// rerenders keep their local scroll position without leaking state for
@@ -3380,6 +3383,7 @@ impl Transcript {
             hovered_entry: None,
             copied_code: None,
             copied_clear: None,
+            recovery_tick: None,
             code_fences: HashMap::new(),
             diagrams: diagrams::DiagramCache::default(),
             copied_message: None,
@@ -6101,6 +6105,50 @@ impl Transcript {
         .detach();
     }
 
+    /// Whether this chat's recovery is waiting on a retry time still ahead,
+    /// which the trailer shows as a live countdown.
+    fn recovery_counting_down(&self, cx: &gpui::App) -> bool {
+        let Some(chat_id) = self.chat_id.as_deref() else {
+            return false;
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        self.state
+            .read(cx)
+            .session_for(chat_id)
+            .and_then(|session| session.recovery.as_ref())
+            .is_some_and(|recovery| {
+                recovery.status == luna_proto::RecoveryStatus::Scheduled
+                    && recovery.retry_at_ms.is_some_and(|at| at > now)
+            })
+    }
+
+    /// Keep the countdown moving: a one-second re-render while a scheduled
+    /// retry is ahead. Without it "Retrying in Ns" froze until some unrelated
+    /// state change happened to notify the transcript.
+    fn sync_recovery_tick(&mut self, cx: &mut Context<Self>) {
+        if !self.recovery_counting_down(cx) {
+            self.recovery_tick = None;
+            return;
+        }
+        if self.recovery_tick.is_some() {
+            return;
+        }
+        self.recovery_tick = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+                // The notify re-renders, and that render drops this task
+                // once the countdown no longer applies.
+                let counting = this.update(cx, |this, cx| {
+                    cx.notify();
+                    this.recovery_counting_down(cx)
+                });
+                if !matches!(counting, Ok(true)) {
+                    break;
+                }
+            }
+        }));
+    }
+
     fn render_recovery_trailer(&self, chat_id: &str, cx: &mut Context<Self>) -> Option<AnyElement> {
         let recovery = self
             .state
@@ -6179,51 +6227,43 @@ impl Transcript {
                         )
                         .child(SharedString::from(headline))
                         .when(show_accounts, |row| {
-                            row.child(
-                                div()
-                                    .id("recovery-open-accounts")
-                                    .cursor_pointer()
-                                    .text_color(theme.accent)
-                                    .on_click(cx.listener(|_, _, _, cx| {
-                                        cx.emit(TranscriptEvent::OpenAccounts)
-                                    }))
-                                    .child("Open Accounts"),
-                            )
+                            // The accounts live on Settings → Providers; name
+                            // the page the user lands on.
+                            row.child(trailer_action(
+                                "recovery-open-accounts",
+                                "Open Providers",
+                                theme.accent,
+                                &theme,
+                                |_, cx| cx.emit(TranscriptEvent::OpenAccounts),
+                                cx,
+                            ))
                         })
                         .when(can_send, |row| {
-                            row.child(
-                                div()
-                                    .id("recovery-send-now")
-                                    .cursor_pointer()
-                                    .text_color(theme.accent)
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            this.recovery_command(true, cx)
-                                        }),
-                                    )
-                                    .child(
-                                        if recovery.status == luna_proto::RecoveryStatus::Held {
-                                            "Continue"
-                                        } else {
-                                            "Send now"
-                                        },
-                                    ),
-                            )
+                            row.child(trailer_action(
+                                "recovery-send-now",
+                                if recovery.status == luna_proto::RecoveryStatus::Held {
+                                    "Continue"
+                                } else {
+                                    "Send now"
+                                },
+                                theme.accent,
+                                &theme,
+                                |this, cx| this.recovery_command(true, cx),
+                                cx,
+                            ))
                         })
                         .when(
                             recovery.status.active()
                                 && recovery.status != luna_proto::RecoveryStatus::Running,
                             |row| {
-                                row.child(
-                                    div()
-                                        .id("recovery-cancel")
-                                        .cursor_pointer()
-                                        .text_color(theme.text_muted)
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.recovery_command(false, cx)
-                                        }))
-                                        .child("Cancel"),
-                                )
+                                row.child(trailer_action(
+                                    "recovery-cancel",
+                                    "Cancel",
+                                    theme.text_muted,
+                                    &theme,
+                                    |this, cx| this.recovery_command(false, cx),
+                                    cx,
+                                ))
                             },
                         ),
                 )
@@ -6272,17 +6312,22 @@ impl Transcript {
                 let theme = Theme::of(cx).clone();
                 return Some(
                     div()
-                        .id("undelivered-retry")
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(Theme::SPACE_SM))
                         .pt(px(Theme::SPACE_LG))
                         .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.danger)
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.retry_send(cx)))
-                        .child(SharedString::from("Not delivered — click to retry"))
+                        .child(
+                            trailer_action(
+                                "undelivered-retry",
+                                "Not delivered — click to retry",
+                                theme.danger,
+                                &theme,
+                                |this, cx| this.retry_send(cx),
+                                cx,
+                            )
+                            .aria_label("Message not delivered. Retry sending"),
+                        )
                         .into_any_element(),
                 );
             }
@@ -6741,7 +6786,6 @@ impl Transcript {
                         });
                     }
                 };
-                let keyboard_emit = emit.clone();
                 Some(
                     div()
                         .id(SharedString::from(format!("side-action-{copy_entry_id}")))
@@ -6764,14 +6808,7 @@ impl Transcript {
                         .focus_visible(move |style| style.bg(theme.surface_raised))
                         .child(label)
                         .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
-                        .on_key_down(cx.listener(move |_, event: &gpui::KeyDownEvent, _, cx| {
-                            if !event.is_held
-                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                            {
-                                keyboard_emit(cx);
-                                cx.stop_propagation();
-                            }
-                        })),
+                        .on_key_down(crate::swallow_activation_key),
                 )
             });
             let fork = history_task_id.clone().and_then(|task_id| {
@@ -6865,7 +6902,6 @@ impl Transcript {
                                 text: text.clone(),
                             })
                         };
-                        let keyboard_emit = emit.clone();
                         div()
                             .id(SharedString::from(format!(
                                 "rewind-message-{copy_entry_id}"
@@ -6882,18 +6918,10 @@ impl Transcript {
                             .text_color(theme.text_muted)
                             .cursor_pointer()
                             .hover(|style| style.bg(crate::theme::ink(0.08)))
+                            .focus_visible(move |style| style.bg(theme.surface_raised))
                             .child(label)
                             .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
-                            .on_key_down(cx.listener(
-                                move |_, event: &gpui::KeyDownEvent, _, cx| {
-                                    if !event.is_held
-                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                    {
-                                        keyboard_emit(cx);
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            ))
+                            .on_key_down(crate::swallow_activation_key)
                     })
             });
             let metadata = div()
@@ -9122,9 +9150,40 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
     fnv1a(&acc)
 }
 
+/// A text action on the recovery or failed-send trailer. These are the only
+/// way out of an error state, so they are focusable buttons, not
+/// pointer-only text; GPUI's keyboard click activates them on Enter/Space.
+/// Focus paints a background rather than a border so tabbing onto one never
+/// reflows the trailer row.
+fn trailer_action(
+    id: &'static str,
+    label: &'static str,
+    color: gpui::Hsla,
+    theme: &Theme,
+    activate: impl Fn(&mut Transcript, &mut Context<Transcript>) + 'static,
+    cx: &mut Context<Transcript>,
+) -> gpui::Stateful<gpui::Div> {
+    let focus_bg = theme.surface_raised;
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .px(px(4.0))
+        .rounded(px(Theme::CONTROL_RADIUS))
+        .text_color(color)
+        .cursor_pointer()
+        .hover(|style| style.bg(crate::theme::ink(0.08)))
+        .focus_visible(move |style| style.bg(focus_bg))
+        .on_click(cx.listener(move |this, _, _, cx| activate(this, cx)))
+        .on_key_down(crate::swallow_activation_key)
+        .child(label)
+}
+
 impl Render for Transcript {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_diagram_style(window, cx);
+        self.sync_recovery_tick(cx);
         if record_view_frame("transcript") {
             tracing::warn!(
                 distance = self.distance_from_bottom(),

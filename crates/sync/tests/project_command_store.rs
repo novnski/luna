@@ -81,10 +81,14 @@ fn migration_snapshot_ownership_and_attempt_fence() {
     );
     let live = rusqlite::Connection::open(dir.path().join("docs.sqlite3")).unwrap();
     assert_eq!(
-        live.query_row("SELECT max(version) FROM schema_migrations", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
-        15
+        live.query_row(
+            "SELECT count(*) FROM schema_migrations WHERE version=15",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "the project-command migration remains applied after later migrations"
     );
     let copy = dir.path().join("snapshot.sqlite3");
     live.execute("VACUUM INTO ?1", [copy.to_str().unwrap()])

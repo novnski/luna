@@ -1,7 +1,7 @@
 //! Client side: request/stream multiplexing over string frames + the WebSocket dialer.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use futures::{SinkExt, StreamExt};
@@ -10,28 +10,99 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 
 use crate::{ClientFrame, RpcError, ServerFrame};
 
-/// Per-stream queue depth. Bounded: route_frame awaits a full queue, pausing
-/// the connection reader — transport backpressure instead of unbounded growth
-/// when a consumer stalls behind a fast producer (watch frames every 120ms
-/// during streaming used to pile up whole-transcript payloads here).
+/// Bound memory while allowing short scheduling pauses. A view that stops
+/// consuming for a full second is disconnected so it cannot indefinitely block
+/// unrelated replies on the multiplexed transport. Watchers resubscribe from
+/// their authoritative snapshot when their receiver closes.
 const STREAM_QUEUE_CAP: usize = 256;
+const STREAM_SEND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+struct StreamWatch(tokio::task::JoinHandle<()>);
+
+impl Drop for StreamWatch {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 enum Pending {
     Call(oneshot::Sender<Result<serde_json::Value, RpcError>>),
-    Stream(mpsc::Sender<serde_json::Value>),
+    Stream {
+        items: mpsc::Sender<serde_json::Value>,
+        _watch: StreamWatch,
+    },
     CheckedStream {
         items: mpsc::Sender<serde_json::Value>,
         ready: Option<oneshot::Sender<Result<(), RpcError>>>,
+        _watch: StreamWatch,
     },
 }
 
 struct Shared {
     pending: Mutex<HashMap<u64, Pending>>,
+    closed: AtomicBool,
+    // RPC futures are also polled by GPUI's executor, which has no current
+    // Tokio reactor. Background cleanup belongs to the connection's runtime.
+    runtime: tokio::runtime::Handle,
 }
 
 impl Shared {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<u64, Pending>> {
         self.pending.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn insert(&self, id: u64, entry: Pending) -> Result<(), RpcError> {
+        let mut pending = self.lock();
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(RpcError::Closed);
+        }
+        pending.insert(id, entry);
+        Ok(())
+    }
+
+    fn close(&self) {
+        let drained = {
+            let mut pending = self.lock();
+            // Serialize EOF with registration, including a still-open outbound half.
+            self.closed.store(true, Ordering::Relaxed);
+            std::mem::take(&mut *pending)
+        };
+        // Dropping senders closes calls, readiness waits and stream receivers.
+        // Dropping monitors also releases their sender clones.
+        drop(drained);
+    }
+}
+
+/// Cancellation of a local wait must not retain its reply slot. Do not cancel
+/// the server mutation: it may already have crossed a durable commit boundary.
+struct PendingCall<'a> {
+    id: u64,
+    shared: &'a Shared,
+}
+
+impl Drop for PendingCall<'_> {
+    fn drop(&mut self) {
+        self.shared.lock().remove(&self.id);
+    }
+}
+
+fn cancel_stream(shared: &Shared, out: &mpsc::Sender<String>, id: u64) {
+    let Ok(frame) = serde_json::to_string(&ClientFrame {
+        id,
+        method: None,
+        params: serde_json::Value::Null,
+        cancel: true,
+    }) else {
+        return;
+    };
+    match out.try_send(frame) {
+        Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+        Err(mpsc::error::TrySendError::Full(frame)) => {
+            let out = out.clone();
+            shared.runtime.spawn(async move {
+                let _ = out.send(frame).await;
+            });
+        }
     }
 }
 
@@ -63,25 +134,7 @@ impl Drop for RpcSubscription {
         if self.shared.lock().remove(&self.id).is_none() {
             return;
         }
-        let Ok(frame) = serde_json::to_string(&ClientFrame {
-            id: self.id,
-            method: None,
-            params: serde_json::Value::Null,
-            cancel: true,
-        }) else {
-            return;
-        };
-        match self.out.try_send(frame) {
-            Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
-            Err(mpsc::error::TrySendError::Full(frame)) => {
-                let out = self.out.clone();
-                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                    runtime.spawn(async move {
-                        let _ = out.send(frame).await;
-                    });
-                }
-            }
-        }
+        cancel_stream(&self.shared, &self.out, self.id);
     }
 }
 
@@ -90,6 +143,8 @@ impl RpcClient {
     pub fn new(out: mpsc::Sender<String>, mut inbound: mpsc::Receiver<String>) -> Self {
         let shared = Arc::new(Shared {
             pending: Mutex::new(HashMap::new()),
+            closed: AtomicBool::new(false),
+            runtime: tokio::runtime::Handle::current(),
         });
         let reader_shared = shared.clone();
         let reader_out = out.clone();
@@ -110,25 +165,7 @@ impl RpcClient {
                     route_frame(&reader_shared, &reader_out, frame).await;
                 }
             }
-            // Connection closed: fail everything still pending.
-            let drained: Vec<Pending> = {
-                let mut pending = reader_shared.lock();
-                pending.drain().map(|(_, p)| p).collect()
-            };
-            for entry in drained {
-                match entry {
-                    Pending::Call(tx) => {
-                        let _ = tx.send(Err(RpcError::Closed));
-                    }
-                    Pending::CheckedStream {
-                        ready: Some(ready), ..
-                    } => {
-                        let _ = ready.send(Err(RpcError::Closed));
-                    }
-                    Pending::Stream(_) | Pending::CheckedStream { ready: None, .. } => {}
-                }
-                // Stream item receivers end by sender drop.
-            }
+            reader_shared.close();
         });
         Self {
             out,
@@ -146,7 +183,11 @@ impl RpcClient {
     ) -> Result<serde_json::Value, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.shared.lock().insert(id, Pending::Call(tx));
+        self.shared.insert(id, Pending::Call(tx))?;
+        let _pending = PendingCall {
+            id,
+            shared: &self.shared,
+        };
         self.send(ClientFrame {
             id,
             method: Some(method.into()),
@@ -171,8 +212,8 @@ impl RpcClient {
     }
 
     /// Streaming request: items arrive on the receiver; it closes when the server sends
-    /// `{done}` or `{err}`, or the connection drops. Dropping the receiver cancels the
-    /// stream server-side (the reader notices the dead channel and sends `{id, cancel}`).
+    /// `{done}` or `{err}`, the connection drops, or its queue stays full for a
+    /// second. Dropping the receiver cancels even an idle server-side stream.
     pub async fn subscribe(
         &self,
         method: &str,
@@ -180,7 +221,14 @@ impl RpcClient {
     ) -> Result<mpsc::Receiver<serde_json::Value>, RpcError> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(STREAM_QUEUE_CAP);
-        self.shared.lock().insert(id, Pending::Stream(tx));
+        let watch = self.watch_receiver(id, tx.clone());
+        self.shared.insert(
+            id,
+            Pending::Stream {
+                items: tx,
+                _watch: watch,
+            },
+        )?;
         self.send(ClientFrame {
             id,
             method: Some(method.into()),
@@ -206,13 +254,15 @@ impl RpcClient {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (items_tx, items_rx) = mpsc::channel(STREAM_QUEUE_CAP);
         let (ready_tx, ready_rx) = oneshot::channel();
-        self.shared.lock().insert(
+        let watch = self.watch_receiver(id, items_tx.clone());
+        self.shared.insert(
             id,
             Pending::CheckedStream {
                 items: items_tx,
                 ready: Some(ready_tx),
+                _watch: watch,
             },
-        );
+        )?;
         self.send(ClientFrame {
             id,
             method: Some(method.into()),
@@ -233,6 +283,19 @@ impl RpcClient {
         Ok(subscription)
     }
 
+    fn watch_receiver(&self, id: u64, items: mpsc::Sender<serde_json::Value>) -> StreamWatch {
+        let shared = Arc::downgrade(&self.shared);
+        let out = self.out.clone();
+        StreamWatch(self.shared.runtime.spawn(async move {
+            items.closed().await;
+            if let Some(shared) = shared.upgrade()
+                && shared.lock().remove(&id).is_some()
+            {
+                cancel_stream(&shared, &out, id);
+            }
+        }))
+    }
+
     async fn send(&self, frame: ClientFrame) -> Result<(), RpcError> {
         let json = serde_json::to_string(&frame)
             .map_err(|e| RpcError::Transport(format!("serialize frame: {e}")))?;
@@ -242,6 +305,7 @@ impl RpcClient {
 
 impl Drop for RpcClient {
     fn drop(&mut self) {
+        self.shared.close();
         self.reader.abort();
     }
 }
@@ -259,7 +323,9 @@ async fn route_frame(shared: &Arc<Shared>, out: &mpsc::Sender<String>, frame: Se
             }) => {
                 let _ = ready.send(Err(error));
             }
-            Some(Pending::Stream(_)) | Some(Pending::CheckedStream { ready: None, .. }) | None => {
+            Some(Pending::Stream { .. })
+            | Some(Pending::CheckedStream { ready: None, .. })
+            | None => {
                 // Stream errored: the sender drop closes the receiver.
                 tracing::debug!(id, %error, "rpc: stream ended with error");
             }
@@ -287,28 +353,29 @@ async fn route_frame(shared: &Arc<Shared>, out: &mpsc::Sender<String>, frame: Se
         if let Some(ready) = ready {
             let _ = ready.send(Ok(()));
         }
-        // Clone the sender out of the lock: the bounded send must await
-        // (backpressure) without holding `shared`.
+        // Never hold the map lock while allowing a briefly busy consumer to drain.
         let tx = match shared.lock().get(&id) {
-            Some(Pending::Stream(tx)) => Some(tx.clone()),
+            Some(Pending::Stream { items, .. }) => Some(items.clone()),
             Some(Pending::CheckedStream { items, .. }) => Some(items.clone()),
             _ => None,
         };
         let dead = match tx {
-            Some(tx) => tx.send(item).await.is_err(),
+            Some(tx) => match tokio::time::timeout(STREAM_SEND_TIMEOUT, tx.send(item)).await {
+                Ok(result) => result.is_err(),
+                Err(_) => {
+                    tracing::warn!(
+                        id,
+                        "rpc: canceling stalled stream; receiver must resubscribe"
+                    );
+                    true
+                }
+            },
             None => false,
         };
         if dead {
             // Receiver was dropped — cancel server-side and forget the stream.
             shared.lock().remove(&id);
-            if let Ok(json) = serde_json::to_string(&ClientFrame {
-                id,
-                method: None,
-                params: serde_json::Value::Null,
-                cancel: true,
-            }) {
-                let _ = out.send(json).await;
-            }
+            cancel_stream(shared, out, id);
         }
         return;
     }

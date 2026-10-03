@@ -888,6 +888,25 @@ impl RuntimeConfig {
     }
 }
 
+/// Task defaults are not the resolved per-turn request: inherited model,
+/// reasoning and account choices may differ without any user configuration
+/// change. Exclude the provider's effective-permission audit, which is updated
+/// normally when a run starts; retain the requested execution settings.
+fn recovery_task_configuration(chat: &luna_proto::Chat) -> serde_json::Value {
+    serde_json::json!({
+        "config": chat.config.as_ref().map(|config| serde_json::json!({
+            "harness": config.harness,
+            "providerAccountId": config.provider_account_id,
+            "model": config.model,
+            "reasoning": config.reasoning,
+            "modelOptions": config.model_options,
+            "sandbox": config.sandbox,
+            "permissionMode": config.permission_mode,
+        })),
+        "cwd": chat.cwd.as_deref().map(expand_home),
+    })
+}
+
 struct RunHandle {
     run_id: String,
     started_for_goal_attachment: bool,
@@ -3948,6 +3967,7 @@ impl SessionsEngine {
                 &original_message_id,
                 workspace_repair_revision,
             )?;
+        self.freeze_recovery_task_configuration(chat_id, &original_message_id)?;
         // Runtime contracts are host authority, never client-provided model
         // options. Strip even a syntactically valid forged contract before any
         // request snapshot, recovery record, or provider dispatch.
@@ -4777,6 +4797,7 @@ impl SessionsEngine {
                 &user_id,
                 workspace_repair_revision,
             )?;
+        self.freeze_recovery_task_configuration(chat_id, &user_id)?;
         let frozen_steer_request = self
             .last_request(chat_id)
             .filter(|request| {
@@ -5380,6 +5401,23 @@ impl SessionsEngine {
                 .is_ok_and(|harness| harness.supports_safe_recovery_continuation())
     }
 
+    fn freeze_recovery_task_configuration(
+        &self,
+        task_id: &str,
+        message_id: &str,
+    ) -> Result<(), EngineError> {
+        if let Some(workspace) = self.inner.workspace()
+            && let Some(chat) = workspace.chat(task_id)?
+        {
+            self.inner.recovery.record_execution_configuration(
+                task_id,
+                message_id,
+                &recovery_task_configuration(&chat),
+            )?;
+        }
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn record_recovery_failure(
         &self,
@@ -5823,7 +5861,17 @@ impl SessionsEngine {
                 .cwd
                 .as_deref()
                 .is_some_and(|cwd| expand_home(cwd) != expand_home(&record.request.cwd));
-            if config_changed || cwd_changed {
+            let workspace_changed = match self
+                .inner
+                .recovery
+                .execution_configuration(task_id, &record.view.original_message_id)?
+            {
+                Some(original) => original != recovery_task_configuration(&chat),
+                // Old journals have no captured task defaults. Keep their
+                // conservative comparison rather than assuming equivalence.
+                None => config_changed || cwd_changed,
+            };
+            if workspace_changed {
                 return self.supersede_recovery(
                     task_id,
                     "Recovery cancelled because task configuration or working directory changed before dispatch.",

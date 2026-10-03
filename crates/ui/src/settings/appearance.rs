@@ -988,20 +988,30 @@ impl AppearancePage {
                 self.set_selected_size_ix(kind, last);
                 cx.notify();
             }
-            "enter" | "space" => {
-                if self.size_menu(kind).is_open() {
-                    self.commit_size(kind, window, cx);
-                } else {
-                    *self.size_dismissed_at(kind) = None;
-                    self.toggle_size_menu(kind, cx);
-                }
-            }
+            // Activation rides GPUI's key-up keyboard click on the trigger
+            // (`activate_size_from_keyboard`). Acting here as well opened the
+            // menu on key-down and toggled it shut again on key-up.
+            "enter" | "space" => cx.stop_propagation(),
             "escape" => {
                 self.set_selected_size_ix(kind, kind.size_ix(cx));
                 self.close_size_menu(kind, cx);
                 cx.notify();
             }
             _ => {}
+        }
+    }
+
+    fn activate_size_from_keyboard(
+        &mut self,
+        kind: FontKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.size_menu(kind).is_open() {
+            self.commit_size(kind, window, cx);
+        } else {
+            *self.size_dismissed_at(kind) = None;
+            self.toggle_size_menu(kind, cx);
         }
     }
 
@@ -1190,10 +1200,6 @@ impl AppearancePage {
             cx.notify();
         }
     }
-}
-
-fn is_activation_key(event: &KeyDownEvent) -> bool {
-    !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space")
 }
 
 impl popover::ScrollRailHost for AppearancePage {
@@ -1430,7 +1436,7 @@ fn preference_choice(
             gpui::Toggled::False
         })
         .tab_index(0)
-        .focus_visible(move |style| style.border_2().border_color(focus_color))
+        .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
         .h(px(30.0))
         .px(px(10.0))
         .rounded(px(7.0))
@@ -2228,10 +2234,16 @@ impl AppearancePage {
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 this.on_size_key_down(kind, event, window, cx)
             }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                window.focus(&this.size_focus(kind).clone(), cx);
-                this.toggle_size_menu(kind, cx);
-            }))
+            .on_click(
+                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                    if event.is_keyboard() {
+                        this.activate_size_from_keyboard(kind, window, cx);
+                        return;
+                    }
+                    window.focus(&this.size_focus(kind).clone(), cx);
+                    this.toggle_size_menu(kind, cx);
+                }),
+            )
             .child(div().flex_1().child(labels[current].clone()))
             .child(
                 icons::icon(icons::ALT_ARROW_DOWN)
@@ -2322,8 +2334,12 @@ impl AppearancePage {
                     this.theme_menu_mut(appearance_kind).note_trigger_press();
                 }),
             )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if this.theme_menu_mut(appearance_kind).take_press_was_open() {
+            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+                // GPUI's Enter/Space keyboard click has no mouse-down press
+                // note, so the press check would always reopen; toggle instead.
+                if event.is_keyboard() {
+                    this.toggle_theme_menu(appearance_kind, cx);
+                } else if this.theme_menu_mut(appearance_kind).take_press_was_open() {
                     this.close_theme_menu(appearance_kind, cx);
                 } else {
                     let other = if appearance_kind.is_light() {
@@ -2336,13 +2352,7 @@ impl AppearancePage {
                 }
                 cx.notify();
             }))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                if is_activation_key(event) {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                    this.toggle_theme_menu(appearance_kind, cx);
-                }
-            }))
+            .on_key_down(crate::swallow_activation_key)
             .child(palette_preview(&selected_theme))
             .child(
                 div()
@@ -2383,7 +2393,6 @@ impl AppearancePage {
                         .enumerate()
                         .map(|(index, variant)| {
                             let id = variant.id.clone();
-                            let key_id = id.clone();
                             let name = variant.name.clone();
                             let active = id == selected_id;
                             let sample = Theme::for_selection(
@@ -2423,17 +2432,7 @@ impl AppearancePage {
                                 this.close_theme_menu(appearance_kind, cx);
                                 cx.notify();
                             }))
-                            .on_key_down(cx.listener(
-                                move |this, event: &KeyDownEvent, window, cx| {
-                                    if is_activation_key(event) {
-                                        window.prevent_default();
-                                        cx.stop_propagation();
-                                        appearance::set_theme(appearance_kind, key_id.clone(), cx);
-                                        this.close_theme_menu(appearance_kind, cx);
-                                        cx.notify();
-                                    }
-                                },
-                            ))
+                            .on_key_down(crate::swallow_activation_key)
                             .child(palette_preview(&sample))
                             .child(div().flex_1().min_w_0().truncate().child(name))
                             .when(active, |row| {
@@ -2524,16 +2523,7 @@ impl AppearancePage {
                     }
                     cx.notify();
                 }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                    if is_activation_key(event) {
-                        window.prevent_default();
-                        cx.stop_propagation();
-                        if let Some(dialog) = this.import_dialog.as_mut() {
-                            dialog.mode = value;
-                        }
-                        cx.notify();
-                    }
-                }))
+                .on_key_down(crate::swallow_activation_key)
                 .child(
                     div()
                         .flex()
@@ -2663,7 +2653,6 @@ impl AppearancePage {
             );
             for variant in &compilation.family.variants {
                 let variant_id = variant.id.clone();
-                let key_variant_id = variant_id.clone();
                 let selected_now = selected.contains(&variant_id);
                 let review_open = review_variant.as_deref() == Some(variant_id.as_str());
                 let appearance = if variant.appearance.is_dark() {
@@ -2740,15 +2729,7 @@ impl AppearancePage {
                                                 this.toggle_import_variant(&variant_id, cx)
                                             }
                                         }))
-                                        .on_key_down(cx.listener(
-                                            move |this, event: &KeyDownEvent, window, cx| {
-                                                if is_activation_key(event) {
-                                                    window.prevent_default();
-                                                    cx.stop_propagation();
-                                                    this.toggle_import_variant(&key_variant_id, cx);
-                                                }
-                                            },
-                                        )),
+                                        .on_key_down(crate::swallow_activation_key),
                                 )
                                 .child(palette_preview(&sample))
                                 .child(
@@ -2908,14 +2889,7 @@ impl AppearancePage {
                         this.import_dialog = None;
                         cx.notify();
                     }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            this.import_dialog = None;
-                            cx.notify();
-                        }
-                    }))
+                    .on_key_down(crate::swallow_activation_key)
                     .child(
                         icons::icon(icons::CLOSE)
                             .size(px(12.0))
@@ -2941,14 +2915,7 @@ impl AppearancePage {
                         this.import_dialog = None;
                         cx.notify();
                     }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            this.import_dialog = None;
-                            cx.notify();
-                        }
-                    })),
+                    .on_key_down(crate::swallow_activation_key),
             )
             .child(
                 popover::btn_primary(
@@ -2988,21 +2955,9 @@ impl AppearancePage {
                                 this.compile_import(cx);
                             }
                         }))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if is_activation_key(event) {
-                                window.prevent_default();
-                                cx.stop_propagation();
-                                if this
-                                    .import_dialog
-                                    .as_ref()
-                                    .is_some_and(|dialog| dialog.compilation.is_some())
-                                {
-                                    this.finish_import(cx);
-                                } else {
-                                    this.compile_import(cx);
-                                }
-                            }
-                        }))
+                        // A key-down Analyze followed by GPUI's key-up click
+                        // imported the theme before it could be reviewed.
+                        .on_key_down(crate::swallow_activation_key)
                 }),
             );
 
@@ -3100,14 +3055,7 @@ impl AppearancePage {
                         this.review_entry = None;
                         cx.notify();
                     }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            this.review_entry = None;
-                            cx.notify();
-                        }
-                    })),
+                    .on_key_down(crate::swallow_activation_key),
             ),
         );
         Some(popover::modal(
@@ -3155,14 +3103,7 @@ impl AppearancePage {
                                 this.reset_confirmation_open = false;
                                 cx.notify();
                             }))
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                if is_activation_key(event) {
-                                    window.prevent_default();
-                                    cx.stop_propagation();
-                                    this.reset_confirmation_open = false;
-                                    cx.notify();
-                                }
-                            })),
+                            .on_key_down(crate::swallow_activation_key),
                     )
                     .child(
                         popover::btn_primary(theme, "Reset appearance")
@@ -3173,13 +3114,7 @@ impl AppearancePage {
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.reset_to_defaults(window, cx);
                             }))
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                if is_activation_key(event) {
-                                    window.prevent_default();
-                                    cx.stop_propagation();
-                                    this.reset_to_defaults(window, cx);
-                                }
-                            })),
+                            .on_key_down(crate::swallow_activation_key),
                     ),
             );
         Some(popover::modal(
@@ -3367,13 +3302,7 @@ impl AppearancePage {
                         .aria_label("Add theme")
                         .tab_index(0)
                         .on_click(cx.listener(|this, _, _, cx| this.open_import(cx)))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if is_activation_key(event) {
-                                window.prevent_default();
-                                cx.stop_propagation();
-                                this.open_import(cx);
-                            }
-                        })),
+                        .on_key_down(crate::swallow_activation_key),
                 )
                 .into_any_element(),
         ];
@@ -3458,16 +3387,7 @@ impl Render for AppearancePage {
                     appearance::set_mode(mode, cx);
                     cx.notify();
                 }))
-                .on_key_down(cx.listener(
-                    move |_, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            appearance::set_mode(mode, cx);
-                            cx.notify();
-                        }
-                    },
-                ))
+                .on_key_down(crate::swallow_activation_key)
             })
             .collect::<Vec<_>>();
 
@@ -3517,14 +3437,7 @@ impl Render for AppearancePage {
                         appearance::set_accent(selection, cx);
                         cx.notify();
                     }))
-                    .on_key_down(cx.listener(move |_, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            appearance::set_accent(selection, cx);
-                            cx.notify();
-                        }
-                    }))
+                    .on_key_down(crate::swallow_activation_key)
             })
             .collect::<Vec<_>>();
         let surface_controls = SurfacePreference::ALL
@@ -3535,14 +3448,7 @@ impl Render for AppearancePage {
                         appearance::set_surface(surface, cx);
                         cx.notify();
                     }))
-                    .on_key_down(cx.listener(move |_, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            appearance::set_surface(surface, cx);
-                            cx.notify();
-                        }
-                    }))
+                    .on_key_down(crate::swallow_activation_key)
             })
             .collect::<Vec<_>>();
         let mut settings_rows = theme_rows;
@@ -3677,15 +3583,7 @@ impl Render for AppearancePage {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.choose_new_thread_background(cx)
                                     }))
-                                    .on_key_down(cx.listener(
-                                        |this, event: &KeyDownEvent, window, cx| {
-                                            if is_activation_key(event) {
-                                                window.prevent_default();
-                                                cx.stop_propagation();
-                                                this.choose_new_thread_background(cx);
-                                            }
-                                        },
-                                    )),
+                                    .on_key_down(crate::swallow_activation_key),
                                 )
                                 .child(
                                     compact_action(
@@ -3697,15 +3595,7 @@ impl Render for AppearancePage {
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.remove_new_thread_background(cx)
                                     }))
-                                    .on_key_down(cx.listener(
-                                        |this, event: &KeyDownEvent, window, cx| {
-                                            if is_activation_key(event) {
-                                                window.prevent_default();
-                                                cx.stop_propagation();
-                                                this.remove_new_thread_background(cx);
-                                            }
-                                        },
-                                    )),
+                                    .on_key_down(crate::swallow_activation_key),
                                 )
                         })
                         .when(current_background.is_none(), |actions| {
@@ -3718,15 +3608,7 @@ impl Render for AppearancePage {
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.choose_new_thread_background(cx)
                                 }))
-                                .on_key_down(cx.listener(
-                                    |this, event: &KeyDownEvent, window, cx| {
-                                        if is_activation_key(event) {
-                                            window.prevent_default();
-                                            cx.stop_propagation();
-                                            this.choose_new_thread_background(cx);
-                                        }
-                                    },
-                                )),
+                                .on_key_down(crate::swallow_activation_key),
                             )
                         }),
                 )
@@ -3741,14 +3623,7 @@ impl Render for AppearancePage {
                             crate::settings::set_new_thread_background_effect(effect, cx);
                             cx.notify();
                         }))
-                        .on_key_down(cx.listener(move |_, event: &KeyDownEvent, window, cx| {
-                            if is_activation_key(event) {
-                                window.prevent_default();
-                                cx.stop_propagation();
-                                crate::settings::set_new_thread_background_effect(effect, cx);
-                                cx.notify();
-                            }
-                        }))
+                        .on_key_down(crate::swallow_activation_key)
                 })
                 .collect::<Vec<_>>();
             settings_rows.push(
@@ -3897,16 +3772,10 @@ impl Render for AppearancePage {
                     gpui::Toggled::False
                 })
                 .tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(focus_color))
+                .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_chat_code_wrap(cx)))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if is_activation_key(event) {
-                        window.prevent_default();
-                        cx.stop_propagation();
-                        this.toggle_chat_code_wrap(cx);
-                    }
-                }))
+                .on_key_down(crate::swallow_activation_key)
                 .into_any_element(),
         ));
         code_rows.push(preference_row(
@@ -3925,16 +3794,10 @@ impl Render for AppearancePage {
                     gpui::Toggled::False
                 })
                 .tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(focus_color))
+                .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_wrap(cx)))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if is_activation_key(event) {
-                        window.prevent_default();
-                        cx.stop_propagation();
-                        this.toggle_diff_wrap(cx);
-                    }
-                }))
+                .on_key_down(crate::swallow_activation_key)
                 .into_any_element(),
         ));
         code_rows.push(preference_row(
@@ -3953,16 +3816,10 @@ impl Render for AppearancePage {
                     gpui::Toggled::False
                 })
                 .tab_index(0)
-                .focus_visible(move |style| style.border_2().border_color(focus_color))
+                .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| this.toggle_file_wrap(cx)))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if is_activation_key(event) {
-                        window.prevent_default();
-                        cx.stop_propagation();
-                        this.toggle_file_wrap(cx);
-                    }
-                }))
+                .on_key_down(crate::swallow_activation_key)
                 .into_any_element(),
         ));
         let layout_controls = div()
@@ -3977,15 +3834,7 @@ impl Render for AppearancePage {
                     !ui_settings.diff_split,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.set_diff_layout(false, cx)))
-                .on_key_down(cx.listener(
-                    |this, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            this.set_diff_layout(false, cx);
-                        }
-                    },
-                )),
+                .on_key_down(crate::swallow_activation_key),
             )
             .child(
                 preference_choice(
@@ -3995,15 +3844,7 @@ impl Render for AppearancePage {
                     ui_settings.diff_split,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.set_diff_layout(true, cx)))
-                .on_key_down(cx.listener(
-                    |this, event: &KeyDownEvent, window, cx| {
-                        if is_activation_key(event) {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                            this.set_diff_layout(true, cx);
-                        }
-                    },
-                )),
+                .on_key_down(crate::swallow_activation_key),
             );
         code_rows.push(preference_row(
             &theme,
@@ -4028,14 +3869,7 @@ impl Render for AppearancePage {
                     appearance::set_diff_color_scheme(DiffColorScheme::RedGreen, cx);
                     cx.notify();
                 }))
-                .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
-                    if is_activation_key(event) {
-                        window.prevent_default();
-                        cx.stop_propagation();
-                        appearance::set_diff_color_scheme(DiffColorScheme::RedGreen, cx);
-                        cx.notify();
-                    }
-                })),
+                .on_key_down(crate::swallow_activation_key),
             )
             .child(
                 preference_choice(
@@ -4048,14 +3882,7 @@ impl Render for AppearancePage {
                     appearance::set_diff_color_scheme(DiffColorScheme::BlueOrange, cx);
                     cx.notify();
                 }))
-                .on_key_down(cx.listener(|_, event: &KeyDownEvent, window, cx| {
-                    if is_activation_key(event) {
-                        window.prevent_default();
-                        cx.stop_propagation();
-                        appearance::set_diff_color_scheme(DiffColorScheme::BlueOrange, cx);
-                        cx.notify();
-                    }
-                })),
+                .on_key_down(crate::swallow_activation_key),
             );
         code_rows.push(preference_row(
             &theme,
@@ -4084,14 +3911,7 @@ impl Render for AppearancePage {
                             this.reset_confirmation_open = true;
                             cx.notify();
                         }))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if is_activation_key(event) {
-                                window.prevent_default();
-                                cx.stop_propagation();
-                                this.reset_confirmation_open = true;
-                                cx.notify();
-                            }
-                        }))
+                        .on_key_down(crate::swallow_activation_key)
                         .into_any_element(),
                 )),
             );

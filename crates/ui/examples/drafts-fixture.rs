@@ -1349,6 +1349,8 @@ async fn seed_l11_context_controls(core: &EngineCore, root: &Path) -> anyhow::Re
     Ok(())
 }
 
+const TURN_RECOVERY_SPACE: &str = "turn-recovery-project";
+
 fn turn_recovery_project(root: &Path) -> PathBuf {
     root.join("fixture-project")
 }
@@ -1525,12 +1527,26 @@ fn initialize_fixture_workspace(
     let project = turn_recovery_project(root);
     if turn_recovery {
         std::fs::create_dir_all(&project)?;
+        // Sessions require a project: a projectless chat is hidden and cannot
+        // be selected, which left this mode on an empty "No sessions" canvas.
+        core.workspace.create_space(
+            TURN_RECOVERY_SPACE,
+            &core.device_id,
+            project.to_str().unwrap(),
+            Some("L10 recovery project".into()),
+            false,
+        )?;
     }
+    let fixture_space = if turn_recovery {
+        Some(TURN_RECOVERY_SPACE)
+    } else {
+        composer_project.then_some("composer-preview-project")
+    };
 
     if !task_a_exists {
         core.workspace.create_chat(
             TASK_A,
-            composer_project.then_some("composer-preview-project"),
+            fixture_space,
             Some(&core.device_id),
             Some(fixture_chat_config()),
             turn_recovery
@@ -1545,13 +1561,8 @@ fn initialize_fixture_workspace(
         core.workspace.rename_chat(TASK_A, title)?;
     }
     if !task_b_exists {
-        core.workspace.create_chat(
-            TASK_B,
-            composer_project.then_some("composer-preview-project"),
-            Some(&core.device_id),
-            None,
-            None,
-        )?;
+        core.workspace
+            .create_chat(TASK_B, fixture_space, Some(&core.device_id), None, None)?;
         core.workspace.rename_chat(TASK_B, "L08 Draft B")?;
     }
 
@@ -1780,6 +1791,22 @@ fn main() -> anyhow::Result<()> {
     let preview_chips = mode == "composer-chips";
     let selected_task_id = startup.task_id;
 
+    // Engine teardown runs exactly once: from GPUI's quit hook on macOS, where
+    // `NSApp terminate:` exits inside that hook and `run` never returns, or
+    // after `run` returns on the other platforms.
+    let core = Arc::new(core);
+    let shutdown_engine: std::rc::Rc<dyn Fn()> = {
+        let core = core.clone();
+        let runtime = runtime.handle().clone();
+        let once = std::sync::Once::new();
+        std::rc::Rc::new(move || {
+            once.call_once(|| {
+                let _ = runtime.block_on(core.shutdown());
+            })
+        })
+    };
+    let shutdown_on_quit = shutdown_engine.clone();
+
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(move |cx| {
@@ -1849,9 +1876,43 @@ fn main() -> anyhow::Result<()> {
                         ))),
                         ..Default::default()
                     },
-                    |_, cx| cx.new(|cx| shell::Shell::new(state.clone(), boot, cx)),
+                    |window, cx| {
+                        let shell = cx.new(|cx| shell::Shell::new(state.clone(), boot, cx));
+                        // The app's main-window close guard: unsaved drafts or
+                        // files keep the window open until they are saved.
+                        let weak_shell = shell.downgrade();
+                        window.on_window_should_close(cx, move |_, cx| {
+                            let should_close = weak_shell
+                                .update(cx, |shell, cx| shell.prepare_window_close(cx))
+                                .unwrap_or(true);
+                            if should_close {
+                                settings::flush(cx);
+                            }
+                            should_close
+                        });
+                        shell
+                    },
                 )
                 .unwrap();
+            // A normal app lifecycle, so the fixture never strands the
+            // one-GUI slot. The menu bar offers Quit (⌘Q, bound by
+            // `Shell::new`'s keymap): with the window open it dispatches
+            // `app_menus::Quit` to the global handler, whose `prepare_quit`
+            // runs the save guard before terminating. Closing the last window
+            // has already passed the window's close guard above, and GPUI's
+            // own `LastWindowClosed` mode then quits once the window is
+            // removed (an action dispatched from a window-closed observer was
+            // lost: `active_window()` could still name the removed window).
+            // On macOS that quit still goes through `native_quit`, which
+            // re-runs `prepare_quit` (no Shell windows remain) before allowing
+            // termination. The quit hook below shuts the engine down.
+            cx.set_menus(app_menus::app_menus());
+            cx.set_quit_mode(gpui::QuitMode::LastWindowClosed);
+            cx.on_app_quit(move |_| {
+                shutdown_on_quit();
+                async {}
+            })
+            .detach();
             if seed {
                 let composer = window
                     .update(cx, |shell, _, _| shell.fixture_appshots_composer())
@@ -1882,7 +1943,7 @@ fn main() -> anyhow::Result<()> {
                 .detach();
             }
         });
-    runtime.block_on(core.shutdown());
+    shutdown_engine();
     Ok(())
 }
 

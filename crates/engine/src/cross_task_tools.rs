@@ -915,6 +915,7 @@ impl<B: CrossTaskBackend> CrossTaskTools<B> {
             .map(|target| (target.task_id.clone(), target.after_cursor.clone()))
             .collect::<std::collections::HashMap<_, _>>();
         let result = tokio::select! {
+            biased;
             _ = cancel.cancelled() => return Err(CrossTaskError::Cancelled),
             result = tokio::time::timeout(Duration::from_millis(u64::from(timeout_ms)), self.backend.wait_event(request)) => result,
         };
@@ -1070,6 +1071,7 @@ async fn with_cancel<T>(
     future: impl std::future::Future<Output = Result<T, CrossTaskError>>,
 ) -> Result<T, CrossTaskError> {
     tokio::select! {
+        biased;
         _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
         result = tokio::time::timeout(Duration::from_millis(BACKEND_DEADLINE_MS), future) => result.map_err(|_| CrossTaskError::Deadline)?,
     }

@@ -23,6 +23,7 @@ use luna_proto::{
 };
 use luna_rpc::methods;
 
+use crate::AccessibleButton as _;
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::popover::{self, Loadable};
 use crate::settings::harnesses::HarnessesPage;
@@ -1974,6 +1975,7 @@ impl Render for AccountsPage {
                 vec![
                     widgets::error_strip(&theme, message)
                         .id("accounts-load-error")
+                        .accessible_button("Retry loading accounts", theme.accent)
                         .cursor_pointer()
                         .on_click(cx.listener(|this, _, _, cx| {
                             // Retry IS the visit's first successful list — force usage.
@@ -2077,6 +2079,10 @@ impl Render for AccountsPage {
                                                 .id(SharedString::from(format!(
                                                     "provider-update-{name}"
                                                 )))
+                                                .accessible_button(
+                                                    format!("Update {name}"),
+                                                    theme.accent,
+                                                )
                                                 .hover(|s| widgets::ghost_hover(&theme, s))
                                                 .when(is_updating, |button| button.opacity(0.5))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2098,6 +2104,10 @@ impl Render for AccountsPage {
                                         el.child(
                                             widgets::ghost_action(&theme)
                                                 .id(add_id)
+                                                .accessible_button(
+                                                    sign_in_label.to_string(),
+                                                    theme.accent,
+                                                )
                                                 .hover(|s| widgets::ghost_hover(&theme, s))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.request_login(
@@ -2114,22 +2124,25 @@ impl Render for AccountsPage {
                                                 .child(SharedString::from(sign_in_label)),
                                         )
                                     })
-                                    .child(
+                                    .child(if installed {
+                                        widgets::switch_control(
+                                            SharedString::from(format!("provider-toggle-{name}")),
+                                            format!("Enable {name}"),
+                                            enabled,
+                                            &theme,
+                                            cx,
+                                            move |this, cx| {
+                                                this.toggle_harness(harness, !enabled, cx);
+                                            },
+                                        )
+                                        .when(descriptor.is_none(), |el| el.opacity(0.35))
+                                        .into_any_element()
+                                    } else {
+                                        // Not installed: shown, but not a control.
                                         widgets::toggle_switch(&theme, enabled)
-                                            .id(SharedString::from(format!(
-                                                "provider-toggle-{name}"
-                                            )))
-                                            .when(!installed || descriptor.is_none(), |el| {
-                                                el.opacity(0.35)
-                                            })
-                                            .when(installed, |el| {
-                                                el.cursor_pointer().on_click(cx.listener(
-                                                    move |this, _, _, cx| {
-                                                        this.toggle_harness(harness, !enabled, cx);
-                                                    },
-                                                ))
-                                            }),
-                                    ),
+                                            .opacity(0.35)
+                                            .into_any_element()
+                                    }),
                             )
                             .when(!installed, |el| {
                                 el.child(widgets::warning_strip(
@@ -2203,6 +2216,10 @@ impl Render for AccountsPage {
                                         // `disabled:opacity-50`).
                                         widgets::ghost_action(&theme)
                                             .id("accounts-refresh")
+                                            .accessible_button(
+                                                "Refresh provider accounts",
+                                                theme.accent,
+                                            )
                                             .flex_none()
                                             .text_size(crate::typography::ui_rems(12.5))
                                             .hover(|s| widgets::ghost_hover(&theme, s))
@@ -2246,6 +2263,14 @@ impl Render for AccountsPage {
                             .child(
                                 widgets::ghost_action(&theme)
                                     .id("providers-advanced-disclosure")
+                                    .accessible_button(
+                                        if self.advanced_open {
+                                            "Hide provider options"
+                                        } else {
+                                            "Advanced provider options"
+                                        },
+                                        theme.accent,
+                                    )
                                     .mt(px(24.0))
                                     .hover(|s| widgets::ghost_hover(&theme, s))
                                     .on_click(

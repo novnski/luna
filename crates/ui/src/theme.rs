@@ -1775,6 +1775,23 @@ pub fn card_selected_shadows() -> Vec<gpui::BoxShadow> {
     }]
 }
 
+/// Keyboard focus ring for `focus_visible`: a 2px inset shadow ring.
+/// GPUI resolves the focus-visible style during layout, so a focus-only
+/// `border_2()` grew auto-sized controls by 4px (and nudged a fixed-size
+/// switch knob) whenever Tab landed on them. The shadow adds nothing to
+/// layout, and drawn inside the bounds it is never clipped by a scroll edge.
+/// It paints above the element's own fill and below its children.
+pub fn focus_ring(style: gpui::StyleRefinement, color: Hsla) -> gpui::StyleRefinement {
+    use gpui::Styled as _;
+    style.shadow(vec![gpui::BoxShadow {
+        color,
+        offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+        blur_radius: gpui::px(0.0),
+        spread_radius: gpui::px(2.0),
+        inset: true,
+    }])
+}
+
 /// An exact achromatic tone from an 8-bit channel value (`grey(13)` ≡ `#0d0d0d`)
 /// — for surfaces matched against reference-screenshot samples.
 pub fn grey(value: u8) -> Hsla {

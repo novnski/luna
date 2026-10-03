@@ -83,41 +83,58 @@ impl Render for FilesSettingsPage {
         let selected = self.autosave_delay_ms;
         let word_wrap = self.word_wrap;
         let show_all_files = self.show_all_files;
-        let options = DELAY_OPTIONS.into_iter().map(|delay| {
-            let active = delay == selected;
-            div()
-                .id(SharedString::from(format!("files-autosave-{delay}")))
-                .h(px(28.0))
-                .px(px(10.0))
-                .rounded(px(7.0))
-                .border_1()
-                .border_color(if active {
-                    theme.accent.opacity(0.7)
-                } else {
-                    theme.border
-                })
-                .bg(if active {
-                    theme.accent.opacity(0.11)
-                } else {
-                    crate::theme::wash(0.025)
-                })
-                .text_size(crate::typography::ui_rems(11.5))
-                .text_color(if active { theme.text } else { theme.text_muted })
-                .flex()
-                .items_center()
-                .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::wash(0.08)))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.autosave_delay_ms = delay;
-                    cx.emit(FilesSettingsEvent::AutosaveDelayChanged(delay));
-                    cx.notify();
-                }))
-                .child(if delay >= 1_000 {
+        let accent = theme.accent;
+        // Collected now: the switches below need `cx` mutably, so the chips'
+        // listeners cannot stay borrowed by a lazy iterator.
+        let options: Vec<_> = DELAY_OPTIONS
+            .into_iter()
+            .map(|delay| {
+                let active = delay == selected;
+                let label = if delay >= 1_000 {
                     format!("{} s", delay as f32 / 1_000.0)
                 } else {
                     format!("{delay} ms")
-                })
-        });
+                };
+                div()
+                    .id(SharedString::from(format!("files-autosave-{delay}")))
+                    .role(gpui::Role::RadioButton)
+                    .aria_label(format!("Autosave after {label}"))
+                    .aria_toggled(if active {
+                        gpui::Toggled::True
+                    } else {
+                        gpui::Toggled::False
+                    })
+                    .tab_index(0)
+                    .focus_visible(move |style| style.border_color(accent))
+                    .h(px(28.0))
+                    .px(px(10.0))
+                    .rounded(px(7.0))
+                    .border_1()
+                    .border_color(if active {
+                        theme.accent.opacity(0.7)
+                    } else {
+                        theme.border
+                    })
+                    .bg(if active {
+                        theme.accent.opacity(0.11)
+                    } else {
+                        crate::theme::wash(0.025)
+                    })
+                    .text_size(crate::typography::ui_rems(11.5))
+                    .text_color(if active { theme.text } else { theme.text_muted })
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(crate::theme::wash(0.08)))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.autosave_delay_ms = delay;
+                        cx.emit(FilesSettingsEvent::AutosaveDelayChanged(delay));
+                        cx.notify();
+                    }))
+                    .on_key_down(crate::swallow_activation_key)
+                    .child(label)
+            })
+            .collect();
         let card = widgets::section_card(&theme)
             .child(
                 widgets::card_row(&theme, true)
@@ -138,16 +155,18 @@ impl Render for FilesSettingsPage {
                                 ],
                             )),
                     )
-                    .child(
-                        widgets::toggle_switch(&theme, autosave_enabled)
-                            .id("files-autosave-toggle")
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.autosave_enabled = !this.autosave_enabled;
-                                cx.emit(FilesSettingsEvent::AutosaveChanged(this.autosave_enabled));
-                                cx.notify();
-                            })),
-                    ),
+                    .child(widgets::switch_control(
+                        "files-autosave-toggle",
+                        "Autosave",
+                        autosave_enabled,
+                        &theme,
+                        cx,
+                        |this, cx| {
+                            this.autosave_enabled = !this.autosave_enabled;
+                            cx.emit(FilesSettingsEvent::AutosaveChanged(this.autosave_enabled));
+                            cx.notify();
+                        },
+                    )),
             )
             .when(autosave_enabled, |card| {
                 card.child(
@@ -181,7 +200,7 @@ impl Render for FilesSettingsPage {
                 )
             })
             .child(
-                widgets::card_row(&theme, true)
+                widgets::card_row(&theme, false)
                     .child(widgets::row_tile(&theme, icons::LIST))
                     .child(
                         div()
@@ -199,16 +218,18 @@ impl Render for FilesSettingsPage {
                                 ],
                             )),
                     )
-                    .child(
-                        widgets::toggle_switch(&theme, word_wrap)
-                            .id("files-word-wrap-toggle")
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.word_wrap = !this.word_wrap;
-                                cx.emit(FilesSettingsEvent::WordWrapChanged(this.word_wrap));
-                                cx.notify();
-                            })),
-                    ),
+                    .child(widgets::switch_control(
+                        "files-word-wrap-toggle",
+                        "Word wrap",
+                        word_wrap,
+                        &theme,
+                        cx,
+                        |this, cx| {
+                            this.word_wrap = !this.word_wrap;
+                            cx.emit(FilesSettingsEvent::WordWrapChanged(this.word_wrap));
+                            cx.notify();
+                        },
+                    )),
             )
             .child(
                 widgets::card_row(&theme, false)
@@ -231,18 +252,18 @@ impl Render for FilesSettingsPage {
                                 ],
                             )),
                     )
-                    .child(
-                        widgets::toggle_switch(&theme, show_all_files)
-                            .id("files-show-all-toggle")
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.show_all_files = !this.show_all_files;
-                                cx.emit(FilesSettingsEvent::ShowAllFilesChanged(
-                                    this.show_all_files,
-                                ));
-                                cx.notify();
-                            })),
-                    ),
+                    .child(widgets::switch_control(
+                        "files-show-all-toggle",
+                        "Show all files",
+                        show_all_files,
+                        &theme,
+                        cx,
+                        |this, cx| {
+                            this.show_all_files = !this.show_all_files;
+                            cx.emit(FilesSettingsEvent::ShowAllFilesChanged(this.show_all_files));
+                            cx.notify();
+                        },
+                    )),
             );
 
         let scrollbar = popover::rail(self, "files-settings-page-scrollbar", &theme, cx);

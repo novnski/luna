@@ -182,7 +182,6 @@ fn header_control<V: 'static>(
     let label = label.into();
     let border_strong = theme.border_strong;
     let hover = crate::theme::ink(0.06);
-    let key_action = action.clone();
     div()
         .id(id.into())
         .role(gpui::Role::Button)
@@ -200,12 +199,7 @@ fn header_control<V: 'static>(
         .hover(move |style| style.bg(hover))
         .focus_visible(move |style| style.border_color(border_strong))
         .on_click(cx.listener(move |view, _, _, cx| action(view, cx)))
-        .on_key_down(cx.listener(move |view, event: &gpui::KeyDownEvent, _, cx| {
-            if is_settings_nav_activation(&event.keystroke.key, event.is_held) {
-                key_action(view, cx);
-                cx.stop_propagation();
-            }
-        }))
+        .on_key_down(crate::swallow_activation_key)
 }
 
 /// Compact identity header: Back · title · identity badge · Open as main,

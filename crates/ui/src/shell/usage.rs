@@ -2864,16 +2864,7 @@ impl Shell {
                         this.usage_provider_filter = Some(provider);
                         cx.notify();
                     }))
-                    .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                        if matches!(
-                            event.keystroke.key.to_ascii_lowercase().as_str(),
-                            "enter" | "space"
-                        ) {
-                            cx.stop_propagation();
-                            this.usage_provider_filter = Some(provider);
-                            cx.notify();
-                        }
-                    }))
+                    .on_key_down(crate::swallow_activation_key)
                     .child(
                         div()
                             .relative()
@@ -2989,15 +2980,7 @@ impl Shell {
                             .on_click(
                                 cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)),
                             )
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if matches!(
-                                    event.keystroke.key.to_ascii_lowercase().as_str(),
-                                    "enter" | "space"
-                                ) {
-                                    cx.stop_propagation();
-                                    this.cycle_usage_environment(cx);
-                                }
-                            }))
+                            .on_key_down(crate::swallow_activation_key)
                             .child(environment_label),
                     )
                     .child(
@@ -3018,15 +3001,7 @@ impl Shell {
                             .cursor_pointer()
                             .hover(|el| el.bg(palette.hover))
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if matches!(
-                                    event.keystroke.key.to_ascii_lowercase().as_str(),
-                                    "enter" | "space"
-                                ) {
-                                    cx.stop_propagation();
-                                    this.refresh_usage(cx);
-                                }
-                            }))
+                            .on_key_down(crate::swallow_activation_key)
                             .child(icon(icons::REFRESH).size(px(15.0)).text_color(
                                 if self.usage_refreshing {
                                     palette.refresh_active
@@ -3048,15 +3023,7 @@ impl Shell {
                             .justify_center()
                             .cursor_pointer()
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
-                            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                                if matches!(
-                                    event.keystroke.key.to_ascii_lowercase().as_str(),
-                                    "enter" | "space"
-                                ) {
-                                    cx.stop_propagation();
-                                    this.toggle_usage_card(cx);
-                                }
-                            }))
+                            .on_key_down(crate::swallow_activation_key)
                             .child(
                                 icon(icons::ALT_ARROW_DOWN)
                                     .size(px(13.0))
@@ -3105,15 +3072,7 @@ impl Shell {
             .justify_center()
             .text_color(theme.text)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
-                if matches!(
-                    event.keystroke.key.to_ascii_lowercase().as_str(),
-                    "enter" | "space"
-                ) {
-                    cx.stop_propagation();
-                    this.toggle_usage_card(cx);
-                }
-            }))
+            .on_key_down(crate::swallow_activation_key)
             .child(icon(icons::CHART).size(px(18.0)).text_color(theme.text));
         div()
             .size(px(36.0))

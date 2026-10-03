@@ -86,6 +86,10 @@ pub struct BrowserSurface {
     remote: bool,
     previews: luna_proto::PreviewSnapshot,
     previews_loading: bool,
+    /// The engine serving this chat has no preview discovery (an older or
+    /// different host). Discovery is not retried, and the empty state stops
+    /// promising that a dev server will appear.
+    previews_unsupported: bool,
     previews_task: Option<gpui::Task<()>>,
     #[cfg(feature = "browser-fixture")]
     fixture_preview_open: std::rc::Rc<std::cell::Cell<Option<gpui::Point<gpui::Pixels>>>>,
@@ -162,6 +166,7 @@ impl BrowserSurface {
             remote,
             previews: luna_proto::PreviewSnapshot::default(),
             previews_loading: true,
+            previews_unsupported: false,
             previews_task: None,
             #[cfg(feature = "browser-fixture")]
             fixture_preview_open: Default::default(),
@@ -252,13 +257,27 @@ impl BrowserSurface {
     ) {
         self.previews_task = Some(cx.spawn(async move |this, cx| {
             loop {
+                // Checked: an engine without the method answers with an error
+                // frame, which a plain subscription only saw as an instantly
+                // closed stream and retried forever as "Connecting…".
                 let subscription = handle
                     .client()
-                    .subscribe(
+                    .subscribe_checked(
                         luna_rpc::methods::WATCH_PREVIEWS,
                         serde_json::json!({"chatId": chat_id}),
                     )
                     .await;
+                if let Err(luna_rpc::RpcError::UnknownMethod(_)) = subscription {
+                    this.update(cx, |this, cx| {
+                        this.previews_unsupported = true;
+                        this.previews.services.clear();
+                        this.previews.error = None;
+                        this.previews_loading = false;
+                        cx.notify();
+                    })
+                    .ok();
+                    return;
+                }
                 if let Ok(mut updates) = subscription {
                     while let Some(value) = updates.recv().await {
                         if let Ok(snapshot) =

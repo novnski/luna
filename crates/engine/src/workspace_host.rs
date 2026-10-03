@@ -2595,7 +2595,7 @@ mod tests {
             .to_string();
         assert!(busy.contains("admission denied (Busy)"), "{busy}");
         let claim = host
-            .claim_chat("rejected-chat", None)
+            .claim_chat("rejected-chat", root.path().to_str())
             .unwrap_err()
             .to_string();
         assert!(claim.contains("admission denied (Busy)"), "{claim}");

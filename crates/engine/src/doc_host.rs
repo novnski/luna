@@ -238,6 +238,7 @@ struct DocHostInner {
     /// Tracks every spawned worker so `shutdown_workers` can await them.
     tasks: TaskTracker,
     handles: Mutex<HashMap<String, Arc<ChatDocHandle>>>,
+    eviction_started: AtomicBool,
     /// Serialize cold opens without blocking access to already-live handles.
     opening: Mutex<()>,
     /// First open in this engine process reconciles a durable `Running`
@@ -946,6 +947,7 @@ impl DocHost {
                 edge_disconnected: AtomicBool::new(false),
                 tasks: TaskTracker::new(),
                 handles: Mutex::new(HashMap::new()),
+                eviction_started: AtomicBool::new(false),
                 opening: Mutex::new(()),
                 context_reconciled: Mutex::new(HashSet::new()),
                 seeding: Mutex::new(HashSet::new()),
@@ -2114,7 +2116,15 @@ impl DocHost {
                     ));
                 }
                 let stale = registry_gen >= 2 && handle.room_gen < 2;
-                if (stale || handle.retired.load(Ordering::Relaxed)) && !self.pinned(handle) {
+                let retired = handle.retired.load(Ordering::Relaxed);
+                // A completed lineage replacement is different from LRU
+                // eviction. Reader-only queue watches must move to the
+                // durable thin document before accepting more mutations.
+                let replace_retired = retired
+                    && !self.seed_blocked(handle)
+                    && matches!(self.inner.store.load_snapshot_with_cursor(chat_id)?,
+                        Some((_, _, epoch)) if epoch >= crate::chat2_host::CHAT2_DOC_EPOCH);
+                if replace_retired || ((stale || retired) && !self.pinned(handle)) {
                     // A seed flipped this chat under a cached fat handle
                     // (review B1): drop it so this open converges onto the
                     // thin lineage + chat2 room. Retire only at the drop:
@@ -2488,6 +2498,7 @@ impl DocHost {
         lock(&self.inner.handles).insert(chat_id.to_string(), handle.clone());
         drop(opening);
         self.spawn_worker(chat_task(self.clone(), Arc::downgrade(&handle), changed_rx));
+        self.start_eviction_watcher();
         self.evict_over_budget();
         Ok(handle)
     }
@@ -3196,10 +3207,30 @@ impl DocHost {
         });
     }
 
+    /// A burst of opens can finish entirely inside the attach grace. Revisit
+    /// the warm set after it ages even when no more documents change or open.
+    /// The weak reference does not keep an otherwise retired host alive.
+    fn start_eviction_watcher(&self) {
+        if self.inner.eviction_started.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let weak = Arc::downgrade(&self.inner);
+        self.spawn_worker(async move {
+            let mut timer = tokio::time::interval(std::time::Duration::from_secs(5));
+            timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            timer.tick().await;
+            loop {
+                timer.tick().await;
+                let Some(inner) = weak.upgrade() else { return };
+                DocHost { inner }.evict_over_budget();
+            }
+        });
+    }
+
     /// LRU eviction: while the warm set exceeds [`WARM_DOC_CAP`] or the
     /// resident estimate exceeds `DOC_LRU_BYTE_BUDGET`, close the
     /// least-recently-touched unpinned docs. Pinned (never evicted):
-    /// - watched docs (`messages_tx` has receivers — a UI transcript);
+    /// - watched docs (transcript or queue receivers);
     /// - docs with a live writer (`Arc<SessionDoc>` held outside the handle —
     ///   a run streaming into it);
     /// - host-side docs with pending commands (the executor owes them work).
@@ -3233,17 +3264,44 @@ impl DocHost {
             if count <= WARM_DOC_CAP && estimate <= luna_doc::DOC_LRU_BYTE_BUDGET {
                 return;
             }
-            let evicted = {
-                let mut handles = lock(&self.inner.handles);
+            // Serialize with cold opens, retaining the discoverable handle
+            // until its final snapshot is durable. Otherwise a failed save
+            // loses the only copy, or a reopen races ahead of the final flush.
+            let _opening = lock(&self.inner.opening);
+            let candidate = {
+                let handles = lock(&self.inner.handles);
                 match handles.get(&chat_id) {
-                    Some(handle) if !self.pinned(handle) => handles.remove(&chat_id),
+                    Some(handle)
+                        if now_ms() - handle.last_access.load(Ordering::Relaxed)
+                            >= EVICT_MIN_IDLE_MS
+                            && !self.pinned(handle) =>
+                    {
+                        Some(handle.clone())
+                    }
                     _ => None,
                 }
             };
-            if let Some(handle) = evicted {
-                // Final flush outside the map lock; ≤1s of changes could be
-                // pending in the snapshot debounce.
-                self.save_snapshot(&handle);
+            let Some(handle) = candidate else { continue };
+            if let Err(error) = self.save_snapshot_checked(&handle) {
+                tracing::warn!(chat = %chat_id, %error, "keeping document after eviction flush failed");
+                continue;
+            }
+            let evicted = {
+                let mut handles = lock(&self.inner.handles);
+                // Cached opens and watch attachment remain available during
+                // disk I/O. Recheck their liveness before removing the handle.
+                if handles
+                    .get(&chat_id)
+                    .is_some_and(|current| Arc::ptr_eq(current, &handle))
+                    && now_ms() - handle.last_access.load(Ordering::Relaxed) >= EVICT_MIN_IDLE_MS
+                    && !self.pinned(&handle)
+                {
+                    handles.remove(&chat_id)
+                } else {
+                    None
+                }
+            };
+            if evicted.is_some() {
                 tracing::debug!(chat = %handle.chat_id, "doc evicted (LRU)");
             }
         }
@@ -3280,7 +3338,7 @@ impl DocHost {
         if handle.publication_failed.load(Ordering::Acquire) {
             return true;
         }
-        if handle.messages_tx.receiver_count() > 0 {
+        if handle.messages_tx.receiver_count() > 0 || handle.queue_tx.receiver_count() > 0 {
             return true;
         }
         // The handle itself holds one doc ref; more means a live writer.

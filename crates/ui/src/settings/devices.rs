@@ -12,6 +12,7 @@ use std::time::Duration;
 use luna_proto::WorkspaceScope;
 use luna_rpc::methods;
 
+use crate::AccessibleButton as _;
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::popover;
 use crate::settings::widgets;
@@ -377,6 +378,7 @@ impl Render for DevicesPage {
                         // own hover carries the reveal).
                         widgets::ghost_action(&theme)
                             .id(("device-rename", ix))
+                            .accessible_button("Rename device", theme.accent)
                             .opacity(0.7)
                             .hover(|s| {
                                 s.opacity(1.0)

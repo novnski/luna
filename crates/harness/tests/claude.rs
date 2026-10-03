@@ -1858,15 +1858,20 @@ async fn native_nested_agents_keep_ownership_model_usage_and_completion() {
         ]
     );
 
-    // E: nested background child, steered by A's SendMessage (F5).
+    // E: nested background child, steered by A's SendMessage (F5). The
+    // fixture intentionally repeats the opening text as a real instruction;
+    // it must survive echo deduplication before the keywords follow-up.
     let e = tagged("toolu_E");
     assert_eq!(
-        e[..3],
+        e[..4],
         [
             AgentEvent::UserMessage {
                 text: "List the token kinds.".into()
             },
             progress(None, None, None, None, None, Some(true)),
+            AgentEvent::UserMessage {
+                text: "List the token kinds.".into()
+            },
             AgentEvent::UserMessage {
                 text: "Include keywords too.".into()
             },

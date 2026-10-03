@@ -429,32 +429,19 @@ impl ProjectsPage {
                 theme.text_muted
             })
             .when(self.busy, |el| el.opacity(0.5))
-            .focus_visible(move |style| style.border_2().border_color(accent))
+            .focus_visible(move |style| crate::theme::focus_ring(style, accent))
             .when(!selected && !self.busy, |el| {
                 el.hover(|style| style.bg(theme.surface_raised_hover))
             })
             .child(label)
-            .on_click(cx.listener({
-                let action = action.clone();
-                let origin = origin.clone();
-                move |page, _, _, cx| {
-                    if page.state.read(cx).engine_generation() == engine_generation
-                        && page.current_request_scope(cx) == origin
-                    {
-                        page.action(action.clone(), cx);
-                    }
+            .on_click(cx.listener(move |page, _, _, cx| {
+                if page.state.read(cx).engine_generation() == engine_generation
+                    && page.current_request_scope(cx) == origin
+                {
+                    page.action(action.clone(), cx);
                 }
             }))
-            .on_key_down(cx.listener(move |page, event: &gpui::KeyDownEvent, _, cx| {
-                if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    if page.state.read(cx).engine_generation() == engine_generation
-                        && page.current_request_scope(cx) == origin
-                    {
-                        page.action(action.clone(), cx);
-                    }
-                    cx.stop_propagation();
-                }
-            }))
+            .on_key_down(crate::swallow_activation_key)
             .into_any_element()
     }
 

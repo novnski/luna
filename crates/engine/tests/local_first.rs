@@ -31,6 +31,32 @@ fn config(
     }
 }
 
+/// Seed the current encrypted-session contract in a disposable device root.
+fn save_session_fixture(root: &std::path::Path, refresh_token: &[u8]) {
+    use luna_engine::{CredentialBroker, CredentialScope, SecretIngress};
+    let (_, credential) = CredentialBroker::for_data_dir(root)
+        .store_local(
+            SecretIngress::LocalEngine,
+            CredentialScope::luna_sync(),
+            "refresh-token",
+            "Synthetic session",
+            "Fixture edge",
+            refresh_token,
+        )
+        .unwrap();
+    std::fs::write(
+        root.join("session.json"),
+        serde_json::json!({
+            "version": 2,
+            "credentialId": credential.id,
+            "user": {"id": "user_1", "email": "u@example.com"},
+            "orgId": "org_1"
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
 async fn rejecting_edge() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -44,8 +70,18 @@ async fn rejecting_edge() -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<
             let seen = seen.clone();
             tokio::spawn(async move {
                 let mut request = [0u8; 4096];
-                let _ = stream.read(&mut request).await;
-                seen.fetch_add(1, Ordering::SeqCst);
+                let Ok(size) = stream.read(&mut request).await else {
+                    return;
+                };
+                if size == 0 {
+                    return; // canceled TCP dial, not an HTTP request
+                }
+                // A separately running LUNA Dev discovers project listeners
+                // with HEAD /. The runtime under test excludes its own PID
+                // from preview discovery, so these are not its Edge requests.
+                if !request[..size].starts_with(b"HEAD / HTTP/1.") {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                }
                 let body = r#"{"error":"revoked"}"#;
                 let response = format!(
                     "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -374,11 +410,7 @@ async fn local_runtime_does_not_start_the_edge_updater() {
 #[tokio::test]
 async fn revoked_captured_session_stays_on_its_synced_cache() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("session.json"),
-        r#"{"refreshToken":"dead","user":{"id":"user_1","email":"u@example.com"},"orgId":"org_1"}"#,
-    )
-    .unwrap();
+    save_session_fixture(dir.path(), b"dead");
     let (edge_url, requests, edge_task) = rejecting_edge().await;
     let config = config(dir.path(), edge_url, Some("client_test"), None);
     let auth = Engine::build_auth(&config).await;
@@ -415,11 +447,7 @@ async fn revoked_captured_session_stays_on_its_synced_cache() {
 #[tokio::test]
 async fn transient_refresh_failure_keeps_synced_recovery_supervisors_alive() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("session.json"),
-        r#"{"refreshToken":"still-valid","user":{"id":"user_1","email":"u@example.com"},"orgId":"org_1"}"#,
-    )
-    .unwrap();
+    save_session_fixture(dir.path(), b"still-valid");
     let config = config(
         dir.path(),
         "http://127.0.0.1:1".into(),
@@ -446,8 +474,8 @@ async fn transient_refresh_failure_keeps_synced_recovery_supervisors_alive() {
         "peer routing must recover without restarting the app"
     );
     assert!(
-        runtime.core().updater().is_some(),
-        "the Edge updater supervisor must survive an offline boot"
+        runtime.core().updater().is_none(),
+        "unmanaged fixture binaries must not poll the signed release feed"
     );
     runtime.shutdown().await;
 }
@@ -457,10 +485,7 @@ async fn workspace_recovers_from_an_unreachable_edge_without_restarting() {
     let edge = DaemonEdge::start().await;
     edge.offline.store(true, Ordering::SeqCst);
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("session.json"),
-        r#"{"refreshToken":"still-valid","user":{"id":"user_1","email":"u@example.com"},"orgId":"org_1"}"#,
-    ).unwrap();
+    save_session_fixture(dir.path(), b"still-valid");
     let config = config(dir.path(), edge.url.clone(), Some("client_test"), None);
     let auth = Engine::build_auth(&config).await;
     let scope = Engine::initial_workspace_scope(&auth);
@@ -601,11 +626,7 @@ async fn headless_stop_rpc_drains_the_daemon_and_releases_ipc() {
 #[tokio::test]
 async fn headless_sign_out_closes_joined_edge_rooms_and_stops_daemon() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(
-        dir.path().join("session.json"),
-        r#"{"refreshToken":"still-valid","user":{"id":"user_1","email":"u@example.com"},"orgId":"org_1"}"#,
-    )
-    .unwrap();
+    save_session_fixture(dir.path(), b"still-valid");
     let edge = DaemonEdge::start().await;
     let port = {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

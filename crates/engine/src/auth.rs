@@ -1677,8 +1677,14 @@ mod tests {
             assert!(broker.set_in_memory_store_locked_for_tests(true));
 
             let auth = Auth::new(config);
-            let error = auth.sign_out().unwrap_err().to_string();
-            assert!(error.contains("locked"), "{error}");
+            let error = auth.sign_out().unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    EngineError::Credential(CredentialError::CredentialStoreLocked)
+                ),
+                "{error}"
+            );
             assert_eq!(auth.state(), AuthState::SignedOut);
             assert!(dir.path().join("session.json").exists());
 

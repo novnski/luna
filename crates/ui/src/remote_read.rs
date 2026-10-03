@@ -103,12 +103,7 @@ impl RemoteReadWindow {
             .on_click(cx.listener(move |this, _, _, _| {
                 let _ = this.commands.send(command);
             }))
-            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
-                if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    cx.stop_propagation();
-                    let _ = this.commands.send(command);
-                }
-            }))
+            .on_key_down(crate::swallow_activation_key)
     }
 }
 

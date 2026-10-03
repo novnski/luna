@@ -742,12 +742,7 @@ impl Shell {
             })
             .tooltip_show_delay(Duration::from_millis(350))
             .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
-            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") && !event.is_held {
-                    this.toggle_activity(window, cx);
-                    cx.stop_propagation();
-                }
-            }))
+            .on_key_down(crate::swallow_activation_key)
             .child(icon(icons::BELL).size(px(16.0)).text_color(if active {
                 theme.accent
             } else {
