@@ -84,6 +84,7 @@ mod side_chats;
 mod spaces;
 mod tabs;
 mod usage;
+mod workbench;
 
 use crate::AccessibleButton as _;
 use spaces::{AddSpaceFlow, RenameSpaceDialog};
@@ -102,7 +103,8 @@ actions!(
         OpenSettings,
         NextSession,
         PrevSession,
-        ArchiveSession
+        ArchiveSession,
+        ReopenClosedTab
     ]
 );
 
@@ -400,6 +402,8 @@ pub fn apply_keymap(
         // Fixed: ⌘K summons the command palette.
         // Pressing it again dismisses.
         KeyBinding::new(&platform_combo("mod-k"), ToggleCommandPalette, None),
+        // Fixed: ⌘⇧T reopens the newest closed workbench tab.
+        KeyBinding::new(&platform_combo("mod-shift-t"), ReopenClosedTab, None),
         KeyBinding::new(
             &valid_or_default(&keymap.open_model_picker, "mod-/"),
             OpenModelPicker,
@@ -930,6 +934,9 @@ pub(super) struct ChatRowProps<'a> {
     pub(super) details: Option<SidebarThreadTooltip>,
     /// Reorder payload; `None` keeps the row fixed.
     pub(super) drag: Option<SidebarChatDrag>,
+    /// Related rows while the workbench is available: whether this chat has
+    /// an open tab (`None` everywhere else).
+    pub(super) workbench_open: Option<bool>,
 }
 
 /// Where a dragged sidebar task may land. Pins reorder only among pins, and
@@ -989,12 +996,16 @@ pub(super) fn related_kind_badge(kind: related_chats::RelatedKind, theme: &Theme
         .text_size(crate::typography::ui_rems(10.0))
         .line_height(crate::typography::ui_rems(14.0))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.readable_tone(tone, 0.85))
+        .text_color(theme.readable_on(tone, tone.opacity(0.08), crate::theme::TEXT_CONTRAST_TARGET))
         .child(
             icon(kind.icon())
                 .size(px(10.0))
                 .flex_none()
-                .text_color(theme.readable_tone(tone, 0.7)),
+                .text_color(theme.readable_on(
+                    tone.opacity(0.7),
+                    tone.opacity(0.08),
+                    crate::theme::NON_TEXT_CONTRAST_TARGET,
+                )),
         )
         .child(kind.label())
 }
@@ -1229,7 +1240,7 @@ fn bottom_stack_measurement_matches(
     measured_has_composer == expected_has_composer
 }
 
-fn new_thread_background_opacity(is_frost: bool) -> f32 {
+pub(crate) fn new_thread_background_opacity(is_frost: bool) -> f32 {
     if is_frost {
         NEW_THREAD_BACKGROUND_FROSTED_OPACITY
     } else {
@@ -2145,6 +2156,8 @@ pub struct Shell {
     /// Composers of chats shown in the right pane's shared chat view, cached
     /// per chat so drafts and sends in flight outlive the pane.
     pane_composers: Entity<pane_chat::PaneComposers>,
+    /// The central chat workbench (tabs and splits around Main).
+    workbench: workbench::WorkbenchState,
     _pane_composers_observe: Subscription,
     /// History/subagent events from the open pane chat's transcript.
     pane_transcript_events: Option<Subscription>,
@@ -2389,6 +2402,10 @@ pub struct Shell {
     /// All pane masks and chrome evaluate animation at the same frame time.
     /// A slow render must not give the native page and its titlebar different widths.
     render_time: Option<std::time::Instant>,
+    /// QA: a pinned animation clock, so geometry, readback and pixels all
+    /// come from one exact point in a transition.
+    #[cfg(feature = "appshots-fixture")]
+    fixture_motion_clock: Option<std::time::Instant>,
     splash: SplashPhase,
     splash_task: Option<Task<()>>,
     /// Focus fallback (registered on first paint — [`Shell::new`] has no
@@ -2664,6 +2681,7 @@ impl Shell {
             child_chat_panel: None,
             child_chat_events: None,
             pane_composers,
+            workbench: workbench::WorkbenchState::new(cx),
             _pane_composers_observe: pane_composers_observe,
             pane_transcript_events: None,
             pending_open_main: None,
@@ -2819,6 +2837,8 @@ impl Shell {
             reduced_motion: false,
             motion_active: std::cell::Cell::new(false),
             render_time: None,
+            #[cfg(feature = "appshots-fixture")]
+            fixture_motion_clock: None,
             splash: SplashPhase::Visible,
             splash_task: None,
             focus_sub: None,
@@ -3186,6 +3206,7 @@ impl Shell {
                 changes.update(cx, |changes, cx| changes.ensure_content(cx));
             }
         }
+        self.reconcile_workbench(cx);
         match state.read(cx).connection {
             ConnectionStatus::Ready => {
                 if self.splash == SplashPhase::Visible {
@@ -3447,7 +3468,27 @@ impl Shell {
                     .get(id)
                     // Contextual title (user request): the pane's scope
                     // label, or the pinned commit's subject.
-                    .map(|changes| (*surface, changes.read(cx).tab_title(), false, None)),
+                    .map(|changes| {
+                        let changes = changes.read(cx);
+                        // A surface bound to a workbench tab's checkout names
+                        // that chat, so its Git actions are never ambiguous.
+                        let title = match changes
+                            .target_chat_id()
+                            .filter(|chat| *chat != self.active_chat)
+                            .and_then(|chat| {
+                                self.state
+                                    .read(cx)
+                                    .chats
+                                    .iter()
+                                    .find(|row| row.id == chat)
+                                    .and_then(|row| row.title.as_deref())
+                                    .map(transcript::single_line)
+                            }) {
+                            Some(chat) => format!("{} · {chat}", changes.tab_title()).into(),
+                            None => changes.tab_title(),
+                        };
+                        (*surface, title, false, None)
+                    }),
                 RightSurface::Terminal(tab) => terminals
                     .iter()
                     .find(|(k, _, _)| k == tab)
@@ -3867,6 +3908,61 @@ impl Shell {
         self.register_diff_surface(changes, cx);
     }
 
+    /// Changes and Git actions for `chat_id`'s own checkout (a workbench
+    /// tab), in this workbench's right pane. Reuses an open surface already
+    /// bound to that chat.
+    pub(super) fn add_diff_surface_for(
+        &mut self,
+        chat_id: String,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<Changes>> {
+        if self.active_chat.is_empty() {
+            return None;
+        }
+        if !self.right_pane_open(cx) {
+            self.toggle_right_pane(cx);
+        }
+        if chat_id == self.active_chat {
+            let existing = self.right_tabs.get(&self.panel_key(cx)).and_then(|tabs| {
+                tabs.iter().copied().find(|surface| {
+                    matches!(surface, RightSurface::Diff(id) if self
+                        .diffs
+                        .get(id)
+                        .is_some_and(|changes| changes.read(cx).target_chat_id().is_none()))
+                })
+            });
+            match existing {
+                Some(surface) => self.set_right_active(surface, cx),
+                None => self.add_diff_surface(cx),
+            }
+            return self.active_diff_entity(cx);
+        }
+        let existing = self.right_tabs.get(&self.panel_key(cx)).and_then(|tabs| {
+            tabs.iter().copied().find(|surface| {
+                matches!(surface, RightSurface::Diff(id) if self
+                    .diffs
+                    .get(id)
+                    .is_some_and(|changes| changes.read(cx).target_chat_id() == Some(chat_id.as_str())))
+            })
+        });
+        if let Some(surface) = existing {
+            self.set_right_active(surface, cx);
+            return self.active_diff_entity(cx);
+        }
+        let state = self.state.clone();
+        let changes = cx.new(|cx| Changes::for_chat(state, chat_id, cx));
+        self.register_diff_surface(changes.clone(), cx);
+        Some(changes)
+    }
+
+    /// The Changes entity of the right pane's active Diff surface.
+    fn active_diff_entity(&self, cx: &App) -> Option<Entity<Changes>> {
+        match self.resolved_right_active(cx) {
+            RightSurface::Diff(id) => self.diffs.get(&id).cloned(),
+            _ => None,
+        }
+    }
+
     /// Files is single-instance per chat: both the picker and the `+` menu
     /// focus the existing surface instead of creating duplicate trees and
     /// duplicate workspace subscriptions.
@@ -4169,7 +4265,10 @@ impl Shell {
                     let panel = panel.read(cx);
                     panel.is_current(cx) && panel.open_chat_id() == Some(task_id.as_str())
                 });
-                if self.active_chat == *task_id || visible_child {
+                // A child (or other chat) open as a workbench tab forks its
+                // own side chat: the source is that chat, never Main.
+                let workbench_tab = self.workbench.has_view(task_id);
+                if self.active_chat == *task_id || visible_child || workbench_tab {
                     self.release_side_chat(cx);
                     // The new side chat's page takes the Related chats view;
                     // an open child stays underneath it for Back.
@@ -4478,7 +4577,32 @@ impl Shell {
     /// caller falls through to [`Self::prepare_window_close`] and the window
     /// closes — the same cascade browsers use. The native traffic-light close
     /// deliberately skips this rung: it always closes the window.
+    /// ⌘W: the active surface first (an open composer popover, a workbench
+    /// tab or group, the right pane's surface), then the window itself,
+    /// behind the unsaved-work gate.
+    pub fn close_window_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_active_surface(window, cx) {
+            return;
+        }
+        if self.prepare_window_close(cx) {
+            window.remove_window();
+        }
+    }
+
     pub fn close_active_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        // With focus in the canvas the workbench consumes ⌘W: a closable tab
+        // or empty group closes, and Main is a protected no-op (never the
+        // right pane's surface or the window). Elsewhere the cascade runs.
+        // An open composer popover (Main's or a tab's) owns the keyboard
+        // first: ⌘W closes it, never the tab, surface or window beneath.
+        for pickers in self.visible_pickers(cx) {
+            if pickers.update(cx, |pickers, cx| pickers.dismiss_open(cx)) {
+                return true;
+            }
+        }
+        if self.workbench_close_focused(window, cx) {
+            return true;
+        }
         let Some(surface) = self.closable_right_surface(cx) else {
             return false;
         };
@@ -6348,8 +6472,18 @@ impl Shell {
         match surface {
             ChatRowSurface::Sidebar | ChatRowSurface::Palette => self.open_chat(id, cx),
             ChatRowSurface::Activity => self.open_activity_chat(id, cx),
-            ChatRowSurface::ChildPane => self.open_child_chat_in_pane(id, cx),
-            ChatRowSurface::SidePane => self.open_side_chat_in_pane(id, cx),
+            // Related chats is the workbench's library: a row opens (or
+            // focuses) its center tab; older engines keep the pane view.
+            ChatRowSurface::ChildPane => {
+                if !self.open_related_in_workbench(id.clone(), false, cx) {
+                    self.open_child_chat_in_pane(id, cx)
+                }
+            }
+            ChatRowSurface::SidePane => {
+                if !self.open_related_in_workbench(id.clone(), true, cx) {
+                    self.open_side_chat_in_pane(id, cx)
+                }
+            }
         }
     }
 
@@ -6782,7 +6916,10 @@ impl Shell {
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
             || self.add_space.is_some()
-            || self.composer.read(cx).pickers().read(cx).is_open()
+            || self
+                .visible_pickers(cx)
+                .iter()
+                .any(|pickers| pickers.read(cx).is_open())
     }
 
     /// Track held modifiers for sidebar jump hints and the queue's submit hint.
@@ -7431,8 +7568,17 @@ impl Shell {
 
     fn tween_elapsed(&self, started: std::time::Instant) -> Duration {
         self.render_time
-            .unwrap_or_else(std::time::Instant::now)
+            .unwrap_or_else(|| self.frame_clock())
             .saturating_duration_since(started)
+    }
+
+    /// The animation clock: now (a QA fixture may pin it).
+    fn frame_clock(&self) -> std::time::Instant {
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(pinned) = self.fixture_motion_clock {
+            return pinned;
+        }
+        std::time::Instant::now()
     }
 
     /// Evaluate a width tween at the frame time (see [`WidthTween`]).
@@ -8393,6 +8539,7 @@ impl Shell {
             search_query,
             details,
             drag,
+            workbench_open,
         } = row;
         // The status and hover actions share a fixed-size corner. Changing its
         // width used to squeeze the project label and make neighboring rows
@@ -8515,6 +8662,39 @@ impl Shell {
                 .justify_end()
                 .gap(px(2.0))
                 .h(px(18.0))
+                .when(workbench_open == Some(false), |el| {
+                    let open_id = id.clone();
+                    el.child(
+                        div()
+                            .id(SharedString::from(format!("{row_id}-open-tab")))
+                            .role(gpui::Role::Button)
+                            .aria_label("Open tab")
+                            .size(px(20.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.glass_hover()))
+                            .tooltip(move |_, cx| {
+                                cx.new(|_| SurfaceTabTooltip {
+                                    text: "Open tab".into(),
+                                })
+                                .into()
+                            })
+                            .tooltip_show_delay(Duration::from_millis(350))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.activate_chat_row(surface, open_id.clone(), cx);
+                            }))
+                            .child(
+                                icon(icons::ARROW_UP_RIGHT)
+                                    .size(px(13.0))
+                                    .text_color(theme.text_muted),
+                            ),
+                    )
+                })
                 .when_some(pin_control, |el, control| el.child(control))
                 .when(can_settle || settled, |el| {
                     let settle_label = if settled {
@@ -8639,7 +8819,9 @@ impl Shell {
                                 div()
                                     .text_size(crate::typography::ui_rems(10.0))
                                     .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(status_color)
+                                    // The status word is text: its tone,
+                                    // held to the text floor.
+                                    .text_color(theme.readable_tone(status_color, 1.0))
                                     .child(SharedString::from(label)),
                             )
                             .into_any_element()
@@ -8686,10 +8868,10 @@ impl Shell {
         let selected_wash = crate::theme::glass_selected_bg();
         let subline = if search_query.is_some() {
             theme.text_muted
-        } else if theme.appearance.is_light() {
-            theme.text_muted
         } else {
-            theme.text_muted.opacity(0.5)
+            // Project, branch and note lines are information: quiet, but
+            // held to the text floor on every surface a row sits on.
+            theme.readable_muted(0.5)
         };
         let select_id = id.clone();
         let menu_id = id.clone();
@@ -8928,7 +9110,41 @@ impl Shell {
                             .line_height(crate::typography::ui_rems(17.0))
                             .child(popover::search_highlight(title, search_query, theme)),
                     ))
-                    .when_some(child_chats_chip, |el, chip| el.child(chip)),
+                    .when_some(child_chats_chip, |el, chip| el.child(chip))
+                    // An open tab in the workbench: click focuses it.
+                    .when(workbench_open == Some(true), |el| {
+                        let tone = theme.accent;
+                        el.child(
+                            div()
+                                .id(SharedString::from(format!("{row_id}-open")))
+                                .role(gpui::Role::Label)
+                                .aria_label("Open in the workbench")
+                                .h(px(16.0))
+                                .flex_none()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(3.0))
+                                .px(px(4.0))
+                                .rounded(px(4.0))
+                                .bg(tone.opacity(0.10))
+                                .text_size(crate::typography::ui_rems(10.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.readable_on(
+                                    tone,
+                                    tone.opacity(0.10),
+                                    crate::theme::TEXT_CONTRAST_TARGET,
+                                ))
+                                .child(icon(icons::EYE).size(px(10.0)).flex_none().text_color(
+                                    theme.readable_on(
+                                        tone,
+                                        tone.opacity(0.10),
+                                        crate::theme::NON_TEXT_CONTRAST_TARGET,
+                                    ),
+                                ))
+                                .child("Open"),
+                        )
+                    }),
             )
             // Omit the third line when both Branch and Pull request are hidden;
             // the two-line group stays centered in the uniform row height.
@@ -9597,7 +9813,7 @@ impl Shell {
                 .child(
                     icon(icons::ARROW_DOWN)
                         .size(px(12.0))
-                        .text_color(theme.accent),
+                        .text_color(theme.readable_icon(theme.accent)),
                 )
                 .child(icon(mark).size(px(13.0)).text_color(theme.text))
                 .into_any_element(),
@@ -10293,7 +10509,7 @@ impl Shell {
                             .mt(px(10.0))
                             .text_size(crate::typography::ui_rems(12.0))
                             .line_height(crate::typography::ui_rems(17.0))
-                            .text_color(theme.danger)
+                            .text_color(theme.readable_tone(theme.danger, 1.0))
                             .child(error),
                     )
                 })
@@ -10341,7 +10557,7 @@ impl Shell {
                             .mt(px(10.0))
                             .text_size(crate::typography::ui_rems(12.0))
                             .line_height(crate::typography::ui_rems(17.0))
-                            .text_color(theme.danger)
+                            .text_color(theme.readable_tone(theme.danger, 1.0))
                             .child(error),
                     )
                 })
@@ -10610,6 +10826,10 @@ impl Shell {
             cx.stop_propagation();
             return;
         }
+        if event.keystroke.key == "escape" && self.workbench_cancel_drag(window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape" && self.capture_escape_surface(cx) {
             cx.stop_propagation();
             return;
@@ -10642,33 +10862,53 @@ impl Shell {
             } else {
                 window.focus_next(cx);
             }
+            // Tab into another workbench group makes that group the focused
+            // one (Cmd-W, `+` and the frame's Git row follow it).
+            self.sync_workbench_pane_focus(window, cx);
             cx.stop_propagation();
             return;
         }
-        let selected_chat = self.state.read(cx).selected_chat.clone();
-        let indicator = selected_chat
+        // Escape stops the chat whose composer has the keyboard: the
+        // focused workbench tab inside the canvas, else Main. A focused tab
+        // without a composer (read-only history, archived) stops nothing.
+        let keyboard = self.keyboard_composer(window, cx);
+        let target_chat = keyboard.as_ref().and_then(|(chat, _)| chat.clone());
+        let indicator = target_chat
             .as_deref()
             .map(|chat_id| self.state.read(cx).indicator_for(chat_id, Utc::now()))
             .unwrap_or(Indicator::None);
-        let interrupting = selected_chat
-            .as_deref()
-            .is_some_and(|chat_id| self.composer.read(cx).is_interrupting(chat_id));
+        let interrupting = target_chat.as_deref().is_some_and(|chat_id| {
+            keyboard
+                .as_ref()
+                .is_some_and(|(_, composer)| composer.read(cx).is_interrupting(chat_id))
+        });
         let escape_stops_active_agent = self.settings.escape_stops_active_agent;
 
-        match resolve_shell_escape(
+        let outcome = resolve_shell_escape(
             &event.keystroke.key,
             false,
             escape_stops_active_agent,
             self.route,
-            selected_chat.as_deref(),
+            target_chat.as_deref(),
             indicator,
             interrupting,
-        ) {
+        );
+        #[cfg(feature = "appshots-fixture")]
+        if event.keystroke.key == "escape" {
+            let label = match &outcome {
+                ShellEscapeOutcome::InterruptChat(_) => "interrupt",
+                ShellEscapeOutcome::Blocked => "blocked",
+                ShellEscapeOutcome::Ignored | ShellEscapeOutcome::OtherKey => "ignored",
+            };
+            self.workbench.escape_log.push((target_chat.clone(), label));
+        }
+        match outcome {
             ShellEscapeOutcome::Blocked => cx.stop_propagation(),
             ShellEscapeOutcome::InterruptChat(chat_id) => {
                 cx.stop_propagation();
-                self.composer
-                    .update(cx, |composer, cx| composer.interrupt_chat(chat_id, cx));
+                if let Some((_, composer)) = keyboard {
+                    composer.update(cx, |composer, cx| composer.interrupt_chat(chat_id, cx));
+                }
             }
             ShellEscapeOutcome::OtherKey | ShellEscapeOutcome::Ignored => {}
         }
@@ -10988,7 +11228,7 @@ impl Shell {
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-delete-{chat_id}"))
                             .id("chat-menu-delete")
-                            .text_color(theme.danger)
+                            .text_color(theme.readable_tone(theme.danger, 1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.close_chat_menu(cx);
                                 this.request_task_action(
@@ -11000,7 +11240,7 @@ impl Shell {
                             .child(
                                 icon(icons::TRASH_BIN_MINIMALISTIC)
                                     .size(px(16.0))
-                                    .text_color(theme.danger),
+                                    .text_color(theme.readable_icon(theme.danger)),
                             )
                             .child(SharedString::from("Delete…")),
                     ),
@@ -11099,6 +11339,9 @@ impl Shell {
                 menu,
                 chat_menu_closing,
             ));
+        }
+        if let Some(menu) = self.render_workbench_menu(cx) {
+            overlays.push(menu);
         }
 
         if let Some(dialog) = &mut self.rename_dialog {
@@ -11852,11 +12095,15 @@ impl Shell {
             )
     }
 
+    /// The main conversation column. `top_inset` is the chrome above the
+    /// transcript it fades under: the overlaid titlebar for the full-height
+    /// canvas, nothing inside a workbench pane (its tab strip sits above).
     fn render_main(
         &mut self,
         window: &mut Window,
         main_content_width: f32,
         transcript_width: f32,
+        top_inset: f32,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme_owned = Theme::of(cx).clone();
@@ -12146,8 +12393,12 @@ impl Shell {
                         // Fully faded BY the titlebar's bottom edge (the
                         // title text is opaque — overlap read as collision),
                         // ramping in the band just below it.
-                        .inset_top(Theme::TITLEBAR_HEIGHT)
-                        .band_top(Theme::TRANSCRIPT_FADE_BAND)
+                        .inset_top(top_inset)
+                        .band_top(if top_inset > 0.0 {
+                            Theme::TRANSCRIPT_FADE_BAND
+                        } else {
+                            Theme::TRANSCRIPT_FADE_BAND * 0.5
+                        })
                         .band_bottom(bottom_band),
                     )
                 },
@@ -12520,7 +12771,7 @@ impl Shell {
             // surface — a strip caption above it was redundant (user request).
             Indicator::AwaitingInput => strip.into_any_element(),
             Indicator::Errored => strip
-                .text_color(theme.danger)
+                .text_color(theme.readable_tone(theme.danger, 1.0))
                 .child(SharedString::from("Run failed"))
                 .into_any_element(),
             Indicator::None if sending => strip
@@ -12657,29 +12908,17 @@ impl Shell {
         } else {
             gpui::Empty.into_any_element()
         };
-        // Flush panel (user request — the inset card is gone): full window
-        // height with a left hairline, glass-friendly like the terminal dock
-        // (translucent over the frost; solid otherwise). The resize grabber
-        // lives outside this clipped container, on the root layout's seam.
-        let panel_bg = if theme.is_glass() {
-            bg.opacity(0.4)
-        } else {
-            bg
-        };
-        // Side and child chats are chats: they sit on the same shell frost
-        // as the main conversation (one surface for both, like the Codex
-        // reference) instead of the work-surface panel tone.
-        let chat_surface = matches!(self.resolved_right_active(cx), RightSurface::RelatedChats);
+        // The right sidebar shares the one chrome surface (the shell frost)
+        // with the left sidebar, titlebar and frame footer: no tint band and
+        // no wall of its own; the inset canvas is the distinct surface. The
+        // resize grabber (outside this clipped container, on the seam) shows
+        // its highlight on hover. Content that needs an opaque field (the
+        // editor, terminal, browser) paints its own.
+        let _ = bg;
         let panel = div()
             .size_full()
             .flex()
             .flex_col()
-            // In takeover the panel's left edge IS the sidebar seam, which
-            // already carries the sidebar tone's right hairline — a second
-            // border there doubled up (user report).
-            .when(!self.right_pane_expanded, |el| {
-                el.border_l_1().border_color(theme.border)
-            })
             // The panel's right edge IS the window's right edge: it carries
             // the CSD window's rounded corners directly (gpui cannot clip
             // children rounded — each full-bleed layer rounds itself; see
@@ -12688,7 +12927,6 @@ impl Shell {
                 let corner = Self::window_corner_radius(window);
                 el.rounded_tr(px(corner)).rounded_br(px(corner))
             })
-            .when(!chat_surface, |el| el.bg(panel_bg))
             .overflow_hidden()
             // The titlebar is a glass overlay over the full-height content
             // row; the panel's own chrome starts below it.
@@ -12908,7 +13146,7 @@ impl Shell {
                         .mb(px(16.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .line_height(crate::typography::ui_rems(17.0))
-                        .text_color(theme.danger)
+                        .text_color(theme.readable_tone(theme.danger, 1.0))
                         .child(error),
                 )
             })
@@ -14139,7 +14377,8 @@ fn nav_history_button(
             .child(
                 icon(icon_path)
                     .size(px(16.0))
-                    .text_color(theme.readable_muted(0.35)),
+                    // Disabled control glyph: exempt, intentionally quiet.
+                    .text_color(theme.decorative_muted(0.35)),
             )
             .into_any_element();
     }
@@ -14186,7 +14425,7 @@ fn header_icon_button(
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.render_time = Some(std::time::Instant::now());
+        self.render_time = Some(self.frame_clock());
         self.sync_confirmation_focus(window, cx);
         if self.all_file_edits_flushed(cx)
             && self.composer.read(cx).draft_flush_complete()
@@ -14445,6 +14684,16 @@ impl Render for Shell {
                     this.archive_selected_chat(cx)
                 }
             }))
+            // ⌘⇧T: the newest closed workbench tab. A native browser or
+            // editor with focus receives its own keys before this binding.
+            .on_action(cx.listener(|this, _: &ReopenClosedTab, _, cx| {
+                if matches!(this.route, Route::Chat)
+                    && !this.overlay_owns_keyboard(cx)
+                    && this.workbench_available()
+                {
+                    this.workbench_reopen(None, cx)
+                }
+            }))
             // A jump routes back to chat itself, so Settings is not a dead
             // spot — the same call a click on that sidebar row makes. But an
             // open picker/palette owns the keyboard: no jumping underneath
@@ -14452,8 +14701,11 @@ impl Render for Shell {
             // this matched binding beats its key handler to the dispatch —
             // forward the slot instead of eating it.
             .on_action(cx.listener(|this, jump: &JumpSession, _, cx| {
-                let pickers = this.composer.read(cx).pickers().clone();
-                let handled = pickers.update(cx, |pickers, cx| pickers.jump_model_slot(jump.0, cx));
+                // The slot goes to whichever visible composer's model menu
+                // is open (Main's or a workbench tab's), never another.
+                let handled = this.visible_pickers(cx).into_iter().any(|pickers| {
+                    pickers.update(cx, |pickers, cx| pickers.jump_model_slot(jump.0, cx))
+                });
                 if !handled && !this.overlay_owns_keyboard(cx) {
                     this.jump_to_session(jump.0, cx)
                 }
@@ -14467,10 +14719,27 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ToggleActivity, window, cx| {
                 this.toggle_activity(window, cx);
             }))
+            // Any press starts a new pointer gesture: a workbench gesture an
+            // earlier Escape cancelled is over.
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| this.workbench_gesture_pressed()))
+            // ⌘W / Close Window reaches the focused window's Shell here,
+            // through the same key binding and menu item, so it never
+            // depends on which window the platform reports as key (a hidden
+            // or not-yet-key window has none). The app-level handler stays
+            // as the fallback when no Shell is on the dispatch path.
+            .on_action(
+                cx.listener(|this, _: &crate::app_menus::CloseWindow, window, cx| {
+                    this.close_window_action(window, cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
-                    let pickers = this.composer.read(cx).pickers().clone();
-                    pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
+                    // The focused workbench tab's own picker, not Main's.
+                    // A focused tab without a composer opens nothing.
+                    if let Some((_, composer)) = this.keyboard_composer(window, cx) {
+                        let pickers = composer.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
+                    }
                 }
             }))
             .on_action(cx.listener(|this, _: &AddSpacePalette, _, cx| {
@@ -14550,7 +14819,11 @@ impl Render for Shell {
                     self.state.read(cx).selected_chat.is_some(),
                     panel_handoff,
                 );
-                let main_width = (transcript_width - 10.0).max(0.0);
+                // In a split, Main's rail follows its own pane's width.
+                let main_width = self
+                    .workbench_main_pane_width()
+                    .map_or(transcript_width, |pane| pane.min(transcript_width));
+                let main_width = (main_width - 10.0).max(0.0);
                 // Clearance excludes the terminal dock: the transcript
                 // viewport ends at the dock's top (see the underlay in
                 // `render_main`), so only the chrome above it overlaps.
@@ -14582,7 +14855,35 @@ impl Render for Shell {
                     },
                     cx,
                 );
-                let main = self.render_main(window, main_content_width, transcript_width, cx);
+                // The chat route with a selected chat is the workbench: the
+                // inset canvas of tabs and splits around Main, and the
+                // frame's bottom row. The new-chat canvas sits in the same frame.
+                let framed = self.workbench_framed(cx);
+                let on_chat_route = matches!(self.route, Route::Chat);
+                let top_chrome = if on_chat_route {
+                    0.0
+                } else {
+                    Theme::TITLEBAR_HEIGHT
+                };
+                self.transcript.update(cx, |transcript, cx| {
+                    transcript.set_top_chrome(top_chrome, cx)
+                });
+                self.composer
+                    .update(cx, |composer, cx| composer.set_frame_footer(framed, cx));
+                let main = if framed {
+                    self.render_workbench(window, main_content_width, transcript_width, cx)
+                } else if on_chat_route {
+                    self.render_canvas_frame(window, main_content_width, transcript_width, cx)
+                } else {
+                    self.settle_workbench_drag(cx);
+                    self.render_main(
+                        window,
+                        main_content_width,
+                        transcript_width,
+                        Theme::TITLEBAR_HEIGHT,
+                        cx,
+                    )
+                };
                 // The Changes pane is chat-scoped chrome: the Settings route
                 // never renders it (luna __root.tsx `!isSettings && activeChat`
                 // around the diff column) — the per-session open flags stay
@@ -14704,9 +15005,13 @@ impl Render for Shell {
                             el.top(px(window_corner)).bottom(px(window_corner))
                         }
                     })
-                    .bg(crate::theme::wash(0.05))
-                    .border_r_1()
-                    .border_color(border_color);
+                    // One continuous chrome surface (no lighter column, no
+                    // wall). Collapsed, the sliver keeps its hairline as the
+                    // grab affordance; open, the resize seam highlights on
+                    // hover instead.
+                    .when(sidebar_now < 8.0, |el| {
+                        el.border_r_1().border_color(border_color)
+                    });
                 // The content row spans the FULL window height — the titlebar
                 // overlays it (glass, no fill), so the transcript can scroll
                 // under the header and fade out at its edge. Columns that
@@ -19982,6 +20287,43 @@ mod exit_regressions {
     }
 }
 
+/// Sidebar toggles shared by the browser and appshots fixtures (one
+/// definition, so enabling both features never duplicates it).
+#[cfg(any(feature = "browser-fixture", feature = "appshots-fixture"))]
+impl Shell {
+    /// Pin the animation clock `fraction` of the way through the right
+    /// sidebar's current width transition (`None` when none is running).
+    /// Returns the pinned elapsed time in ms.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_pin_right_motion(
+        &mut self,
+        fraction: f32,
+        cx: &mut Context<Self>,
+    ) -> Option<f32> {
+        let tween = self.right_tween?;
+        let total = motion::RESIZE.total().mul_f32(motion::speed_scale());
+        let elapsed = total.mul_f32(fraction.clamp(0.0, 1.0));
+        self.fixture_motion_clock = Some(tween.started + elapsed);
+        cx.notify();
+        Some(elapsed.as_secs_f32() * 1000.0)
+    }
+
+    /// Release the pinned animation clock.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_unpin_motion(&mut self, cx: &mut Context<Self>) {
+        self.fixture_motion_clock = None;
+        cx.notify();
+    }
+
+    pub fn fixture_toggle_sidebar(&mut self, right: bool, cx: &mut Context<Self>) {
+        if right {
+            self.toggle_right_pane(cx);
+        } else {
+            self.toggle_sidebar(cx);
+        }
+    }
+}
+
 /// Native browser regression fixture hooks are excluded from shipped builds.
 #[cfg(feature = "browser-fixture")]
 impl Shell {
@@ -20039,13 +20381,6 @@ impl Shell {
         self.route = Route::Settings(SettingsSection::Devices);
         window.blur();
         cx.notify();
-    }
-    pub fn fixture_toggle_sidebar(&mut self, right: bool, cx: &mut Context<Self>) {
-        if right {
-            self.toggle_right_pane(cx);
-        } else {
-            self.toggle_sidebar(cx);
-        }
     }
     pub fn fixture_resize_browser(&mut self, width: f32, cx: &mut Context<Self>) {
         self.settings.right_pane_width = width;

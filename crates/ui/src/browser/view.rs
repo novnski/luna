@@ -643,7 +643,7 @@ impl Render for BrowserSurface {
             .on_action(cx.listener(|this, _: &super::Back, _, _| this.history(false)))
             .on_action(cx.listener(|this, _: &super::Forward, _, _| this.history(true)))
             .child(toolbar)
-            .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.danger).child(message)))
+            .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.readable_tone(theme.danger, 1.0)).child(message)))
             .when(remote_loopback, |el| el.child(div().px(px(12.0)).py(px(8.0)).border_b_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
                 .child("Localhost opens on this device. Open a detected preview from a new tab to reach your other device.")))

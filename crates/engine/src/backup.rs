@@ -996,6 +996,10 @@ fn collect_profile(
     if attempts.exists() {
         collect_tree(root, &attempts, "github-pr-attempt", entries, false)?;
     }
+    let workbenches = profile.join("chat-workbenches-v1");
+    if workbenches.exists() {
+        collect_tree(root, &workbenches, "chat-workbench", entries, false)?;
+    }
     let uploads = profile.join("uploads");
     if uploads.exists() {
         collect_tree(root, &uploads, "attachment", entries, false)?;
@@ -1027,6 +1031,9 @@ fn collect_tree(
     ensure_real_dir(dir)?;
     for path in sorted_children(dir)? {
         let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if category == "chat-workbench" && name.starts_with(".pending-workbench-") {
+            continue;
+        }
         if category == "github-pr-attempt"
             && (name.starts_with(".pending-pr-") || pr_lock_name(name))
         {
@@ -1074,6 +1081,11 @@ fn add_file(
     entries: &mut Vec<SourceEntry>,
 ) -> Result<()> {
     ensure_real_file(source)?;
+    if category == "chat-workbench" && fs::metadata(source)?.len() > 256 * 1024 {
+        return Err(BackupError::Invalid(
+            "chat workbench file exceeds its size limit".into(),
+        ));
+    }
     if logical != source {
         ensure_real_file(logical)?;
     }
@@ -1667,6 +1679,13 @@ fn validate_entry_path(path: &str, category: &str) -> Result<()> {
                     name.len() == 64 && name.bytes().all(|c| c.is_ascii_hexdigit())
                 })
         }),
+        "chat-workbench" => profile_tail.is_some_and(|tail| {
+            tail.len() == 2
+                && tail[0] == "chat-workbenches-v1"
+                && tail[1].strip_suffix(".json").is_some_and(|name| {
+                    name.len() == 64 && name.bytes().all(|c| c.is_ascii_hexdigit())
+                })
+        }),
         "attachment" => profile_tail
             .is_some_and(|tail| tail.len() >= 2 && tail[0] == "uploads" && tail[1] != "tmp"),
         _ => false,
@@ -1696,6 +1715,11 @@ fn validate_manifest(manifest: &BackupManifest) -> Result<()> {
     let mut total = 0u64;
     for entry in &manifest.entries {
         validate_entry_path(&entry.path, &entry.category)?;
+        if entry.category == "chat-workbench" && entry.size > 256 * 1024 {
+            return Err(BackupError::Invalid(
+                "chat workbench archive entry exceeds its size limit".into(),
+            ));
+        }
         if !seen.insert(&entry.path)
             || entry.sha256.len() != 64
             || !entry.sha256.bytes().all(|c| c.is_ascii_hexdigit())
@@ -1840,6 +1864,20 @@ fn latest_authoritative_mtime(root: &Path) -> Result<i64> {
         let attempts = profile.join("github-pr-attempts");
         if attempts.exists() {
             tree_mtime(&attempts, latest, false)?;
+        }
+        let workbenches = profile.join("chat-workbenches-v1");
+        if workbenches.exists() {
+            ensure_real_dir(&workbenches)?;
+            for child in sorted_children(&workbenches)? {
+                if child
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with(".pending-workbench-"))
+                {
+                    continue;
+                }
+                file_mtime(&child, latest)?;
+            }
         }
         let uploads = profile.join("uploads");
         if uploads.exists() {
@@ -1994,6 +2032,7 @@ fn validate_managed_restore_path(path: &str) -> Result<()> {
         "journal",
         "attachment",
         "github-pr-attempt",
+        "chat-workbench",
     ] {
         if validate_entry_path(path, category).is_ok() {
             return Ok(());
@@ -3238,6 +3277,8 @@ fn replaceable_root_fingerprint(root: &Path) -> Result<String> {
                     "journal"
                 } else if rel.contains("/github-pr-attempts/") {
                     "github-pr-attempt"
+                } else if rel.contains("/chat-workbenches-v1/") {
+                    "chat-workbench"
                 } else if rel.contains("/uploads/") {
                     "attachment"
                 } else {

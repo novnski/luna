@@ -37,9 +37,9 @@ fn status_badge(theme: &Theme, status: ProviderMcpStatus) -> gpui::Div {
         ProviderMcpStatus::Connected => widgets::badge_active(theme, label),
         ProviderMcpStatus::Failed => widgets::badge(theme, label)
             .border_color(theme.danger.opacity(0.5))
-            .text_color(theme.danger),
+            .text_color(theme.readable_tone(theme.danger, 1.0)),
         ProviderMcpStatus::NeedsAuth | ProviderMcpStatus::Pending => {
-            widgets::badge(theme, label).text_color(theme.warning)
+            widgets::badge(theme, label).text_color(theme.readable_tone(theme.warning, 1.0))
         }
         ProviderMcpStatus::Disabled | ProviderMcpStatus::Unknown => widgets::badge(theme, label),
     }
@@ -254,7 +254,7 @@ impl HarnessesPage {
                 div()
                     .mt(px(4.0))
                     .text_size(crate::typography::ui_rems(11.5))
-                    .text_color(theme.danger)
+                    .text_color(theme.readable_tone(theme.danger, 1.0))
                     .child(format!(
                         "Claude error{}: {error}",
                         details

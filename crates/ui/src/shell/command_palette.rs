@@ -55,6 +55,7 @@ enum EntryIdentity {
     Theme,
     SearchAllContent,
     SearchCurrentContent,
+    Workbench(super::workbench::WorkbenchAction),
     Chat(String),
     History(String),
     LoadOlder(ResultGroup),
@@ -79,6 +80,8 @@ pub(super) enum Entry {
     Theme(AppearanceMode),
     SearchAllContent,
     SearchCurrentContent,
+    /// A workbench tab/split command (dragging is never the only way).
+    Workbench(super::workbench::WorkbenchAction),
     Chat {
         id: String,
         group: ResultGroup,
@@ -94,7 +97,12 @@ impl Entry {
     fn is_ordinary_action(&self) -> bool {
         matches!(
             self,
-            Self::NewChat | Self::NewProject | Self::Settings | Self::Activity | Self::Theme(_)
+            Self::NewChat
+                | Self::NewProject
+                | Self::Settings
+                | Self::Activity
+                | Self::Theme(_)
+                | Self::Workbench(_)
         )
     }
 
@@ -111,6 +119,7 @@ impl Entry {
             Self::Theme(_) => EntryIdentity::Theme,
             Self::SearchAllContent => EntryIdentity::SearchAllContent,
             Self::SearchCurrentContent => EntryIdentity::SearchCurrentContent,
+            Self::Workbench(action) => EntryIdentity::Workbench(*action),
             Self::Chat { id, .. } => EntryIdentity::Chat(id.clone()),
             Self::History { event_id, .. } => EntryIdentity::History(event_id.clone()),
             Self::LoadOlder(group) => EntryIdentity::LoadOlder(*group),
@@ -135,6 +144,7 @@ impl Entry {
             Self::SearchCurrentContent => {
                 Some(("Search content in current project", icons::FOLDER))
             }
+            Self::Workbench(action) => Some((action.label(), action.icon())),
             Self::Chat { .. } | Self::History { .. } | Self::LoadOlder(_) => None,
         }
     }
@@ -243,6 +253,14 @@ impl Shell {
         };
         let query = palette.search.read(cx).text().trim().to_lowercase();
         let mut entries = actions_for(&query, Theme::of(cx).appearance.is_dark());
+        entries.extend(
+            self.workbench_palette_actions()
+                .into_iter()
+                .map(Entry::Workbench)
+                .filter(|entry| {
+                    matches_query(&query, entry.action().map_or("", |(label, _)| label))
+                }),
+        );
         if !query.is_empty() {
             entries.push(if self.history_search_global {
                 Entry::SearchCurrentContent
@@ -592,6 +610,7 @@ impl Shell {
             Entry::Settings => self.open_settings(SettingsSection::DEFAULT, cx),
             Entry::Activity => self.toggle_activity(window, cx),
             Entry::Theme(_) => unreachable!(),
+            Entry::Workbench(action) => self.run_workbench_action(action, cx),
             Entry::Chat { id, .. } => self.open_chat(id, cx),
             Entry::History { .. } => {
                 if let Some(event) = history_event {
@@ -855,6 +874,9 @@ impl Shell {
                         }))
                     }
                     Entry::Settings => Some(crate::settings::badge_combo("mod-,")),
+                    Entry::Workbench(super::workbench::WorkbenchAction::Reopen) => {
+                        Some(crate::settings::badge_combo("mod-shift-t"))
+                    }
                     Entry::Activity => {
                         let combo = self.settings.keymap.get(ShortcutId::OpenActivity);
                         (!combo.is_empty()).then(|| crate::settings::badge_combo(combo))
@@ -948,6 +970,7 @@ impl Shell {
                         search_query: Some(&query),
                         details: None,
                         drag: None,
+                        workbench_open: None,
                     },
                     &theme,
                     cx,

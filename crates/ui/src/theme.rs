@@ -571,6 +571,44 @@ impl SyntaxPalette {
         }
     }
 
+    /// Apply `f` to every syntax color (readability derivation).
+    pub(crate) fn map(&mut self, f: impl Fn(Hsla) -> Hsla) {
+        for color in [
+            &mut self.comment,
+            &mut self.keyword,
+            &mut self.string,
+            &mut self.string_special,
+            &mut self.escape,
+            &mut self.number,
+            &mut self.boolean,
+            &mut self.type_name,
+            &mut self.type_builtin,
+            &mut self.constructor,
+            &mut self.function,
+            &mut self.function_builtin,
+            &mut self.macro_name,
+            &mut self.property,
+            &mut self.constant,
+            &mut self.variable,
+            &mut self.variable_special,
+            &mut self.parameter,
+            &mut self.operator,
+            &mut self.punctuation,
+            &mut self.tag,
+            &mut self.attribute,
+            &mut self.label,
+            &mut self.markup_heading,
+            &mut self.markup_raw,
+            &mut self.markup_link,
+            &mut self.markup_reference,
+            &mut self.markup_emphasis,
+            &mut self.markup_strong,
+            &mut self.invalid,
+        ] {
+            *color = f(*color);
+        }
+    }
+
     fn for_appearance(appearance: Appearance, text: Hsla, comment: Hsla, danger: Hsla) -> Self {
         match appearance {
             Appearance::Dark => Self::dark(text, comment, danger),
@@ -779,10 +817,192 @@ impl TerminalColors {
     }
 }
 
+/// WCAG 2.2 AA minimum for normal-size text (1.4.3).
+pub const TEXT_CONTRAST_MIN: f32 = 4.5;
+/// WCAG 2.2 AA minimum for meaningful non-text: icons, indicators, focus
+/// visuals and control boundaries (1.4.11).
+pub const NON_TEXT_CONTRAST_MIN: f32 = 3.0;
+/// What derived paint colors aim for. WCAG thresholds are not rounded
+/// (2.999:1 fails 3:1), so floors land slightly above each minimum to stay
+/// on the passing side after f32 compositing and 8-bit rendering; audits
+/// still compare the real ratio against the unrounded minimum.
+pub const TEXT_CONTRAST_TARGET: f32 = 4.6;
+pub const NON_TEXT_CONTRAST_TARGET: f32 = 3.1;
+
 impl Theme {
-    /// Secondary text keeps its authored contrast in light appearance. Dark
-    /// appearance retains the quieter opacity used by existing components.
+    /// Secondary text. Dark appearance keeps the quieter opacity a caller
+    /// asks for, but never below the text contrast floor on any surface it
+    /// actually sits on (see [`Self::legible`]); light keeps the authored
+    /// token, held to the same floor.
     pub fn readable_muted(&self, dark_opacity: f32) -> Hsla {
+        let base = if self.appearance.is_light() {
+            self.text_muted
+        } else {
+            self.text_muted.opacity(dark_opacity)
+        };
+        self.legible(base, TEXT_CONTRAST_TARGET)
+    }
+
+    /// Faint text (placeholders, hints) is still text: held to the floor.
+    pub fn readable_faint(&self, dark_opacity: f32) -> Hsla {
+        let base = if self.appearance.is_light() {
+            self.text_faint
+        } else {
+            self.text_faint.opacity(dark_opacity)
+        };
+        self.legible(base, TEXT_CONTRAST_TARGET)
+    }
+
+    /// Semantic copy (status words, kind labels) in its tone, held to the
+    /// text floor in both appearances.
+    pub fn readable_tone(&self, tone: Hsla, dark_opacity: f32) -> Hsla {
+        let base = if self.appearance.is_light() {
+            tone
+        } else {
+            tone.opacity(dark_opacity)
+        };
+        self.legible(base, TEXT_CONTRAST_TARGET)
+    }
+
+    /// Text painted on a translucent `backing` (a badge's or row's own wash):
+    /// floored on that wash over every reading surface.
+    pub fn readable_on(&self, color: Hsla, backing: Hsla, min: f32) -> Hsla {
+        self.readable_on_stacks(color, &[&[backing]], min)
+    }
+
+    /// `color` floored where it is actually painted: on each `stacks` entry
+    /// (translucent layers, bottom first) composited over every reading
+    /// surface. An empty stack stands for the bare reading surfaces. A badge
+    /// on an active tab chip, for example, sits on its own wash over the
+    /// chip's wash over the canvas.
+    pub fn readable_on_stacks(&self, color: Hsla, stacks: &[&[Hsla]], min: f32) -> Hsla {
+        let mut key = vec![color];
+        for stack in stacks {
+            // A separator keeps [a][b] and [a, b] distinct.
+            key.push(hsla(-1.0, -1.0, -1.0, stack.len() as f32));
+            key.extend_from_slice(stack);
+        }
+        self.memo_color(&key, min, || {
+            self.with_reading_surfaces(|surfaces| {
+                let layered: Vec<Hsla> = stacks
+                    .iter()
+                    .flat_map(|stack| {
+                        surfaces.iter().map(move |surface| {
+                            stack
+                                .iter()
+                                .fold(*surface, |under, layer| flatten(*layer, under))
+                        })
+                    })
+                    .collect();
+                legible_on(color, self.text, &layered, min)
+            })
+        })
+    }
+
+    /// The workbench tab chip fills (over its pane): resting (none),
+    /// hovered and active. Text, badges and focus rings on a tab sit on one
+    /// of these.
+    pub fn tab_chip_washes(&self) -> [Hsla; 3] {
+        [hsla(0.0, 0.0, 0.0, 0.0), self.wash(0.05), self.wash(0.09)]
+    }
+
+    /// A Main/accent badge on a workbench tab: `color` floored on the
+    /// badge's `badge` wash over each tab chip fill.
+    pub fn readable_on_tab_badge(&self, color: Hsla, badge: Hsla, min: f32) -> Hsla {
+        let [rest, hover, active] = self.tab_chip_washes();
+        self.readable_on_stacks(
+            color,
+            &[&[rest, badge], &[hover, badge], &[active, badge]],
+            min,
+        )
+    }
+
+    /// The keyboard focus ring and focused-group indicator: the accent,
+    /// floored at the non-text target on every reading surface and on the
+    /// tab chip fills it outlines.
+    pub fn focus_ring(&self) -> Hsla {
+        let [rest, hover, active] = self.tab_chip_washes();
+        self.readable_on_stacks(
+            self.accent,
+            &[&[rest], &[hover], &[active]],
+            NON_TEXT_CONTRAST_TARGET,
+        )
+    }
+
+    /// An accent check or indicator on a selected menu row
+    /// ([`card_selected_bg`]), resting or hovered.
+    pub fn selected_row_icon(&self, tone: Hsla) -> Hsla {
+        let selected = card_selected_bg_for(self.appearance);
+        self.readable_on_stacks(
+            tone,
+            &[&[selected], &[selected, self.ink(0.05)]],
+            NON_TEXT_CONTRAST_TARGET,
+        )
+    }
+
+    /// Label color for destructive (danger) fills; `on_accent` is for the
+    /// accent fill only, since one color rarely reads on both.
+    pub fn on_danger(&self) -> Hsla {
+        on_fill(self.on_accent, &[self.danger_strong])
+    }
+
+    /// The opaque plate the new-chat selector rows sit on while user artwork
+    /// is set: the input plate over the chrome, without the artwork showing
+    /// through, so the labels' floor holds on any image.
+    pub fn artwork_selector_plate(&self) -> Hsla {
+        flatten(self.input_glass_bg(), self.chrome_surface())
+    }
+
+    /// The composer pill's fill over user artwork, revealed beneath it at
+    /// `strength` (hero opacity × the cutout's reveal): the usual plate,
+    /// thickened until text and placeholder read over an all-white and an
+    /// all-black image, the extremes any artwork lies between.
+    pub fn artwork_composer_plate(&self, strength: f32) -> Hsla {
+        let plate = if self.is_frost() {
+            self.composer_sidebar_tint()
+        } else {
+            flatten(self.input_bg, self.bg)
+        };
+        let canvas = flatten(self.canvas_fill(), self.chrome_surface());
+        let backdrops = [
+            flatten(hsla(0.0, 0.0, 1.0, strength), canvas),
+            flatten(hsla(0.0, 0.0, 0.0, strength), canvas),
+        ];
+        let opaque = Hsla { a: 1.0, ..plate };
+        for step in 0..=20 {
+            let alpha = plate.a + (1.0 - plate.a) * step as f32 / 20.0;
+            let candidate = Hsla { a: alpha, ..opaque };
+            if backdrops.iter().all(|backdrop| {
+                let surface = flatten(candidate, *backdrop);
+                painted_contrast(self.text, surface) >= TEXT_CONTRAST_TARGET
+                    && painted_contrast(self.text_faint, surface) >= TEXT_CONTRAST_TARGET
+            }) {
+                return candidate;
+            }
+        }
+        opaque
+    }
+
+    /// The terminal panel fill: the theme's terminal background, thinned to
+    /// a wash on glass so the frost reads through (explicit cell backgrounds
+    /// still paint opaque quads).
+    pub fn terminal_panel_fill(&self) -> Hsla {
+        if self.is_glass() {
+            self.terminal.background.opacity(0.4)
+        } else {
+            self.terminal.background
+        }
+    }
+
+    /// A meaningful icon or indicator in `tone`, held to the non-text floor.
+    pub fn readable_icon(&self, tone: Hsla) -> Hsla {
+        self.legible(tone, NON_TEXT_CONTRAST_TARGET)
+    }
+
+    /// Purely decorative ink: separators ("·", "/", "›"), illustrations and
+    /// disabled controls. WCAG exempts these from contrast minimums; never
+    /// use this for a label, value, status or control a user must read.
+    pub fn decorative_muted(&self, dark_opacity: f32) -> Hsla {
         if self.appearance.is_light() {
             self.text_muted
         } else {
@@ -790,22 +1010,156 @@ impl Theme {
         }
     }
 
-    /// The faint light token already sits near the body-text contrast floor.
-    pub fn readable_faint(&self, dark_opacity: f32) -> Hsla {
-        if self.appearance.is_light() {
-            self.text_faint
+    /// The workbench canvas tint over the shell chrome: slightly darker in
+    /// dark themes, subtly recessed in light ones.
+    pub fn canvas_fill(&self) -> Hsla {
+        if self.appearance.is_dark() {
+            self.bg.opacity(0.55)
         } else {
-            self.text_faint.opacity(dark_opacity)
+            self.ink(0.035)
         }
     }
 
-    /// Keep semantic copy legible on pale surfaces without changing dark UI.
-    pub fn readable_tone(&self, tone: Hsla, dark_opacity: f32) -> Hsla {
-        if self.appearance.is_light() {
-            tone
-        } else {
-            tone.opacity(dark_opacity)
+    /// The shell chrome as composited: the frost over the adverse desktop
+    /// for this appearance (the worst plausible backdrop).
+    pub fn chrome_surface(&self) -> Hsla {
+        flatten(self.glass(), self.adverse_backdrop())
+    }
+
+    /// The opaque colors text actually sits on, as composited: shell chrome
+    /// (the frost over the adverse desktop for this appearance), its hover
+    /// and selected washes, the workbench canvas, raised chips, floating
+    /// cards, input plates, settings cards and dialogs. The worst of them is
+    /// each foreground's floor.
+    pub fn reading_surfaces(&self) -> Vec<(&'static str, Hsla)> {
+        let backdrop = self.adverse_backdrop();
+        let chrome = flatten(self.glass(), backdrop);
+        vec![
+            ("chrome", chrome),
+            ("chrome-hover", flatten(self.element_hover, chrome)),
+            ("chrome-selected", flatten(self.element_active, chrome)),
+            ("canvas", flatten(self.canvas_fill(), chrome)),
+            // Markdown code blocks: their ink plate over the canvas.
+            (
+                "code",
+                flatten(self.ink(0.035), flatten(self.canvas_fill(), chrome)),
+            ),
+            ("raised", flatten(self.surface_raised, chrome)),
+            ("overlay", flatten(self.glass_overlay(), chrome)),
+            ("input", flatten(self.input_glass_bg(), chrome)),
+            // Settings cards and modal dialogs (over their scrim).
+            ("card", flatten(self.card_glass_bg(), chrome)),
+            (
+                "dialog",
+                flatten(self.surface_dialog, flatten(self.scrim(), chrome)),
+            ),
+        ]
+    }
+
+    /// The lowest contrast `color` reaches across [`Self::reading_surfaces`].
+    pub fn worst_contrast(&self, color: Hsla) -> f32 {
+        self.with_reading_surfaces(|surfaces| {
+            surfaces
+                .iter()
+                .map(|surface| painted_contrast(color, *surface))
+                .fold(f32::MAX, f32::min)
+        })
+    }
+
+    /// A key for everything [`Self::reading_surfaces`] depends on: the
+    /// resolved palette, not only its id (a linked custom theme can
+    /// recompile under the same id).
+    fn palette_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        // Raw inputs only, so the key is a cheap hash during paint: every
+        // reading surface is derived from these (the glass and floating /
+        // input / card tint searches read `text` and `text_muted`).
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.variant_id.hash(&mut hasher);
+        (self.appearance == Appearance::Dark).hash(&mut hasher);
+        (self.surface_treatment == SurfaceTreatment::Frosted).hash(&mut hasher);
+        for color in [
+            self.text,
+            self.text_muted,
+            self.bg,
+            self.surface,
+            self.surface_raised,
+            self.surface_card,
+            self.surface_dialog,
+            self.surface_overlay,
+            self.input_bg,
+            self.element_hover,
+            self.element_active,
+        ] {
+            for part in [color.h, color.s, color.l, color.a] {
+                part.to_bits().hash(&mut hasher);
+            }
         }
+        hasher.finish()
+    }
+
+    fn with_reading_surfaces<R>(&self, f: impl FnOnce(&[Hsla]) -> R) -> R {
+        thread_local! {
+            static SURFACES: std::cell::RefCell<Option<(u64, Vec<Hsla>)>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        let key = self.palette_key();
+        SURFACES.with_borrow_mut(|cache| {
+            if cache.as_ref().is_none_or(|(cached, _)| *cached != key) {
+                let surfaces = self
+                    .reading_surfaces()
+                    .into_iter()
+                    .map(|(_, surface)| surface)
+                    .collect();
+                *cache = Some((key, surfaces));
+            }
+            f(&cache.as_ref().expect("filled above").1)
+        })
+    }
+
+    /// A derived readable foreground: `color` as asked when it clears `min`
+    /// on every reading surface; otherwise its opacity rises, then its
+    /// lightness moves (hue and saturation kept, see [`legible_on`]) until it
+    /// does. Stored preferences (theme, accent, surface) are never
+    /// rewritten; only this paint color is derived.
+    pub fn legible(&self, color: Hsla, min: f32) -> Hsla {
+        // One input (no layer stacks): its key never equals a stacked one.
+        self.memo_color(&[color], min, || self.derive_legible(color, min))
+    }
+
+    /// Paint-time memo for derived foregrounds, keyed by the palette, the
+    /// inputs and the floor, so call sites stay cheap during render.
+    fn memo_color(&self, inputs: &[Hsla], min: f32, derive: impl FnOnce() -> Hsla) -> Hsla {
+        thread_local! {
+            static MEMO: std::cell::RefCell<std::collections::HashMap<(u64, Vec<u32>), Hsla>> =
+                std::cell::RefCell::new(std::collections::HashMap::new());
+        }
+        let mut bits = Vec::with_capacity(inputs.len() * 4 + 1);
+        for color in inputs {
+            bits.extend([
+                color.h.to_bits(),
+                color.s.to_bits(),
+                color.l.to_bits(),
+                color.a.to_bits(),
+            ]);
+        }
+        bits.push(min.to_bits());
+        let key = (self.palette_key(), bits);
+        if let Some(hit) = MEMO.with_borrow(|cache| cache.get(&key).copied()) {
+            return hit;
+        }
+        let derived = derive();
+        MEMO.with_borrow_mut(|cache| {
+            if cache.len() > 4096 {
+                cache.clear();
+            }
+            cache.insert(key, derived);
+        });
+        derived
+    }
+
+    fn derive_legible(&self, color: Hsla, min: f32) -> Hsla {
+        self.with_reading_surfaces(|surfaces| legible_on(color, self.text, surfaces, min))
     }
 
     // ---- numbers drive layout (px) ----
@@ -891,8 +1245,51 @@ impl Theme {
     /// remain legible against the adverse desktop luminance for this
     /// appearance. A theme with unusually delicate contrast may therefore get
     /// denser glass, never silently broken text.
+    /// Frost coverage over the adverse desktop, raised until primary text
+    /// clears its target on every surface derived from the chrome (hover and
+    /// selected washes, the canvas, the active-tab wash, the code plate), and
+    /// muted text 3:1 on the chrome itself. Memoized: paint calls `glass()`
+    /// constantly.
     fn contrast_checked_glass_alpha(&self, base: f32) -> f32 {
-        self.contrast_checked_tint_alpha(self.surface, base, self.adverse_backdrop())
+        thread_local! {
+            static GLASS: std::cell::RefCell<std::collections::HashMap<(u64, u32), f32>> =
+                std::cell::RefCell::new(std::collections::HashMap::new());
+        }
+        let key = (self.palette_key(), base.to_bits());
+        if let Some(hit) = GLASS.with_borrow(|cache| cache.get(&key).copied()) {
+            return hit;
+        }
+        let backdrop = self.adverse_backdrop();
+        let canvas_fill = self.canvas_fill();
+        let tab_wash = self.wash(0.09);
+        let code_plate = self.ink(0.035);
+        let mut chosen = 1.0;
+        for step in 0..=20 {
+            let alpha = base + (1.0 - base) * step as f32 / 20.0;
+            let chrome = flatten(self.surface.opacity(alpha), backdrop);
+            let canvas = flatten(canvas_fill, chrome);
+            let reads = [
+                chrome,
+                flatten(self.element_hover, chrome),
+                flatten(self.element_active, chrome),
+                canvas,
+                flatten(tab_wash, canvas),
+                flatten(code_plate, canvas),
+            ]
+            .iter()
+            .all(|surface| painted_contrast(self.text, *surface) >= TEXT_CONTRAST_TARGET);
+            if reads && painted_contrast(self.text_muted, chrome) >= 3.0 {
+                chosen = alpha;
+                break;
+            }
+        }
+        GLASS.with_borrow_mut(|cache| {
+            if cache.len() > 256 {
+                cache.clear();
+            }
+            cache.insert(key, chosen);
+        });
+        chosen
     }
 
     /// Increase tint coverage only as far as needed for Luna's shared text
@@ -956,8 +1353,24 @@ impl Theme {
     pub fn for_popup(&self) -> Self {
         let mut popup = self.clone();
         if self.is_frost() {
-            popup.text_muted = self.text.opacity(0.64);
-            popup.text_faint = self.text.opacity(0.48);
+            // Floored on the floating card itself (its tint over the adverse
+            // desktop), keeping the translucent primary > muted > hint ladder.
+            let card = flatten(
+                self.glass_overlay(),
+                flatten(self.glass(), self.adverse_backdrop()),
+            );
+            popup.text_muted = legible_on(
+                self.text.opacity(0.64),
+                self.text,
+                &[card],
+                TEXT_CONTRAST_TARGET,
+            );
+            popup.text_faint = legible_on(
+                self.text.opacity(0.48),
+                self.text,
+                &[card],
+                TEXT_CONTRAST_TARGET,
+            );
         }
         popup
     }
@@ -1303,6 +1716,7 @@ impl Theme {
             };
             self.diff_add = model_color(addition);
             self.diff_del = model_color(deletion);
+            self.harden_syntax();
         }
         self
     }
@@ -1427,7 +1841,98 @@ impl Theme {
                 Some(safe_text),
             ));
         }
+        theme.harden_composited_foregrounds();
         theme
+    }
+
+    /// Hold foreground-only roles to the WCAG 2.2 AA floors on the surfaces
+    /// they are actually painted on as composited (frost over the adverse
+    /// desktop, hover/selected washes, the canvas, raised and floating
+    /// cards), for every theme including curated ones: their authored values
+    /// assumed opaque backgrounds. Text roles reach 4.5:1, the focus edge
+    /// 3:1. Only the derived paint color changes; stored preferences don't.
+    /// Two passes, because glass coverage depends on the muted role.
+    fn harden_composited_foregrounds(&mut self) {
+        for _ in 0..2 {
+            self.text_muted = self.derive_legible(self.text_muted, TEXT_CONTRAST_TARGET);
+            self.text_dim = self.derive_legible(self.text_dim, TEXT_CONTRAST_TARGET);
+            self.text_faint = self.derive_legible(self.text_faint, TEXT_CONTRAST_TARGET);
+            self.danger_muted = self.derive_legible(self.danger_muted, TEXT_CONTRAST_TARGET);
+            self.warning_muted = self.derive_legible(self.warning_muted, TEXT_CONTRAST_TARGET);
+            self.success_muted = self.derive_legible(self.success_muted, TEXT_CONTRAST_TARGET);
+            self.border_strong = self.derive_legible(self.border_strong, NON_TEXT_CONTRAST_TARGET);
+        }
+        // Labels on solid fills: the authored on-color when it reads at AA,
+        // else whichever of white/black reads best on that fill.
+        self.on_solid = on_fill(self.on_solid, &[self.solid]);
+        self.on_accent = on_fill(self.on_accent, &[self.accent_strong]);
+        // Inline code chips: their wash over the canvas and the code plate.
+        let backdrop = self.adverse_backdrop();
+        let canvas = flatten(self.canvas_fill(), flatten(self.glass(), backdrop));
+        let chip_surfaces = [
+            flatten(self.code_wash, canvas),
+            flatten(self.code_wash, flatten(self.ink(0.035), canvas)),
+        ];
+        self.code_text = legible_on(
+            self.code_text,
+            self.text,
+            &chip_surfaces,
+            TEXT_CONTRAST_TARGET,
+        );
+        // Selection washes: thinned (never invisible) until the text they
+        // mark reads on them, in the composer and in the terminal.
+        // The composer pill is the frosted sidebar tint or the input plate,
+        // over the canvas; other fields sit on the input plate or chrome.
+        let input_bases = [
+            flatten(self.input_glass_bg(), self.chrome_surface()),
+            flatten(self.input_glass_bg(), canvas),
+            flatten(self.composer_sidebar_tint(), canvas),
+            self.chrome_surface(),
+        ];
+        self.selection = wash_for_text(
+            self.selection,
+            self.text,
+            &input_bases,
+            TEXT_CONTRAST_TARGET,
+            0.12,
+        );
+        let terminal_surface = flatten(self.terminal_panel_fill(), self.chrome_surface());
+        self.terminal.selection = wash_for_text(
+            self.terminal.selection,
+            self.terminal.foreground,
+            &[terminal_surface],
+            TEXT_CONTRAST_TARGET,
+            0.12,
+        );
+        // The terminal cursor block is a meaningful indicator on the panel.
+        self.cursor = legible_on(
+            self.cursor,
+            self.terminal.foreground,
+            &[terminal_surface],
+            NON_TEXT_CONTRAST_TARGET,
+        );
+        self.harden_syntax();
+    }
+
+    /// Code is text too: keep each syntax hue, moved toward the text color
+    /// only as far as the floor needs on every reading surface and on the
+    /// diff rows' added/deleted washes (re-run when the diff scheme moves).
+    fn harden_syntax(&mut self) {
+        let mut surfaces: Vec<Hsla> = self
+            .reading_surfaces()
+            .into_iter()
+            .map(|(_, surface)| surface)
+            .collect();
+        let chrome = self.chrome_surface();
+        let canvas = flatten(self.canvas_fill(), chrome);
+        for tone in [self.diff_add, self.diff_del] {
+            let wash = Hsla { a: 0.055, ..tone };
+            surfaces.push(flatten(wash, chrome));
+            surfaces.push(flatten(wash, canvas));
+        }
+        let text = self.text;
+        self.syntax
+            .map(|color| legible_on(color, text, &surfaces, TEXT_CONTRAST_TARGET));
     }
 
     /// Install the theme for `appearance` as the gpui global and point the
@@ -1724,9 +2229,13 @@ pub fn user_bubble_bg() -> Hsla {
 /// the tone-flipped grey wash, at 6% (dark's 11% read too dark on the bright
 /// plane, user report).
 pub fn card_selected_bg() -> Hsla {
-    match current_appearance() {
-        Appearance::Dark => wash(0.11),
-        Appearance::Light => wash(0.06),
+    card_selected_bg_for(current_appearance())
+}
+
+fn card_selected_bg_for(appearance: Appearance) -> Hsla {
+    match appearance {
+        Appearance::Dark => wash_for(appearance, 0.11),
+        Appearance::Light => wash_for(appearance, 0.06),
     }
 }
 
@@ -1910,6 +2419,99 @@ pub fn contrast_ratio(a: Hsla, b: Hsla) -> f32 {
 
 fn painted_contrast(foreground: Hsla, background: Hsla) -> f32 {
     contrast_ratio(flatten(foreground, background), background)
+}
+
+/// A label color for solid `fills`: `authored` when it reaches 4.5:1 on all
+/// of them, otherwise white or black, whichever reads better on the worst.
+fn on_fill(authored: Hsla, fills: &[Hsla]) -> Hsla {
+    let worst = |candidate: Hsla| {
+        fills
+            .iter()
+            .map(|fill| painted_contrast(candidate, *fill))
+            .fold(f32::MAX, f32::min)
+    };
+    if worst(authored) >= TEXT_CONTRAST_TARGET {
+        return authored;
+    }
+    let (white, black) = (hsla(0.0, 0.0, 1.0, 1.0), hsla(0.0, 0.0, 0.0, 1.0));
+    if worst(white) >= worst(black) {
+        white
+    } else {
+        black
+    }
+}
+
+/// `color` as asked when it clears `min` on every `surfaces` entry; else its
+/// opacity rises, then its lightness moves (toward the side `text` reads on,
+/// then the other) until it does. Hue and saturation are kept, so an amber
+/// stays amber and a green stays green: the derivation never interpolates
+/// hue toward an unrelated text color. When no lightness of that hue reads
+/// there (a bright ANSI background under any tint, say), whichever of white
+/// and black reads better, never a color known to fail.
+pub(crate) fn legible_on(color: Hsla, text: Hsla, surfaces: &[Hsla], min: f32) -> Hsla {
+    let worst = |candidate: Hsla| {
+        surfaces
+            .iter()
+            .map(|surface| painted_contrast(candidate, *surface))
+            .fold(f32::MAX, f32::min)
+    };
+    if worst(color) >= min {
+        return color;
+    }
+    for step in 1..=10 {
+        let alpha = color.a + (1.0 - color.a) * step as f32 / 10.0;
+        let raised = Hsla { a: alpha, ..color };
+        if worst(raised) >= min {
+            return raised;
+        }
+    }
+    let opaque = Hsla { a: 1.0, ..color };
+    let lighter_first = relative_luminance(text) >= relative_luminance(opaque);
+    let targets = if lighter_first {
+        [1.0, 0.0]
+    } else {
+        [0.0, 1.0]
+    };
+    for target in targets {
+        for step in 1..=24 {
+            let l = opaque.l + (target - opaque.l) * step as f32 / 24.0;
+            let shifted = Hsla { l, ..opaque };
+            if worst(shifted) >= min {
+                return shifted;
+            }
+        }
+    }
+    let (white, black) = (hsla(0.0, 0.0, 1.0, 1.0), hsla(0.0, 0.0, 0.0, 1.0));
+    if worst(white) >= worst(black) {
+        white
+    } else {
+        black
+    }
+}
+
+/// A translucent `wash` thinned (never below `floor_alpha`) until `text`
+/// reads at `min` on it over every `bases` entry, for selection highlights
+/// that must stay visible without hiding the text they mark.
+fn wash_for_text(wash: Hsla, text: Hsla, bases: &[Hsla], min: f32, floor_alpha: f32) -> Hsla {
+    let reads = |candidate: Hsla| {
+        bases
+            .iter()
+            .all(|base| painted_contrast(text, flatten(candidate, *base)) >= min)
+    };
+    if reads(wash) {
+        return wash;
+    }
+    for step in 1..=10 {
+        let alpha = wash.a - (wash.a - floor_alpha).max(0.0) * step as f32 / 10.0;
+        let thinner = Hsla { a: alpha, ..wash };
+        if reads(thinner) {
+            return thinner;
+        }
+    }
+    Hsla {
+        a: floor_alpha.min(wash.a),
+        ..wash
+    }
 }
 
 /// Composite `fg` (which may be translucent) over an opaque `bg`, returning the
@@ -2180,12 +2782,19 @@ mod tests {
                 "{} text",
                 variant.id
             );
-            assert_eq!(
-                theme.text_muted,
-                model_color(variant.colors.text_muted),
-                "{} muted text",
-                variant.id
-            );
+            // Authored muted text is kept wherever it already reads at AA on
+            // every composited surface; elsewhere only the derived paint
+            // color rises to the floor (the stored theme is untouched).
+            let authored = model_color(variant.colors.text_muted);
+            if theme.worst_contrast(authored) >= TEXT_CONTRAST_TARGET {
+                assert_eq!(theme.text_muted, authored, "{} muted text", variant.id);
+            } else {
+                assert!(
+                    theme.worst_contrast(theme.text_muted) >= TEXT_CONTRAST_MIN,
+                    "{} derived muted text",
+                    variant.id
+                );
+            }
         }
     }
 

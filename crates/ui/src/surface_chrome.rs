@@ -26,7 +26,13 @@ pub(crate) fn input() -> Div {
         .text_size(crate::typography::ui_rems(11.5))
 }
 
+/// A sidebar surface's control row. It sits on the shared chrome surface
+/// (the shell frost every sidebar, header and footer uses): no band of its
+/// own and no border stack. Spacing and alignment group the controls; the
+/// row height matches the workbench tab strip so both sidebars' second rows
+/// line up with the canvas. Separators belong to real list/diff structure.
 pub(crate) fn toolbar(theme: &Theme) -> Div {
+    let _ = theme;
     div()
         .h(px(HEADER_HEIGHT))
         .w_full()
@@ -35,12 +41,4 @@ pub(crate) fn toolbar(theme: &Theme) -> Div {
         .flex()
         .items_center()
         .gap(px(CONTROL_GAP))
-        .border_t_1()
-        .border_b_1()
-        .border_color(theme.border)
-        .bg(if theme.is_glass() {
-            theme.surface.opacity(0.26)
-        } else {
-            theme.surface
-        })
 }

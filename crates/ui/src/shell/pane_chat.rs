@@ -260,7 +260,7 @@ pub(super) fn render_pane_header<V: 'static>(
         .child(
             div()
                 .flex_none()
-                .text_color(theme.readable_muted(0.4))
+                .text_color(theme.decorative_muted(0.4))
                 .child("/"),
         )
         .child(
@@ -355,7 +355,7 @@ pub(super) fn render_pane_header<V: 'static>(
                 .child(
                     div()
                         .flex_none()
-                        .text_color(theme.readable_muted(0.4))
+                        .text_color(theme.decorative_muted(0.4))
                         .child("·"),
                 )
         })
@@ -376,6 +376,147 @@ pub(super) fn render_pane_header<V: 'static>(
         .flex_col()
         .child(toolbar)
         .child(strip)
+}
+
+/// A workbench tab's context strip. The tab already names the chat and its
+/// role, so this is one quiet row: status, the chat's actual parent (a link
+/// for children and side chats; an alongside chat names no parent), provider
+/// facts, and a side chat's explicit End. Closing the tab is not End.
+fn render_embedded_strip(
+    chrome: &PaneChatChrome,
+    parent: &str,
+    end_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
+    theme: &Theme,
+    cx: &mut Context<PaneChatView>,
+) -> gpui::Div {
+    let muted = theme.readable_muted(0.7);
+    let identity = chrome.identity;
+    let parent_label: SharedString = match identity {
+        PaneIdentity::Child => format!("Child of {}", chrome.parent_title).into(),
+        PaneIdentity::Side => format!("Side chat from {}", chrome.parent_title).into(),
+        PaneIdentity::Alongside => "Alongside · your own chat, not a child".into(),
+    };
+    let parent_control: AnyElement = if identity == PaneIdentity::Alongside || parent.is_empty() {
+        div()
+            .min_w_0()
+            .truncate()
+            .text_color(muted)
+            .child(parent_label)
+            .into_any_element()
+    } else {
+        let parent_id = parent.to_string();
+        header_control(
+            "pane-chat-parent",
+            format!("Open parent chat: {}", chrome.parent_title),
+            theme,
+            Rc::new(
+                move |_: &mut PaneChatView, cx: &mut Context<PaneChatView>| {
+                    cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
+                },
+            ),
+            cx,
+        )
+        .h(px(20.0))
+        .px(px(4.0))
+        .min_w_0()
+        .text_color(muted)
+        .child(
+            icon(match identity {
+                PaneIdentity::Side => icons::GIT_FORK,
+                _ => icons::BOT,
+            })
+            .size(px(11.0))
+            .flex_none()
+            .text_color(theme.readable_muted(0.6)),
+        )
+        .child(div().min_w_0().truncate().child(parent_label))
+        .into_any_element()
+    };
+    let end_side = (identity == PaneIdentity::Side).then(|| {
+        let border_strong = theme.border_strong;
+        let hover = crate::theme::ink(0.06);
+        div()
+            .id("pane-chat-unload")
+            .role(gpui::Role::Button)
+            .aria_label("End side chat: stop it and keep its history read-only")
+            .tab_index(0)
+            .h(px(20.0))
+            .px(px(6.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
+            .border_1()
+            .border_color(gpui::transparent_black())
+            .cursor_pointer()
+            .text_color(theme.text_muted)
+            .hover(move |style| style.bg(hover))
+            .focus_visible(move |style| style.border_color(border_strong))
+            .on_click(cx.listener(|_, _, _, cx| cx.emit(PaneChatEvent::Unload)))
+            .on_key_down(crate::swallow_activation_key)
+            .tooltip(|_, cx| {
+                crate::pickers::ControlTooltip::view(
+                    "End side chat",
+                    Some(
+                        "Stops it for good; the history stays readable. Closing the tab only hides it."
+                            .into(),
+                    ),
+                    cx,
+                )
+            })
+            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+            .child(icon(icons::STOP).size(px(12.0)).text_color(theme.text_muted))
+            .child("End")
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| end_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+    });
+    div()
+        .w_full()
+        .h(px(28.0))
+        .flex_none()
+        .px(px(12.0))
+        .flex()
+        .items_center()
+        .gap(px(6.0))
+        .border_b_1()
+        .border_color(theme.border.opacity(0.6))
+        .text_size(crate::typography::ui_rems(11.5))
+        .min_w_0()
+        .when_some(chrome.status.clone(), |el, (label, color, _)| {
+            el.child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(color)
+                        .child(label),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .text_color(theme.decorative_muted(0.4))
+                        .child("·"),
+                )
+        })
+        .child(div().min_w_0().child(parent_control))
+        .when_some(chrome.meta.clone(), |el, meta| {
+            el.child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.readable_muted(0.6))
+                    .child(format!("· {meta}")),
+            )
+        })
+        .child(div().flex_1())
+        .children(end_side)
 }
 
 /// A side chat inherits its checkout, access and provider from the main chat
@@ -550,6 +691,11 @@ pub(super) struct PaneChatView {
     /// Owner-supplied status for chats without a session-derived one (a side
     /// chat's lease lifetime).
     status_override: Option<(SharedString, gpui::Hsla)>,
+    /// Where the embedded strip's End control painted (QA readback).
+    end_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
+    /// A workbench tab: the tab names the chat, so the view keeps only a
+    /// slim context strip (parent, status, provider) above the transcript.
+    embedded: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -565,6 +711,51 @@ impl PaneChatView {
         links: LinkUi,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::build(
+            state, chat_id, identity, parent, back_label, composer, links, false, true, cx,
+        )
+    }
+
+    /// A workbench tab's view. Creating it never moves keyboard focus: a
+    /// restored layout mounts several at once; the shell focuses one.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new_embedded(
+        state: Entity<AppState>,
+        chat_id: String,
+        identity: PaneIdentity,
+        parent: String,
+        composer: Entity<Composer>,
+        links: LinkUi,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        composer.update(cx, |composer, cx| composer.set_frame_footer(true, cx));
+        Self::build(
+            state,
+            chat_id,
+            identity,
+            parent,
+            "Workbench",
+            composer,
+            links,
+            true,
+            false,
+            cx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build(
+        state: Entity<AppState>,
+        chat_id: String,
+        identity: PaneIdentity,
+        parent: String,
+        back_label: &'static str,
+        composer: Entity<Composer>,
+        links: LinkUi,
+        embedded: bool,
+        focus: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let owner = state.update(cx, |state, cx| {
             let owner = state.watch_pane_chat(chat_id.clone(), cx);
             // Reading it here is reading it: clear the unseen marker exactly
@@ -578,7 +769,9 @@ impl PaneChatView {
         transcript.update(cx, |transcript, _| {
             transcript.set_workspace_link_handler(links)
         });
-        composer.update(cx, |composer, cx| composer.request_focus(cx));
+        if focus {
+            composer.update(cx, |composer, cx| composer.request_focus(cx));
+        }
         let subscriptions = vec![
             cx.observe(&state, |_, _, cx| cx.notify()),
             cx.observe(&composer, |_, _, cx| cx.notify()),
@@ -604,7 +797,38 @@ impl PaneChatView {
             composer_height: Rc::new(Cell::new(0.0)),
             last_layout: (0.0, 0.0),
             status_override: None,
+            end_bounds: Rc::new(Cell::new(None)),
+            embedded,
             _subscriptions: subscriptions,
+        }
+    }
+
+    pub(super) fn chat_id(&self) -> &str {
+        &self.chat_id
+    }
+
+    /// The composer slot's measured width (its controls lay out within it).
+    pub(super) fn composer_slot_width(&self) -> f32 {
+        self.composer_width.get()
+    }
+
+    /// Where the embedded strip's End control last painted.
+    pub(super) fn end_bounds(&self) -> Option<gpui::Bounds<Pixels>> {
+        self.end_bounds.get()
+    }
+
+    /// The identity can change under a live view (a reopened chat, a child
+    /// whose row arrived after the tab opened); the view keeps its watch.
+    pub(super) fn set_identity(
+        &mut self,
+        identity: PaneIdentity,
+        parent: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.identity != identity || self.parent != parent {
+            self.identity = identity;
+            self.parent = parent;
+            cx.notify();
         }
     }
 
@@ -691,7 +915,11 @@ impl PaneChatView {
                 Some(model) => format!("{provider} · {model}"),
                 None => provider.to_string(),
             };
-            if let Some(branch) = chat.and_then(|chat| chat.branch.as_deref()) {
+            // A workbench tab's checkout and branch live in the frame's
+            // bottom row while it is focused.
+            if !self.embedded
+                && let Some(branch) = chat.and_then(|chat| chat.branch.as_deref())
+            {
                 meta.push_str(&format!(" · {branch}"));
             }
             SharedString::from(meta)
@@ -718,8 +946,26 @@ impl Render for PaneChatView {
         let (chrome, archived, loading) = self.chrome(cx);
         let open_id = self.chat_id.clone();
         let parent_id = self.parent.clone();
-        let header = render_pane_header(
-            &chrome,
+        let header = if self.embedded {
+            render_embedded_strip(&chrome, &self.parent, self.end_bounds.clone(), &theme, cx)
+        } else {
+            self.render_full_header(&chrome, open_id, parent_id, &theme, cx)
+        };
+        self.render_with_header(header, archived, loading, &theme, cx)
+    }
+}
+
+impl PaneChatView {
+    fn render_full_header(
+        &mut self,
+        chrome: &PaneChatChrome,
+        open_id: String,
+        parent_id: String,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        render_pane_header(
+            chrome,
             PaneHeaderActions {
                 back_label: self.back_label,
                 // (Side chats: Back parks the side chat; see SideChatPanel.)
@@ -778,9 +1024,19 @@ impl Render for PaneChatView {
                     Vec::new()
                 },
             },
-            &theme,
+            theme,
             cx,
-        );
+        )
+    }
+
+    fn render_with_header(
+        &mut self,
+        header: gpui::Div,
+        archived: bool,
+        loading: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let width = self.composer_width.get();
         if width > 0.0 {
             self.composer.update(cx, |composer, cx| {

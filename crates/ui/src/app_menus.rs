@@ -54,7 +54,7 @@ pub fn init(cx: &mut App) {
     // (crates/zed/src/zed.rs `register_action(Minimize/Zoom)`).
     cx.on_action(|_: &Minimize, cx| with_active_window(cx, |window| window.minimize_window()));
     cx.on_action(|_: &Zoom, cx| with_active_window(cx, |window| window.zoom_window()));
-    cx.on_action(close_window);
+    register_close_window(cx);
     // Appearance. Each verb persists and repaints every window; see
     // `appearance::set_mode`.
     cx.on_action(|_: &AppearanceSystem, cx| appearance::set_mode(AppearanceMode::System, cx));
@@ -99,6 +99,13 @@ pub(crate) fn quit_after_save(cx: &mut App) {
     cx.quit();
 }
 
+/// The ⌘W handler alone (`CloseWindow` → workbench tab, right-pane
+/// surface, then the window). Headless QA registers it without the native
+/// quit hooks so the real key/menu dispatch path is exercised.
+pub fn register_close_window(cx: &mut App) {
+    cx.on_action(close_window);
+}
+
 fn close_window(_: &CloseWindow, cx: &mut App) {
     cx.defer(close_active_window);
 }
@@ -106,17 +113,11 @@ fn close_window(_: &CloseWindow, cx: &mut App) {
 fn close_active_window(cx: &mut App) {
     if let Some(window) = cx.active_window() {
         if let Some(window) = window.downcast::<shell::Shell>() {
+            // Normally the Shell's own `CloseWindow` listener has handled
+            // the action already; this runs when none was on the path.
             window
                 .update(cx, |shell, window, cx| {
-                    // ⌘W closes the right pane's active surface first (the tab
-                    // the user just opened); an empty or closed pane falls
-                    // through to the window close, unsaved-file gate and all.
-                    if shell.close_active_surface(window, cx) {
-                        return;
-                    }
-                    if shell.prepare_window_close(cx) {
-                        window.remove_window();
-                    }
+                    shell.close_window_action(window, cx)
                 })
                 .ok();
         } else {
@@ -430,7 +431,7 @@ mod native_quit {
         let app = cx.to_async();
         REQUEST.with_borrow_mut(|request| {
             *request = Some(Box::new(move || {
-                let mut app = app.clone();
+                let app = app.clone();
                 executor
                     .spawn(async move {
                         let _ = app.update(request_quit);

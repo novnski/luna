@@ -591,6 +591,17 @@ impl SideChats {
             .is_ok_and(|meta| meta.parent_id == parent && meta.state == "preparing")
     }
 
+    /// Layout validation reads identity only; it never reactivates a side chat.
+    pub(crate) fn layout_identity(&self, id: &str) -> Result<Option<(String, String)>> {
+        Ok(lock(&self.0.db)
+            .query_row(
+                "SELECT parent_id,state FROM side_chats WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?)
+    }
+
     pub(crate) async fn activate(&self, id: &str) -> Result<SideChatCreated> {
         let _gate = self.gate(id).await;
         let meta = self.meta(id)?;

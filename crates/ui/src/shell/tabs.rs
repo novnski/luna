@@ -193,7 +193,7 @@ impl Shell {
     /// parent. A parent that no longer exists is named, not linked.
     fn render_parent_breadcrumb(
         &self,
-        (parent_id, title, archived): (Option<String>, SharedString, bool),
+        (parent_id, title, archived, origin): (Option<String>, SharedString, bool, &'static str),
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -221,11 +221,7 @@ impl Shell {
             .occlude()
             .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
             .tooltip(move |_, cx| {
-                crate::pickers::ControlTooltip::view(
-                    tooltip_title.clone(),
-                    Some("This chat's parent: the chat whose agent started it".into()),
-                    cx,
-                )
+                crate::pickers::ControlTooltip::view(tooltip_title.clone(), Some(origin.into()), cx)
             })
             .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
             .child(
@@ -282,13 +278,12 @@ impl Shell {
         // A child opened as the main chat names its actual parent (from its
         // record's lineage, never a placement): `(parent id if it still
         // exists, title, archived)`.
-        let parent_crumb: Option<(Option<String>, SharedString, bool)> = {
+        let parent_crumb: Option<(Option<String>, SharedString, bool, &'static str)> = {
             let state = self.state.read(cx);
-            state
-                .selected_chat_row()
-                .and_then(super::placement::lineage_parent_id)
-                .map(
-                    |parent_id| match state.chats.iter().find(|chat| chat.id == parent_id) {
+            state.selected_chat_row().and_then(|chat| {
+                let origin = super::related_chats::parent_origin(chat);
+                super::placement::lineage_parent_id(chat).map(|parent_id| {
+                    match state.chats.iter().find(|row| row.id == parent_id) {
                         Some(parent) => (
                             Some(parent_id.to_string()),
                             transcript::single_line(
@@ -296,10 +291,12 @@ impl Shell {
                             )
                             .into(),
                             parent.archived,
+                            origin,
                         ),
-                        None => (None, "an unavailable chat".into(), false),
-                    },
-                )
+                        None => (None, "an unavailable chat".into(), false, origin),
+                    }
+                })
+            })
         };
         let (title, target, harness, on_canvas): (
             SharedString,
@@ -480,7 +477,7 @@ impl Shell {
                                     div()
                                         .flex_none()
                                         .text_size(crate::typography::ui_rems(12.0))
-                                        .text_color(theme.readable_muted(0.4))
+                                        .text_color(theme.decorative_muted(0.4))
                                         .child("›"),
                                 )
                         })

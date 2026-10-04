@@ -10,6 +10,9 @@ use std::sync::Arc;
 /// The synced registry rejects any row op over 16 KiB, and a rejected batch
 /// permanently wedges that device's registry sync. Keep child rows well below.
 pub(super) const CHILD_ROW_BUDGET_BYTES: usize = 12 * 1024;
+pub(super) fn not_draft(value: &bool) -> bool {
+    !*value
+}
 const CHILD_SUMMARY_CHARS: usize = 2_000;
 pub(super) const CHILD_SUMMARY_OMITTED: &str =
     "Summary omitted to keep the synced task small; open the child chat.";
@@ -203,8 +206,22 @@ impl EngineRpc {
         parent_id: &str,
         request: &CreateChildThreadRequest,
     ) -> Result<ChatConfig, crate::EngineError> {
-        validate_child_request(request)
-            .map_err(|error| crate::EngineError::Other(error.to_string()))?;
+        self.prepare_child_execution_kind(parent_id, request, false)
+            .await
+    }
+
+    async fn prepare_child_execution_kind(
+        &self,
+        parent_id: &str,
+        request: &CreateChildThreadRequest,
+        draft: bool,
+    ) -> Result<ChatConfig, crate::EngineError> {
+        (if draft {
+            crate::cross_task_tools::validate_child_tab_request(request)
+        } else {
+            validate_child_request(request)
+        })
+        .map_err(|error| crate::EngineError::Other(error.to_string()))?;
         let parent = self.validate_child_parent(parent_id)?;
         let parent_config = parent.config.as_ref().ok_or_else(|| {
             crate::EngineError::Other("Parent execution configuration is unavailable".into())
@@ -523,6 +540,102 @@ impl EngineRpc {
         }
     }
 
+    /// Explicit desktop `+`: create lineage and an empty persistent chat, but
+    /// leave startup entirely to the user's first normal queued message.
+    pub(super) async fn create_child_tab(
+        &self,
+        params: luna_proto::CreateChildTabRequest,
+    ) -> Result<ChildThreadReceipt, RpcError> {
+        let parent_id = params.parent_task_id;
+        let request = CreateChildThreadRequest {
+            prompt: String::new(),
+            idempotency_key: params.idempotency_key,
+            title: params.title,
+            provider: params.provider,
+            model: params.model,
+            reasoning: params.reasoning,
+            model_options: params.model_options,
+            cwd: None,
+            report_results: false,
+            continue_parent: false,
+            checkout: None,
+            permission_mode: None,
+        };
+        crate::cross_task_tools::validate_child_tab_request(&request)
+            .map_err(|error| RpcError::Failed(error.to_string()))?;
+        let child_id = child_task_id(&parent_id, &request.idempotency_key);
+        if self
+            .store
+            .task_command_receipt(&format!("child-create:{child_id}"))
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .is_none()
+        {
+            let before = self
+                .validate_child_parent(&parent_id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            self.prepare_child_execution_kind(&parent_id, &request, true)
+                .await
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            let current = self
+                .validate_child_parent(&parent_id)
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            // A newly created main chat may acquire its canonical checkout ID
+            // during normal repository discovery. That does not move its cwd.
+            let checkout_changed = before
+                .checkout_id
+                .as_ref()
+                .is_some_and(|id| current.checkout_id.as_ref() != Some(id));
+            if current.config != before.config
+                || current.cwd != before.cwd
+                || current.space_id != before.space_id
+                || checkout_changed
+            {
+                return Err(RpcError::Failed(
+                    "Main chat settings changed while preparing the child; retry the same request"
+                        .into(),
+                ));
+            }
+        }
+        let mut command = legacy_task_command(
+            child_id.clone(),
+            TaskCommandIntent::CreateChildChat {
+                parent_task_id: parent_id.clone(),
+                request,
+                access_grant: None,
+                draft: true,
+            },
+        );
+        command.command_id = format!("child-create:{child_id}");
+        command.actor_id = "luna-user:child-tab".into();
+        let receipt = self.execute_task_command(command, true).await?;
+        if receipt.status != CommandReceiptStatus::Applied {
+            return Err(RpcError::Failed(child_creation_failure(&receipt)));
+        }
+        let chat = self
+            .workspace
+            .chat(&child_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .ok_or_else(|| {
+                RpcError::Failed("Created child is unavailable; inspect the same request ID".into())
+            })?;
+        let child = chat
+            .child_thread
+            .as_ref()
+            .ok_or_else(|| RpcError::Failed("Created child lineage is unavailable".into()))?;
+        Ok(ChildThreadReceipt {
+            task_id: child_id.clone(),
+            parent_task_id: parent_id,
+            command: receipt,
+            initial_message_id: child.initial_message_id.clone(),
+            startup_state: self.child_startup_state(&child_id, child),
+            provisioning: child.provisioning.clone(),
+            execution: chat
+                .config
+                .as_ref()
+                .map(luna_proto::ChildExecutionSelection::from),
+        })
+    }
+
     /// Seed a child for in-process engine/GUI integration fixtures. This trusted
     /// host API is deliberately not exposed by RPC or the user interface; live
     /// agent creation always uses `create_child_approved` and its turn fence.
@@ -559,6 +672,7 @@ impl EngineRpc {
                 parent_task_id: parent_id.clone(),
                 request,
                 access_grant,
+                draft: false,
             },
         );
         command.command_id = format!("child-create:{child_id}");
@@ -630,6 +744,7 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id: authority.caller_task_id.clone(),
                 request,
+                draft: false,
                 access_grant: fence
                     .access_granted
                     .then_some(ChildAccessGrant::ApprovalCard),
@@ -680,11 +795,22 @@ impl EngineRpc {
         parent_id: &str,
         request: CreateChildThreadRequest,
         access_grant: Option<ChildAccessGrant>,
+        draft: bool,
         fence: Option<&ApprovedSendFence>,
     ) -> Result<CommandReceipt, TaskProjectionError> {
         let fail =
             |message: String| TaskProjectionError::Mutation(crate::EngineError::Other(message));
-        validate_child_request(&request).map_err(|error| fail(error.to_string()))?;
+        if draft && (access_grant.is_some() || fence.is_some()) {
+            return Err(fail(
+                "Blank child tabs cannot carry agent approval or elevated access grants".into(),
+            ));
+        }
+        (if draft {
+            crate::cross_task_tools::validate_child_tab_request(&request)
+        } else {
+            validate_child_request(&request)
+        })
+        .map_err(|error| fail(error.to_string()))?;
         if task_id != child_task_id(parent_id, &request.idempotency_key) {
             return Err(fail("Child identity does not match its request".into()));
         }
@@ -971,6 +1097,21 @@ impl EngineRpc {
     }
 
     fn child_startup_state(&self, id: &str, child: &ChildThread) -> String {
+        if child.initial_prompt.is_empty() {
+            if let Some(session) = self.sessions.session_status(id) {
+                return format!("{:?}", session.status).to_lowercase();
+            }
+            if self
+                .workspace
+                .chat(id)
+                .ok()
+                .flatten()
+                .is_some_and(|chat| chat.last_message_at.is_some())
+            {
+                return "manual-session-saved".into();
+            }
+            return "awaiting-first-message".into();
+        }
         if let Ok(Some(receipt)) = self
             .store
             .task_command_receipt(&format!("child-start:{id}"))
@@ -1034,7 +1175,7 @@ impl EngineRpc {
 
     async fn sweep_child_thread(&self, chat: &Chat) -> Result<(), crate::EngineError> {
         let child = chat.child_thread.clone().expect("filtered child");
-        if !chat.archived {
+        if !chat.archived && !child.initial_prompt.is_empty() {
             let mut start = legacy_task_command(
                 chat.id.clone(),
                 TaskCommandIntent::QueueMessage {
@@ -1053,17 +1194,19 @@ impl EngineRpc {
             // provider delivery. The queue owns unknown acceptance recovery.
             let _ = self.execute_task_command(start, true).await;
         }
-        self.append_child_notice(
-            &child.parent_task_id,
-            &format!("child-created:{}", chat.id),
-            &format!(
-                "Created child {}: {}. Fresh context; {}.",
-                self.child_reference(chat.title.as_deref(), &chat.id),
-                self.child_startup_state(&chat.id, &child),
-                child_checkout_summary(chat, &child)
-            ),
-        )
-        .await?;
+        if !child.initial_prompt.is_empty() {
+            self.append_child_notice(
+                &child.parent_task_id,
+                &format!("child-created:{}", chat.id),
+                &format!(
+                    "Created child {}: {}. Fresh context; {}.",
+                    self.child_reference(chat.title.as_deref(), &chat.id),
+                    self.child_startup_state(&chat.id, &child),
+                    child_checkout_summary(chat, &child)
+                ),
+            )
+            .await?;
+        }
         if !child.report_results {
             return Ok(());
         }

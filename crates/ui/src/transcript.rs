@@ -3113,6 +3113,10 @@ pub struct Transcript {
     /// transcript's bottom (measured last frame): the last row pads past it
     /// so pinned content rests above the glass chrome it scrolls under.
     bottom_clearance: f32,
+    /// Chrome the first row rests below: the overlaid titlebar for a
+    /// full-height view, nothing inside the workbench canvas (its tab strip
+    /// sits above the viewport instead).
+    top_chrome: f32,
     /// Hovered rail tick (grows + shows the preview card).
     rail_hover: Option<usize>,
     /// `(row id, entry id)` under the pointer — reveals the entry's timestamp
@@ -3379,6 +3383,7 @@ impl Transcript {
             selection_scroll_task: None,
             rail_enabled,
             bottom_clearance: 0.0,
+            top_chrome: Theme::TITLEBAR_HEIGHT,
             rail_hover: None,
             hovered_entry: None,
             copied_code: None,
@@ -3421,6 +3426,18 @@ impl Transcript {
     /// Shell-driven: the measured height of the bottom chrome stack the
     /// transcript scrolls under. Sub-pixel jitter is ignored so steady-state
     /// frames don't re-notify.
+    /// See [`Self::top_chrome`].
+    pub fn set_top_chrome(&mut self, height: f32, cx: &mut Context<Self>) {
+        if (self.top_chrome - height).abs() > 0.5 {
+            self.top_chrome = height;
+            if !self.rows.is_empty() {
+                self.list.remeasure_items(0..1);
+                self.viewport_layout_revision = self.viewport_layout_revision.wrapping_add(1);
+            }
+            cx.notify();
+        }
+    }
+
     pub fn set_bottom_clearance(&mut self, height: f32, cx: &mut Context<Self>) {
         if (self.bottom_clearance - height).abs() > 0.5 {
             self.bottom_clearance = height;
@@ -6450,7 +6467,7 @@ impl Transcript {
             if self.doc_override.is_some() {
                 Theme::SPACE_LG
             } else {
-                Theme::TITLEBAR_HEIGHT + Theme::SPACE_LG + 10.0
+                self.top_chrome + Theme::SPACE_LG + 10.0
             }
         } else {
             top_gap_for(ix.checked_sub(1).and_then(|i| self.rows.get(i)), &row)
@@ -8149,13 +8166,13 @@ fn detail_body(
                     .child(
                         div()
                             .flex_none()
-                            .text_color(theme.diff_add)
+                            .text_color(theme.readable_tone(theme.diff_add, 1.0))
                             .child(SharedString::from(format!("+{}", stat.additions))),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_color(theme.diff_del)
+                            .text_color(theme.readable_tone(theme.diff_del, 1.0))
                             .child(SharedString::from(format!("−{}", stat.deletions))),
                     )
             }))

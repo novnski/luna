@@ -61,6 +61,90 @@ fn service(root: &Path) -> BackupService {
     )
 }
 
+/// Full encrypted archive -> staged verification -> activation with a saved
+/// tab tree. Failure cases precede code in the chat-workbench design brief.
+#[test]
+fn workbench_layout_archive_roundtrip_preserves_ids_ratios_and_closed_history() {
+    use luna_proto::{
+        ChatWorkbenchCommand, ChatWorkbenchSnapshot, ChatWorkbenchTab, WorkbenchDestination,
+        WorkbenchEdge,
+    };
+    use sha2::{Digest, Sha256};
+    let (_parent, root, backups) = fixture();
+    let main = "workbench-backup-main";
+    let mut layout = ChatWorkbenchSnapshot::new(main);
+    layout
+        .apply(&ChatWorkbenchCommand::OpenTab {
+            tab: ChatWorkbenchTab::chat("child-backup"),
+            destination: Some(WorkbenchDestination::Split {
+                node_id: "main-pane".into(),
+                edge: WorkbenchEdge::Right,
+                new_pane_id: "right".into(),
+                split_id: "split".into(),
+            }),
+        })
+        .unwrap();
+    layout
+        .apply(&ChatWorkbenchCommand::ResizeSplit {
+            split_id: "split".into(),
+            ratio: 0.63,
+        })
+        .unwrap();
+    layout
+        .apply(&ChatWorkbenchCommand::OpenTab {
+            tab: ChatWorkbenchTab::chat("closed-backup"),
+            destination: None,
+        })
+        .unwrap();
+    layout
+        .apply(&ChatWorkbenchCommand::CloseTab {
+            chat_id: "closed-backup".into(),
+        })
+        .unwrap();
+    layout.revision = 4;
+    let folder = root.join("profiles/local/chat-workbenches-v1");
+    fs::create_dir_all(&folder).unwrap();
+    let file = folder.join(format!("{:x}.json", Sha256::digest(main.as_bytes())));
+    let bytes = serde_json::to_vec(&serde_json::json!({"snapshot":layout,"receipts":[]})).unwrap();
+    fs::write(&file, &bytes).unwrap();
+    let temporary = folder.join(".pending-workbench-uncommitted");
+    fs::write(&temporary, b"unfinished").unwrap();
+    let receipt = service(&root)
+        .export(&backups.join("workbench.lunabk"))
+        .unwrap();
+    assert_eq!(
+        receipt
+            .manifest
+            .entries
+            .iter()
+            .filter(|entry| entry.category == "chat-workbench")
+            .count(),
+        1
+    );
+    assert!(
+        !receipt
+            .manifest
+            .entries
+            .iter()
+            .any(|entry| entry.path.contains("pending-workbench"))
+    );
+    fs::remove_file(temporary).unwrap();
+    fs::write(&file, b"changed after backup").unwrap();
+    let staged = service(&root).stage_restore(&receipt.archive).unwrap();
+    service(&root).verify_staged_for_tests(&staged).unwrap();
+    service(&root).activate(staged).unwrap();
+    assert_eq!(fs::read(&file).unwrap(), bytes);
+    if let Ok(dir) = std::env::var("WORKBENCH_EVIDENCE_DIR") {
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(Path::new(&dir).join("layout-backup-roundtrip.json"),serde_json::to_vec_pretty(&serde_json::json!({"manifest":receipt.manifest,"restoredLayout":layout,"exactBytesRestored":true,"temporaryFileExcluded":true})).unwrap()).unwrap();
+        fs::copy(
+            receipt.archive,
+            Path::new(&dir).join("synthetic-layout.lunabk"),
+        )
+        .unwrap();
+    }
+}
+
 #[test]
 fn sqlite_backup_restore_preserves_workspace_w_and_older_execution_lineage() {
     use luna_proto::{

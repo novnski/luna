@@ -1380,7 +1380,7 @@ impl Shell {
                 div()
                     .id("usage-price-save")
                     .cursor_pointer()
-                    .text_color(theme.accent)
+                    .text_color(theme.readable_tone(theme.accent, 1.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .on_click(cx.listener(|this, _, _, cx| this.save_usage_price_override(cx)))
                     .child("Save exact-model rate"),
@@ -1389,7 +1389,7 @@ impl Shell {
             card = card.child(
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.warning)
+                    .text_color(theme.readable_tone(theme.warning, 1.0))
                     .child(error.clone()),
             );
         }
@@ -1414,7 +1414,7 @@ impl Shell {
                         div()
                             .id(SharedString::from(format!("usage-price-remove-{index}")))
                             .cursor_pointer()
-                            .text_color(theme.warning)
+                            .text_color(theme.readable_tone(theme.warning, 1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.remove_usage_price_override(&model, cx)
                             }))
@@ -2709,7 +2709,7 @@ impl Shell {
                     content = content.child(div().w_full().flex().flex_col().gap(px(4.0))
                         .children(snapshot.summary.warnings.iter().cloned().chain(
                             snapshot.summary.partial.then(|| "Some environments reported partial history; totals may be incomplete.".to_string())
-                        ).map(|warning| div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.warning).child(warning))));
+                        ).map(|warning| div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.readable_tone(theme.warning, 1.0)).child(warning))));
                 }
             }
         } else {
@@ -2722,7 +2722,11 @@ impl Shell {
             ));
         }
         if let Some(error) = &self.usage_error {
-            content = content.child(div().text_color(theme.warning).child(error.clone()));
+            content = content.child(
+                div()
+                    .text_color(theme.readable_tone(theme.warning, 1.0))
+                    .child(error.clone()),
+            );
         }
         let price_open = self.usage_page_price_editor_open;
         let content = content.when(price_open, |page| {

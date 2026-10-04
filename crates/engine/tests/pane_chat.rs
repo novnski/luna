@@ -2381,3 +2381,319 @@ async fn child_execution_rejects_invalid_choices_before_identity_or_worktree_cre
     );
     core.shutdown().await;
 }
+
+// Central workbench failure cases were recorded before implementation in
+// docs/design/chat-workbench/failure-cases.md. This uses real registry/docs,
+// queue dispatch, child maintenance, side forks, persistence and restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn blank_child_tabs_preserve_drafts_and_running_sessions_across_view_changes() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("blank-child-project");
+    init_repo(&project);
+    let (core, recorder) = assemble_multi_provider(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    core.workspace
+        .create_space(
+            "blank-space",
+            &core.device_id,
+            project.to_str().unwrap(),
+            None,
+            true,
+        )
+        .unwrap();
+    let codex = uuid::Uuid::new_v4().to_string();
+    let claude = uuid::Uuid::new_v4().to_string();
+    for (parent, provider) in [(&codex, HarnessId::Codex), (&claude, HarnessId::ClaudeCode)] {
+        create_chat(
+            &client,
+            parent,
+            "blank-space",
+            &project,
+            config(provider, "ask", "parent-model", "high"),
+        )
+        .await;
+        core.doc_host
+            .open(parent)
+            .unwrap()
+            .write_user_message("private-parent", "PARENT_PRIVATE_CONTEXT", 1)
+            .unwrap();
+    }
+    let requests = [
+        json!({"parentTaskId":codex,"idempotencyKey":"user-claude-tab","title":"Blank Claude child","provider":"claude-code","model":"child-model","reasoning":"high","modelOptions":{"fastMode":"off"}}),
+        json!({"parentTaskId":claude,"idempotencyKey":"user-codex-tab","title":"Blank Codex child","provider":"codex","model":"cross-provider-model","reasoning":"low","modelOptions":{"fastMode":"on"}}),
+    ];
+    let mut receipts = Vec::new();
+    let mut children = Vec::new();
+    for request in &requests {
+        let before = core
+            .workspace
+            .chat(request["parentTaskId"].as_str().unwrap())
+            .unwrap();
+        let receipt = client
+            .call("CreateChildTab", request.clone())
+            .await
+            .unwrap_or_else(|error| {
+                evidence("blank-child-preflight-failure.json", &json!({"error":error.to_string(),"before":before,"after":core.workspace.chat(request["parentTaskId"].as_str().unwrap()).unwrap()}));
+                panic!("blank child creation failed: {error}")
+            });
+        assert_eq!(receipt["startupState"], "awaiting-first-message");
+        assert_eq!(receipt["provisioning"]["createdBy"], "user");
+        let child = receipt["taskId"].as_str().unwrap().to_string();
+        let row = core.workspace.chat(&child).unwrap().unwrap();
+        let lineage = row.child_thread.as_ref().unwrap();
+        assert!(lineage.initial_prompt.is_empty());
+        assert!(!lineage.report_results);
+        assert!(!lineage.continue_parent);
+        assert_eq!(
+            lineage.parent_task_id,
+            request["parentTaskId"].as_str().unwrap()
+        );
+        assert!(row.source_context.is_none());
+        assert!(row.harness_session_id.is_none());
+        assert!(
+            core.task_identity
+                .view(&child)
+                .unwrap()
+                .current_binding
+                .is_none()
+        );
+        assert_eq!(entry_count(&core, &child), 0);
+        assert_eq!(queue_len(&core, &child), 0);
+        receipts.push(receipt);
+        children.push(child);
+    }
+    // At least one real periodic child sweep must run while both tabs are blank.
+    tokio::time::sleep(Duration::from_millis(2300)).await;
+    assert!(recorder.runs.lock().unwrap().is_empty());
+    for child in &children {
+        assert_eq!(entry_count(&core, child), 0);
+        assert_eq!(queue_len(&core, child), 0);
+    }
+    assert_eq!(
+        entry_count(&core, &codex),
+        1,
+        "blank creation must not inject a notice/prompt into Main"
+    );
+    let first = &children[0];
+    let draft = json!({"version":1,"draftId":first,"taskId":first,"revision":1,"text":"UNSENT_DRAFT_SURVIVES_TAB_CLOSE","updatedAtMs":100});
+    client
+        .call("SaveComposerDraft", json!({"draft":draft}))
+        .await
+        .unwrap();
+    async fn layout(client: &RpcClient, main: &str, command: Value) -> Value {
+        let info = client.call("EngineInfo", json!({})).await.unwrap();
+        let current = client
+            .call("GetChatWorkbench", json!({"mainChatId":main}))
+            .await
+            .unwrap();
+        client.call("MutateChatWorkbench",json!({"mainChatId":main,"profileId":info["profileId"],"expectedRevision":current["revision"],"commandId":uuid::Uuid::new_v4().to_string(),"command":command})).await.unwrap()
+    }
+    layout(
+        &client,
+        &codex,
+        json!({"op":"openTab","tab":{"chatId":first}}),
+    )
+    .await;
+    layout(&client, &codex, json!({"op":"closeTab","chatId":first})).await;
+    let saved_draft = client
+        .call("GetComposerDraft", json!({"taskId":first}))
+        .await
+        .unwrap();
+    assert!(
+        saved_draft
+            .to_string()
+            .contains("UNSENT_DRAFT_SURVIVES_TAB_CLOSE")
+    );
+    let replay = client
+        .call("CreateChildTab", requests[0].clone())
+        .await
+        .unwrap();
+    assert_eq!(replay["taskId"], *first);
+    let mut conflict = requests[0].clone();
+    conflict["model"] = json!("cross-provider-model");
+    assert!(client.call("CreateChildTab", conflict).await.is_err());
+    for (key, value) in [
+        ("prompt", json!("must not execute")),
+        ("permissionMode", json!("full")),
+        ("checkout", json!({"kind":"newWorktree"})),
+        ("reportResults", json!(true)),
+    ] {
+        let mut forged = requests[0].clone();
+        forged[key] = value;
+        assert!(client.call("CreateChildTab", forged).await.is_err());
+    }
+    assert_eq!(core.workspace.read_chats().unwrap().len(), 4);
+    let blank_rows = children
+        .iter()
+        .map(|id| core.workspace.chat(id).unwrap().unwrap())
+        .collect::<Vec<_>>();
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+    let (core, recorder) = assemble_multi_provider(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert!(recorder.runs.lock().unwrap().is_empty());
+    assert_eq!(
+        client
+            .call("GetComposerDraft", json!({"taskId":first}))
+            .await
+            .unwrap(),
+        saved_draft
+    );
+    for child in &children {
+        assert_eq!(entry_count(&core, child), 0);
+        assert_eq!(queue_len(&core, child), 0);
+    }
+    layout(&client, &codex, json!({"op":"reopenClosed"})).await;
+    queue(
+        &client,
+        first,
+        "first-real-user-message",
+        "HOLD FIRST_UI_CHILD_PROMPT",
+    )
+    .await;
+    until("manual child running", || {
+        runs_for(&recorder, first).len() == 1 && core.sessions.turn_in_flight(first)
+    })
+    .await;
+    let native = core
+        .task_identity
+        .view(first)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(
+        contract(&runs_for(&recorder, first)[0])
+            .context
+            .parent_thread_id
+            .as_deref(),
+        Some(codex.as_str())
+    );
+    assert_eq!(
+        runs_for(&recorder, first)[0].prompt,
+        "HOLD FIRST_UI_CHILD_PROMPT"
+    );
+    layout(&client,&codex,json!({"op":"moveTab","chatId":first,"destination":{"kind":"split","nodeId":"main-pane","edge":"right","newPaneId":"running-child","splitId":"running-split"}})).await;
+    layout(
+        &client,
+        &codex,
+        json!({"op":"closePane","paneId":"running-child"}),
+    )
+    .await;
+    assert!(
+        core.sessions.turn_in_flight(first),
+        "closing the view must not stop the turn"
+    );
+    layout(
+        &client,
+        &codex,
+        json!({"op":"openTab","tab":{"chatId":first}}),
+    )
+    .await;
+    assert_eq!(runs_for(&recorder, first).len(), 1);
+    assert!(runs_for(&recorder, &children[1]).is_empty());
+    assert_eq!(
+        core.task_identity
+            .view(first)
+            .unwrap()
+            .current_binding
+            .unwrap(),
+        native
+    );
+    let entries = core
+        .doc_host
+        .open(first)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    let users = entries
+        .iter()
+        .filter(|entry| entry.role == luna_doc::MessageRole::User)
+        .collect::<Vec<_>>();
+    assert_eq!(users.len(), 1);
+    assert!(
+        !serde_json::to_string(&entries)
+            .unwrap()
+            .contains("PARENT_PRIVATE_CONTEXT")
+    );
+    command(
+        &client,
+        first,
+        "explicit-stop-child",
+        json!({"kind":"session","command":{"kind":"interrupt"}}),
+    )
+    .await
+    .unwrap();
+    until("explicit child stop", || {
+        !core.sessions.turn_in_flight(first)
+    })
+    .await;
+    assert_eq!(
+        entry_count(&core, &codex),
+        1,
+        "manual child must not report/wake Main"
+    );
+    // A real native-fork side chat remains active while its view closes/reopens.
+    queue(&client, &codex, "parent-for-side", "PARENT_SIDE_CONTEXT").await;
+    until("parent ready to fork", || {
+        runs_for(&recorder, &codex).len() == 1
+            && !core.sessions.turn_in_flight(&codex)
+            && core
+                .task_identity
+                .view(&codex)
+                .and_then(|v| v.current_binding)
+                .is_some()
+    })
+    .await;
+    let side = client
+        .call(
+            "CreateSideChat",
+            json!({"parentId":codex,"requestId":uuid::Uuid::new_v4().to_string()}),
+        )
+        .await
+        .unwrap();
+    let side_id = side["meta"]["id"].as_str().unwrap();
+    let side_binding = core.task_identity.view(side_id).unwrap().current_binding;
+    layout(
+        &client,
+        &codex,
+        json!({"op":"openTab","tab":{"chatId":side_id,"sideParentId":codex}}),
+    )
+    .await;
+    layout(&client, &codex, json!({"op":"closeTab","chatId":side_id})).await;
+    let side_history = client
+        .call("ListSideChats", json!({"parentId":codex}))
+        .await
+        .unwrap();
+    assert!(
+        side_history["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == side_id && row["state"] == "active")
+    );
+    layout(&client, &codex, json!({"op":"reopenClosed"})).await;
+    assert_eq!(
+        core.task_identity.view(side_id).unwrap().current_binding,
+        side_binding
+    );
+    assert!(runs_for(&recorder, side_id).is_empty());
+    assert!(
+        client
+            .call("GetChatWorkbench", json!({"mainChatId":side_id}))
+            .await
+            .is_err()
+    );
+    let final_layout = client
+        .call("GetChatWorkbench", json!({"mainChatId":codex}))
+        .await
+        .unwrap();
+    evidence(
+        "blank-child-workbench-lifecycle.json",
+        &json!({"receipts":receipts,"blankRows":blank_rows,"draft":saved_draft,"firstUserMessages":users,"nativeBinding":native,"sideHistory":side_history,"layout":final_layout,"noBlankStartupAfterRestart":true,"viewCloseDidNotStop":true}),
+    );
+    drop(client);
+    core.shutdown().await;
+}

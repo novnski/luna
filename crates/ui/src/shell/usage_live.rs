@@ -145,7 +145,7 @@ pub(super) fn live_sessions_section(
                     header.child(
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.warning)
+                            .text_color(theme.readable_tone(theme.warning, 1.0))
                             .child(format!("Claude limits on this page: {note}")),
                     )
                 }),

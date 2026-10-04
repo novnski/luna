@@ -1748,7 +1748,7 @@ impl AccountsPage {
                     div()
                         .mt(px(8.0))
                         .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.danger_muted)
+                        .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(message),
                 )
             })
@@ -2091,7 +2091,9 @@ impl Render for AccountsPage {
                                                 .child(
                                                     crate::icons::icon(crate::icons::ARROW_DOWN)
                                                         .size(px(15.0))
-                                                        .text_color(theme.accent),
+                                                        .text_color(
+                                                            theme.readable_icon(theme.accent),
+                                                        ),
                                                 )
                                                 .child(if is_updating {
                                                     "Updating…"

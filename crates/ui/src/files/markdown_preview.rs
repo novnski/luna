@@ -1068,7 +1068,7 @@ impl MarkdownPreview {
                             Some(Err(error)) => div()
                                 .p(px(12.0))
                                 .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(theme.warning_muted)
+                                .text_color(theme.readable_tone(theme.warning_muted, 1.0))
                                 .child(error.clone())
                                 .into_any_element(),
                             None => div()
@@ -1330,7 +1330,7 @@ impl Render for MarkdownPreview {
                 el.child(
                     div()
                         .px(px(24.0))
-                        .text_color(theme.warning_muted)
+                        .text_color(theme.readable_tone(theme.warning_muted, 1.0))
                         .child("Large file preview is truncated and read-only."),
                 )
             })

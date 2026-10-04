@@ -640,7 +640,7 @@ pub fn render_block(
                             .min_w(px(18.0))
                             .text_size(crate::typography::ui_rems(MD_TEXT_SIZE))
                             .line_height(crate::typography::ui_rems(MD_LINE_HEIGHT))
-                            .text_color(theme.accent)
+                            .text_color(theme.readable_tone(theme.accent, 1.0))
                             .child(SharedString::from(format!("{}.", start + item_ix as u64)))
                             .into_any_element(),
                         None => div()
@@ -1892,7 +1892,7 @@ fn render_code_block(
                     .child(
                         div()
                             .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.warning_muted)
+                            .text_color(theme.readable_tone(theme.warning_muted, 1.0))
                             .child(diagnostic),
                     )
                     .into_any_element();

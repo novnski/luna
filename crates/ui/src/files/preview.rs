@@ -2144,7 +2144,11 @@ impl FilesSurface {
                         .border_color(theme.warning.opacity(0.25))
                         .bg(theme.warning.opacity(0.055))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.warning_muted)
+                        .text_color(theme.readable_on(
+                            theme.warning_muted,
+                            theme.warning.opacity(0.055),
+                            crate::theme::TEXT_CONTRAST_TARGET,
+                        ))
                         .child(div().min_w_0().max_w_full().whitespace_normal().child(
                             if self.target_change_pending {
                                 "Workspace changed. Switch back to save, or discard these edits."
@@ -2211,7 +2215,11 @@ impl FilesSurface {
                             .border_color(theme.warning.opacity(0.25))
                             .bg(theme.warning.opacity(0.055))
                             .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.warning_muted)
+                            .text_color(theme.readable_on(
+                                theme.warning_muted,
+                                theme.warning.opacity(0.055),
+                                crate::theme::TEXT_CONTRAST_TARGET,
+                            ))
                             .child(div().min_w_0().max_w_full().whitespace_normal().child(
                                 if confirming_reload {
                                     "Discard unsaved changes?"
@@ -2817,7 +2825,11 @@ impl FilesSurface {
                         .flex()
                         .items_center()
                         .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(theme.warning_muted)
+                        .text_color(theme.readable_on(
+                            theme.warning_muted,
+                            theme.warning.opacity(0.045),
+                            crate::theme::TEXT_CONTRAST_TARGET,
+                        ))
                         .child("Large file preview is truncated and read-only."),
                 )
             })

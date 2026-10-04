@@ -25,7 +25,7 @@ pub(super) struct GitWriteOwner {
 impl Changes {
     pub(super) fn git_context(&self, cx: &App) -> Option<(String, Option<String>, String)> {
         let state = self.state.read(cx);
-        let chat = state.selected_chat_row()?;
+        let chat = self.target_row(state)?;
         let cwd = chat.cwd.clone()?;
         let target = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
             .then(|| chat.device_id.clone());
@@ -34,9 +34,7 @@ impl Changes {
     }
 
     pub(super) fn git_chat_id(&self, cx: &App) -> Option<String> {
-        self.state
-            .read(cx)
-            .selected_chat_row()
+        self.target_row(self.state.read(cx))
             .map(|chat| chat.id.clone())
     }
 
@@ -44,7 +42,7 @@ impl Changes {
         let (_, _, selection) = self.git_context(cx)?;
         let state = self.state.read(cx);
         let engine = state.engine()?;
-        let chat = state.selected_chat_row()?;
+        let chat = self.target_row(state)?;
         Some(GitUiScope {
             engine_generation: state.engine_generation(),
             engine_device: engine.engine_info().device_id.clone(),
@@ -132,6 +130,14 @@ impl Changes {
         true
     }
 
+    /// Entry point from the workbench frame's Commit & push: the same
+    /// preview/token-guarded Git panel, for this surface's bound checkout.
+    pub(crate) fn open_git_actions(&mut self, cx: &mut Context<Self>) {
+        self.git_open = true;
+        self.load_git(cx);
+        cx.notify();
+    }
+
     /// Entry point from conversation rewind's separate filesystem choice.
     /// Opens the existing preview/token guarded checkpoint workflow.
     pub(crate) fn open_file_checkpoints(&mut self, cx: &mut Context<Self>) {
@@ -214,7 +220,7 @@ impl Changes {
 
     fn checkpoint_context(&self, cx: &App) -> Option<(String, String, String, bool)> {
         let state = self.state.read(cx);
-        let chat = state.selected_chat_row()?;
+        let chat = self.target_row(state)?;
         let cwd = chat.cwd.clone()?;
         let local = state.local_device_id.as_deref() == Some(chat.device_id.as_str());
         Some((
@@ -609,9 +615,7 @@ impl Changes {
             expected_token: preview.token,
             paths: self.git_selected.iter().cloned().collect(),
             harness: self
-                .state
-                .read(cx)
-                .selected_chat_row()
+                .target_row(self.state.read(cx))
                 .and_then(|chat| chat.config.as_ref().map(|config| config.harness)),
         };
         self.git_read_generation += 1;

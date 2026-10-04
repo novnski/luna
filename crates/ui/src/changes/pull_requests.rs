@@ -115,7 +115,7 @@ impl Changes {
             engine_generation: state.engine_generation(),
             engine_device: engine.engine_info().device_id.clone(),
             selection,
-            selected_checkout: state.selected_chat_row()?.checkout_id.clone(),
+            selected_checkout: self.target_row(state)?.checkout_id.clone(),
             git: self.git_preview.as_ref().map(PrGitContext::from),
         })
     }

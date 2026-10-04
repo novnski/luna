@@ -5248,6 +5248,36 @@ impl AppState {
         self.engine_generation = self.engine_generation.wrapping_add(1);
     }
 
+    /// Start the production `WatchSessions` stream on the attached engine:
+    /// the authoritative run/indicator feed `attach_engine` starts, without
+    /// the chats watch that would replace the fixture's UI-only lineage. The
+    /// task lives with the attachment (`watch_tasks`), like the production
+    /// watches. Returns whether an engine was attached.
+    pub fn fixture_watch_sessions(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(handle) = self.engine.clone() else {
+            return false;
+        };
+        self.watch_tasks.push(spawn_watch(
+            cx,
+            handle,
+            methods::WATCH_SESSIONS,
+            AppState::apply_sessions,
+        ));
+        true
+    }
+
+    /// `chat_id`'s indicator from the engine's sessions alone (no optimistic
+    /// pending-send overlay), and whether a sessions frame has arrived.
+    pub fn fixture_session_indicator(&self, chat_id: &str) -> (String, bool) {
+        (
+            format!(
+                "{:?}",
+                effective_indicator(self.session_for(chat_id), Utc::now())
+            ),
+            self.sessions_synced(),
+        )
+    }
+
     /// Exercise the production attachment/reconnect boundary after the
     /// fixture has populated its selected chat and static workspace rows.
     pub fn fixture_attach_engine(&mut self, engine: EngineHandle, cx: &mut Context<Self>) {

@@ -1,0 +1,85 @@
+{
+  "sources": [
+    {
+      "path": "/Users/iulian/Desktop/SCREENSHOTS/Screen Recording 2026-10-04 at 03.12.29.mov",
+      "sha256": "f12c135a0d68c1026d7ac666d03312ee1718961423ca80d5611037e0a1f0236c"
+    },
+    {
+      "path": "/Users/iulian/Desktop/SCREENSHOTS/Screen Recording 2026-10-04 at 03.16.22.mov",
+      "sha256": "320a0ed379306c9158995b3a571d31c1dca8a3cd32faded938a0fc10e43bceba"
+    }
+  ],
+  "frames": [
+    {
+      "video": 1,
+      "seconds": 15,
+      "file": "01-inset-canvas.jpg"
+    },
+    {
+      "video": 1,
+      "seconds": 32,
+      "file": "02-sidebar-and-chrome.jpg"
+    },
+    {
+      "video": 1,
+      "seconds": 39,
+      "file": "03-new-provider-tab.jpg"
+    },
+    {
+      "video": 2,
+      "seconds": 17,
+      "file": "04-drag-start.jpg"
+    },
+    {
+      "video": 2,
+      "seconds": 18.5,
+      "file": "05-two-column-split.jpg"
+    },
+    {
+      "video": 2,
+      "seconds": 23,
+      "file": "06-focused-composer.jpg"
+    },
+    {
+      "video": 2,
+      "seconds": 26,
+      "file": "07-running-split.jpg"
+    },
+    {
+      "video": 2,
+      "seconds": 30,
+      "file": "08-split-without-sidebar.jpg"
+    },
+    {
+      "video": 2,
+      "seconds": 33,
+      "file": "09-merged-tabs.jpg"
+    }
+  ],
+  "nativeInspection": {
+    "observed": [
+      "tab to right split",
+      "third tab to nested bottom split",
+      "pane header back to tab strip",
+      "tab reorder",
+      "close tab",
+      "closed conversation in history",
+      "reopen and switch to native Chat View"
+    ],
+    "notConfirmedLive": [
+      "divider ratio change; automated drags did not move the divider"
+    ],
+    "permissionPrompt": "History initially restored a terminal with a bypass-mode prompt. No was selected; no grant was accepted. Switch to Chat View restored the existing transcript.",
+    "originalLayoutRestored": "three original tabs, original order, original Claude tab selected"
+  },
+  "presentationCrop": "Handoff stills omit the top 48 pixels of their 1920px-wide extracts, keeping the functional workbench while omitting the unrelated account/usage bar. Original recordings and uncropped analysis frames remain local.",
+  "clip": {
+    "video": 2,
+    "startSeconds": 15,
+    "durationSeconds": 20,
+    "cropTopSourcePixels": 80,
+    "outputWidth": 1920,
+    "fps": 30,
+    "file": "10-drag-split-resize.mp4"
+  }
+}

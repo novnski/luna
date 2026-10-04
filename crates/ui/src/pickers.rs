@@ -1721,6 +1721,30 @@ impl Pickers {
     /// instead of going quiet and eating the very chips the rows advertise
     /// (macOS field report: "cmd shortcuts do nothing in the model
     /// selector"). Returns whether the menu was open and the slot consumed.
+    /// Close an open popover (Cmd-W inside the workbench). Returns whether
+    /// one was open.
+    pub fn dismiss_open(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.is_open() {
+            return false;
+        }
+        self.close(cx);
+        true
+    }
+
+    /// The model ids the open model menu lists, in slot order (QA
+    /// readback: slot N of `Mod+N` picks entry N-1).
+    pub fn model_row_ids(&self, cx: &App) -> Vec<String> {
+        self.model_rows(cx)
+            .iter()
+            .map(|row| row.model.id.clone())
+            .collect()
+    }
+
+    /// The model this composer would send with (QA readback).
+    pub fn current_model_id(&self, cx: &App) -> Option<String> {
+        self.effective_model_id(cx).map(str::to_string)
+    }
+
     pub fn jump_model_slot(&mut self, slot: usize, cx: &mut Context<Self>) -> bool {
         if self.open_kind() != Some(PickerKind::HarnessModel) {
             return false;
@@ -4687,7 +4711,9 @@ impl Pickers {
                     )
                     .id(("permission-row", ix))
                     .when(!supported, |row| row.opacity(0.48))
-                    .when(warning && supported, |row| row.text_color(theme.warning))
+                    .when(warning && supported, |row| {
+                        row.text_color(theme.readable_tone(theme.warning, 1.0))
+                    })
                     .when(supported, |row| {
                         row.cursor_pointer()
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -4712,7 +4738,7 @@ impl Pickers {
                                             crate::icons::icon(crate::icons::CHECK)
                                                 .size(px(14.0))
                                                 .text_color(if warning {
-                                                    theme.warning
+                                                    theme.readable_icon(theme.warning)
                                                 } else {
                                                     theme.text
                                                 }),
@@ -4738,7 +4764,7 @@ impl Pickers {
                         .px(px(10.0))
                         .py(px(6.0))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.warning)
+                        .text_color(theme.readable_tone(theme.warning, 1.0))
                         .child(error),
                 )
             })
@@ -4878,7 +4904,7 @@ impl Pickers {
             }
             Loadable::Error(error) => div()
                 .text_size(crate::typography::ui_rems(11.5))
-                .text_color(theme.danger_muted)
+                .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                 .child(SharedString::from(error.clone()))
                 .into_any_element(),
             Loadable::Idle | Loadable::Loading => div()
@@ -4918,7 +4944,7 @@ impl Pickers {
                     el.child(
                         div()
                             .text_size(crate::typography::ui_rems(10.5))
-                            .text_color(theme.danger_muted)
+                            .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                             .child(SharedString::from(error)),
                     )
                 })
@@ -5183,7 +5209,11 @@ impl Pickers {
                                     slot.child(
                                         crate::icons::icon(crate::icons::CHECK)
                                             .size(px(13.0))
-                                            .text_color(theme.accent),
+                                            .text_color(theme.readable_on_stacks(
+                                                theme.accent,
+                                                &[&[], &[theme.ink(0.05)]],
+                                                crate::theme::NON_TEXT_CONTRAST_TARGET,
+                                            )),
                                     )
                                 }),
                         )
@@ -5194,7 +5224,7 @@ impl Pickers {
                         div()
                             .text_size(crate::typography::ui_rems(10.0))
                             .line_height(px(16.0))
-                            .text_color(theme.danger_muted)
+                            .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                             .child(SharedString::from(error)),
                     )
                 })
@@ -5513,7 +5543,7 @@ impl Pickers {
                         .px(px(8.0))
                         .pt(px(3.0))
                         .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(theme.danger_muted)
+                        .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(SharedString::from(error)),
                 )
             })

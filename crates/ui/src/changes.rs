@@ -1657,6 +1657,10 @@ struct CommentDraft {
 /// (the shell calls it when the pane first opens).
 pub struct Changes {
     state: Entity<AppState>,
+    /// The chat whose checkout this surface addresses. `None` follows the
+    /// selected chat (the right pane's own); a workbench tab's Changes is
+    /// bound to that tab's chat so Git actions never reach another checkout.
+    target_chat: Option<String>,
     diffs: Vec<CheckoutDiff>,
     started: bool,
     error: Option<SharedString>,
@@ -1807,6 +1811,25 @@ impl Changes {
         }
     }
 
+    /// A surface bound to `chat_id`'s checkout, whatever chat is selected.
+    pub fn for_chat(state: Entity<AppState>, chat_id: String, cx: &mut Context<Self>) -> Self {
+        let mut changes = Self::new(state, cx);
+        changes.target_chat = Some(chat_id);
+        changes
+    }
+
+    /// The chat this surface addresses (see [`Self::target_chat`]).
+    pub fn target_chat_id(&self) -> Option<&str> {
+        self.target_chat.as_deref()
+    }
+
+    pub(crate) fn target_row<'a>(&self, state: &'a AppState) -> Option<&'a luna_proto::Chat> {
+        match &self.target_chat {
+            Some(id) => state.chats.iter().find(|chat| &chat.id == id),
+            None => state.selected_chat_row(),
+        }
+    }
+
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
         let settings = crate::settings::current(cx);
@@ -1817,6 +1840,7 @@ impl Changes {
         let git_message_events = cx.subscribe(&git_message, |_, _, _, cx| cx.notify());
         Self {
             state,
+            target_chat: None,
             mode,
             wrap_lines: settings.diff_wrap,
             diffs: Vec::new(),
@@ -1930,7 +1954,7 @@ impl Changes {
     /// and the pane sits on "Preparing diff…" forever (user report).
     fn desired_target(&self, cx: &App) -> Option<String> {
         let state = self.state.read(cx);
-        let device = state.selected_chat_row()?.device_id.clone();
+        let device = self.target_row(state)?.device_id.clone();
         (state.local_device_id.as_deref() != Some(device.as_str())).then_some(device)
     }
 
@@ -2023,7 +2047,7 @@ impl Changes {
 
     fn resolved(&self, cx: &App) -> Option<CheckoutDiff> {
         let state = self.state.read(cx);
-        let chat = state.selected_chat_row()?;
+        let chat = self.target_row(state)?;
         resolve_diff(&self.diffs, chat).cloned()
     }
 
@@ -2033,7 +2057,7 @@ impl Changes {
         if let Some(diff) = self.resolved(cx) {
             return Some(diff.cwd);
         }
-        self.state.read(cx).selected_chat_row()?.cwd.clone()
+        self.target_row(self.state.read(cx))?.cwd.clone()
     }
 
     /// The diff the pane currently displays: the watch stream for the working
@@ -2110,9 +2134,7 @@ impl Changes {
                             .is_some_and(|base| changes.branches.contains(base));
                         if !keep {
                             let current = changes
-                                .state
-                                .read(cx)
-                                .selected_chat_row()
+                                .target_row(changes.state.read(cx))
                                 .and_then(|chat| chat.branch.clone());
                             changes.base_ref =
                                 default_base_ref(&changes.branches, current.as_deref());
@@ -2144,9 +2166,7 @@ impl Changes {
             return;
         }
         let Some(chat_id) = self
-            .state
-            .read(cx)
-            .selected_chat_row()
+            .target_row(self.state.read(cx))
             .map(|chat| chat.id.clone())
         else {
             return;
@@ -2270,7 +2290,8 @@ impl Changes {
         if let Some(history) = &self.history {
             return history.clone();
         }
-        let history = cx.new(|cx| GitHistory::new(self.state.clone(), cx));
+        let target_chat = self.target_chat.clone();
+        let history = cx.new(|cx| GitHistory::new(self.state.clone(), cx).with_target(target_chat));
         self.history_events =
             Some(
                 cx.subscribe(&history, |this: &mut Self, _, event, cx| match event {
@@ -3185,9 +3206,7 @@ impl Changes {
         let engine = self.state.read(cx).engine().cloned();
         let target = self.desired_target(cx);
         let chat_id = self
-            .state
-            .read(cx)
-            .selected_chat_row()
+            .target_row(self.state.read(cx))
             .map(|chat| chat.id.clone());
         let mode = self.scope.mode().to_string();
         let base_ref = self.base_ref.clone();
@@ -3671,7 +3690,7 @@ impl Changes {
                         .flex_none()
                         .font_family(theme.font_mono.clone())
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(add_color(theme))
+                        .text_color(theme.readable_tone(add_color(theme), 1.0))
                         .child(SharedString::from(format!("+{adds}"))),
                 )
             })
@@ -3681,7 +3700,7 @@ impl Changes {
                         .flex_none()
                         .font_family(theme.font_mono.clone())
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(del_color(theme))
+                        .text_color(theme.readable_tone(del_color(theme), 1.0))
                         .child(SharedString::from(format!("−{dels}"))),
                 )
             })
@@ -3890,9 +3909,7 @@ impl Changes {
         }
         let scope = self.scope;
         let history_branch = (scope == DiffScope::History).then(|| {
-            self.state
-                .read(cx)
-                .selected_chat_row()
+            self.target_row(self.state.read(cx))
                 .and_then(|chat| chat.branch.clone())
                 .unwrap_or_else(|| "HEAD".to_string())
         });
@@ -4108,9 +4125,7 @@ impl Changes {
             return None;
         }
         let branch = self
-            .state
-            .read(cx)
-            .selected_chat_row()
+            .target_row(self.state.read(cx))
             .and_then(|chat| chat.branch.clone())
             .unwrap_or_else(|| "HEAD".to_string());
         let base = self.base_ref.clone().unwrap_or_else(|| "…".to_string());
@@ -4332,14 +4347,14 @@ impl Changes {
                     div()
                         .font_family(theme.font_mono.clone())
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(add_color(theme))
+                        .text_color(theme.readable_tone(add_color(theme), 1.0))
                         .child(SharedString::from(format!("+{}", parsed.additions))),
                 )
                 .child(
                     div()
                         .font_family(theme.font_mono.clone())
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(del_color(theme))
+                        .text_color(theme.readable_tone(del_color(theme), 1.0))
                         .child(SharedString::from(format!("−{}", parsed.deletions))),
                 )
                 .child(div().flex_1())
@@ -4362,13 +4377,80 @@ impl Changes {
 }
 
 /// Green for additions — sampled from the reference diff (soft emerald).
-fn add_color(theme: &Theme) -> gpui::Hsla {
+pub fn add_color(theme: &Theme) -> gpui::Hsla {
     theme.diff_add // emerald-400
 }
 
 /// Red for deletions — softer than the theme danger, per the reference diff.
-fn del_color(theme: &Theme) -> gpui::Hsla {
+pub fn del_color(theme: &Theme) -> gpui::Hsla {
     theme.diff_del // red-400
+}
+
+/// Hunk header text (`@@ … @@`), floored on the hunk band.
+pub fn diff_hunk_text(theme: &Theme) -> gpui::Hsla {
+    theme.readable_on(
+        theme.text_faint,
+        theme.diff_hunk_bg,
+        crate::theme::TEXT_CONTRAST_TARGET,
+    )
+}
+
+/// A diff row's tint: the added/deleted hue at ~5–6% over the pane tone,
+/// sampled from the reference.
+pub fn diff_row_wash(tone: gpui::Hsla) -> gpui::Hsla {
+    gpui::Hsla { a: 0.055, ..tone }
+}
+
+/// A row's marker, marker color, wash, accent bar and line-number color.
+/// Markers and line numbers are read text, floored on the row's own wash;
+/// the accent bar is a non-text indicator beside it.
+pub fn diff_row_paint(
+    kind: LineKind,
+    theme: &Theme,
+) -> (
+    &'static str,
+    gpui::Hsla,
+    Option<gpui::Hsla>,
+    Option<gpui::Hsla>,
+    gpui::Hsla,
+) {
+    use crate::theme::{NON_TEXT_CONTRAST_TARGET, TEXT_CONTRAST_TARGET};
+    let tinted = |marker: &'static str, tone: gpui::Hsla| {
+        let wash = diff_row_wash(tone);
+        (
+            marker,
+            theme.readable_on(tone, wash, TEXT_CONTRAST_TARGET),
+            Some(wash),
+            Some(theme.readable_on(tone.opacity(0.55), wash, NON_TEXT_CONTRAST_TARGET)),
+            theme.readable_on(tone.opacity(0.9), wash, TEXT_CONTRAST_TARGET),
+        )
+    };
+    match kind {
+        LineKind::Add => tinted("+", add_color(theme)),
+        LineKind::Del => tinted("−", del_color(theme)),
+        _ => (
+            "·",
+            theme.readable_faint(0.5),
+            None,
+            None,
+            theme.readable_faint(0.8),
+        ),
+    }
+}
+
+/// Unhighlighted code on context, added and deleted rows alike.
+pub fn diff_plain_text(theme: &Theme) -> gpui::Hsla {
+    use crate::theme::TEXT_CONTRAST_TARGET;
+    let on_add = theme.readable_on(
+        theme.text.opacity(0.92),
+        diff_row_wash(add_color(theme)),
+        TEXT_CONTRAST_TARGET,
+    );
+    theme.readable_on(
+        on_add,
+        diff_row_wash(del_color(theme)),
+        TEXT_CONTRAST_TARGET,
+    )
 }
 
 /// One notice row ("New file", "Binary file — contents not shown", …).
@@ -4398,7 +4480,7 @@ fn hunk_header_row(header: &str, theme: &Theme) -> AnyElement {
         .bg(theme.diff_hunk_bg)
         .font_family(theme.font_mono.clone())
         .text_size(crate::typography::ui_rems(11.0))
-        .text_color(theme.text_faint)
+        .text_color(diff_hunk_text(theme))
         .child(SharedString::from(header.to_string()))
         .into_any_element()
 }
@@ -4478,35 +4560,7 @@ fn diff_line_row(
         );
     }
 
-    // Row tints sampled from the reference: ~5–6% washes over the pane tone.
-    let mut add_bg = add_color(theme);
-    add_bg.a = 0.055;
-    let mut del_bg = del_color(theme);
-    del_bg.a = 0.055;
-
-    let (marker, marker_color, row_bg, accent, number_color) = match line.kind {
-        LineKind::Add => (
-            "+",
-            add_color(theme),
-            Some(add_bg),
-            Some(add_color(theme).opacity(0.55)),
-            add_color(theme).opacity(0.9),
-        ),
-        LineKind::Del => (
-            "−",
-            del_color(theme),
-            Some(del_bg),
-            Some(del_color(theme).opacity(0.55)),
-            del_color(theme).opacity(0.9),
-        ),
-        _ => (
-            "·",
-            theme.readable_faint(0.5),
-            None,
-            None,
-            theme.readable_faint(0.8),
-        ),
-    };
+    let (marker, marker_color, row_bg, accent, number_color) = diff_row_paint(line.kind, theme);
     let gutter = |no: Option<u32>, color: gpui::Hsla| {
         div()
             .w(px(gutter_px))
@@ -4527,7 +4581,7 @@ fn diff_line_row(
         &line.text,
         spans,
         &mono,
-        theme.text.opacity(0.92),
+        diff_plain_text(theme),
         theme,
     );
     let content_width = match code_width {
@@ -4632,7 +4686,7 @@ fn line_runs(
         &line.text,
         spans,
         &font(theme.font_mono.clone()),
-        theme.text.opacity(0.92),
+        diff_plain_text(theme),
         theme,
     )
 }
@@ -4650,33 +4704,7 @@ fn split_line_cell(
     code_width: DiffCodeWidth,
     scroll: Option<DiffCodeScroll>,
 ) -> gpui::Div {
-    let mut add_bg = add_color(theme);
-    add_bg.a = 0.055;
-    let mut del_bg = del_color(theme);
-    del_bg.a = 0.055;
-    let (marker, marker_color, row_bg, accent, number_color) = match line.kind {
-        LineKind::Add => (
-            "+",
-            add_color(theme),
-            Some(add_bg),
-            Some(add_color(theme).opacity(0.55)),
-            add_color(theme).opacity(0.9),
-        ),
-        LineKind::Del => (
-            "−",
-            del_color(theme),
-            Some(del_bg),
-            Some(del_color(theme).opacity(0.55)),
-            del_color(theme).opacity(0.9),
-        ),
-        _ => (
-            "·",
-            theme.readable_faint(0.5),
-            None,
-            None,
-            theme.readable_faint(0.8),
-        ),
-    };
+    let (marker, marker_color, row_bg, accent, number_color) = diff_row_paint(line.kind, theme);
     let content_width = match code_width {
         DiffCodeWidth::Clipped => None,
         DiffCodeWidth::Scrollable(metrics) => Some(metrics.split_content_width(gutter_px)),
@@ -5005,7 +5033,7 @@ impl Render for Changes {
         let base = self.base_ref.clone();
         // With no session selected (new-chat canvas) there is nothing to
         // prepare — show the quiet empty state, not an endless spinner.
-        let no_chat = self.state.read(cx).selected_chat_row().is_none();
+        let no_chat = self.target_row(self.state.read(cx)).is_none();
         let phase = if no_chat {
             DiffPhase::Clean
         } else {
@@ -5149,7 +5177,7 @@ impl Render for Changes {
                         .border_b_1()
                         .border_color(theme.border)
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.warning)
+                        .text_color(theme.readable_tone(theme.warning, 1.0))
                         .child(message),
                 )
             })

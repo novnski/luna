@@ -142,7 +142,30 @@ pub(crate) const MAX_CHILD_PROMPT_CHARS: usize = 8_000;
 pub(crate) fn validate_child_request(
     request: &luna_proto::CreateChildThreadRequest,
 ) -> Result<(), CrossTaskError> {
-    if request.prompt.trim().is_empty()
+    validate_child_fields(request, false)
+}
+
+/// The UI's blank-child path is deliberately narrower than agent creation.
+pub(crate) fn validate_child_tab_request(
+    request: &luna_proto::CreateChildThreadRequest,
+) -> Result<(), CrossTaskError> {
+    if !request.prompt.is_empty()
+        || request.cwd.is_some()
+        || request.checkout.is_some()
+        || request.permission_mode.is_some()
+        || request.report_results
+        || request.continue_parent
+    {
+        return Err(CrossTaskError::Input);
+    }
+    validate_child_fields(request, true)
+}
+
+fn validate_child_fields(
+    request: &luna_proto::CreateChildThreadRequest,
+    blank_tab: bool,
+) -> Result<(), CrossTaskError> {
+    if (!blank_tab && request.prompt.trim().is_empty())
         || request.prompt.chars().count() > MAX_CHILD_PROMPT_CHARS
         || !valid_key(&request.idempotency_key)
         || request

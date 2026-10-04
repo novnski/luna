@@ -1127,7 +1127,7 @@ impl DialogButton {
 /// recolors it and never resizes the button row.
 fn button_frame(theme: &Theme, label: &str) -> (Div, SharedString) {
     let label = SharedString::from(label.to_string());
-    let focus = theme.accent;
+    let focus = theme.focus_ring();
     let frame = div()
         .tab_index(0)
         .px(px(11.0))
@@ -1182,7 +1182,7 @@ pub fn btn_danger(theme: &Theme, label: &str) -> DialogButton {
         div: frame
             .bg(theme.danger_strong)
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(gpui::white())
+            .text_color(theme.on_danger())
             .hover(|s| s.opacity(0.9)),
         label,
     }
@@ -1271,7 +1271,7 @@ pub fn error_row(theme: &Theme, message: &str) -> gpui::Div {
         .gap(px(6.0))
         .p(px(Theme::SPACE_SM))
         .text_size(crate::typography::ui_rems(12.0))
-        .text_color(theme.danger)
+        .text_color(theme.readable_tone(theme.danger, 1.0))
         .child(gpui::SharedString::from(message.to_string()))
 }
 

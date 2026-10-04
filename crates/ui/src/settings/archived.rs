@@ -266,7 +266,7 @@ impl Render for ArchivedPage {
                     // effectively ~20% glyph (luna settings.archived.tsx).
                     crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
                         .size(px(28.0))
-                        .text_color(theme.readable_muted(0.2)),
+                        .text_color(theme.decorative_muted(0.2)),
                 )
                 .child(
                     div()

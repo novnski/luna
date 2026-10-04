@@ -120,6 +120,7 @@ pub mod backup;
 pub mod backup_control;
 pub mod change_requests;
 pub mod chat2_host;
+mod chat_workbench;
 mod claude_child_reports;
 mod claude_mcp;
 mod claude_ongoing;
@@ -291,6 +292,7 @@ impl std::fmt::Debug for EngineConfig {
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
+    chat_workbenches: chat_workbench::ChatWorkbenches,
     github_pr: source_control::pull_requests::GitHubPullRequests,
     backup_control: Option<backup_control::BackupControl>,
     pub store: Arc<DocsStore>,
@@ -678,7 +680,10 @@ impl EngineCore {
             registry.clone(),
             agent_accounts.clone(),
         ));
+        let chat_workbenches =
+            chat_workbench::ChatWorkbenches::open(profile.store_root(), device_write.handle())?;
         Ok(Self {
+            chat_workbenches,
             github_pr,
             side_chats,
             backup_control,
@@ -896,6 +901,7 @@ impl EngineCore {
         if include_backup {
             // Saved shell commands are a local desktop workflow, never relay RPCs.
             rpc = rpc.with_project_commands(self.project_commands.clone());
+            rpc = rpc.with_chat_workbenches(self.chat_workbenches.clone());
         }
         if let Some(remote_auth) = &self.remote_auth {
             rpc = rpc.with_remote_auth(remote_auth.clone());

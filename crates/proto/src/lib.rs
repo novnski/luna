@@ -6,6 +6,7 @@
 pub mod activity;
 pub mod agent;
 pub mod backup;
+pub mod chat_workbench;
 pub mod composer_catalog;
 pub mod context_control;
 pub mod cross_task_tools;
@@ -38,6 +39,7 @@ pub mod workspace;
 pub use activity::*;
 pub use agent::*;
 pub use backup::*;
+pub use chat_workbench::*;
 pub use composer_catalog::*;
 pub use context_control::*;
 pub use cross_task_tools::*;

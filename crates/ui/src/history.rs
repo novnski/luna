@@ -1302,6 +1302,8 @@ fn decode_history_avatar(encoded: &str) -> Option<Arc<Image>> {
 
 pub struct GitHistory {
     state: Entity<AppState>,
+    /// The chat whose checkout the history reads (`None`: the selected chat).
+    target_chat: Option<String>,
     started: bool,
     target_key: Option<String>,
     commits: Vec<GitHistoryCommit>,
@@ -1944,6 +1946,7 @@ impl GitHistory {
         });
         Self {
             state,
+            target_chat: None,
             started: false,
             target_key: None,
             commits: Vec::new(),
@@ -1999,9 +2002,18 @@ impl GitHistory {
         }
     }
 
+    /// Bind to `chat`'s checkout (a workbench tab's Changes).
+    pub fn with_target(mut self, chat: Option<String>) -> Self {
+        self.target_chat = chat;
+        self
+    }
+
     fn context(&self, cx: &App) -> Option<(String, String, Option<String>)> {
         let state = self.state.read(cx);
-        let chat = state.selected_chat_row()?;
+        let chat = match &self.target_chat {
+            Some(id) => state.chats.iter().find(|chat| &chat.id == id)?,
+            None => state.selected_chat_row()?,
+        };
         let cwd = chat.cwd.clone()?;
         let target = (state.local_device_id.as_deref() != Some(chat.device_id.as_str()))
             .then(|| chat.device_id.clone());
@@ -4341,7 +4353,11 @@ impl Render for GitHistory {
                         .bg(theme.danger.opacity(0.05))
                         .truncate()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.danger_muted)
+                        .text_color(theme.readable_on(
+                            theme.danger_muted,
+                            theme.danger.opacity(0.05),
+                            crate::theme::TEXT_CONTRAST_TARGET,
+                        ))
                         .child(SharedString::from(format!("Fetch failed: {error}"))),
                 )
             })
@@ -4365,7 +4381,11 @@ impl Render for GitHistory {
                             .bg(theme.danger.opacity(0.05))
                             .truncate()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.danger_muted)
+                            .text_color(theme.readable_on(
+                                theme.danger_muted,
+                                theme.danger.opacity(0.05),
+                                crate::theme::TEXT_CONTRAST_TARGET,
+                            ))
                             .child(error),
                     )
                 },

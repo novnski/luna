@@ -45,11 +45,7 @@ pub const RESIZE_DEBOUNCE_MS: u64 = 80;
 /// true tone. Explicit cell backgrounds (vim colorschemes etc.) still paint
 /// their own opaque quads on top.
 pub fn terminal_panel_bg(theme: &Theme) -> Hsla {
-    if theme.is_glass() {
-        theme.terminal.background.opacity(0.4)
-    } else {
-        theme.terminal.background
-    }
+    theme.terminal_panel_fill()
 }
 
 fn rgb8(r: u8, g: u8, b: u8) -> Hsla {
@@ -110,6 +106,141 @@ pub fn resolve_color(color: CellColor, theme: &Theme) -> Hsla {
         }
         CellColor::Rgb(r, g, b) => rgb8(r, g, b),
     }
+}
+
+/// Whether a cell color is the theme's (default foreground/background or one
+/// of the 16 ANSI slots) rather than a program's explicit choice.
+fn palette_controlled(color: CellColor) -> bool {
+    matches!(
+        color,
+        CellColor::Foreground | CellColor::Background | CellColor::Indexed(0..=15)
+    )
+}
+
+/// One cell's paint inputs, after inverse is applied.
+#[derive(Debug, Clone, Copy)]
+pub struct TerminalCellPaint {
+    pub fg: CellColor,
+    pub bg: CellColor,
+    pub ch: char,
+    pub selected: bool,
+    pub dim: bool,
+    pub hidden: bool,
+}
+
+/// Box drawing, block elements and braille: graphics a program composes
+/// from foreground ink (bars, borders, fills), painted exactly as asked.
+fn is_terminal_graphic(ch: char) -> bool {
+    matches!(ch, '\u{2500}'..='\u{259F}' | '\u{2800}'..='\u{28FF}')
+}
+
+/// The opaque color a default-background cell paints as: the panel fill
+/// over the shell chrome over the adverse desktop.
+pub fn terminal_surface(theme: &Theme) -> Hsla {
+    crate::theme::flatten(terminal_panel_bg(theme), theme.chrome_surface())
+}
+
+/// The painted foreground of one cell. Palette-controlled pairs (theme
+/// foreground, ANSI16, default or ANSI16 background, under the selection
+/// when selected) get a minimum contrast at paint (like VS Code's
+/// `minimumContrastRatio`): the hue kept, moved toward the terminal
+/// foreground only as far as the text floor needs — dim text included, it is
+/// still text. Program-chosen 256-color/true-color pairs paint exactly as
+/// asked; their contrast is the program's.
+///
+/// Order: the caller passes colors after inverse (`display_colors`), then
+/// dim applies, then the selection the text sits on, then the floor. Never
+/// adjusted: concealed cells (SGR 8 — their foreground IS the background,
+/// and stays so), block/box-drawing/braille graphics (fills and lines, not
+/// reading text), and program-chosen colors.
+pub fn terminal_paint_fg(cell: TerminalCellPaint, theme: &Theme, surface: Hsla) -> Hsla {
+    let TerminalCellPaint {
+        fg,
+        bg,
+        ch,
+        dim,
+        hidden,
+        ..
+    } = cell;
+    let mut color = resolve_color(fg, theme);
+    if hidden {
+        return color;
+    }
+    if dim {
+        color.a *= 0.6;
+    }
+    if is_terminal_graphic(ch) || !palette_controlled(fg) || !palette_controlled(bg) {
+        return color;
+    }
+    terminal_floor(
+        color,
+        terminal_cell_behind(cell, theme, surface),
+        theme.terminal.foreground,
+    )
+}
+
+/// The opaque color shown behind a cell's glyph: its background (default
+/// panel or explicit), then the selection over it when selected.
+pub fn terminal_cell_behind(cell: TerminalCellPaint, theme: &Theme, surface: Hsla) -> Hsla {
+    let base = match cell.bg {
+        CellColor::Background => surface,
+        other => crate::theme::flatten(resolve_color(other, theme), surface),
+    };
+    if cell.selected {
+        crate::theme::flatten(theme.terminal.selection, base)
+    } else {
+        base
+    }
+}
+
+/// The glyph redrawn above the focused (filled) cursor block: it sits on the
+/// cursor over the cell's shown background, so palette text is floored
+/// there. The same guards as [`terminal_paint_fg`] keep graphics and
+/// program-chosen colors exactly as asked.
+pub fn terminal_cursor_glyph_fg(cell: TerminalCellPaint, theme: &Theme, surface: Hsla) -> Hsla {
+    let painted = terminal_paint_fg(cell, theme, surface);
+    if cell.hidden
+        || is_terminal_graphic(cell.ch)
+        || !palette_controlled(cell.fg)
+        || !palette_controlled(cell.bg)
+    {
+        return painted;
+    }
+    let under_cursor =
+        crate::theme::flatten(theme.cursor, terminal_cell_behind(cell, theme, surface));
+    terminal_floor(painted, under_cursor, theme.terminal.foreground)
+}
+
+/// The floor for one resolved (foreground, opaque background, fallback)
+/// triple, memoized: a grid repeats a handful of palette pairs, so a frame
+/// pays the luminance search once per distinct pair, not once per cell.
+fn terminal_floor(color: Hsla, behind: Hsla, fallback: Hsla) -> Hsla {
+    type Key = [u32; 12];
+    thread_local! {
+        static FLOORS: std::cell::RefCell<std::collections::HashMap<Key, Hsla>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let bits = |c: Hsla| [c.h.to_bits(), c.s.to_bits(), c.l.to_bits(), c.a.to_bits()];
+    let mut key = [0u32; 12];
+    key[..4].copy_from_slice(&bits(color));
+    key[4..8].copy_from_slice(&bits(behind));
+    key[8..].copy_from_slice(&bits(fallback));
+    if let Some(hit) = FLOORS.with_borrow(|cache| cache.get(&key).copied()) {
+        return hit;
+    }
+    let floored = crate::theme::legible_on(
+        color,
+        fallback,
+        &[behind],
+        crate::theme::TEXT_CONTRAST_TARGET,
+    );
+    FLOORS.with_borrow_mut(|cache| {
+        if cache.len() > 4096 {
+            cache.clear();
+        }
+        cache.insert(key, floored);
+    });
+    floored
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +514,9 @@ pub struct TerminalPrepaint {
     /// measured the grid with.
     line_h: Pixels,
     cursor: Option<PaintQuad>,
+    /// The cell's glyph redrawn ABOVE a focused (filled) cursor block, in a
+    /// color that reads on the block as composited: `(column, row, shaped)`.
+    cursor_glyph: Option<(usize, usize, ShapedLine)>,
 }
 
 impl gpui::IntoElement for TerminalElement {
@@ -485,6 +619,7 @@ impl gpui::Element for TerminalElement {
                 cell_w,
                 line_h,
                 cursor: None,
+                cursor_glyph: None,
             };
         };
 
@@ -560,6 +695,49 @@ impl gpui::Element for TerminalElement {
             }
         });
 
+        // Under a filled block the glyph sits on the cursor color, not the
+        // cell background: redraw it above the block in a color that reads
+        // there (the guards still apply: concealed cells and graphics keep
+        // their paint; a blank cell needs nothing).
+        let cursor_glyph = snapshot.cursor.filter(|_| self.focused).and_then(|c| {
+            let cell = snapshot.lines.get(c.row)?.get(c.col)?;
+            if cell.hidden || cell.ch == ' ' || cell.wide_spacer {
+                return None;
+            }
+            let (fg, bg) = cell.display_colors();
+            let color = terminal_cursor_glyph_fg(
+                TerminalCellPaint {
+                    fg,
+                    bg,
+                    ch: cell.ch,
+                    selected: cell.selected,
+                    dim: cell.dim,
+                    hidden: false,
+                },
+                &theme,
+                terminal_surface(&theme),
+            );
+            let mut glyph_font = mono.clone();
+            if cell.bold {
+                glyph_font.weight = gpui::FontWeight::BOLD;
+            }
+            let text = SharedString::from(cell.ch.to_string());
+            let shaped = window.text_system().shape_line(
+                text.clone(),
+                font_size,
+                &[TextRun {
+                    len: text.len(),
+                    font: glyph_font,
+                    color,
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            Some((c.col, c.row, shaped))
+        });
+
         TerminalPrepaint {
             bg_quads,
             sel_quads,
@@ -567,6 +745,7 @@ impl gpui::Element for TerminalElement {
             cell_w,
             line_h,
             cursor,
+            cursor_glyph,
         }
     }
 
@@ -608,6 +787,19 @@ impl gpui::Element for TerminalElement {
             }
             if let Some(cursor) = prepaint.cursor.take() {
                 window.paint_quad(cursor);
+            }
+            if let Some((col, row, glyph)) = prepaint.cursor_glyph.take() {
+                let _ = glyph.paint(
+                    point(
+                        origin.x + prepaint.cell_w * col as f32,
+                        origin.y + prepaint.line_h * row as f32,
+                    ),
+                    prepaint.line_h,
+                    gpui::TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                );
             }
         });
     }
@@ -658,6 +850,7 @@ fn shape_row(
         runs.clear();
     }
 
+    let surface = terminal_surface(theme);
     let mut segments: Vec<(usize, ShapedLine)> = Vec::new();
     let mut text = String::with_capacity(row.len());
     let mut runs: Vec<TextRun> = Vec::new();
@@ -683,11 +876,19 @@ fn shape_row(
         if text.is_empty() {
             seg_col = col;
         }
-        let (fg, _) = cell.display_colors();
-        let mut color = resolve_color(fg, theme);
-        if cell.dim {
-            color.a *= 0.6;
-        }
+        let (fg, bg) = cell.display_colors();
+        let color = terminal_paint_fg(
+            TerminalCellPaint {
+                fg,
+                bg,
+                ch: cell.ch,
+                selected: cell.selected,
+                dim: cell.dim,
+                hidden: cell.hidden,
+            },
+            theme,
+            surface,
+        );
         let mut cell_font = mono.clone();
         cell_font.weight = if cell.bold {
             gpui::FontWeight::BOLD

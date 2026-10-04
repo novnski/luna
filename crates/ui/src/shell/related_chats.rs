@@ -1,8 +1,9 @@
 //! Related chats: one right-pane list of the chats a conversation spawned.
 //!
 //! Two kinds share it, each marked on its row:
-//! - **Child chats** are started by the conversation's agent, with fresh
-//!   context. The agent creates and manages them; the user follows them.
+//! - **Child chats** start with fresh context, linked to the conversation:
+//!   the user opens a blank one with `+` (New child chat), or the
+//!   conversation's agent starts one (`create_thread`).
 //! - **Side chats** are started by the user from a copy of the
 //!   conversation's context. Only the user creates (and ends) them.
 //!
@@ -19,7 +20,8 @@ use luna_proto::ChatIndicator;
 /// Who started a related chat.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RelatedKind {
-    /// Started by the parent conversation's agent, with fresh context.
+    /// A child of the parent conversation, with fresh context: started by
+    /// its agent (`create_thread`) or by the user (`+`, New child chat).
     Child,
     /// Started by the user from a copy of the parent's context.
     Side,
@@ -46,10 +48,43 @@ impl RelatedKind {
 
     pub(super) fn description(self) -> &'static str {
         match self {
-            Self::Child => "Started by this chat's agent, with fresh context",
-            Self::Side => "Started by you from a copy of this chat's context",
+            Self::Child => "A child of this chat, with fresh context",
+            // Main's library also lists sides forked from its children, so
+            // this names no particular source chat.
+            Self::Side => "Started by you from copied conversation context",
             Self::Alongside => "Your own chat, listed beside this one (not its child)",
         }
+    }
+}
+
+/// Who started a child, from its engine-recorded provisioning: the parent's
+/// agent or the user. Older rows without provisioning say neither.
+pub(super) fn child_origin(chat: &luna_proto::Chat) -> &'static str {
+    match chat
+        .child_thread
+        .as_ref()
+        .and_then(|child| child.provisioning.as_ref())
+        .map(|provisioning| provisioning.created_by)
+    {
+        Some(luna_proto::ChildCreator::User) => "You started it from this chat, with fresh context",
+        Some(luna_proto::ChildCreator::Agent) => "Started by this chat's agent, with fresh context",
+        None => "A child of this chat, with fresh context",
+    }
+}
+
+/// The breadcrumb's account of a child's parent, from the same record.
+pub(super) fn parent_origin(chat: &luna_proto::Chat) -> &'static str {
+    match chat
+        .child_thread
+        .as_ref()
+        .and_then(|child| child.provisioning.as_ref())
+        .map(|provisioning| provisioning.created_by)
+    {
+        Some(luna_proto::ChildCreator::User) => {
+            "This chat's parent: you started this child from it"
+        }
+        Some(luna_proto::ChildCreator::Agent) => "This chat's parent: its agent started this child",
+        None => "This chat's parent: the chat it belongs to",
     }
 }
 
@@ -58,6 +93,9 @@ impl RelatedKind {
 /// lists, from the chat row; the row's state is the fresher one.
 struct SideItem {
     id: String,
+    /// The side chat's actual source chat (Main, or a child it was forked
+    /// from). Never guessed from where the row is listed.
+    parent: String,
     state: String,
     title: SharedString,
     /// Last activity: the later of the chat row's last message and the
@@ -369,6 +407,11 @@ impl Shell {
                     .unwrap_or_else(|| meta.title.clone());
                 SideItem {
                     id: meta.id.clone(),
+                    parent: state
+                        .side_chat_rows
+                        .get(&meta.id)
+                        .map(|row| row.parent_id.clone())
+                        .unwrap_or_else(|| parent.to_string()),
                     state: state
                         .side_chat_rows
                         .get(&meta.id)
@@ -386,8 +429,24 @@ impl Shell {
                 }
             })
             .collect();
+        // Side chats forked from this chat's children (or from any chat in
+        // its workbench) list here too, under their actual source, so a
+        // closed Side tab stays reopenable from this library.
+        let layout = self.workbench.layout();
+        let listed = |row: &crate::state::SideChatRow, id: &str| {
+            row.parent_id == parent
+                || chat(row.parent_id.as_str()).and_then(super::placement::lineage_parent_id)
+                    == Some(parent)
+                || (layout.main_chat_id == parent
+                    && (layout.contains_chat(&row.parent_id)
+                        || layout.contains_chat(id)
+                        || layout
+                            .closed_tabs
+                            .iter()
+                            .any(|closed| closed.tab.chat_id == id)))
+        };
         for (id, row) in &state.side_chat_rows {
-            if row.parent_id != parent || items.iter().any(|item| item.id == *id) {
+            if !listed(row, id) || items.iter().any(|item| item.id == *id) {
                 continue;
             }
             let Some(chat) = chat(id.as_str()) else {
@@ -395,6 +454,7 @@ impl Shell {
             };
             items.push(SideItem {
                 id: id.clone(),
+                parent: row.parent_id.clone(),
                 state: row.state.clone().unwrap_or_else(|| "active".into()),
                 title: transcript::single_line(chat.title.as_deref().unwrap_or("Side chat")).into(),
                 recency_ms: chat
@@ -423,8 +483,14 @@ impl Shell {
     /// The Related chats surface: the open chat when a row was opened (the
     /// most recently opened kind when both are), else the list.
     pub(super) fn render_related_chats(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let child = self.ensure_child_chat_panel(cx);
         let side = self.ensure_side_chat_panel(cx);
+        // With the workbench, conversations open as center tabs: this pane is
+        // the library and never renders a second conversation.
+        if self.workbench_is_open(&self.active_chat).is_some() {
+            let snapshot = side.read(cx).list_snapshot();
+            return self.render_related_list(snapshot, cx);
+        }
+        let child = self.ensure_child_chat_panel(cx);
         let child_open = child.read(cx).open_chat_id().is_some();
         let side_open = side.read(cx).has_page();
         if side_open && (self.related_focus == RelatedKind::Side || !child_open) {
@@ -523,7 +589,13 @@ impl Shell {
                 project.clone().into(),
                 device.into(),
                 branch.clone(),
-                Some(kind.description().into()),
+                Some(
+                    match kind {
+                        RelatedKind::Child => child_origin(&chat),
+                        _ => kind.description(),
+                    }
+                    .into(),
+                ),
             );
             let element = self.render_chat_row(
                 ChatRowProps {
@@ -570,6 +642,7 @@ impl Shell {
                         project: parent_project.clone().into(),
                         harness: chat.config.as_ref().map(|config| config.harness),
                     }),
+                    workbench_open: self.workbench_is_open(&chat.id),
                 },
                 &theme,
                 cx,
@@ -651,7 +724,24 @@ impl Shell {
                 device: device.clone().into(),
                 model: Some(model),
                 branch: None,
-                status: Some(format!("{} · {note}", RelatedKind::Side.description()).into()),
+                status: Some(
+                    if item.parent == parent {
+                        format!("{} · {note}", RelatedKind::Side.description())
+                    } else {
+                        // Forked from a child: name its actual source.
+                        let source = self
+                            .state
+                            .read(cx)
+                            .chats
+                            .iter()
+                            .find(|chat| chat.id == item.parent)
+                            .and_then(|chat| chat.title.as_deref())
+                            .map(transcript::single_line)
+                            .unwrap_or_else(|| "another chat".into());
+                        format!("Side chat you started from {source} · {note}")
+                    }
+                    .into(),
+                ),
             };
             let pinned_at = marks.pinned_at_ms;
             let element = self.render_chat_row(
@@ -691,6 +781,7 @@ impl Shell {
                         project: parent_project.clone().into(),
                         harness: item.harness,
                     }),
+                    workbench_open: self.workbench_is_open(&item.id),
                 },
                 &theme,
                 cx,
@@ -966,7 +1057,7 @@ impl Shell {
             )
             .child(kind_line(
                 RelatedKind::Child,
-                "Child chats appear when this chat's agent starts one. Each begins with fresh context.",
+                "Child chats start with fresh context: open one with + (New child chat), or this chat's agent may start one.",
             ))
             .child(kind_line(
                 RelatedKind::Side,

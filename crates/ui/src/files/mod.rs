@@ -282,7 +282,11 @@ impl Render for FilesSurface {
                         .items_center()
                         .gap(px(6.0))
                         .text_size(crate::typography::ui_rems(10.0))
-                        .text_color(theme.warning_muted)
+                        .text_color(theme.readable_on(
+                            theme.warning_muted,
+                            theme.warning.opacity(0.045),
+                            crate::theme::TEXT_CONTRAST_TARGET,
+                        ))
                         .child(
                             crate::icons::icon(crate::icons::REFRESH)
                                 .size(px(10.5))

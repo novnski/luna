@@ -2028,7 +2028,7 @@ impl AppearancePage {
                         slot.child(
                             icons::icon(icons::CHECK)
                                 .size(px(14.0))
-                                .text_color(theme.accent),
+                                .text_color(theme.selected_row_icon(theme.accent)),
                         )
                     }))
                     .into_any_element()
@@ -2189,7 +2189,7 @@ impl AppearancePage {
                     slot.child(
                         icons::icon(icons::CHECK)
                             .size(px(14.0))
-                            .text_color(theme.accent),
+                            .text_color(theme.selected_row_icon(theme.accent)),
                     )
                 }))
                 .into_any_element()
@@ -2439,7 +2439,7 @@ impl AppearancePage {
                                 row.child(
                                     icons::icon(icons::CHECK)
                                         .size(px(14.0))
-                                        .text_color(theme.accent),
+                                        .text_color(theme.selected_row_icon(theme.accent)),
                                 )
                             })
                         }),
@@ -2799,7 +2799,11 @@ impl AppearancePage {
                         .rounded(px(8.0))
                         .bg(theme.warning.opacity(0.08))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.warning)
+                        .text_color(theme.readable_on(
+                            theme.warning,
+                            theme.warning.opacity(0.08),
+                            crate::theme::TEXT_CONTRAST_TARGET,
+                        ))
                         .child(SharedString::from(format!(
                             "{} could not be compiled · {}",
                             failure.name, failure.message
@@ -2838,7 +2842,11 @@ impl AppearancePage {
                     .gap(px(7.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .line_height(crate::typography::ui_rems(16.0))
-                    .text_color(theme.danger)
+                    .text_color(theme.readable_on(
+                        theme.danger,
+                        theme.danger.opacity(0.08),
+                        crate::theme::TEXT_CONTRAST_TARGET,
+                    ))
                     .child(
                         icons::icon(icons::DANGER_TRIANGLE)
                             .size(px(13.0))
@@ -3257,7 +3265,7 @@ impl AppearancePage {
                     })
                     .child(
                         compact_action(theme, "Remove", format!("theme-remove-{id}"))
-                            .text_color(theme.danger)
+                            .text_color(theme.readable_tone(theme.danger, 1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Err(error) = theme_library::remove(&id, cx) {
                                     this.library_error = Some(error.to_string().into());
@@ -3591,7 +3599,7 @@ impl Render for AppearancePage {
                                         "Remove",
                                         "new-thread-background-remove",
                                     )
-                                    .text_color(theme.danger)
+                                    .text_color(theme.readable_tone(theme.danger, 1.0))
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.remove_new_thread_background(cx)
                                     }))
@@ -3990,7 +3998,7 @@ impl Render for AppearancePage {
                                     div()
                                         .mt(px(8.0))
                                         .text_size(crate::typography::ui_rems(11.5))
-                                        .text_color(theme.warning)
+                                        .text_color(theme.readable_tone(theme.warning, 1.0))
                                         .child(warning),
                                 )
                             }),

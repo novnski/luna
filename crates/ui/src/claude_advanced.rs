@@ -211,7 +211,7 @@ fn task_card(theme: &Theme, task: &NativeTaskSnapshot) -> AnyElement {
     if let Some(error) = &task.error {
         card = card.child(
             div()
-                .text_color(theme.danger)
+                .text_color(theme.readable_tone(theme.danger, 1.0))
                 .line_clamp(3)
                 .child(error.clone()),
         );
@@ -322,7 +322,7 @@ fn phase_list(theme: &Theme, task: &NativeTaskSnapshot) -> AnyElement {
                     div()
                         .pl(px(21.0))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.danger)
+                        .text_color(theme.readable_tone(theme.danger, 1.0))
                         .truncate()
                         .child(error.clone()),
                 );
@@ -500,7 +500,7 @@ pub fn external_sessions_card(
                 div()
                     .px(px(16.0))
                     .pb(px(14.0))
-                    .text_color(theme.danger)
+                    .text_color(theme.readable_tone(theme.danger, 1.0))
                     .child(format!("Couldn't check Claude sessions: {error}")),
             )
         }
@@ -510,7 +510,7 @@ pub fn external_sessions_card(
                     div()
                         .px(px(16.0))
                         .pb(px(14.0))
-                        .text_color(theme.warning)
+                        .text_color(theme.readable_tone(theme.warning, 1.0))
                         .child(format!("Unavailable: {reason}")),
                 );
             } else if view.sessions.is_empty() {

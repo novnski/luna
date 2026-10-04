@@ -670,11 +670,8 @@ pub(super) fn sidebar_disclosure_header(
             div()
                 .text_size(crate::typography::ui_rems(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(if theme.appearance.is_light() {
-                    theme.text_muted
-                } else {
-                    theme.text_muted.opacity(0.5)
-                })
+                // A section label: quiet, but held to the text floor.
+                .text_color(theme.readable_muted(0.5))
                 .child(label),
         ))
         .child(sidebar_separator(theme).flex_1())
@@ -869,13 +866,10 @@ impl Shell {
         theme: &Theme,
     ) -> AnyElement {
         let resting_reveal = if open { 1.0 } else { 0.0 };
-        let chevron = icon(icons::ALT_ARROW_RIGHT).size(px(12.0)).text_color(
-            if theme.appearance.is_light() {
-                theme.text_muted
-            } else {
-                theme.text_muted.opacity(0.5)
-            },
-        );
+        // A disclosure control's state glyph: the non-text floor.
+        let chevron = icon(icons::ALT_ARROW_RIGHT)
+            .size(px(12.0))
+            .text_color(theme.readable_icon(theme.readable_muted(0.5)));
         if let Some(tween) = self
             .sidebar_disclosure_motion
             .get(key)
@@ -2198,6 +2192,7 @@ impl Shell {
                         search_query: None,
                         details: Some(details),
                         drag,
+                        workbench_open: None,
                     },
                     theme,
                     cx,
@@ -2877,7 +2872,10 @@ impl Shell {
                                 .text_color(if hovered || is_selected {
                                     theme.text
                                 } else {
-                                    theme.text.opacity(0.55)
+                                    theme.legible(
+                                        theme.text.opacity(0.55),
+                                        crate::theme::TEXT_CONTRAST_TARGET,
+                                    )
                                 })
                                 .child(title),
                         ))
@@ -4186,7 +4184,7 @@ impl Shell {
                         div()
                             .px(px(18.0))
                             .pb(px(8.0))
-                            .text_color(theme.danger)
+                            .text_color(theme.readable_tone(theme.danger, 1.0))
                             .child(error),
                     )
                 })
@@ -4312,7 +4310,7 @@ impl Shell {
                 .child(
                     popover::menu_row(&theme, false, format!("space-menu-delete-{space_id}"))
                         .id("space-menu-delete")
-                        .text_color(theme.danger)
+                        .text_color(theme.readable_tone(theme.danger, 1.0))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.close_space_menu(cx);
                             this.delete_space_confirm = Some(delete_id.clone());
@@ -4321,7 +4319,7 @@ impl Shell {
                         .child(
                             icon(icons::TRASH_BIN_MINIMALISTIC)
                                 .size(px(16.0))
-                                .text_color(theme.danger),
+                                .text_color(theme.readable_icon(theme.danger)),
                         )
                         .child(SharedString::from("Remove…")),
                 )

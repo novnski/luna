@@ -204,6 +204,9 @@ pub(super) struct SideChatPanel {
     focus_pending: bool,
     snapshot_alternative: bool,
     error: Option<String>,
+    /// A workbench tab's read-only history of one ended side chat: this id
+    /// only, never the list, Back, a composer or a write.
+    fixed: Option<String>,
     _events: Subscription,
     task: Option<Task<()>>,
     _ticker: Task<()>,
@@ -219,6 +222,61 @@ impl SideChatPanel {
                     .is_some_and(|page| page.meta.id == source))
     }
     pub(super) fn new(
+        state: Entity<AppState>,
+        composers: Entity<PaneComposers>,
+        links: crate::markdown::render::LinkUi,
+        parent: String,
+        origin: Option<(String, String)>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::construct(state, composers, links, parent, origin, cx);
+        this.action(
+            if this.origin.is_some() {
+                PanelAction::New
+            } else {
+                PanelAction::Refresh
+            },
+            cx,
+        );
+        this
+    }
+
+    /// A workbench tab's own read-only history of the side chat `id`, under
+    /// its exact source `parent`. It loads that page directly and once (no
+    /// list refresh first, so no busy guard can swallow the open), keeps
+    /// the engine-generation and owner-chat guards of every panel, and never
+    /// writes: no composer, lease, End or Back.
+    pub(super) fn new_history(
+        state: Entity<AppState>,
+        composers: Entity<PaneComposers>,
+        links: crate::markdown::render::LinkUi,
+        parent: String,
+        id: String,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut this = Self::construct(state, composers, links, parent, None, cx);
+        this.fixed = Some(id.clone());
+        this.action(PanelAction::Open(id), cx);
+        this
+    }
+
+    /// The side chat a history-only panel shows.
+    pub(super) fn fixed_id(&self) -> Option<&str> {
+        self.fixed.as_deref()
+    }
+
+    pub(super) fn error_text(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// A history tab's retry after a failed first read.
+    pub(super) fn retry_history(&mut self, cx: &mut Context<Self>) {
+        if self.fixed.is_some() {
+            self.action(PanelAction::Refresh, cx);
+        }
+    }
+
+    fn construct(
         state: Entity<AppState>,
         composers: Entity<PaneComposers>,
         links: crate::markdown::render::LinkUi,
@@ -262,6 +320,10 @@ impl SideChatPanel {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
                 if this
                     .update(cx, |panel, cx| {
+                        // A saved history has nothing to renew or poll.
+                        if panel.fixed.is_some() {
+                            return;
+                        }
                         // Persistent side chats have no lease to renew. A
                         // writable page without a first-class row reads its
                         // saved page until the row (and its watch) arrives.
@@ -294,7 +356,7 @@ impl SideChatPanel {
                 }
             }
         });
-        let mut this = Self {
+        Self {
             state,
             persistent,
             pending_create: None,
@@ -324,19 +386,11 @@ impl SideChatPanel {
             focus_pending: false,
             snapshot_alternative: false,
             error: None,
+            fixed: None,
             _events: events,
             task: None,
             _ticker: ticker,
-        };
-        this.action(
-            if this.origin.is_some() {
-                PanelAction::New
-            } else {
-                PanelAction::Refresh
-            },
-            cx,
-        );
-        this
+        }
     }
 
     /// Shell owns the asynchronous readback, so a failed unload stays visible
@@ -359,6 +413,54 @@ impl SideChatPanel {
 
     pub(super) fn page_id(&self) -> Option<&str> {
         self.page.as_ref().map(|page| page.meta.id.as_str())
+    }
+
+    /// The chat this panel lists side chats for (their source parent).
+    pub(super) fn parent_id(&self) -> &str {
+        &self.parent
+    }
+
+    /// Whether this panel's list (or open page) includes `id`.
+    pub(super) fn lists(&self, id: &str) -> bool {
+        self.page_id() == Some(id)
+            || self
+                .history
+                .as_ref()
+                .is_some_and(|history| history.items.iter().any(|meta| meta.id == id))
+    }
+
+    /// The open page when it is a writable first-class side chat that a
+    /// workbench tab can take over: `(side chat id, its source parent)`.
+    pub(super) fn first_class_page(&self, cx: &App) -> Option<(String, String)> {
+        if self.busy || !self.full_mode(cx) {
+            return None;
+        }
+        self.page
+            .as_ref()
+            .map(|page| (page.meta.id.clone(), self.parent.clone()))
+    }
+
+    /// A workbench tab took this side chat: forget the page without the
+    /// unwatch `Back` would do (the tab's view owns those watches now; doc
+    /// watches are not reference counted). A leased side chat stays parked
+    /// so the heartbeat keeps it writable. The panel returns to its list.
+    pub(super) fn hand_off_page(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        if self.busy || self.page_id() != Some(id) {
+            return false;
+        }
+        if let Some(lease) = self.lease.take() {
+            self.parked.insert(id.to_string(), lease);
+        }
+        self.page = None;
+        self.full_view = None;
+        self.transcript = None;
+        self.transcript_events = None;
+        self.before = None;
+        self.answers.clear();
+        self.task = None;
+        self.operation_label = None;
+        self.action(PanelAction::Refresh, cx);
+        true
     }
 
     /// Leave the open page for the list (its chat was deleted).
@@ -392,7 +494,8 @@ impl SideChatPanel {
     /// The `WatchChats` row is fresher than the page: End publishes `ended`
     /// before its response, and the composer locks the moment it does.
     fn writable(&self, page: &SideChatPage, cx: &App) -> bool {
-        page.meta.state == "active"
+        self.fixed.is_none()
+            && page.meta.state == "active"
             && self.can_write()
             && self
                 .state
@@ -527,6 +630,20 @@ impl SideChatPanel {
     }
 
     fn action(&mut self, action: PanelAction, cx: &mut Context<Self>) {
+        // A history tab reads its one page; it has no list to go back to,
+        // and never creates, sends, answers, stops or ends anything.
+        if self.fixed.is_some()
+            && !matches!(
+                action,
+                PanelAction::Open(_)
+                    | PanelAction::Refresh
+                    | PanelAction::Older
+                    | PanelAction::Latest
+                    | PanelAction::RevealOrigin
+            )
+        {
+            return;
+        }
         if matches!(action, PanelAction::Back) {
             if !self.is_current(cx) {
                 return;
@@ -756,6 +873,12 @@ impl SideChatPanel {
                     (
                         methods::READ_SIDE_CHAT,
                         json!({"id":page.meta.id,"lease":self.lease,"before":self.before}),
+                    )
+                } else if let Some(id) = &self.fixed {
+                    // A history tab whose first read failed retries its page.
+                    (
+                        methods::READ_SIDE_CHAT,
+                        json!({"id":id,"lease":null,"before":self.before}),
                     )
                 } else {
                     (methods::LIST_SIDE_CHATS, json!({"parentId":self.parent}))
@@ -1139,25 +1262,30 @@ impl SideChatPanel {
             meta: Some(format!("{provider} · {model} · {context}").into()),
         };
         let has_origin = page.meta.origin_message_id.is_some();
-        let header = super::pane_chat::render_pane_header(
-            &chrome,
-            PaneHeaderActions {
-                back_label: "Related chats",
-                back: Rc::new(|panel: &mut Self, cx| panel.action(PanelAction::Back, cx)),
-                open_main: None,
-                show_parent: has_origin.then(|| {
-                    Rc::new(|panel: &mut Self, cx: &mut Context<Self>| {
-                        panel.action(PanelAction::RevealOrigin, cx)
-                    }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
-                }),
-                extra: (writable && self.persistent)
-                    .then(|| self.end_control(theme, cx))
-                    .into_iter()
-                    .collect(),
-            },
-            theme,
-            cx,
-        );
+        let header = if self.fixed.is_some() {
+            self.render_history_strip(&chrome, has_origin, theme, cx)
+        } else {
+            super::pane_chat::render_pane_header(
+                &chrome,
+                PaneHeaderActions {
+                    back_label: "Related chats",
+                    back: Rc::new(|panel: &mut Self, cx| panel.action(PanelAction::Back, cx)),
+                    open_main: None,
+                    show_parent: has_origin.then(|| {
+                        Rc::new(|panel: &mut Self, cx: &mut Context<Self>| {
+                            panel.action(PanelAction::RevealOrigin, cx)
+                        }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
+                    }),
+                    extra: (writable && self.persistent)
+                        .then(|| self.end_control(theme, cx))
+                        .into_iter()
+                        .collect(),
+                },
+                theme,
+                cx,
+            )
+            .into_any_element()
+        };
 
         let mut notices: Vec<AnyElement> = Vec::new();
         if let Some(label) = self.operation_label {
@@ -1290,6 +1418,54 @@ impl SideChatPanel {
             .child(super::pane_chat::render_pane_body(
                 notices, transcript, false, composer, theme,
             ))
+            .into_any_element()
+    }
+
+    /// A history tab's one quiet row (the tab already names the chat): its
+    /// read-only status, its exact source parent, and Show in parent when
+    /// the side chat quoted a message there.
+    fn render_history_strip(
+        &self,
+        chrome: &PaneChatChrome,
+        has_origin: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let muted = theme.readable_muted(0.7);
+        div()
+            .id("side-history-strip")
+            .w_full()
+            .flex_none()
+            .h(px(32.0))
+            .px(px(14.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .text_size(crate::typography::ui_rems(11.5))
+            .text_color(muted)
+            .when_some(chrome.status.clone(), |row, (label, _, _)| {
+                row.child(div().flex_none().child(label))
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.decorative_muted(0.4))
+                    .child("·"),
+            )
+            .child(div().min_w_0().truncate().child(SharedString::from(format!(
+                "Side chat from {}",
+                chrome.parent_title
+            ))))
+            .child(div().flex_1())
+            .when(has_origin, |row| {
+                row.child(
+                    popover::btn_ghost(theme, "Show in parent", "side-history-origin")
+                        .id("side-history-origin")
+                        .on_click(cx.listener(|panel, _, _, cx| {
+                            panel.action(PanelAction::RevealOrigin, cx)
+                        })),
+                )
+            })
             .into_any_element()
     }
 
@@ -1901,8 +2077,13 @@ impl Shell {
         // repaint the shell while it lists, and once when a page opens or
         // closes. Loaded ids also feed the related-chat counts.
         self.side_chat_listing = false;
-        self.side_chat_observation = Some(cx.observe(&panel, |shell, panel, cx| {
-            let panel = panel.read(cx);
+        self.side_chat_observation = Some(cx.observe(&panel, |shell, panel_entity, cx| {
+            // A writable side chat the panel just created or opened belongs
+            // in a center tab when the workbench is available.
+            if shell.workbench_available() && panel_entity.read(cx).first_class_page(cx).is_some() {
+                shell.adopt_side_page(panel_entity.clone(), cx);
+            }
+            let panel = panel_entity.read(cx);
             let listing = panel.page.is_none();
             let mut indexed = false;
             if let Some(history) = &panel.history {

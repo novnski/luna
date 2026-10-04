@@ -24,6 +24,9 @@ pub mod capabilities {
     /// Durable side chats have no view lease or expiry; only explicit End closes them.
     pub const SIDE_CHAT_PERSISTENCE_V1: &str = "side-chat-persistence-v1";
 
+    /// Profile-local tab/split layouts and user-created blank child tabs.
+    pub const CHAT_WORKBENCH_V1: &str = "chat-workbench-v1";
+
     pub const CURRENT: &[&str] = &[
         LUNA_OWNER_IPC_V1,
         MESSAGE_QUEUE_V1,
@@ -35,6 +38,7 @@ pub mod capabilities {
         SESSION_HISTORY_SEARCH_V1,
         SIDE_CHAT_TASK_COMMANDS_V1,
         SIDE_CHAT_PERSISTENCE_V1,
+        CHAT_WORKBENCH_V1,
     ];
 
     pub fn current() -> Vec<String> {

@@ -333,6 +333,9 @@ enum TaskCommandIntent {
         /// Engine-set only; absent for legacy payloads (unchanged hash).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         access_grant: Option<child_threads::ChildAccessGrant>,
+        /// Trusted user tab creation only; absent on legacy/agent commands.
+        #[serde(default, skip_serializing_if = "child_threads::not_draft")]
+        draft: bool,
     },
     ChildOutcome {
         outcome: luna_proto::ChildThreadOutcome,
@@ -1226,6 +1229,7 @@ mod prompt_stash;
 mod side_chats;
 
 pub struct EngineRpc {
+    chat_workbenches: Option<crate::chat_workbench::ChatWorkbenches>,
     composer_catalog: std::sync::Mutex<crate::composer_catalog::CatalogCache>,
     github_pr: Option<crate::source_control::pull_requests::GitHubPullRequests>,
     side_chats: Option<crate::side_chats::SideChats>,
@@ -1635,9 +1639,13 @@ impl EngineRpc {
             device_id: doc_host.device_id().to_string(),
             workspace_scope,
             profile_id: Some(workspace.profile_id(workspace_scope)),
-            capabilities: luna_proto::capabilities::current(),
+            capabilities: luna_proto::capabilities::current()
+                .into_iter()
+                .filter(|capability| capability != luna_proto::capabilities::CHAT_WORKBENCH_V1)
+                .collect(),
         };
         let rpc = Self {
+            chat_workbenches: None,
             composer_catalog: std::sync::Mutex::new(
                 crate::composer_catalog::CatalogCache::default(),
             ),
@@ -5384,6 +5392,7 @@ impl EngineRpc {
                 parent_task_id,
                 request,
                 access_grant,
+                draft,
             } => self
                 .apply_child_creation(
                     command_id,
@@ -5391,6 +5400,7 @@ impl EngineRpc {
                     &parent_task_id,
                     request,
                     access_grant,
+                    draft,
                     send_fence,
                 )
                 .map(Some),
@@ -9872,6 +9882,26 @@ impl RpcService for EngineRpc {
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
                 RpcReply::value(&view)
             }
+            methods::GET_CHAT_WORKBENCH => {
+                let p: luna_proto::GetChatWorkbenchRequest = parse_params(params)?;
+                RpcReply::value(&self.read_chat_workbench(&p.main_chat_id)?)
+            }
+            methods::WATCH_CHAT_WORKBENCH => {
+                let p: luna_proto::GetChatWorkbenchRequest = parse_params(params)?;
+                self.read_chat_workbench(&p.main_chat_id)?;
+                let receiver = self.chat_workbenches_service()?.watch(&p.main_chat_id)
+                    .map_err(|error| RpcError::Failed(error.to_string()))?;
+                Ok(RpcReply::Stream(watch_stream(receiver)))
+            }
+            methods::MUTATE_CHAT_WORKBENCH => {
+                let p: luna_proto::MutateChatWorkbenchRequest = parse_params(params)?;
+                RpcReply::value(&self.mutate_chat_workbench(p)?)
+            }
+            methods::CREATE_CHILD_TAB => {
+                self.chat_workbenches_service()?;
+                let p: luna_proto::CreateChildTabRequest = parse_params(params)?;
+                RpcReply::value(&self.create_child_tab(p).await?)
+            }
             methods::CREATE_CHILD_THREAD => Err(RpcError::Failed(
                 "Child chats are created by the parent agent using create_thread. Use New side chat to fork a conversation yourself.".into(),
             )),
@@ -13062,5 +13092,7 @@ mod context_usage_tests {
     }
 }
 
+#[path = "chat_workbench_rpc.rs"]
+mod chat_workbench;
 #[path = "child_threads.rs"]
 mod child_threads;

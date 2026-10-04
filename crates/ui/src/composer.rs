@@ -4794,10 +4794,17 @@ pub struct Composer {
     /// another chat's request when the user navigates quickly.
     interrupting: HashSet<String>,
     interrupt_tasks: HashMap<String, Task<()>>,
+    /// QA: the outcome of each chat's latest Stop — the engine's receipt, or
+    /// the error the user saw.
+    #[cfg(feature = "appshots-fixture")]
+    pub(crate) last_stop: HashMap<String, Result<luna_proto::CommandReceipt, String>>,
     /// Stable outer composer width supplied by the shell. Unlike Taffy's
     /// provisional input measurements, this changes only when the actual
     /// conversation column changes and can safely drive a follow-up render.
     last_available_width: Option<f32>,
+    /// The workbench frame's bottom row names the session's checkout and
+    /// branch, so the session footer leaves them out (drafts keep theirs).
+    frame_footer: bool,
     /// The controls row's last measured fit (fixture/diagnostic readback).
     controls_row: Option<ControlsRowMeasure>,
     /// In-flight compact↔expanded morph (one per committed flip; manual
@@ -4928,6 +4935,15 @@ impl Composer {
 
     /// Feed the stable conversation-column width into responsive composer
     /// controls.
+    /// See [`Self::frame_footer`]: the workbench frame owns the session's
+    /// checkout/branch labels while this composer renders inside it.
+    pub fn set_frame_footer(&mut self, frame_footer: bool, cx: &mut Context<Self>) {
+        if self.frame_footer != frame_footer {
+            self.frame_footer = frame_footer;
+            cx.notify();
+        }
+    }
+
     pub fn set_available_width(&mut self, width: f32, cx: &mut Context<Self>) {
         let composer_width = width.clamp(0.0, COMPOSER_MAX_WIDTH);
         if composer_width_changed(self.last_available_width, composer_width) {
@@ -5137,6 +5153,8 @@ impl Composer {
             send_task: None,
             interrupting: HashSet::new(),
             interrupt_tasks: HashMap::new(),
+            #[cfg(feature = "appshots-fixture")]
+            last_stop: HashMap::new(),
             editing_queued: None,
             queue_edit_lease_id: None,
             queue_edit_base_text_hash: None,
@@ -5156,6 +5174,7 @@ impl Composer {
             queue_previews: HashMap::new(),
             queue_removing: HashSet::new(),
             last_available_width: None,
+            frame_footer: false,
             controls_row: None,
             flip_morph: None,
             last_rendered_height: 0.0,
@@ -8659,7 +8678,7 @@ impl Composer {
                     .px(px(12.0))
                     .py(px(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.danger_muted)
+                    .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                     .child(error),
             );
         } else if self.mention.results.is_empty() && self.mention.native_results.is_empty() {
@@ -8786,7 +8805,7 @@ impl Composer {
                             .child(
                                 crate::icons::icon(crate::icons::MAGIC_WAND_3)
                                     .size(px(14.0))
-                                    .text_color(theme.warning),
+                                    .text_color(theme.readable_icon(theme.warning)),
                             )
                             .child(
                                 div()
@@ -8878,7 +8897,7 @@ impl Composer {
                                 style.bg(accent.opacity(0.18)).text_color(accent)
                             })
                             .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.accent)
+                            .text_color(theme.readable_tone(theme.accent, 1.0))
                             .child("Retry integrations")
                             .on_click(cx.listener(|this, _, _, cx| this.retry_native_catalog(cx))),
                     ),
@@ -9159,7 +9178,7 @@ impl Composer {
                     .px(px(12.0))
                     .py(px(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.danger_muted)
+                    .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                     .child(error),
             );
         } else if self.slash.filtered.is_empty() {
@@ -9263,7 +9282,7 @@ impl Composer {
                         .px(px(12.0))
                         .py(px(8.0))
                         .text_size(crate::typography::ui_rems(11.5))
-                        .text_color(theme.danger_muted)
+                        .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(error),
                 );
             }
@@ -10724,6 +10743,18 @@ impl Composer {
         let failure_chat = chat_id.clone();
         let task = cx.spawn(async move |this, cx| {
             let result = crate::task_commands::execute(&engine, &task_chat_id, intent).await;
+            #[cfg(feature = "appshots-fixture")]
+            {
+                let outcome = result
+                    .as_ref()
+                    .map(Clone::clone)
+                    .map_err(|err| err.to_string());
+                let chat = task_chat_id.clone();
+                this.update(cx, |composer, _| {
+                    composer.last_stop.insert(chat, outcome);
+                })
+                .ok();
+            }
             if let Err(err) = result {
                 this.update(cx, |composer, cx| {
                     composer.interrupting.remove(&task_chat_id);
@@ -11822,7 +11853,11 @@ impl Composer {
                                         crate::theme::focus_ring(style, popup_focus)
                                     })
                                     .cursor_pointer()
-                                    .hover(|style| style.text_color(theme.danger_muted))
+                                    .hover(|style| {
+                                        style.text_color(
+                                            theme.readable_tone(theme.danger_muted, 1.0),
+                                        )
+                                    })
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.delete_stashed_prompt(id.clone(), cx);
                                     }))
@@ -12174,7 +12209,7 @@ impl Render for Composer {
                                             .tab_index(0)
                                             .cursor_pointer()
                                             .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(theme.accent)
+                                            .text_color(theme.readable_tone(theme.accent, 1.0))
                                             .hover(move |style| style.bg(hover_bg))
                                             .child("Restore message")
                                             .on_click(cx.listener(|this, _, _, cx| {
@@ -12419,16 +12454,30 @@ impl Render for Composer {
 
         // Compensate for the transcript canvas beneath the frosted surface.
         // Keep the opaque fallback when frost is disabled or unsupported.
-        let pill = composer_surface(&theme, surface_radius).on_mouse_down(
-            MouseButton::Left,
-            cx.listener(|this, _, window, cx| {
-                // Padding and action controls are part of the text composer.
-                // Open menus keep their own keyboard/search focus.
-                if !this.pickers.read(cx).is_open() {
-                    window.focus(&this.input.focus_handle(cx), cx);
-                }
-            }),
-        );
+        // Over new-thread artwork the pill sits on the image's half-strength
+        // cutout reveal: thicken its plate so text reads on any image.
+        let artwork_strength = (new_thread_chrome_opacity > 0.0
+            && crate::settings::current(cx)
+                .new_thread_composer_background
+                .is_some())
+        .then(|| {
+            crate::shell::new_thread_background_opacity(theme.is_frost())
+                * crate::new_thread_background_mask::CUTOUT_REVEAL_OPACITY
+        });
+        let pill = composer_surface(&theme, surface_radius)
+            .when_some(artwork_strength, |pill, strength| {
+                pill.bg(theme.artwork_composer_plate(strength))
+            })
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    // Padding and action controls are part of the text composer.
+                    // Open menus keep their own keyboard/search focus.
+                    if !this.pickers.read(cx).is_open() {
+                        window.focus(&this.input.focus_handle(cx), cx);
+                    }
+                }),
+            );
         let surface_width = self
             .surface_bounds
             .get()
@@ -12516,10 +12565,33 @@ impl Render for Composer {
                     )
                     .child(send_button),
             );
+        // With new-thread artwork behind the composer, the selector labels
+        // would sit directly on arbitrary image pixels (feathered above the
+        // pill, half-strength below it). Give their rows the composer's own
+        // plate so the text floor holds on light or dark artwork.
+        let artwork_plate = {
+            let artwork = crate::settings::current(cx)
+                .new_thread_composer_background
+                .is_some();
+            let plate = Theme::of(cx).artwork_selector_plate();
+            move |row: gpui::AnyElement| -> gpui::AnyElement {
+                if artwork {
+                    div()
+                        .px(px(4.0))
+                        .py(px(1.0))
+                        .rounded(px(8.0))
+                        .bg(plate)
+                        .child(row)
+                        .into_any_element()
+                } else {
+                    row
+                }
+            }
+        };
         let new_thread_target_selectors = (new_thread_chrome_opacity > 0.0).then(|| {
-            self.pickers.update(cx, |pickers, cx| {
+            artwork_plate(self.pickers.update(cx, |pickers, cx| {
                 pickers.render_new_thread_target_selectors(cx)
-            })
+            }))
         });
         let new_thread_git_selectors = (new_thread_chrome_opacity > 0.0)
             .then(|| {
@@ -12527,7 +12599,8 @@ impl Render for Composer {
                     pickers.render_new_thread_git_selectors(cx)
                 })
             })
-            .flatten();
+            .flatten()
+            .map(artwork_plate);
         let has_new_thread_git_selectors = self
             .state
             .read(cx)
@@ -12607,7 +12680,9 @@ impl Render for Composer {
             session_chrome
         };
         let container = if bottom_slot > 0.0 {
-            let footer = (session_chrome_opacity > 0.0).then(|| {
+            let framed_session =
+                self.frame_footer && self.binding.chat_row(self.state.read(cx)).is_some();
+            let footer = (session_chrome_opacity > 0.0 && !framed_session).then(|| {
                 self.pickers
                     .update(cx, |pickers, cx| pickers.render_footer(cx))
             });
