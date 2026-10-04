@@ -41,14 +41,24 @@ fn create_outcome_unknown<E>(result: &Result<Result<Value, luna_rpc::RpcError>, 
     }
 }
 
-/// `id`'s fork source (the chat it was forked from), when `id` is a fork.
-/// The source may since have been deleted: the fork stays a thread.
+/// `id`'s source when it is a Side chat (it carries that chat's context):
+/// a service side chat's own row, else the authoritative lineage the chats
+/// watch publishes (`forkSourceTaskId`, which also covers generic history
+/// forks). The source may since have been deleted: the chat stays a thread.
 pub(super) fn fork_source<'a>(state: &'a AppState, id: &str) -> Option<&'a str> {
     state
         .side_chat_rows
         .get(id)
         .map(|row| row.parent_id.as_str())
+        .or_else(|| state.fork_source_rows.get(id).map(String::as_str))
         .filter(|source| *source != id)
+}
+
+/// A chat the side chat service owns (its tab carries a side-parent hint
+/// and its service rows). A generic history fork is not one: it opens as an
+/// ordinary chat tab, and no service-only call is made for it.
+pub(super) fn is_service_side_chat(state: &AppState, id: &str) -> bool {
+    state.side_chat_rows.contains_key(id)
 }
 
 /// Whether `id` is a fork (a side thread) at all.
@@ -337,7 +347,10 @@ impl Shell {
     /// Open a side thread: a workbench tab under its source, or the
     /// selected chat without the workbench. It is an ordinary thread.
     pub(super) fn open_side_chat_in_pane(&mut self, id: String, cx: &mut Context<Self>) {
-        if !self.open_related_in_workbench(id.clone(), true, cx) {
+        // Only a service side chat's tab carries the side-parent hint; a
+        // generic history fork opens as an ordinary chat tab.
+        let service = is_service_side_chat(self.state.read(cx), &id);
+        if !self.open_related_in_workbench(id.clone(), service, cx) {
             self.open_chat(id, cx);
         }
     }

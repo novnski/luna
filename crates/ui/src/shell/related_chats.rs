@@ -33,6 +33,16 @@ pub(crate) enum RelatedKind {
 }
 
 impl RelatedKind {
+    /// What the UI calls this kind.
+    pub(super) fn display(self) -> &'static str {
+        match self {
+            Self::Child => "New thread",
+            Self::Side => "Side chat",
+            Self::Alongside => "Alongside",
+        }
+    }
+
+    /// The stable identifier QA readback uses.
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Child => "Child chat",
@@ -51,9 +61,9 @@ impl RelatedKind {
 
     pub(super) fn description(self) -> &'static str {
         match self {
-            Self::Child => "A child of this chat, with fresh context",
+            Self::Child => "A new thread from this chat; its context is not carried over",
             // A nested row says its actual source separately.
-            Self::Side => "Started by you from copied conversation context",
+            Self::Side => "Carries this chat's context, captured when it was created",
             Self::Alongside => "Your own chat, listed beside this one (not its child)",
         }
     }
@@ -68,9 +78,13 @@ pub(super) fn child_origin(chat: &luna_proto::Chat) -> &'static str {
         .and_then(|child| child.provisioning.as_ref())
         .map(|provisioning| provisioning.created_by)
     {
-        Some(luna_proto::ChildCreator::User) => "You started it from this chat, with fresh context",
-        Some(luna_proto::ChildCreator::Agent) => "Started by this chat's agent, with fresh context",
-        None => "A child of this chat, with fresh context",
+        Some(luna_proto::ChildCreator::User) => {
+            "A new thread you started from this chat; its context is not carried over"
+        }
+        Some(luna_proto::ChildCreator::Agent) => {
+            "A new thread this chat's agent started; its context is not carried over"
+        }
+        None => "A new thread from this chat; its context is not carried over",
     }
 }
 
@@ -83,10 +97,12 @@ pub(super) fn parent_origin(chat: &luna_proto::Chat) -> &'static str {
         .map(|provisioning| provisioning.created_by)
     {
         Some(luna_proto::ChildCreator::User) => {
-            "This chat's parent: you started this child from it"
+            "This thread's parent: you started this new thread from it"
         }
-        Some(luna_proto::ChildCreator::Agent) => "This chat's parent: its agent started this child",
-        None => "This chat's parent: the chat it belongs to",
+        Some(luna_proto::ChildCreator::Agent) => {
+            "This thread's parent: its agent started this new thread"
+        }
+        None => "This thread's parent: the chat it was created from",
     }
 }
 
@@ -533,7 +549,7 @@ impl Shell {
                 !settled && spaces::can_manually_settle_chat(&chat, status, has_attention, false);
             let archived = chat.archived || matches!(pending, Some(TaskConfirmation::Archive));
             let untitled = match kind {
-                RelatedKind::Child => "New child chat",
+                RelatedKind::Child => "New thread",
                 RelatedKind::Side => "Side chat",
                 RelatedKind::Alongside => "Untitled chat",
             };
@@ -836,11 +852,11 @@ impl Shell {
             )
             .child(kind_line(
                 RelatedKind::Child,
-                "Child chats start with fresh context: open one with + (New child chat), or this chat's agent may start one.",
+                "New threads start fresh: they don't carry this chat's context. Start one with +, or this chat's agent may start one.",
             ))
             .child(kind_line(
                 RelatedKind::Side,
-                "Side chats are yours: ask something on the side from a copy of this chat's context.",
+                "Side chats carry this chat's context, captured when you start one; later messages here are not copied.",
             ))
             .child(
                 div().pt(px(2.0)).child(
@@ -949,10 +965,18 @@ impl Shell {
                 .collect::<serde_json::Map<_, _>>(),
             // Each fork's source (a link: the source may be deleted).
             "forkSources": state
-                .side_chat_rows
+                .fork_source_rows
                 .iter()
-                .map(|(id, row)| (id.clone(), serde_json::json!(row.parent_id)))
+                .map(|(id, source)| (id.clone(), serde_json::json!(source)))
+                .chain(
+                    state
+                        .side_chat_rows
+                        .iter()
+                        .map(|(id, row)| (id.clone(), serde_json::json!(row.parent_id))),
+                )
                 .collect::<serde_json::Map<_, _>>(),
+            // Service side chats only (their tabs carry the side-parent hint).
+            "serviceSideChats": state.side_chat_rows.keys().cloned().collect::<Vec<_>>(),
             // Each library's rows as the lineage builds them:
             // `[chat, kind, source when nested]`.
             "relatedTrees": ({

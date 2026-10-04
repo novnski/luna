@@ -1107,6 +1107,14 @@ impl Theme {
         flatten(self.glass(), self.adverse_backdrop())
     }
 
+    /// Every tooltip and hover card's fill: the theme's overlay surface,
+    /// composited to an opaque color (the reading surface "overlay"), so no
+    /// underlying text or image shows through in any theme or surface
+    /// preference. Blur alone never made a translucent card readable.
+    pub fn tooltip_surface(&self) -> Hsla {
+        flatten(self.glass_overlay(), self.chrome_surface())
+    }
+
     /// The opaque colors text actually sits on, as composited: shell chrome
     /// (the frost over the adverse desktop for this appearance), its hover
     /// and selected washes, the workbench canvas, raised chips, floating

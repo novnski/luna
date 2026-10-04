@@ -104,7 +104,13 @@ actions!(
         NextSession,
         PrevSession,
         ArchiveSession,
-        ReopenClosedTab
+        ReopenClosedTab,
+        OpenCreationChooser,
+        NewThreadInSplit,
+        PreviousWorkbenchTab,
+        NextWorkbenchTab,
+        PreviousWorkbenchGroup,
+        NextWorkbenchGroup
     ]
 );
 
@@ -402,14 +408,56 @@ pub fn apply_keymap(
         // Fixed: ⌘K summons the command palette.
         // Pressing it again dismisses.
         KeyBinding::new(&platform_combo("mod-k"), ToggleCommandPalette, None),
-        // Fixed: ⌘⇧T reopens the newest closed workbench tab.
-        KeyBinding::new(&platform_combo("mod-shift-t"), ReopenClosedTab, None),
         KeyBinding::new(
             &valid_or_default(&keymap.open_model_picker, "mod-/"),
             OpenModelPicker,
             None,
         ),
     ]);
+    // Tabs and splits: each binds its configured chord; an empty one (the
+    // user cleared it, or an upgrade found its default taken) binds nothing.
+    let workbench_bindings: [(ShortcutId, Box<dyn Fn(&str) -> KeyBinding>); 7] = [
+        (
+            ShortcutId::NewThreadChooser,
+            Box::new(|combo: &str| KeyBinding::new(combo, OpenCreationChooser, None)),
+        ),
+        (
+            ShortcutId::NewThreadSplit,
+            Box::new(|combo: &str| KeyBinding::new(combo, NewThreadInSplit, None)),
+        ),
+        (
+            ShortcutId::PreviousTab,
+            Box::new(|combo: &str| KeyBinding::new(combo, PreviousWorkbenchTab, None)),
+        ),
+        (
+            ShortcutId::NextTab,
+            Box::new(|combo: &str| KeyBinding::new(combo, NextWorkbenchTab, None)),
+        ),
+        (
+            ShortcutId::PreviousGroup,
+            Box::new(|combo: &str| KeyBinding::new(combo, PreviousWorkbenchGroup, None)),
+        ),
+        (
+            ShortcutId::NextGroup,
+            Box::new(|combo: &str| KeyBinding::new(combo, NextWorkbenchGroup, None)),
+        ),
+        (
+            ShortcutId::ReopenTab,
+            Box::new(|combo: &str| KeyBinding::new(combo, ReopenClosedTab, None)),
+        ),
+    ];
+    for (id, bind) in workbench_bindings {
+        let combo = keymap.get(id);
+        if combo.is_empty() {
+            continue;
+        }
+        let combo = platform_combo(combo);
+        if Keystroke::parse(&combo).is_ok() {
+            cx.bind_keys([bind(&combo)]);
+        } else {
+            tracing::warn!(%combo, "unparseable workbench shortcut; leaving it unbound");
+        }
+    }
     if !keymap.open_activity.is_empty() {
         let combo = platform_combo(&keymap.open_activity);
         if !crate::settings::activity_combo_is_reserved(&keymap.open_activity)
@@ -1004,7 +1052,7 @@ pub(super) fn related_kind_badge(kind: related_chats::RelatedKind, theme: &Theme
                     crate::theme::NON_TEXT_CONTRAST_TARGET,
                 )),
         )
-        .child(kind.label())
+        .child(kind.display())
 }
 
 /// Ghost row following the pointer while a sidebar task drags. It keeps the
@@ -1123,7 +1171,7 @@ impl Render for SidebarThreadTooltip {
             .rounded(px(9.0))
             .border_1()
             .border_color(theme.border_strong)
-            .bg(crate::popover::surface_bg(theme))
+            .bg(theme.tooltip_surface())
             .shadow_md()
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
@@ -1179,7 +1227,7 @@ impl Render for SurfaceTabTooltip {
             .rounded(px(6.0))
             .border_1()
             .border_color(theme.border)
-            .bg(crate::popover::surface_bg(theme))
+            .bg(theme.tooltip_surface())
             .text_size(crate::typography::ui_rems(10.5))
             .text_color(theme.text_muted)
             .child(self.text.clone());
@@ -2337,6 +2385,13 @@ pub struct Shell {
     debug_gate: Option<GatePhase>,
     debug_upload: Option<String>,
     sidebar_tween: Option<WidthTween>,
+    /// Settings' own navigation visibility, for this visit only (never
+    /// saved): entering Settings always shows its navigation whatever the
+    /// chat sidebar's saved collapse, and leaving restores the chat's.
+    settings_nav_collapsed: bool,
+    /// Whether the last render was on the Settings route (to animate the
+    /// sidebar between the two visibilities when the route changes).
+    sidebar_on_settings: bool,
     sidebar_edge_bounce: Option<motion::ResizeEdgeBounce>,
     /// Boundary currently held during a sidebar drag. Cleared on re-entry or
     /// release so the next genuine edge crossing can acknowledge the limit.
@@ -2806,6 +2861,8 @@ impl Shell {
             debug_gate,
             debug_upload,
             sidebar_tween: None,
+            settings_nav_collapsed: false,
+            sidebar_on_settings: false,
             sidebar_edge_bounce: None,
             sidebar_resize_edge: None,
             pane_resize_active: None,
@@ -3211,11 +3268,51 @@ impl Shell {
 
     // ---- layout state ----
 
+    /// Whether the sidebar is collapsed on this route: Settings' own per-visit
+    /// state there, the saved chat preference everywhere else.
+    fn sidebar_collapsed(&self) -> bool {
+        if matches!(self.route, Route::Settings(_)) {
+            self.settings_nav_collapsed
+        } else {
+            self.settings.sidebar_collapsed
+        }
+    }
+
     fn sidebar_target(&self) -> f32 {
-        if self.settings.sidebar_collapsed {
+        if self.sidebar_collapsed() {
             0.0
         } else {
             self.settings.sidebar_width
+        }
+    }
+
+    /// The route moved into or out of Settings: Settings opens with its
+    /// navigation shown, and the sidebar animates between the two routes'
+    /// visibilities (the saved chat preference is never written here).
+    fn sync_route_sidebar(&mut self) {
+        let on_settings = matches!(self.route, Route::Settings(_));
+        if on_settings == self.sidebar_on_settings {
+            return;
+        }
+        let previous_collapsed = if self.sidebar_on_settings {
+            self.settings_nav_collapsed
+        } else {
+            self.settings.sidebar_collapsed
+        };
+        let previous_target = if previous_collapsed {
+            0.0
+        } else {
+            self.settings.sidebar_width
+        };
+        let from = self.eval_tween(self.sidebar_tween, previous_target);
+        self.sidebar_on_settings = on_settings;
+        if on_settings {
+            self.settings_nav_collapsed = false;
+        }
+        let to = self.sidebar_target();
+        if (from - to).abs() > 0.5 {
+            self.sidebar_edge_bounce = None;
+            self.sidebar_tween = Some(WidthTween::new(from, to));
         }
     }
 
@@ -3283,6 +3380,14 @@ impl Shell {
         self.sidebar_resize_edge = None;
         self.pane_resize_active = None;
         self.pane_resize_dragging = None;
+        // In Settings the toggle collapses only Settings' own navigation for
+        // this visit; the chat sidebar's saved preference stays as it is.
+        if matches!(self.route, Route::Settings(_)) {
+            self.settings_nav_collapsed = !self.settings_nav_collapsed;
+            self.sidebar_tween = Some(WidthTween::new(from, self.sidebar_target()));
+            cx.notify();
+            return;
+        }
         self.settings.sidebar_collapsed = !self.settings.sidebar_collapsed;
         if self.settings.sidebar_collapsed {
             self.usage_card_open = false;
@@ -4799,7 +4904,11 @@ impl Shell {
         let x = f32::from(event.event.position.x);
         let sample = sidebar_drag_sample(x, self.sidebar_resize_edge, self.reduced_motion);
         self.settings.sidebar_width = sample.width;
-        self.settings.sidebar_collapsed = false;
+        if matches!(self.route, Route::Settings(_)) {
+            self.settings_nav_collapsed = false;
+        } else {
+            self.settings.sidebar_collapsed = false;
+        }
         self.pane_resize_dragging = Some(PaneResizeKind::Sidebar);
         self.sidebar_tween = None; // live drag tracks the pointer directly
         if sample.starts_bounce {
@@ -5903,7 +6012,7 @@ impl Shell {
                 };
                 if !unchanged {
                     shell.sidebar_notice =
-                        Some("Task changed while opening the fork review.".into());
+                        Some("Task changed while opening the side chat review.".into());
                     return;
                 }
                 let permission_ceiling = config.effective_permission_mode;
@@ -5911,8 +6020,8 @@ impl Shell {
                 let source_title = chat
                     .title
                     .as_deref()
-                    .map(|title| format!("{title} (fork)"))
-                    .unwrap_or_else(|| "Forked task".into());
+                    .map(|title| format!("{title} (side chat)"))
+                    .unwrap_or_else(|| "Side chat".into());
                 let title = cx.new(|cx| ComposerInput::new("Task title (optional)", cx));
                 title.update(cx, |input, cx| input.set_text(source_title, cx));
                 let prompt = cx.new(|cx| ComposerInput::new("First prompt (optional)", cx));
@@ -6846,6 +6955,7 @@ impl Shell {
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
             || self.add_space.is_some()
+            || self.workbench.chooser.is_some()
             || self
                 .visible_pickers(cx)
                 .iter()
@@ -7554,8 +7664,7 @@ impl Shell {
 
     pub(super) fn sidebar_now(&self) -> f32 {
         self.eval_tween(self.sidebar_tween, self.sidebar_target())
-            + self
-                .eval_resize_edge_bounce(self.sidebar_edge_bounce, !self.settings.sidebar_collapsed)
+            + self.eval_resize_edge_bounce(self.sidebar_edge_bounce, !self.sidebar_collapsed())
     }
 
     fn right_now(&self, cx: &App) -> f32 {
@@ -8924,7 +9033,7 @@ impl Shell {
                     .aria_label(match kind {
                         Some(kind) => SharedString::from(format!(
                             "{}: {title}. {}",
-                            kind.label(),
+                            kind.display(),
                             kind.description()
                         )),
                         None => title.clone(),
@@ -10768,6 +10877,13 @@ impl Shell {
             cx.notify();
             return;
         }
+        // The `+` chooser owns Escape first: it closes without creating, and
+        // Escape never reaches a picker or the stop path underneath it.
+        if event.keystroke.key == "escape" && self.workbench.chooser.is_some() {
+            self.workbench_close_chooser(cx);
+            cx.stop_propagation();
+            return;
+        }
         // An open composer popover (Main's or a workbench tab's) owns Escape,
         // as it owns ⌘W and the ⌘1…⌘9 slots: it closes (a setting submenu
         // first) before Escape can reach the stop path, and wherever keyboard
@@ -11120,7 +11236,7 @@ impl Shell {
                                     .text_color(theme.text_muted),
                             )
                             .child(SharedString::from(if native_history_fork {
-                                "Fork into new task…"
+                                "Create side chat from here…"
                             } else {
                                 "Start new task with context…"
                             })),
@@ -11290,6 +11406,9 @@ impl Shell {
         if let Some(menu) = self.render_workbench_menu(cx) {
             overlays.push(menu);
         }
+        if let Some(chooser) = self.render_creation_chooser(window, cx) {
+            overlays.push(chooser);
+        }
 
         if let Some(dialog) = &mut self.rename_dialog {
             if std::mem::take(&mut dialog.focus_pending) {
@@ -11360,13 +11479,13 @@ impl Shell {
                         cx.stop_propagation();
                     }
                 }))
-                .child(popover::dialog_title(&theme, "Fork into new task"))
+                .child(popover::dialog_title(&theme, "Create side chat from here"))
                 .child(
                     div()
                         .mt(px(8.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
-                        .child("Creates an independent provider conversation. Files and external effects are not copied or rewound."),
+                        .child("Creates a side chat that carries this conversation's context up to this message, captured now; later messages here are not copied. Files and external effects are not copied or rewound."),
                 )
                 .child(
                     div()
@@ -11394,7 +11513,7 @@ impl Shell {
                             div()
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.readable_muted(0.55))
-                                .child("New worktree: unavailable for conversation-only forks"),
+                                .child("New worktree: unavailable for conversation-only side chats"),
                         )
                         .child(
                             popover::btn_ghost(
@@ -11434,7 +11553,7 @@ impl Shell {
                                 })),
                         )
                         .child(
-                            popover::btn_primary(&theme, "Create fork")
+                            popover::btn_primary(&theme, "Create side chat")
                                 .id("history-fork-confirm")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.submit_history_fork(cx)
@@ -11496,7 +11615,7 @@ impl Shell {
                         .mt(px(8.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
-                        .child("LUNA first stages a native conversation fork and recovery snapshot. Files, tool calls, and external effects are not undone."),
+                        .child("LUNA first stages a native copy of the conversation and a recovery snapshot. Files, tool calls, and external effects are not undone."),
                 )
                 .child(
                     div()
@@ -11573,7 +11692,7 @@ impl Shell {
                         .mt(px(8.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
-                        .child("Restoring creates another independent provider fork and keeps the current conversation as an undo recovery. Files and external effects are unchanged."),
+                        .child("Restoring creates another independent provider conversation and keeps the current conversation as an undo recovery. Files and external effects are unchanged."),
                 )
                 .child(div().mt(px(12.0)).flex().flex_col().children(rows))
                 .child(
@@ -11868,7 +11987,7 @@ impl Shell {
                 .when(action == TaskConfirmation::Delete, |card| {
                     card.child(div().mt(px(6.0)).child(popover::dialog_body(
                         &theme,
-                        "LUNA-managed execution will stop. LUNA removes its local transcript snapshot, unsent draft, terminal history and verified unshared draft uploads. Independent forks, project files, shared attachments, synced copies and provider-private data remain. Provider cleanup is unsupported.",
+                        "LUNA-managed execution will stop. LUNA removes its local transcript snapshot, unsent draft, terminal history and verified unshared draft uploads. Independent side chats, project files, shared attachments, synced copies and provider-private data remain. Provider cleanup is unsupported.",
                     )))
                 })
                 .child(
@@ -12060,17 +12179,17 @@ impl Shell {
         // Settings route: just the section outlet — the section label lives in
         // the unified window titlebar now (render_title_bar). Settings never
         // underlaps: pad below the overlaid titlebar.
+        // Settings sits in the same contained content plane as chat: inset
+        // from the chrome (its navigation stays in the sidebar), rounded,
+        // darker, one frame (its section cards are content groups in it).
         if let Route::Settings(section) = self.route {
             let outlet = self.settings_outlet(section, window, cx);
-            return div()
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .pt(px(Theme::TITLEBAR_HEIGHT))
-                .flex()
-                .flex_col()
-                .child(div().flex_1().min_h_0().child(outlet))
-                .into_any_element();
+            return workbench::render::contained_plane(
+                theme,
+                "settings-plane",
+                div().flex_1().min_h_0().child(outlet).into_any_element(),
+            )
+            .into_any_element();
         }
 
         let _ = (text, border);
@@ -14378,6 +14497,7 @@ fn header_icon_button(
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_time = Some(self.frame_clock());
+        self.sync_route_sidebar();
         self.sync_confirmation_focus(window, cx);
         if self.all_file_edits_flushed(cx)
             && self.composer.read(cx).draft_flush_complete()
@@ -14639,11 +14759,40 @@ impl Render for Shell {
             // ⌘⇧T: the newest closed workbench tab. A native browser or
             // editor with focus receives its own keys before this binding.
             .on_action(cx.listener(|this, _: &ReopenClosedTab, _, cx| {
-                if matches!(this.route, Route::Chat)
-                    && !this.overlay_owns_keyboard(cx)
-                    && this.workbench_available()
-                {
+                if this.workbench_keys_apply(cx) {
                     this.workbench_reopen(None, cx)
+                }
+            }))
+            // Tabs and splits (configurable): only on the chat route with no
+            // overlay owning the keyboard; they act on the focused group.
+            .on_action(cx.listener(|this, _: &OpenCreationChooser, _, cx| {
+                if this.workbench_keys_apply(cx) {
+                    this.run_workbench_action(workbench::WorkbenchAction::Chooser, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NewThreadInSplit, _, cx| {
+                if this.workbench_keys_apply(cx) {
+                    this.run_workbench_action(workbench::WorkbenchAction::NewThreadSplit, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PreviousWorkbenchTab, _, cx| {
+                if this.workbench_keys_apply(cx) {
+                    this.workbench_cycle_tab(false, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NextWorkbenchTab, _, cx| {
+                if this.workbench_keys_apply(cx) {
+                    this.workbench_cycle_tab(true, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &PreviousWorkbenchGroup, _, cx| {
+                if this.workbench_keys_apply(cx) {
+                    this.workbench_cycle_group(false, cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NextWorkbenchGroup, _, cx| {
+                if this.workbench_keys_apply(cx) {
+                    this.workbench_cycle_group(true, cx);
                 }
             }))
             // A jump routes back to chat itself, so Settings is not a dead
@@ -20297,6 +20446,35 @@ impl Shell {
         let state = self.state.clone();
         self.accounts_page = Some(cx.new(|cx| AccountsPage::new_fixture(state, snapshot, cx)));
         cx.notify();
+    }
+
+    /// Use `keymap` as the saved keymap (e.g. one an older build saved,
+    /// loaded through `UiSettings::load`), rebinding keys as a launch would.
+    pub fn fixture_load_keymap(
+        &mut self,
+        keymap: crate::settings::KeymapConfig,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings.keymap = keymap;
+        apply_keymap(
+            cx,
+            &self.settings.keymap,
+            self.settings.composer_send_behavior,
+        );
+        self.shortcuts_page = None;
+        self.shortcuts_sub = None;
+        cx.notify();
+    }
+    /// The keymap the shell keeps (and saves).
+    pub fn fixture_saved_keymap(&self) -> serde_json::Value {
+        serde_json::to_value(&self.settings.keymap).unwrap_or_default()
+    }
+    /// Settings → Shortcuts, and its page once it has rendered.
+    pub fn fixture_open_shortcuts(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(SettingsSection::Shortcuts, cx);
+    }
+    pub fn fixture_shortcuts_page(&self) -> Option<Entity<ShortcutsPage>> {
+        self.shortcuts_page.clone()
     }
 
     pub fn fixture_appshots_settings(&mut self, open: bool, cx: &mut Context<Self>) {

@@ -554,7 +554,7 @@ impl Render for SidebarViewOptionsTooltip {
             .rounded(px(6.0))
             .border_1()
             .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
+            .bg(theme.tooltip_surface())
             .shadow_md()
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
@@ -2116,7 +2116,7 @@ impl Shell {
                     device,
                     branch.clone().map(SharedString::from),
                     match &parent {
-                        Some(parent) => Some(format!("Child of {parent}").into()),
+                        Some(parent) => Some(format!("New thread from {parent}").into()),
                         None => (status == ChatIndicator::Completed).then(|| "Done".into()),
                     },
                 );
@@ -4410,7 +4410,7 @@ impl Shell {
                 .child(popover::dialog_title(&theme, "Remove project?"))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, copy)))
                 .child(div().mt(px(6.0)).child(popover::dialog_body(&theme,
-                    "Every session in this project, including any fork listed in the count, is deleted. Forks outside this project, project files, shared attachments, synced copies and provider-private data remain. LUNA cleans up local transcript snapshots, unsent drafts, terminal history and verified unshared draft uploads. Remote cleanup is unavailable; deletion stops if this project contains remote sessions.",
+                    "Every session in this project, including any side chat listed in the count, is deleted. Side chats outside this project, project files, shared attachments, synced copies and provider-private data remain. LUNA cleans up local transcript snapshots, unsent drafts, terminal history and verified unshared draft uploads. Remote cleanup is unavailable; deletion stops if this project contains remote sessions.",
                 )))
                 .child(
                     div()

@@ -190,6 +190,194 @@ async fn optimistic_main_becomes_available_after_creation_without_recreating_del
 }
 
 #[tokio::test]
+async fn non_main_source_creates_fresh_and_context_threads_in_the_host_layout() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(dir.path(), "chooser-source");
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let chats = ids(2);
+    let (main, source) = (&chats[0], &chats[1]);
+    seed(&core, &client, &dir.path().join("project"), &chats).await;
+    core.doc_host
+        .open(source)
+        .unwrap()
+        .write_user_message("source-context", "CAPTURED_SOURCE_CONTEXT", 1)
+        .unwrap();
+    let profile_id = profile(&client).await;
+    let mut host = get(&client, main).await;
+    mutate(
+        &client,
+        &mut host,
+        &profile_id,
+        "open-source",
+        json!({
+            "op":"openTab", "tab":{"chatId":source}
+        }),
+    )
+    .await;
+    let create = json!({"parentTaskId":source,"idempotencyKey":"chooser-fresh","title":"Fresh from active source"});
+    let fresh = client.call("CreateChildTab", create.clone()).await.unwrap();
+    let fresh_id = fresh["taskId"].as_str().unwrap();
+    let fresh_row = core.workspace.chat(fresh_id).unwrap().unwrap();
+    assert_eq!(
+        fresh_row.child_thread.as_ref().unwrap().parent_task_id,
+        *source
+    );
+    assert!(fresh_row.source_context.is_none());
+    assert!(fresh_row.harness_session_id.is_none());
+    assert!(
+        core.task_identity
+            .view(fresh_id)
+            .unwrap()
+            .current_binding
+            .is_none()
+    );
+    assert!(
+        core.doc_host
+            .open(fresh_id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        client.call("CreateChildTab", create).await.unwrap()["taskId"],
+        fresh_id
+    );
+    mutate(
+        &client,
+        &mut host,
+        &profile_id,
+        "open-fresh",
+        json!({
+            "op":"openTab", "tab":{"chatId":fresh_id}
+        }),
+    )
+    .await;
+
+    // The same active source can explicitly provide a visible-context copy.
+    // Mock has no native fork; forceSnapshot makes the limited choice explicit.
+    let side_id = uuid::Uuid::new_v4().to_string();
+    let side_request = json!({"parentId":source,"requestId":side_id,"forceSnapshot":true});
+    let side = client
+        .call("CreateSideChat", side_request.clone())
+        .await
+        .unwrap();
+    let replay = client.call("CreateSideChat", side_request).await.unwrap();
+    assert_eq!(side["meta"]["id"], side_id);
+    assert_eq!(replay["meta"]["id"], side_id);
+    assert_eq!(side["meta"]["contextMode"], "contextSnapshot");
+    let side_row = core.workspace.chat(&side_id).unwrap().unwrap();
+    assert_eq!(
+        core.workspace.side_chat_parent(&side_id).as_deref(),
+        Some(source.as_str())
+    );
+    let context_path = EngineProfile::development(dir.path(), "workbench-org", "chooser-source")
+        .store_root()
+        .join("docs.sqlite3");
+    let saved_context = || -> String {
+        rusqlite::Connection::open_with_flags(
+            &context_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap()
+        .query_row(
+            "SELECT context FROM side_chats WHERE id=?1",
+            [&side_id],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let captured_context = saved_context();
+    assert!(captured_context.contains("CAPTURED_SOURCE_CONTEXT"));
+    assert!(!core.sessions.turn_in_flight(&side_id));
+    mutate(
+        &client,
+        &mut host,
+        &profile_id,
+        "open-side",
+        json!({
+            "op":"openTab", "tab":{"chatId":side_id,"sideParentId":source}
+        }),
+    )
+    .await;
+    assert_eq!(host.main_chat_id, *main);
+    assert_eq!(host.root.tabs().len(), 4);
+    assert_eq!(core.workspace.read_chats().unwrap().len(), 4);
+    let mut watch = client.subscribe("WatchChats", json!({})).await.unwrap();
+    let rows = tokio::time::timeout(Duration::from_secs(3), watch.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let fresh_published = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == fresh_id)
+        .unwrap();
+    assert!(fresh_published.get("forkSourceTaskId").is_none());
+    assert!(fresh_published.get("sideChatParentId").is_none());
+    let side_published = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == side_id)
+        .unwrap();
+    assert_eq!(side_published["sideChatContextMode"], "contextSnapshot");
+    drop(watch);
+    stop(core, client).await;
+
+    let core = assemble(dir.path(), "chooser-source");
+    let client = luna_rpc::memory_client(core.rpc_service());
+    assert_eq!(get(&client, main).await, host);
+    assert_eq!(
+        core.workspace.chat(fresh_id).unwrap().unwrap().child_thread,
+        fresh_row.child_thread
+    );
+    assert_eq!(
+        core.workspace
+            .chat(&side_id)
+            .unwrap()
+            .unwrap()
+            .source_context,
+        side_row.source_context
+    );
+    assert_eq!(saved_context(), captured_context);
+    let mut after_restart_watch = client.subscribe("WatchChats", json!({})).await.unwrap();
+    let after_restart_rows =
+        tokio::time::timeout(Duration::from_secs(3), after_restart_watch.recv())
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(
+        after_restart_rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == side_id)
+            .unwrap()["sideChatContextMode"],
+        "contextSnapshot"
+    );
+    drop(after_restart_watch);
+    assert!(
+        core.task_identity
+            .view(fresh_id)
+            .unwrap()
+            .current_binding
+            .is_none()
+    );
+    evidence(
+        "non-main-creation-source.json",
+        json!({
+            "main":main,"source":source,"fresh":fresh,"freshRow":fresh_row,
+        "side":side,"sideRow":side_row,"capturedContext":captured_context,"hostAfterRestart":host,"published":rows,"publishedAfterRestart":after_restart_rows,
+            "freshHistoryEntries":0,"providerStarted":false
+        }),
+    );
+    stop(core, client).await;
+}
+
+#[tokio::test]
 async fn balance_panes_preserves_mixed_layouts_and_equalizes_leaf_area() {
     // Failure cases 28-29 were recorded before implementation. Exercise the
     // actual RPC, revision ledger and persisted tree; never invoke a reducer

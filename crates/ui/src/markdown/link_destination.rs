@@ -62,7 +62,7 @@ pub fn destination_card(
         .rounded(px(4.))
         .border_1()
         .border_color(theme.border_strong)
-        .bg(theme.surface_raised)
+        .bg(theme.tooltip_surface())
         .shadow_sm()
         .text_size(crate::typography::ui_rems(11.))
         .line_height(crate::typography::ui_rems(14.))

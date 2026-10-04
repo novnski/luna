@@ -199,7 +199,7 @@ impl Shell {
     ) -> AnyElement {
         let muted = theme.text_muted;
         let border_strong = theme.border_strong;
-        let tooltip_title: SharedString = format!("Child of {title}").into();
+        let tooltip_title: SharedString = format!("New thread from {title}").into();
         let crumb = div()
             .id("parent-breadcrumb")
             .max_w(px(240.0))
@@ -230,7 +230,7 @@ impl Shell {
                     .flex_none()
                     .text_color(muted),
             )
-            .child(div().flex_none().child("Child of"))
+            .child(div().flex_none().child("New thread from"))
             .child(
                 div()
                     .min_w_0()
@@ -258,7 +258,7 @@ impl Shell {
                 .into_any_element(),
             None => crumb
                 .aria_label(SharedString::from(
-                    "Child of a chat that is no longer available",
+                    "New thread from a chat that is no longer available",
                 ))
                 .into_any_element(),
         }

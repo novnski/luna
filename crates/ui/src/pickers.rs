@@ -595,7 +595,7 @@ impl Render for ControlTooltip {
             .rounded(px(8.0))
             .border_1()
             .border_color(theme.border_strong)
-            .bg(popover::surface_bg(theme))
+            .bg(theme.tooltip_surface())
             .shadow_md()
             .text_size(crate::typography::ui_rems(12.0))
             .child(
@@ -1254,6 +1254,43 @@ impl Pickers {
         }
     }
 
+    /// The providers this device offers, in catalog order (`None` while the
+    /// catalog loads): the New thread choices in the creation chooser.
+    pub(crate) fn offered_providers(&self) -> Option<Vec<(HarnessId, String)>> {
+        self.harnesses.ready().map(|list| {
+            offered_harnesses(list)
+                .into_iter()
+                .map(|descriptor| (descriptor.id, descriptor.name))
+                .collect()
+        })
+    }
+
+    /// Hold the actual provider-cache loading state for a deterministic GUI
+    /// acceptance step, then restore the same engine-returned descriptors.
+    #[cfg(feature = "appshots-fixture")]
+    pub(crate) fn fixture_hold_providers(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<Vec<HarnessDescriptor>> {
+        let loaded = self.harnesses.ready()?.clone();
+        self.load_task = None;
+        self.harnesses = Loadable::Loading;
+        self.catalog_rev += 1;
+        cx.notify();
+        Some(loaded)
+    }
+
+    #[cfg(feature = "appshots-fixture")]
+    pub(crate) fn fixture_restore_providers(
+        &mut self,
+        loaded: Vec<HarnessDescriptor>,
+        cx: &mut Context<Self>,
+    ) {
+        self.harnesses = Loadable::Ready(loaded);
+        self.catalog_rev += 1;
+        cx.notify();
+    }
+
     /// How a provider change on the bound chat would go: `direct` (an
     /// unstarted chat: the ordinary switch at once), `confirm` (a started
     /// chat or a fork) or `draft` (no chat yet).
@@ -1307,6 +1344,7 @@ impl Pickers {
             && !state.send_pending(&chat.id, now)
             && !state.send_queued(&chat.id, now)
             && !state.side_chat_rows.contains_key(&chat.id)
+            && !state.fork_source_rows.contains_key(&chat.id)
     }
 
     /// A blank chat's provider choice: wait for the provider's catalog (a

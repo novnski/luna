@@ -10820,6 +10820,7 @@ impl RpcService for EngineRpc {
             methods::WATCH_CHATS => {
                 let side_chats = self.side_chats.clone();
                 let workspace = self.workspace.clone();
+                let task_identity = self.task_identity.clone();
                 let changes = watch_stream(self.workspace.watch_chats()).boxed();
                 let changes = if let Some(service) = &side_chats {
                     let workspace = workspace.clone();
@@ -10834,10 +10835,22 @@ impl RpcService for EngineRpc {
                     if let Some(items) = value.as_array_mut() {
                         items.retain_mut(|chat| {
                             let Some(id) = chat.get("id").and_then(|id| id.as_str()).map(str::to_owned) else { return false };
-                            if let Some((parent, state)) = side_states.get(&id) {
+                            // Native history forks are ordinary tasks, too. Their
+                            // immutable provenance is independent of the legacy
+                            // side-chat service and remains valid after source
+                            // deletion or a later provider/context boundary.
+                            if let Some(source) = task_identity.view(&id)
+                                .filter(|view| !view.task.tombstoned)
+                                .and_then(|view| view.task.lineage.source_task_id)
+                                .filter(|source| source != &id)
+                                && let Some(object) = chat.as_object_mut() {
+                                object.insert("forkSourceTaskId".into(), source.into());
+                            }
+                            if let Some((parent, state, context_mode)) = side_states.get(&id) {
                                 if let Some(object) = chat.as_object_mut() {
                                     object.insert("sideChatParentId".into(), parent.clone().into());
                                     object.insert("sideChatState".into(), state.clone().into());
+                                    object.insert("sideChatContextMode".into(), context_mode.clone().into());
                                 }
                                 true
                             } else {

@@ -222,12 +222,15 @@ impl SideChats {
         self.0.changes.subscribe()
     }
 
-    pub(crate) fn published_states(&self) -> Result<HashMap<String, (String, String)>> {
+    pub(crate) fn published_states(&self) -> Result<HashMap<String, (String, String, String)>> {
         let db = lock(&self.0.db);
-        let mut query =
-            db.prepare("SELECT id,parent_id,state FROM side_chats WHERE state<>'deleted'")?;
+        let mut query = db.prepare(
+            "SELECT id,parent_id,state,context_mode FROM side_chats WHERE state<>'deleted'",
+        )?;
         Ok(query
-            .query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))?
+            .query_map([], |row| {
+                Ok((row.get(0)?, (row.get(1)?, row.get(2)?, row.get(3)?)))
+            })?
             .collect::<std::result::Result<_, _>>()?)
     }
 

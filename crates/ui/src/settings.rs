@@ -1038,11 +1038,21 @@ pub enum ShortcutId {
     NextSession,
     PrevSession,
     ArchiveSession,
+    /// The focused group's `+` creation chooser.
+    NewThreadChooser,
+    /// A fresh New thread in a new group to the right.
+    NewThreadSplit,
+    PreviousTab,
+    NextTab,
+    PreviousGroup,
+    NextGroup,
+    /// Reopen the newest closed workbench tab (was a fixed Mod+Shift+T).
+    ReopenTab,
     JumpSession(usize),
 }
 
 impl ShortcutId {
-    pub const ALL: [ShortcutId; 13 + JUMP_SLOTS] = [
+    pub const ALL: [ShortcutId; 20 + JUMP_SLOTS] = [
         ShortcutId::CaptureAppshot,
         ShortcutId::SaveFile,
         ShortcutId::BrowserReload,
@@ -1056,6 +1066,13 @@ impl ShortcutId {
         ShortcutId::NextSession,
         ShortcutId::PrevSession,
         ShortcutId::ArchiveSession,
+        ShortcutId::NewThreadChooser,
+        ShortcutId::NewThreadSplit,
+        ShortcutId::PreviousTab,
+        ShortcutId::NextTab,
+        ShortcutId::PreviousGroup,
+        ShortcutId::NextGroup,
+        ShortcutId::ReopenTab,
         ShortcutId::JumpSession(0),
         ShortcutId::JumpSession(1),
         ShortcutId::JumpSession(2),
@@ -1084,9 +1101,17 @@ impl ShortcutId {
             ShortcutId::NewProject => "New project",
             ShortcutId::OpenModelPicker => "Open model picker",
             ShortcutId::OpenActivity => "Open Activity",
-            ShortcutId::NextSession => "Next session",
-            ShortcutId::PrevSession => "Previous session",
+            // The sidebar list, not workbench tabs (those have their own).
+            ShortcutId::NextSession => "Next sidebar conversation",
+            ShortcutId::PrevSession => "Previous sidebar conversation",
             ShortcutId::ArchiveSession => "Archive session",
+            ShortcutId::NewThreadChooser => "New thread or side chat…",
+            ShortcutId::NewThreadSplit => "New thread in split",
+            ShortcutId::PreviousTab => "Previous tab in group",
+            ShortcutId::NextTab => "Next tab in group",
+            ShortcutId::PreviousGroup => "Previous group",
+            ShortcutId::NextGroup => "Next group",
+            ShortcutId::ReopenTab => "Reopen closed tab",
             ShortcutId::JumpSession(slot) => JUMP_LABELS.get(slot).copied().unwrap_or(""),
         }
     }
@@ -1131,9 +1156,28 @@ impl ShortcutId {
             // Mod+A is the composer's Select all, so archiving takes the
             // shifted combo.
             ShortcutId::ArchiveSession => "mod-shift-a",
+            ShortcutId::NewThreadChooser => "mod-alt-n",
+            ShortcutId::NewThreadSplit => "mod-alt-shift-n",
+            ShortcutId::PreviousTab => "mod-shift-[",
+            ShortcutId::NextTab => "mod-shift-]",
+            ShortcutId::PreviousGroup => "mod-alt-[",
+            ShortcutId::NextGroup => "mod-alt-]",
+            ShortcutId::ReopenTab => "mod-shift-t",
             ShortcutId::JumpSession(slot) => JUMP_DEFAULTS.get(slot).copied().unwrap_or(""),
         }
     }
+
+    /// Shortcuts introduced after keymaps were first saved: an upgraded
+    /// keymap takes their defaults only where the chord is still free.
+    pub const ADDED_LATER: [(ShortcutId, &'static str); 7] = [
+        (ShortcutId::NewThreadChooser, "newThreadChooser"),
+        (ShortcutId::NewThreadSplit, "newThreadSplit"),
+        (ShortcutId::PreviousTab, "previousTab"),
+        (ShortcutId::NextTab, "nextTab"),
+        (ShortcutId::PreviousGroup, "previousGroup"),
+        (ShortcutId::NextGroup, "nextGroup"),
+        (ShortcutId::ReopenTab, "reopenTab"),
+    ];
 
     /// The sidebar row this id jumps to, if it is a jump shortcut.
     pub fn jump_slot(self) -> Option<usize> {
@@ -1163,6 +1207,13 @@ pub struct KeymapConfig {
     pub next_session: String,
     pub prev_session: String,
     pub archive_session: String,
+    pub new_thread_chooser: String,
+    pub new_thread_split: String,
+    pub previous_tab: String,
+    pub next_tab: String,
+    pub previous_group: String,
+    pub next_group: String,
+    pub reopen_tab: String,
     /// One combo per jump slot, in slot order. A list rather than nine fields:
     /// [`UiSettings::load`] discards the WHOLE file on a parse error, so a
     /// fixed-length array would let one malformed entry reset every unrelated
@@ -1186,6 +1237,13 @@ impl Default for KeymapConfig {
             next_session: ShortcutId::NextSession.default_combo().into(),
             prev_session: ShortcutId::PrevSession.default_combo().into(),
             archive_session: ShortcutId::ArchiveSession.default_combo().into(),
+            new_thread_chooser: ShortcutId::NewThreadChooser.default_combo().into(),
+            new_thread_split: ShortcutId::NewThreadSplit.default_combo().into(),
+            previous_tab: ShortcutId::PreviousTab.default_combo().into(),
+            next_tab: ShortcutId::NextTab.default_combo().into(),
+            previous_group: ShortcutId::PreviousGroup.default_combo().into(),
+            next_group: ShortcutId::NextGroup.default_combo().into(),
+            reopen_tab: ShortcutId::ReopenTab.default_combo().into(),
             jump_session: JUMP_DEFAULTS.iter().map(|c| (*c).to_string()).collect(),
         }
     }
@@ -1207,6 +1265,13 @@ impl KeymapConfig {
             ShortcutId::NextSession => &self.next_session,
             ShortcutId::PrevSession => &self.prev_session,
             ShortcutId::ArchiveSession => &self.archive_session,
+            ShortcutId::NewThreadChooser => &self.new_thread_chooser,
+            ShortcutId::NewThreadSplit => &self.new_thread_split,
+            ShortcutId::PreviousTab => &self.previous_tab,
+            ShortcutId::NextTab => &self.next_tab,
+            ShortcutId::PreviousGroup => &self.previous_group,
+            ShortcutId::NextGroup => &self.next_group,
+            ShortcutId::ReopenTab => &self.reopen_tab,
             ShortcutId::JumpSession(slot) => self
                 .jump_session
                 .get(slot)
@@ -1230,6 +1295,13 @@ impl KeymapConfig {
             ShortcutId::NextSession => self.next_session = combo,
             ShortcutId::PrevSession => self.prev_session = combo,
             ShortcutId::ArchiveSession => self.archive_session = combo,
+            ShortcutId::NewThreadChooser => self.new_thread_chooser = combo,
+            ShortcutId::NewThreadSplit => self.new_thread_split = combo,
+            ShortcutId::PreviousTab => self.previous_tab = combo,
+            ShortcutId::NextTab => self.next_tab = combo,
+            ShortcutId::PreviousGroup => self.previous_group = combo,
+            ShortcutId::NextGroup => self.next_group = combo,
+            ShortcutId::ReopenTab => self.reopen_tab = combo,
             ShortcutId::JumpSession(slot) => {
                 if slot < JUMP_SLOTS {
                     if self.jump_session.len() < JUMP_SLOTS {
@@ -1288,14 +1360,29 @@ pub fn combo_from_keystroke_on(
     mac: bool,
     ctrl: bool,
     alt: bool,
-    shift: bool,
+    mut shift: bool,
     cmd: bool,
     key: &str,
 ) -> Option<String> {
     let key = key.trim().to_lowercase();
+    let key = if mac {
+        match key.as_str() {
+            "{" => {
+                shift = true;
+                "["
+            }
+            "}" => {
+                shift = true;
+                "]"
+            }
+            _ => key.as_str(),
+        }
+    } else {
+        key.as_str()
+    };
     if key.is_empty()
         || matches!(
-            key.as_str(),
+            key,
             "ctrl" | "control" | "alt" | "shift" | "cmd" | "platform" | "fn"
         )
     {
@@ -1318,11 +1405,221 @@ pub fn combo_from_keystroke_on(
     if shift {
         parts.push("shift");
     }
-    parts.push(&key);
+    parts.push(key);
     Some(parts.join("-"))
 }
 
-/// Shortcut ids whose combos collide with another shortcut (conflict detection).
+/// A combo as the physical chord it binds: the primary modifier resolved
+/// for this platform (off macOS `ctrl` IS the primary), modifiers in one
+/// order, the key lowercased. Two spellings of one chord ("alt-mod-n",
+/// "mod-alt-n"; "ctrl-s" and "mod-s" off macOS) compare equal.
+pub fn normalized_combo(combo: &str) -> String {
+    normalized_combo_on(cfg!(target_os = "macos"), combo)
+}
+
+/// [`normalized_combo`] for an explicit platform.
+pub fn normalized_combo_on(mac: bool, combo: &str) -> String {
+    let combo = combo.trim().to_lowercase();
+    if combo.is_empty() {
+        return String::new();
+    }
+    if combo == "-" {
+        return combo;
+    }
+    // The key is the final segment; a trailing "-" key ("mod--") keeps it.
+    let (mods, key) = match combo.strip_suffix("--") {
+        Some(rest) => (rest, "-"),
+        None => match combo.rsplit_once('-') {
+            Some((mods, key)) => (mods, key),
+            None => ("", combo.as_str()),
+        },
+    };
+    let mut primary = false;
+    let (mut ctrl, mut alt, mut shift) = (false, false, false);
+    for part in mods.split('-').filter(|part| !part.is_empty()) {
+        match part {
+            "mod" => primary = true,
+            "cmd" | "platform" | "super" | "meta" if mac => primary = true,
+            "ctrl" | "control" if !mac => primary = true,
+            "ctrl" | "control" => ctrl = true,
+            "alt" | "option" | "opt" => alt = true,
+            "shift" => shift = true,
+            other => {
+                // An unknown modifier keeps its own identity.
+                return format!("{mods}-{key}#{other}");
+            }
+        }
+    }
+    // macOS GPUI reports shifted brackets as brace keys with Shift cleared.
+    // Compare the physical chord so recorded braces cannot steal a default.
+    let key = if mac && shift {
+        match key {
+            "[" => {
+                shift = false;
+                "{"
+            }
+            "]" => {
+                shift = false;
+                "}"
+            }
+            _ => key,
+        }
+    } else {
+        key
+    };
+    let mut parts = Vec::new();
+    if primary {
+        parts.push("mod");
+    }
+    if ctrl {
+        parts.push("ctrl");
+    }
+    if alt {
+        parts.push("alt");
+    }
+    if shift {
+        parts.push("shift");
+    }
+    parts.push(key);
+    parts.join("-")
+}
+
+/// Whether two stored combos bind the same chord (empty never matches).
+pub fn same_combo(a: &str, b: &str) -> bool {
+    !a.trim().is_empty() && !b.trim().is_empty() && normalized_combo(a) == normalized_combo(b)
+}
+
+/// Fixed chords no configurable shortcut may take: application/menu
+/// conventions, the command palette, and the composer's own editing and
+/// send keys. Returns what owns `combo`.
+pub fn fixed_combo_owner(combo: &str) -> Option<&'static str> {
+    let mac = cfg!(target_os = "macos");
+    let fixed: &[(&str, &str, bool)] = &[
+        ("mod-k", "the command palette", true),
+        ("mod-,", "Settings", true),
+        ("mod-q", "Quit", mac),
+        ("mod-w", "Close", true),
+        ("mod-m", "Minimize", mac),
+        ("mod-h", "Hide", mac),
+        ("mod-alt-h", "Hide others", mac),
+        ("mod-enter", "the composer's send", true),
+        ("mod-shift-enter", "the composer's alternate send", true),
+        ("mod-a", "Select all", true),
+        ("mod-c", "Copy", true),
+        ("mod-v", "Paste", true),
+        ("mod-x", "Cut", true),
+        ("mod-z", "Undo", true),
+        ("mod-shift-z", "Redo", true),
+    ];
+    fixed
+        .iter()
+        .filter(|(_, _, applies)| *applies)
+        .find(|(fixed, _, _)| same_combo(fixed, combo))
+        .map(|(_, owner, _)| *owner)
+        .or_else(|| input_combo_owner(combo))
+}
+
+/// Fixed input contexts remain bound even if an application action is
+/// reassigned. New global shortcuts must not take typing, caret movement or
+/// selection away from the composer/search field. Existing saved overrides
+/// are retained; this only validates new assignments and default migration.
+fn input_combo_owner(combo: &str) -> Option<&'static str> {
+    let chord = normalized_combo(combo);
+    let plain = chord.strip_prefix("shift-").unwrap_or(&chord);
+    if plain.chars().count() == 1 || plain == "space" {
+        return Some("text entry");
+    }
+    if [
+        "enter",
+        "tab",
+        "backspace",
+        "delete",
+        "left",
+        "right",
+        "up",
+        "down",
+        "home",
+        "end",
+    ]
+    .contains(&plain)
+    {
+        return Some("text editing and focus navigation");
+    }
+    let platform_chords: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "mod-left",
+            "mod-right",
+            "mod-up",
+            "mod-down",
+            "mod-shift-left",
+            "mod-shift-right",
+            "mod-shift-up",
+            "mod-shift-down",
+            "mod-backspace",
+            "mod-delete",
+            "alt-left",
+            "alt-right",
+            "alt-backspace",
+            "alt-delete",
+            "alt-shift-left",
+            "alt-shift-right",
+            "ctrl-a",
+            "ctrl-c",
+            "ctrl-x",
+            "ctrl-v",
+            "ctrl-z",
+            "ctrl-shift-z",
+        ]
+    } else {
+        &[
+            "mod-left",
+            "mod-right",
+            "mod-backspace",
+            "mod-delete",
+            "mod-shift-left",
+            "mod-shift-right",
+        ]
+    };
+    platform_chords
+        .contains(&chord.as_str())
+        .then_some("text editing")
+}
+
+/// Chords a surface still binds in its own key context (the composer's
+/// Stash prompt, the browser's address/tab/history keys). A configurable
+/// action bound to one would be shadowed there, so only the action that
+/// shares its meaning may take it: Mod+S stays Save file's default (a file
+/// editor and the composer never hold focus together). The browser's
+/// Reload is itself configurable (`BrowserReload`), so the ordinary
+/// conflict check protects it.
+const CONTEXTUAL_COMBOS: [(&str, &str, &[ShortcutId]); 5] = [
+    (
+        "mod-s",
+        "the composer's Stash prompt",
+        &[ShortcutId::SaveFile],
+    ),
+    ("mod-l", "the browser's address bar", &[]),
+    ("mod-t", "the browser's New tab", &[]),
+    ("mod-[", "the browser's Back", &[]),
+    ("mod-]", "the browser's Forward", &[]),
+];
+
+/// What owns `combo` so that `id` may not take it: a fixed application
+/// chord, or a contextual chord `id` doesn't share the meaning of. Bindings
+/// a user already saved are kept; this gates new assignments and resets.
+pub fn reserved_combo_owner(id: ShortcutId, combo: &str) -> Option<&'static str> {
+    fixed_combo_owner(combo).or_else(|| {
+        CONTEXTUAL_COMBOS
+            .iter()
+            .find(|(reserved, _, compatible)| {
+                same_combo(reserved, combo) && !compatible.contains(&id)
+            })
+            .map(|(_, owner, _)| *owner)
+    })
+}
+
+/// Shortcut ids whose combos collide with another shortcut (conflict
+/// detection), comparing the chords they bind, not their spelling.
 pub fn conflicted_shortcuts(keymap: &KeymapConfig) -> Vec<ShortcutId> {
     ShortcutId::ALL
         .into_iter()
@@ -1330,9 +1627,9 @@ pub fn conflicted_shortcuts(keymap: &KeymapConfig) -> Vec<ShortcutId> {
             let combo = keymap.get(id);
             id.available()
                 && !combo.is_empty()
-                && ShortcutId::ALL
-                    .into_iter()
-                    .any(|other| other.available() && other != id && keymap.get(other) == combo)
+                && ShortcutId::ALL.into_iter().any(|other| {
+                    other.available() && other != id && same_combo(keymap.get(other), combo)
+                })
         })
         .collect()
 }
@@ -1381,8 +1678,20 @@ pub fn platform_combo(combo: &str) -> String {
 /// [`platform_combo`] for an explicit platform (see [`combo_from_keystroke_on`]).
 pub fn platform_combo_on(mac: bool, combo: &str) -> String {
     let primary = if mac { "cmd" } else { "ctrl" };
-    combo
-        .split('-')
+    let mut parts: Vec<_> = combo.split('-').collect();
+    if mac && parts.contains(&"shift") {
+        let bracket = match parts.last().copied() {
+            Some("[") => Some("{"),
+            Some("]") => Some("}"),
+            _ => None,
+        };
+        if let Some(bracket) = bracket {
+            *parts.last_mut().expect("a bracket key is present") = bracket;
+            parts.retain(|part| *part != "shift");
+        }
+    }
+    parts
+        .into_iter()
         .map(|part| if part == "mod" { primary } else { part })
         .collect::<Vec<_>>()
         .join("-")
@@ -1588,6 +1897,36 @@ impl UiSettings {
                                 .unwrap_or("");
                             resolved.set(id, combo.into());
                             keymap.insert(field.into(), serde_json::json!(combo));
+                        }
+                    }
+                    // Shortcuts added since this keymap was saved take their
+                    // default only where the chord is still free (custom keys
+                    // and the fixed chords keep it); otherwise they stay
+                    // unbound for the user to assign.
+                    if let Some(keymap) = value
+                        .get_mut("keymap")
+                        .and_then(serde_json::Value::as_object_mut)
+                    {
+                        let missing: Vec<(ShortcutId, &str)> = ShortcutId::ADDED_LATER
+                            .into_iter()
+                            .filter(|(_, field)| !keymap.contains_key(*field))
+                            .collect();
+                        if !missing.is_empty() {
+                            for (_, field) in &missing {
+                                keymap.insert((*field).into(), serde_json::json!(""));
+                            }
+                            let mut resolved: KeymapConfig =
+                                serde_json::from_value(serde_json::Value::Object(keymap.clone()))?;
+                            for (id, field) in missing {
+                                let candidate = id.default_combo();
+                                let taken = reserved_combo_owner(id, candidate).is_some()
+                                    || ShortcutId::ALL
+                                        .iter()
+                                        .any(|other| same_combo(resolved.get(*other), candidate));
+                                let combo = if taken { "" } else { candidate };
+                                resolved.set(id, combo.into());
+                                keymap.insert(field.into(), serde_json::json!(combo));
+                            }
                         }
                     }
                     serde_json::from_value::<UiSettings>(value)

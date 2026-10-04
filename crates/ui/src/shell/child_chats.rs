@@ -201,7 +201,7 @@ pub(super) fn child_chat_rows(
             });
             ChildChatRow {
                 id: chat.id.clone(),
-                title: transcript::single_line(chat.title.as_deref().unwrap_or("New child chat")),
+                title: transcript::single_line(chat.title.as_deref().unwrap_or("New thread")),
                 status: child_chat_status(state, chat, now),
                 updated_at: chat.last_message_at.unwrap_or(chat.created_at),
                 detail,

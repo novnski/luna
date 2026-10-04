@@ -5032,6 +5032,31 @@ async fn fork_initial_prompt_grant_commits_with_its_snapshot() {
 
 #[tokio::test]
 async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
+    async fn published_chats(client: &RpcClient) -> serde_json::Value {
+        let mut watch = client
+            .subscribe("WatchChats", serde_json::json!({}))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(3), watch.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    fn assert_provenance(rows: &serde_json::Value, target: &str, source: &str) {
+        let row = rows
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == target)
+            .unwrap();
+        assert_eq!(row["forkSourceTaskId"], source, "{row}");
+        assert!(
+            row.get("sideChatParentId").is_none(),
+            "generic history forks do not become legacy service rows"
+        );
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let forks = Arc::new(Mutex::new(Vec::new()));
     let core = assemble_history(dir.path(), forks.clone(), HarnessId::Opencode);
@@ -5264,6 +5289,72 @@ async fn native_tip_fork_creates_independent_task_binding_and_lineage() {
     ));
     assert_eq!(calls[2].source_session_id, "synthetic-history-fork-2");
     drop(calls);
+
+    let published = published_chats(&client).await;
+    if let Ok(dir) = std::env::var("UI_ALIGNMENT_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("history-fork-published.json"),
+            serde_json::to_vec_pretty(&published).unwrap(),
+        )
+        .unwrap();
+    }
+    assert_provenance(&published, &target_task_id, &source_task_id);
+    assert_provenance(&published, &descendant_task_id, &target_task_id);
+    client
+        .call(
+            "Mutate",
+            serde_json::json!({"op":"deleteChat","chatId":source_task_id}),
+        )
+        .await
+        .unwrap();
+    let after_delete = published_chats(&client).await;
+    assert_provenance(&after_delete, &target_task_id, &source_task_id);
+    assert_provenance(&after_delete, &descendant_task_id, &target_task_id);
+    assert!(
+        !after_delete
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["id"] == source_task_id)
+    );
+    let before_restart = core.task_identity.view(&target_task_id).unwrap();
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+    let core = assemble_history(dir.path(), forks.clone(), HarnessId::Opencode);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let restarted = published_chats(&client).await;
+    assert_provenance(&restarted, &target_task_id, &source_task_id);
+    assert_provenance(&restarted, &descendant_task_id, &target_task_id);
+    // Startup refreshes reconciliation observations. Every binding identity,
+    // generation, provider, workspace and provenance field must stay identical.
+    let stable_binding = |binding: &Option<luna_proto::ExecutionBinding>| {
+        let mut value = serde_json::to_value(binding).unwrap();
+        if let Some(row) = value.as_object_mut() {
+            row.remove("reconciliation");
+            row.remove("lastObservedAtMs");
+        }
+        value
+    };
+    assert_eq!(
+        stable_binding(
+            &core
+                .task_identity
+                .view(&target_task_id)
+                .unwrap()
+                .current_binding
+        ),
+        stable_binding(&before_restart.current_binding)
+    );
+    assert_eq!(
+        forks.lock().unwrap().len(),
+        3,
+        "publishing provenance never creates another provider fork"
+    );
+    if let Ok(dir) = std::env::var("UI_ALIGNMENT_EVIDENCE_DIR") {
+        std::fs::write(std::path::Path::new(&dir).join("history-fork-provenance.json"), serde_json::to_vec_pretty(&serde_json::json!({"published":published,"afterSourceDeletion":after_delete,"afterRestart":restarted,"binding":before_restart.current_binding,"providerForkCalls":3})).unwrap()).unwrap();
+    }
     core.shutdown().await;
 }
 

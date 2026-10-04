@@ -451,7 +451,17 @@ impl EngineHandle {
     /// LUNA approvals.
     #[cfg(feature = "appshots-fixture")]
     pub async fn fixture_from_core(core: &EngineCore) -> anyhow::Result<Self> {
-        let client = memory_client(core.rpc_service());
+        Self::fixture_from_core_with_service(core, core.rpc_service()).await
+    }
+
+    /// Keep local UI authority while a fixture supplies a narrowly scoped
+    /// transport adapter around the same engine (for synthetic providers).
+    #[cfg(feature = "appshots-fixture")]
+    pub async fn fixture_from_core_with_service(
+        core: &EngineCore,
+        service: Arc<dyn luna_rpc::RpcService>,
+    ) -> anyhow::Result<Self> {
+        let client = memory_client(service);
         let engine_info = query_engine_info(&client).await?;
         anyhow::ensure!(
             engine_info.device_id == core.device_id,
@@ -966,6 +976,16 @@ pub struct AppState {
     /// (rows of every non-deleted side chat are published). A side list
     /// loaded earlier can still name them; views drop them.
     pub side_chat_gone: std::collections::HashSet<String>,
+    /// Every context-carrying chat's source, from `WatchChats`'
+    /// `forkSourceTaskId` (authoritative task lineage): service side chats
+    /// and generic history forks alike. Separate from [`Self::side_chat_rows`]
+    /// (the side chat service's own rows): a generic history fork is an
+    /// ordinary chat tab, never a service side chat.
+    pub fork_source_rows: std::collections::HashMap<String, String>,
+    /// A service side chat's context mode from `WatchChats`'
+    /// `sideChatContextMode` (`nativeFork` / `contextSnapshot`). Absent for
+    /// older engines and generic forks: nothing is inferred from absence.
+    pub side_chat_context_modes: std::collections::HashMap<String, String>,
     pub sessions: Vec<Session>,
     session_presentation: Option<Vec<Session>>,
     /// The project the new-session canvas mints into. Healed by
@@ -1096,6 +1116,8 @@ impl AppState {
             chats: Vec::new(),
             side_chat_rows: Default::default(),
             side_chat_gone: Default::default(),
+            fork_source_rows: Default::default(),
+            side_chat_context_modes: Default::default(),
             sessions: Vec::new(),
             session_presentation: None,
             selected_space: None,
@@ -2733,6 +2755,36 @@ impl SideChatRow {
 }
 
 /// Side chat fields of a raw `WatchChats` frame, before [`Chat`] drops them.
+/// `sideChatContextMode` per chat id, from a raw chats frame.
+pub fn side_chat_context_modes(
+    frame: &serde_json::Value,
+) -> std::collections::HashMap<String, String> {
+    frame
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = row.get("id")?.as_str()?;
+            let mode = row.get("sideChatContextMode")?.as_str()?;
+            (!mode.is_empty()).then(|| (id.to_string(), mode.to_string()))
+        })
+        .collect()
+}
+
+/// `forkSourceTaskId` per chat id, from a raw chats frame.
+pub fn fork_source_rows(frame: &serde_json::Value) -> std::collections::HashMap<String, String> {
+    frame
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = row.get("id")?.as_str()?;
+            let source = row.get("forkSourceTaskId")?.as_str()?;
+            (!source.is_empty() && source != id).then(|| (id.to_string(), source.to_string()))
+        })
+        .collect()
+}
+
 fn side_chat_rows(frame: &serde_json::Value) -> std::collections::HashMap<String, SideChatRow> {
     frame
         .as_array()
@@ -2783,6 +2835,8 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
             };
             while let Some(value) = rx.recv().await {
                 let side_rows = side_chat_rows(&value);
+                let fork_sources = fork_source_rows(&value);
+                let context_modes = side_chat_context_modes(&value);
                 let parsed: Vec<Chat> = match serde_json::from_value(value) {
                     Ok(parsed) => parsed,
                     Err(err) => {
@@ -2792,6 +2846,8 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                 };
                 let alive = this.update(cx, |state, cx| {
                     state.apply_side_chat_rows(side_rows);
+                    state.fork_source_rows = fork_sources;
+                    state.side_chat_context_modes = context_modes;
                     state.apply_chats(parsed);
                     state.apply_pending_deep_link(cx);
                     state.reconcile_change_request_watches(cx);

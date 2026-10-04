@@ -120,6 +120,58 @@
 //!     space stays), is missing from the controls row next to Goal for
 //!     Main, a child or a fork, loses its details card or accessible name,
 //!     or overlaps/drops the model, access or Goal controls at narrow widths.
+//! 36. Settings is not inside the contained rounded content plane (flat on
+//!     the chrome, a double frame, clipped corners, mismatched gutters); or
+//!     entering Settings with the chat sidebar collapsed hides its
+//!     navigation; or Settings' own collapse/expand rewrites the saved chat
+//!     sidebar preference, or leaving Settings does not restore it.
+//! 37. A tooltip or rich hover card is translucent (underlying text shows
+//!     through), loses its readable text/icon contrast in any theme or
+//!     surface preference, or its opaque fill is defeated by parent opacity.
+//! 38. UI copy calls context-carrying conversations forks (or "Child chat")
+//!     instead of Side chat / New thread; a tab's help names the wrong
+//!     source (placement instead of lineage), promises future sync, hides a
+//!     deleted source, or says a new thread carries its parent's context.
+//! 39. `+` creates a conversation (or opens anything but its chooser);
+//!     opening, choosing a kind or browsing providers creates something; the
+//!     chooser does not name the actual source (the active chat of the group
+//!     it was opened from) before Create; a double click or retry creates
+//!     two; a chooser left open across a source/main/profile/engine change
+//!     still creates (for the stale source).
+//! 40. A New thread ignores the chosen provider, reuses another provider's
+//!     account, is created under Main instead of the chooser's source, or
+//!     starts a provider; a Side chat leaves its source's provider/account,
+//!     silently falls back to recent visible context after a native refusal,
+//!     offers recent context with no visible messages, or replays an
+//!     uncertain create instead of checking its status.
+//! 41. The split shortcut stops creating one fresh New thread (from the
+//!     group's active chat) directly, ignores the minimum-size guard, or the
+//!     chooser breaks drafts, keyboard navigation (arrows, number keys,
+//!     Enter, Escape), focus return, or command-palette alternatives.
+//! 42. Enter in the chooser creates what no visible button offers: a New
+//!     thread with no provider (catalog loading), a Side chat while its
+//!     capability is loading or its source has nothing to carry, or a plain
+//!     fork where only the recent-messages action is offered (Enter must run
+//!     exactly the offered action, recent context with forceSnapshot).
+//! 43. A New thread asked for while an earlier creation's outcome is unknown
+//!     silently replays that earlier intent (its source, provider, group or
+//!     placement) or starts a second one; Check status does not resend the
+//!     exact original request (same key), or recovery creates twice.
+//! 44. A shortcut's Reset assigns a default another saved shortcut (or a
+//!     fixed chord) already uses, so two actions share one chord.
+//! 45. Closing the chooser (Escape, Cancel, outside click) moves the keyboard
+//!     to Main instead of the source group's chat; or cycling to an empty
+//!     group leaves Main's composer focused, so typing, send, stop or close
+//!     act on Main while the empty group looks focused.
+//! 46. A configurable shortcut is recorded or reset onto a chord a surface
+//!     still binds in its own context (the composer's Mod+S Stash prompt,
+//!     the browser's Mod+L/T/[/]), silently shadowing one of them; or the
+//!     check refuses the action that shares that meaning (Save file's Mod+S,
+//!     Reload's own default); or a refused Reset/record changes a saved
+//!     custom binding.
+//! 47. A Side chat or New thread opened as its own workbench Main loses its
+//!     lineage help (reads as a plain Main), or a deleted source is not
+//!     named as "a deleted chat"; a parentless Main gains lineage copy.
 //! 27. Balance panes counts tabs instead of groups, changes an axis, the
 //!     order, IDs, active chats or focus, leaves a mixed 2-over-1 or six-group
 //!     tree with unequal group areas, writes again on a repeat, is lost on a
@@ -428,15 +480,13 @@ async fn double_click(window: Window, cx: &mut AsyncApp, at: (f32, f32)) -> anyh
 }
 
 fn key(window: Window, cx: &mut AsyncApp, combo: &str) -> anyhow::Result<()> {
-    input(
-        window,
-        cx,
-        PlatformInput::KeyDown(gpui::KeyDownEvent {
-            keystroke: Keystroke::parse(combo)?,
-            is_held: false,
-            prefer_character_input: false,
-        }),
-    )
+    let keystroke = Keystroke::parse(combo)?;
+    // Include GPUI's simulated IME path: a bare KeyDown dispatch runs
+    // shortcuts but never inserts ordinary text into the focused input.
+    gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+        window.dispatch_keystroke(keystroke, cx);
+    })?;
+    Ok(())
 }
 
 /// A one-move drag, as a fast flick or a synthetic native drag (CUA's
@@ -1052,6 +1102,9 @@ async fn merge_engine_chats(
             ))
         })
         .collect();
+    // The lineage and context metadata the live chats watch keeps.
+    let fork_sources = state::fork_source_rows(&frame);
+    let context_modes = state::side_chat_context_modes(&frame);
     let rows: Vec<luna_proto::Chat> = serde_json::from_value(frame)?;
     let fresh = rows.clone();
     cx.update(|cx| {
@@ -1067,6 +1120,8 @@ async fn merge_engine_chats(
             for (id, row) in side_rows {
                 state.side_chat_rows.insert(id, row);
             }
+            state.fork_source_rows.extend(fork_sources);
+            state.side_chat_context_modes.extend(context_modes);
             cx.notify();
         })
     });
@@ -1425,12 +1480,51 @@ async fn toggle(window: Window, cx: &mut AsyncApp, right: bool) -> anyhow::Resul
 /// only the focused one; no step waits for an answer to finish quickly.
 const MOCK_DELAY_MS: &str = "3000";
 
+/// The user API intentionally rejects an explicit Mock provider. The GUI
+/// fixture displays only that registered synthetic provider; choosing it on
+/// a Mock parent is equivalent to the API's legal inherited-provider request.
+/// Keep this adaptation in the fixture transport, never in production UI or
+/// engine validation. Real cross-provider choices have engine and native QA.
+struct FixtureProviderRpc {
+    inner: Arc<dyn luna_rpc::RpcService>,
+    workspace: luna_engine::WorkspaceHost,
+}
+
+#[async_trait::async_trait]
+impl luna_rpc::RpcService for FixtureProviderRpc {
+    async fn handle(
+        &self,
+        method: &str,
+        mut params: Value,
+    ) -> Result<luna_rpc::RpcReply, luna_rpc::RpcError> {
+        if method == luna_rpc::methods::CREATE_CHILD_TAB && params["provider"] == "mock" {
+            let parent = params["parentTaskId"].as_str().unwrap_or_default();
+            let same_mock = self
+                .workspace
+                .chat(parent)
+                .ok()
+                .flatten()
+                .and_then(|chat| chat.config)
+                .is_some_and(|config| config.harness == HarnessId::Mock);
+            if same_mock && let Some(params) = params.as_object_mut() {
+                params.remove("provider");
+            }
+        }
+        self.inner.handle(method, params).await
+    }
+}
+
 fn main() -> anyhow::Result<()> {
     // SAFETY: set first thing in `main`, before the Tokio runtime, the GPUI
     // platform or any other thread exists, and never changed afterwards; the
     // Mock harness only reads it. Process-global on purpose: the fixture's
     // engine runs in this process.
-    unsafe { std::env::set_var("LUNA_MOCK_DELAY_MS", MOCK_DELAY_MS) };
+    unsafe {
+        std::env::set_var("LUNA_MOCK_DELAY_MS", MOCK_DELAY_MS);
+        // This fixture offers the registered synthetic provider in selectors;
+        // ordinary app runs intentionally hide it.
+        std::env::set_var("LUNA_HARNESS", "mock");
+    }
     let output =
         PathBuf::from(std::env::args().nth(1).ok_or_else(|| {
             anyhow::anyhow!("usage: chat-workbench-fixture ABSOLUTE_EVIDENCE_DIR")
@@ -1556,7 +1650,14 @@ fn main() -> anyhow::Result<()> {
     })?;
     let seeded_ids: Vec<String> = SPECS.iter().map(|spec| spec.id.to_string()).collect();
     let spaces = core.workspace.read_spaces()?;
-    let handle = runtime.block_on(state::EngineHandle::fixture_from_core(&core))?;
+    let fixture_service: Arc<dyn luna_rpc::RpcService> = Arc::new(FixtureProviderRpc {
+        inner: core.rpc_service(),
+        workspace: core.workspace.clone(),
+    });
+    let handle = runtime.block_on(state::EngineHandle::fixture_from_core_with_service(
+        &core,
+        fixture_service,
+    ))?;
     let handle_a = handle.clone();
     // The same engine reached under another profile id (accounts under one
     // device root), and an engine that names no profile.
@@ -2198,13 +2299,43 @@ fn main() -> anyhow::Result<()> {
                 let equal = wait_for(window, cx, "equal panes", |rb| (rb["root"]["ratio"].as_f64().unwrap_or(0.0) - 0.5).abs() < 0.001).await?;
                 progress(&output, &mut record, "equalized".into(), equal.clone());
 
-                // w07. `+` while Child A's group is focused: one blank child
-                // of Main (not of Child A), in that group, composer focused.
+                // w07 (failure cases 39-40). `+` in Child A's group opens the
+                // creation chooser naming Child A as the source; opening and
+                // Escape create nothing. An explicit Create makes exactly one
+                // fresh New thread from Child A (the group's active chat; Main
+                // only hosts the layout) in that group, composer focused; a
+                // repeated Create is a no-op.
                 let a_pane = pane_of(&equal, CHILD_A).unwrap()["id"].as_str().unwrap().to_string();
                 click_tab(window, cx, CHILD_A).await?;
                 let before_rows = merge_engine_chats(&reader, &state, cx).await?;
                 let plus = plus_center(&wb(window, cx)?, &a_pane)?;
                 click(window, cx, plus, MouseButton::Left).await?;
+                settle(cx, 300).await;
+                let chooser = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(chooser["open"] == true && chooser["source"] == CHILD_A && chooser["kind"] == "NewThread", "`+` opens the chooser for Child A, New thread first: {chooser}");
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_overlay_owns_keyboard(cx))?, "the chooser owns the keyboard");
+                shot(window, cx, output.join("w07a-chooser.png")).await?;
+                key(window, cx, "escape")?;
+                settle(cx, 300).await;
+                let cancelled = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                let cancelled_rows = merge_engine_chats(&reader, &state, cx).await?;
+                anyhow::ensure!(cancelled["open"] == false && cancelled_rows.len() == before_rows.len() && wb(window, cx)?["creatingChild"] == false, "Escape closes the chooser and creates nothing: {cancelled}");
+                // Failure case 45: the keyboard returns to the source group's
+                // chat (Child A), not Main; a typed key lands in Child A.
+                let owner = window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?;
+                anyhow::ensure!(owner.as_deref() == Some(CHILD_A), "closing the chooser returns the keyboard to Child A: {owner:?}");
+                let main_draft_before = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))?;
+                key(window, cx, "q")?;
+                settle(cx, 150).await;
+                let child_draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(CHILD_A, cx))?;
+                anyhow::ensure!(child_draft.as_deref().is_some_and(|draft| draft.ends_with('q')) && window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))? == main_draft_before, "the key typed after Escape lands in Child A, not Main: {child_draft:?}");
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_type(CHILD_A, "", false, cx))?;
+                click(window, cx, plus, MouseButton::Left).await?;
+                settle(cx, 300).await;
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_chooser_create(cx);
+                    shell.fixture_chooser_create(cx);
+                })?;
                 let created = wait_for(window, cx, "a new child tab", |rb| {
                     rb["creatingChild"] == false
                         && pane_of(rb, CHILD_A).is_some_and(|pane| tabs_of(&pane).len() == 2)
@@ -2217,7 +2348,7 @@ fn main() -> anyhow::Result<()> {
                 let after_rows = merge_engine_chats(&reader, &state, cx).await?;
                 anyhow::ensure!(after_rows.len() == before_rows.len() + 1, "exactly one child per gesture: {} -> {}", before_rows.len(), after_rows.len());
                 let row = after_rows.iter().find(|chat| chat.id == new_child).cloned().unwrap();
-                anyhow::ensure!(row.child_thread.as_ref().is_some_and(|child| child.parent_task_id == MAIN), "the parent is Main, not the focused child: {row:?}");
+                anyhow::ensure!(row.child_thread.as_ref().is_some_and(|child| child.parent_task_id == CHILD_A), "the new thread's source is the group's active chat (Child A), not Main: {row:?}");
                 settle(cx, 400).await;
                 let created = wb(window, cx)?;
                 anyhow::ensure!(created["focusedChat"] == new_child.as_str() && role_of(&created, &new_child).as_deref() == Some("Child"), "new child focused, as Child: {created}");
@@ -2908,8 +3039,8 @@ fn main() -> anyhow::Result<()> {
                 press(window, cx, (sx + 12.0, sy + sh - 12.0), MouseButton::Left, false, 1)?;
                 settle(cx, 200).await;
                 wait_for(window, cx, "the second empty group focused", |rb| rb["focusedPane"] == second_pane.as_str()).await?;
-                let started = window.update(cx, |shell, _, cx| shell.fixture_workbench_action("New child chat", cx))?;
-                anyhow::ensure!(started, "the palette offers New child chat");
+                let started = window.update(cx, |shell, _, cx| shell.fixture_workbench_action("New thread", cx))?;
+                anyhow::ensure!(started, "the palette offers New thread");
                 let child_landed = wait_for(window, cx, "the new child in the focused empty group", |rb| {
                     all_panes(rb).iter().any(|pane| pane["id"] == second_pane.as_str() && tabs_of(pane).len() == 1)
                 })
@@ -3430,6 +3561,8 @@ fn main() -> anyhow::Result<()> {
                 let fork_main = wb(window, cx)?;
                 let fork_pane = pane_of(&fork_main, &fork_one).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the fork's group: {fork_main}"))?;
                 click(window, cx, plus_center(&fork_main, &fork_pane)?, MouseButton::Left).await?;
+                settle(cx, 300).await;
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_create(cx))?;
                 let created_in_fork = {
                     let id = fork_one.clone();
                     wait_for(window, cx, "a new tab created under the fork", move |rb| rb["creatingChild"] == false && all_panes(rb).iter().flat_map(tabs_of).any(|tab| tab != id)).await?
@@ -3444,7 +3577,88 @@ fn main() -> anyhow::Result<()> {
                     let id = fork_child.clone();
                     wait_for(window, cx, "the fork child's published lineage", move |rb| role_of(rb, &id).as_deref() == Some("Child")).await?
                 };
+                // Its help keeps its lineage as Main (only a parentless Main
+                // reads as plain Main): a Side chat of Main, and the New
+                // thread created from it, each opened as its own Main.
+                const MAIN_NOTE: &str = "It is this workbench's Main and stays open.";
+                let fork_main_help = tab_json(&with_child, &fork_one).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
+                anyhow::ensure!(
+                    fork_main_help["title"].as_str().is_some_and(|title| title.starts_with("Side chat of ") && title != "Side chat of a deleted chat")
+                        && fork_main_help["details"].as_str().is_some_and(|details| details.starts_with("Side chats carry the context of the parent thread.") && details.ends_with(MAIN_NOTE)),
+                    "a Side chat as its own Main keeps its Side chat help: {fork_main_help}"
+                );
                 shot(window, cx, output.join("w20c-fork-as-main.png")).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&fork_child, cx))?;
+                let child_main = {
+                    let id = fork_child.clone();
+                    wait_for(window, cx, "the fork's New thread is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
+                };
+                let child_main_help = tab_json(&child_main, &fork_child).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
+                anyhow::ensure!(
+                    child_main_help["title"].as_str().is_some_and(|title| title.starts_with("New thread created from ") && title != "New thread created from a deleted chat")
+                        && child_main_help["details"] == format!("New threads do not carry the context of the parent. {MAIN_NOTE}").as_str(),
+                    "a New thread as its own Main keeps its New thread help: {child_main_help}"
+                );
+                // Deleted sources: the orphan Side chat (its source was
+                // deleted in w20b) and a New thread whose parent is deleted.
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&fork_of_fork, cx))?;
+                let orphan_main = {
+                    let id = fork_of_fork.clone();
+                    wait_for(window, cx, "the orphan Side chat is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
+                };
+                let orphan_main_help = tab_json(&orphan_main, &fork_of_fork).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
+                anyhow::ensure!(
+                    orphan_main_help["title"] == "Side chat of a deleted chat" && orphan_main_help["details"].as_str().is_some_and(|details| details.ends_with(MAIN_NOTE)),
+                    "an orphan Side chat as Main names its deleted source: {orphan_main_help}"
+                );
+                let disposable = fork_via_rpc(MAIN.to_string()).await?;
+                anyhow::ensure!(!disposable.is_empty(), "a disposable source");
+                merge_engine_chats(&reader, &state, cx).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&disposable, cx))?;
+                let disposable_main = {
+                    let id = disposable.clone();
+                    wait_for(window, cx, "the disposable source is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?
+                };
+                let disposable_pane = pane_of(&disposable_main, &disposable).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("its group: {disposable_main}"))?;
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_open(Some(&disposable_pane), false, cx))?;
+                settle(cx, 300).await;
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_create(cx))?;
+                let orphan_child = {
+                    let id = disposable.clone();
+                    let created = wait_for(window, cx, "a New thread of the disposable source", move |rb| rb["creatingChild"] == false && all_panes(rb).iter().flat_map(tabs_of).any(|tab| tab != id)).await?;
+                    all_panes(&created).iter().flat_map(tabs_of).find(|tab| *tab != disposable).unwrap()
+                };
+                merge_engine_chats(&reader, &state, cx).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&orphan_child, cx))?;
+                {
+                    let id = orphan_child.clone();
+                    wait_for(window, cx, "the New thread is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?;
+                }
+                window.update(cx, |shell, _, cx| shell.fixture_chat_action(&disposable, "delete", cx))?;
+                let mut parent_gone = false;
+                for _ in 0..80 {
+                    settle(cx, 150).await;
+                    if !engine_has(&reader, &disposable).await? {
+                        parent_gone = true;
+                        break;
+                    }
+                }
+                anyhow::ensure!(parent_gone, "the New thread's parent is deleted");
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.chats.retain(|chat| chat.id != disposable);
+                        cx.notify();
+                    })
+                });
+                anyhow::ensure!(engine_has(&reader, &orphan_child).await?, "deleting a parent keeps its New thread");
+                let orphan_child_help = {
+                    let id = orphan_child.clone();
+                    let rb = wait_for(window, cx, "the New thread names its deleted parent", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["help"]["title"] == "New thread created from a deleted chat")).await?;
+                    tab_json(&rb, &orphan_child).map(|tab| tab["help"].clone()).unwrap_or(Value::Null)
+                };
+                anyhow::ensure!(orphan_child_help["details"] == format!("New threads do not carry the context of the parent. {MAIN_NOTE}").as_str(), "a New thread as Main with a deleted parent: {orphan_child_help}");
+                shot(window, cx, output.join("w20c-lineage-as-main.png")).await?;
+                progress(&output, &mut record, "lineageAsMain".into(), serde_json::json!({"sideMain": fork_main_help, "childMain": child_main_help, "orphanSideMain": orphan_main_help, "orphanChildMain": orphan_child_help}));
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(MAIN, cx))?;
                 wait_for(window, cx, "back to Main's workbench", |rb| rb["main"] == MAIN && rb["loaded"] == true).await?;
                 settle(cx, 300).await;
@@ -3507,6 +3721,9 @@ fn main() -> anyhow::Result<()> {
                 let main_group = pane_of(&before_split, MAIN).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("Main's group: {before_split}"))?;
                 let groups_before = all_panes(&before_split).len();
                 let known: std::collections::HashSet<String> = all_panes(&before_split).iter().flat_map(tabs_of).collect();
+                let split_source = pane_of(&before_split, MAIN)
+                    .and_then(|pane| pane["active"].as_str().map(str::to_string))
+                    .unwrap_or_else(|| MAIN.to_string());
                 set_right_sidebar(window, cx, false).await?;
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_split_child(&main_group, cx))?;
                 let split_child = {
@@ -3523,7 +3740,7 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(tabs_of(&new_group) == [new_child.clone()] && new_group["active"] == new_child.as_str(), "the new group holds just the new child: {split_child}");
                 anyhow::ensure!(pane_of(&split_child, MAIN).is_some_and(|pane| pane["id"] == main_group.as_str()), "Main stays in its group: {split_child}");
                 let rows = merge_engine_chats(&reader, &state, cx).await?;
-                anyhow::ensure!(rows.iter().find(|chat| chat.id == new_child).is_some_and(|chat| chat.child_thread.as_ref().is_some_and(|child| child.parent_task_id == MAIN)), "the new chat is Main's child");
+                anyhow::ensure!(rows.iter().find(|chat| chat.id == new_child).is_some_and(|chat| chat.child_thread.as_ref().is_some_and(|child| child.parent_task_id == split_source)), "the new thread comes from the group's active chat ({split_source})");
                 anyhow::ensure!(active_turn(&task_snapshot(&reader, &new_child).await?).is_none(), "the blank child starts nothing");
                 shot(window, cx, output.join("w20e-split-child.png")).await?;
 
@@ -3589,7 +3806,7 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(started == Some("confirm"), "a started chat confirms a provider switch: {started:?}");
                 let fork_path = switch_path(cx, &fork_of_fork)?;
                 anyhow::ensure!(fork_path.is_none_or(|path| path == "confirm"), "a fork never switches without confirming: {fork_path:?}");
-                progress(&output, &mut record, "splitChild".into(), serde_json::json!({"layout": split_child, "child": new_child, "blankPath": blank_path, "startedPath": started}));
+                progress(&output, &mut record, "splitChild".into(), serde_json::json!({"layout": split_child, "child": new_child, "source":split_source,"blankPath": blank_path, "startedPath": started}));
 
                 // w20g. Failure case 34: no context row in child/fork panes;
                 // an unseen completion on a hidden tab shows the accent
@@ -3627,12 +3844,460 @@ fn main() -> anyhow::Result<()> {
                     wait_for(window, cx, "the unread dot clears once the tab is on screen", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["status"] == "Idle")).await?
                 };
                 progress(&output, &mut record, "tabStatus".into(), serde_json::json!({"dotted": tab_json(&dotted, &hidden), "seen": tab_json(&seen, &hidden)}));
+
+                // w20g2. Failure case 42: Enter runs only the action the
+                // chooser visibly offers. A Side chat from the blank split
+                // child (nothing to carry; Mock has no native history) offers
+                // nothing: hold both catalog and capability loading states
+                // deterministically; real Enter must never create while
+                // either result is unavailable.
+                let blank_group = new_group["id"].as_str().unwrap_or_default().to_string();
+                click_tab(window, cx, &new_child).await?;
+                let rows_before_blank = merge_engine_chats(&reader, &state, cx).await?.len();
+                let held_providers = window.update(cx, |shell, _, cx| shell.fixture_chooser_hold_providers(cx))?
+                    .ok_or_else(|| anyhow::anyhow!("the warm engine provider catalog to hold"))?;
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_open(Some(&blank_group), false, cx))?;
+                draw(window, cx)?;
+                let provider_loading = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(provider_loading["providers"].is_null() && provider_loading["action"].as_str().is_some_and(|action| action.starts_with("Disabled")), "provider loading is actually held: {provider_loading}");
+                key(window, cx, "enter")?;
+                settle(cx, 200).await;
+                anyhow::ensure!(wb(window, cx)?["creatingChild"] == false && window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?["open"] == true, "Enter with no provider result creates nothing");
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_blank, "cold catalog browsing created no chat");
+                shot(window, cx, output.join("w20g2-cold-provider-chooser.png")).await?;
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_chooser_restore_providers(held_providers.clone(), cx);
+                    shell.fixture_chooser_provider(HarnessId::Mock, cx);
+                })?;
+                let provider_ready = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(provider_ready["action"].as_str().is_some_and(|action| action.starts_with("NewThread")), "the actual provider result restores the explicit choice: {provider_ready}");
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_restore_providers(Vec::new(), cx))?;
+                let provider_removed = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(provider_removed["action"].as_str().is_some_and(|action| action.starts_with("Disabled")), "a provider removed from the offered catalog cannot create: {provider_removed}");
+                key(window, cx, "enter")?;
+                settle(cx, 150).await;
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_blank, "the removed provider creates no chat");
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_restore_providers(held_providers, cx))?;
+                key(window, cx, "escape")?;
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_chooser_open(Some(&blank_group), true, cx);
+                    shell.fixture_chooser_hold_capability(true, cx);
+                })?;
+                draw(window, cx)?;
+                let loading = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(loading["capability"].is_null() && loading["action"].as_str().is_some_and(|action| action.starts_with("Disabled")), "capability loading is actually held: {loading}");
+                key(window, cx, "enter")?;
+                settle(cx, 200).await;
+                let after_loading = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(after_loading["open"] == true && after_loading["sideRequested"] == false, "Enter before the preview is known creates nothing: {loading} -> {after_loading}");
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_hold_capability(false, cx))?;
+                let mut cold = Value::Null;
+                for _ in 0..40 {
+                    cold = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                    if cold["capability"].is_object() {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(cold["source"] == new_child.as_str() && cold["action"].as_str().is_some_and(|action| action.starts_with("Disabled")), "a blank source offers no Side chat: {cold}");
+                shot(window, cx, output.join("w20g2-blank-side-chooser.png")).await?;
+                key(window, cx, "enter")?;
+                settle(cx, 400).await;
+                let after_cold = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(after_cold["open"] == true && after_cold["sideRequested"] == false, "Enter on a disabled action does nothing: {after_cold}");
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_blank, "no chat was created from the blank source");
+                key(window, cx, "escape")?;
+                settle(cx, 300).await;
+                let blank_owner = window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?;
+                anyhow::ensure!(blank_owner.as_deref() == Some(new_child.as_str()), "Escape returns the keyboard to the source's composer: {blank_owner:?}");
+                progress(&output, &mut record, "chooserDisabledEnter".into(), serde_json::json!({"providerLoading":provider_loading,"providerReady":provider_ready,"providerRemoved":provider_removed,"loading": loading, "afterLoading": after_loading, "cold": cold}));
+
+                // w20g3. Failure case 43: a New thread whose outcome is
+                // unknown (its response lost after the engine created it)
+                // blocks any other intent (another source and provider, the
+                // chooser's Enter) without replaying it, keeps the original
+                // request, and Check status resends exactly that request
+                // (same key, source, provider, group, placement): one thread.
+                click_tab(window, cx, MAIN).await?;
+                let rows_before_unknown = merge_engine_chats(&reader, &state, cx).await?.len();
+                window.update(cx, |shell, _, _| shell.fixture_workbench_lose_child_response())?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_request_child(&main_group, Some(HarnessId::Mock), cx))?;
+                let unknown = wait_for(window, cx, "an unknown New thread outcome", |rb| rb["creatingChild"] == false && rb["childFailureRequest"]["ambiguous"] == true).await?;
+                let original = unknown["childFailureRequest"].clone();
+                anyhow::ensure!(original["parent"] == MAIN && original["provider"] == "Mock" && original["pane"] == main_group.as_str() && original["split"] == false, "the unknown request is recorded as asked: {original}");
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_unknown + 1, "the engine did create it (only the response was lost)");
+                shot(window, cx, output.join("w20g3-unknown-child.png")).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_request_child(&blank_group, Some(HarnessId::Codex), cx))?;
+                settle(cx, 300).await;
+                let blocked = wb(window, cx)?;
+                anyhow::ensure!(blocked["creatingChildRequest"].is_null() && blocked["childBlocked"] == true && blocked["childFailureRequest"] == original, "another source/provider is blocked and the original kept: {blocked}");
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_open(Some(&blank_group), false, cx))?;
+                settle(cx, 300).await;
+                let blocked_chooser = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(blocked_chooser["action"].as_str().is_some_and(|action| action.starts_with("Disabled")), "the chooser offers no New thread while one is unresolved: {blocked_chooser}");
+                key(window, cx, "enter")?;
+                settle(cx, 300).await;
+                anyhow::ensure!(wb(window, cx)?["creatingChildRequest"].is_null() && wb(window, cx)?["childFailureRequest"] == original, "Enter on the blocked chooser sends nothing");
+                key(window, cx, "escape")?;
+                settle(cx, 200).await;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_retry_child(cx))?;
+                let checking = wb(window, cx)?;
+                anyhow::ensure!(
+                    ["key", "parent", "provider", "pane", "split"].iter().all(|field| checking["creatingChildRequest"][*field] == original[*field]),
+                    "Check status resends exactly the original request: {checking}"
+                );
+                let recovered = wait_for(window, cx, "Check status settles", |rb| rb["creatingChild"] == false && rb["childFailureRequest"].is_null()).await?;
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_unknown + 1, "recovery creates nothing more (exactly one New thread)");
+                let recovered_child = pane_of(&recovered, MAIN)
+                    .map(|pane| tabs_of(&pane))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|tab| !known.contains(tab) && *tab != new_child)
+                    .ok_or_else(|| anyhow::anyhow!("the recovered New thread opens in Main's group: {recovered}"))?;
+                progress(&output, &mut record, "unknownChild".into(), serde_json::json!({"original": original, "blocked": blocked["childBlocked"], "recovered": recovered_child}));
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_close(&recovered_child, cx))?;
+                settle(cx, 300).await;
                 // Restore the arrangement the frame steps expect: the split
                 // child's group closes (the child stays in Related chats).
                 let new_group_id = new_group["id"].as_str().unwrap_or_default().to_string();
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_close_pane(&new_group_id, cx))?;
                 wait_for(window, cx, "the split child's group closed", move |rb| all_panes(rb).len() == groups_before).await?;
                 set_right_sidebar(window, cx, true).await?;
+
+                // w20h. Failure cases 39-40: the chooser's Side chat path.
+                // The source's provider (Mock) has no native history forks:
+                // the plain "Create side chat" is not offered as if it were
+                // native; the recent-visible-messages action is explicit and
+                // creates exactly one side chat of Main, on Main's provider.
+                // A chooser whose group changes its active chat closes
+                // without creating.
+                let main_group = pane_of(&wb(window, cx)?, MAIN)
+                    .and_then(|pane| pane["id"].as_str().map(str::to_string))
+                    .ok_or_else(|| anyhow::anyhow!("Main's group"))?;
+                click_tab(window, cx, MAIN).await?;
+                let side_before = merge_engine_chats(&reader, &state, cx).await?.len();
+                let known_sides: std::collections::HashSet<String> =
+                    cx.update(|cx| state.read(cx).side_chat_rows.keys().cloned().collect());
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_open(Some(&main_group), true, cx))?;
+                let mut side_chooser = Value::Null;
+                for _ in 0..40 {
+                    settle(cx, 100).await;
+                    side_chooser = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                    if side_chooser["capability"].is_object() {
+                        break;
+                    }
+                }
+                anyhow::ensure!(side_chooser["open"] == true && side_chooser["source"] == MAIN && side_chooser["kind"] == "SideChat", "the Side chat chooser names Main as its source: {side_chooser}");
+                anyhow::ensure!(side_chooser["capability"]["capability"] == "None", "the preview reports no native fork for this provider: {side_chooser}");
+                shot(window, cx, output.join("w20h-side-chooser.png")).await?;
+                // Browsing does not create: switch kinds and providers back and forth.
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_chooser_kind(false, cx);
+                    shell.fixture_chooser_provider(HarnessId::Mock, cx);
+                    shell.fixture_chooser_kind(true, cx);
+                })?;
+                settle(cx, 300).await;
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == side_before, "browsing the chooser creates nothing");
+                // The explicit recent-context side chat, through real Enter:
+                // the visibly offered action (forceSnapshot), never a plain
+                // native request.
+                let offered = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(offered["action"] == "SideRecent", "a non-native source with messages offers only the recent-messages side chat: {offered}");
+                key(window, cx, "enter")?;
+                let mut recent_fork = None;
+                for _ in 0..80 {
+                    let rows = merge_engine_chats(&reader, &state, cx).await?;
+                    if rows.len() > side_before {
+                        recent_fork = cx.update(|cx| {
+                            state
+                                .read(cx)
+                                .side_chat_rows
+                                .iter()
+                                .filter(|(id, row)| row.parent_id == MAIN && !known_sides.contains(*id))
+                                .map(|(id, _)| id.clone())
+                                .find(|id| rows.iter().any(|chat| chat.id == *id))
+                        });
+                        if recent_fork.is_some() {
+                            break;
+                        }
+                    }
+                    settle(cx, 150).await;
+                }
+                let recent_fork = recent_fork.ok_or_else(|| anyhow::anyhow!("the recent-context side chat of Main"))?;
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == side_before + 1, "exactly one side chat per Create");
+                let fork_row = chat_row(cx, &state, &recent_fork).ok_or_else(|| anyhow::anyhow!("its row"))?;
+                // Its tab's tooltip names its source and says it copied
+                // recent visible messages only (never full native context).
+                let mut recent_help = Value::Null;
+                for _ in 0..60 {
+                    merge_engine_chats(&reader, &state, cx).await?;
+                    settle(cx, 100).await;
+                    recent_help = tab_json(&wb(window, cx)?, &recent_fork).map(|tab| tab["help"].clone()).unwrap_or(Value::Null);
+                    if recent_help["details"].as_str().is_some_and(|details| details.contains("recent visible messages only")) {
+                        break;
+                    }
+                }
+                anyhow::ensure!(recent_help["title"].as_str().is_some_and(|title| title.starts_with("Side chat of ")), "the recent-context tab is a Side chat of its source: {recent_help}");
+                let details = recent_help["details"].as_str().unwrap_or_default();
+                anyhow::ensure!(
+                    details.starts_with("Side chats carry the context of the parent thread. Context is captured when created; later parent messages are not copied.")
+                        && details.ends_with("This side chat copied recent visible messages only."),
+                    "the recent-context tab's tooltip says it copied recent visible messages only: {recent_help}"
+                );
+                anyhow::ensure!(fork_row.config.as_ref().is_some_and(|config| config.harness == HarnessId::Mock), "the side chat stays on the source's provider: {fork_row:?}");
+                // A stale chooser: its group's active chat changes while it is
+                // open, so its Create does nothing.
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_open(Some(&main_group), false, cx))?;
+                settle(cx, 200).await;
+                let other_tab = pane_of(&wb(window, cx)?, MAIN)
+                    .map(|pane| tabs_of(&pane))
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|tab| tab != MAIN);
+                if let Some(other) = other_tab {
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_open(&other, cx))?;
+                    settle(cx, 500).await;
+                    let rows_before = merge_engine_chats(&reader, &state, cx).await?.len();
+                    window.update(cx, |shell, _, cx| shell.fixture_chooser_create(cx))?;
+                    settle(cx, 600).await;
+                    let stale = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                    anyhow::ensure!(stale["open"] == false && merge_engine_chats(&reader, &state, cx).await?.len() == rows_before, "a chooser for a changed source closes without creating: {stale}");
+                } else {
+                    anyhow::bail!("Main's group needs a second tab to test a stale chooser");
+                }
+                click_tab(window, cx, MAIN).await?;
+                progress(&output, &mut record, "chooserSideChat".into(), serde_json::json!({"chooser": side_chooser, "recentFork": recent_fork}));
+
+                // w20i. Failure case 36: Settings in the contained plane, its
+                // navigation shown even with the chat sidebar collapsed; its
+                // own collapse never rewrites the saved chat preference, and
+                // leaving restores the chat sidebar exactly.
+                let chat_frame = frame(window, cx)?;
+                if chat_frame["sidebarCollapsed"] == false {
+                    toggle(window, cx, false).await?;
+                }
+                let collapsed = frame(window, cx)?;
+                anyhow::ensure!(collapsed["sidebarCollapsed"] == true && collapsed["sidebarShown"] == false, "the chat sidebar is collapsed: {collapsed}");
+                let rows_before_settings = merge_engine_chats(&reader, &state, cx).await?.len();
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_open(None, false, cx))?;
+                draw(window, cx)?;
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?["open"] == true, "the chooser is open before navigating to Settings");
+                window.update(cx, |shell, _, cx| shell.fixture_open_settings(cx))?;
+                for _ in 0..12 {
+                    draw(window, cx)?;
+                    settle(cx, 60).await;
+                }
+                let in_settings = frame(window, cx)?;
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?["open"] == false, "Settings dismisses the creation chooser");
+                key(window, cx, "enter")?;
+                window.update(cx, |shell, _, cx| shell.fixture_chooser_create(cx))?;
+                settle(cx, 150).await;
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_settings, "no creation is possible from the Settings route");
+                anyhow::ensure!(in_settings["settingsRoute"] == true && in_settings["sidebarShown"] == true && in_settings["sidebarWidthNow"].as_f64().unwrap_or(0.0) > 100.0, "Settings shows its navigation: {in_settings}");
+                anyhow::ensure!(in_settings["sidebarCollapsed"] == true, "entering Settings leaves the saved chat preference collapsed: {in_settings}");
+                shot(window, cx, output.join("w20i-settings-contained.png")).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_toggle_sidebar(false, cx))?;
+                for _ in 0..12 {
+                    draw(window, cx)?;
+                    settle(cx, 60).await;
+                }
+                let settings_collapsed = frame(window, cx)?;
+                anyhow::ensure!(settings_collapsed["sidebarShown"] == false && settings_collapsed["sidebarCollapsed"] == true, "Settings' own collapse: {settings_collapsed}");
+                window.update(cx, |shell, _, cx| shell.fixture_toggle_sidebar(false, cx))?;
+                window.update(cx, |shell, _, cx| shell.fixture_leave_settings(true, cx))?;
+                for _ in 0..12 {
+                    draw(window, cx)?;
+                    settle(cx, 60).await;
+                }
+                let back_in_chat = frame(window, cx)?;
+                anyhow::ensure!(back_in_chat["settingsRoute"] == false && back_in_chat["sidebarCollapsed"] == true && back_in_chat["sidebarShown"] == false, "Back restores the collapsed chat sidebar: {back_in_chat}");
+                if chat_frame["sidebarCollapsed"] == false {
+                    toggle(window, cx, false).await?;
+                }
+                progress(&output, &mut record, "settingsSidebar".into(), serde_json::json!({"inSettings": in_settings, "backInChat": back_in_chat}));
+
+                // w20j. Failure case 41 and the reviewed shortcut map: the
+                // configured Mod+Alt+N opens the focused group's chooser (a
+                // plain N typed in the composer does not); Escape closes it
+                // before any stop handling and nothing is created; group
+                // shortcuts do nothing underneath the open chooser and move
+                // focus in reading order once it is closed.
+                activate(window, cx)?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(MAIN, window, cx))?, "focus Main's composer");
+                draw(window, cx)?;
+                settle(cx, 120).await;
+                let rows_before_keys = merge_engine_chats(&reader, &state, cx).await?.len();
+                key(window, cx, "n")?;
+                settle(cx, 150).await;
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?["open"] == false, "a plain N in the composer is text, not a shortcut");
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_type(MAIN, "", false, cx))?;
+                key(window, cx, "cmd-alt-n")?;
+                settle(cx, 300).await;
+                let keyed = window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?;
+                anyhow::ensure!(keyed["open"] == true && keyed["kind"] == "NewThread", "Mod+Alt+N opens the focused group's chooser: {keyed}");
+                let focused_before = wb(window, cx)?["focusedPane"].clone();
+                key(window, cx, "cmd-alt-]")?;
+                settle(cx, 300).await;
+                anyhow::ensure!(wb(window, cx)?["focusedPane"] == focused_before, "group shortcuts do nothing under the open chooser");
+                let escapes_before_keys = window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log().len())?;
+                key(window, cx, "escape")?;
+                settle(cx, 300).await;
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_chooser_readback(cx))?["open"] == false, "Escape closes the chooser");
+                anyhow::ensure!(window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log().len())? == escapes_before_keys, "an Escape that closes the chooser stops nothing");
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_keys, "keyboard browsing created nothing");
+                let keyed_owner = window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?;
+                anyhow::ensure!(keyed_owner.as_deref() == Some(MAIN), "Escape returns the keyboard to the chooser's source (Main): {keyed_owner:?}");
+                // Real macOS events fold Shift+[ / ] into { / } and clear
+                // Shift. Inject that event shape, not the stored combo.
+                let before_tab_keys = wb(window, cx)?;
+                let main_group = pane_of(&before_tab_keys, MAIN).ok_or_else(|| anyhow::anyhow!("Main's group for tab shortcuts"))?;
+                anyhow::ensure!(tabs_of(&main_group).len() > 1, "tab shortcuts require multiple tabs in Main's group");
+                key(window, cx, "cmd-}")?;
+                settle(cx, 300).await;
+                let next_tab_owner = window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?;
+                anyhow::ensure!(next_tab_owner.is_some() && next_tab_owner.as_deref() != Some(MAIN), "native Cmd+Shift+] moves to another tab: {next_tab_owner:?}");
+                key(window, cx, "cmd-{")?;
+                settle(cx, 300).await;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?.as_deref() == Some(MAIN), "native Cmd+Shift+[ returns to Main");
+                progress(&output, &mut record, "nativeTabShortcuts".into(), serde_json::json!({"nextTab": next_tab_owner, "returnedTo": MAIN}));
+                if all_panes(&wb(window, cx)?).len() > 1 {
+                    key(window, cx, "cmd-alt-]")?;
+                    settle(cx, 400).await;
+                    let moved = wb(window, cx)?;
+                    anyhow::ensure!(moved["focusedPane"] != focused_before, "Mod+Alt+] focuses the next group: {moved}");
+                    key(window, cx, "cmd-alt-[")?;
+                    settle(cx, 400).await;
+                    anyhow::ensure!(wb(window, cx)?["focusedPane"] == focused_before, "Mod+Alt+[ returns to the previous group");
+                }
+                // Failure case 45: cycling to an empty group moves the
+                // keyboard there (no composer owns it); typing, Escape and
+                // send never act on Main.
+                let main_pane_keys = pane_of(&wb(window, cx)?, MAIN).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("Main's group"))?;
+                let groups_before_empty = all_panes(&wb(window, cx)?).len();
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_split_empty(&main_pane_keys, cx))?;
+                let with_empty = wait_for(window, cx, "an empty group", move |rb| all_panes(rb).len() == groups_before_empty + 1).await?;
+                let empty_group = all_panes(&with_empty)
+                    .into_iter()
+                    .find(|pane| tabs_of(pane).is_empty())
+                    .and_then(|pane| pane["id"].as_str().map(str::to_string))
+                    .ok_or_else(|| anyhow::anyhow!("the empty group: {with_empty}"))?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(MAIN, window, cx))?, "focus Main's composer");
+                draw(window, cx)?;
+                settle(cx, 120).await;
+                let main_draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))?;
+                let mut reached = false;
+                for _ in 0..all_panes(&with_empty).len() {
+                    key(window, cx, "cmd-alt-]")?;
+                    settle(cx, 300).await;
+                    if wb(window, cx)?["focusedPane"] == empty_group.as_str() {
+                        reached = true;
+                        break;
+                    }
+                }
+                anyhow::ensure!(reached, "Mod+Alt+] reaches the empty group");
+                let empty_owner = window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?;
+                anyhow::ensure!(empty_owner.is_none(), "no composer owns the keyboard in an empty group: {empty_owner:?}");
+                let escapes_empty = window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log().len())?;
+                key(window, cx, "x")?;
+                key(window, cx, "enter")?;
+                key(window, cx, "escape")?;
+                settle(cx, 300).await;
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))? == main_draft, "typing in the empty group never reaches Main's draft");
+                let empty_escapes: Vec<(Option<String>, &str)> = window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log())?.into_iter().skip(escapes_empty).collect();
+                anyhow::ensure!(empty_escapes.iter().all(|(target, outcome)| target.as_deref() != Some(MAIN) && *outcome != "interrupt"), "Escape in the empty group stops nothing in Main: {empty_escapes:?}");
+                anyhow::ensure!(merge_engine_chats(&reader, &state, cx).await?.len() == rows_before_keys, "nothing was sent or created from the empty group");
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_close_pane(&empty_group, cx))?;
+                wait_for(window, cx, "the empty group closed", move |rb| all_panes(rb).len() == groups_before_empty).await?;
+                progress(&output, &mut record, "keyboardRouting".into(), serde_json::json!({"chooser": keyed, "emptyGroup": empty_group}));
+
+                // w20j2. Failure cases 44 and 46: a keymap an older build
+                // saved (Mod+Alt+N already New session, Mod+T on the
+                // terminal) loads through the real migration; Reset and the
+                // recorder refuse chords another saved shortcut, a fixed key
+                // or a contextual key (composer Stash, browser keys) owns,
+                // leave every saved value unchanged, and still accept the
+                // compatible defaults (Save file's Mod+S, Reload's own).
+                let old_dir = output.join("old-keymap-settings");
+                std::fs::create_dir_all(&old_dir)?;
+                std::fs::write(
+                    settings::UiSettings::path(&old_dir),
+                    serde_json::json!({"keymap": {"newSession": "mod-alt-n", "toggleTerminal": "mod-t", "saveFile": "mod-shift-s", "browserReload": "mod-alt-r"}}).to_string(),
+                )?;
+                let loaded = settings::UiSettings::load(&old_dir).keymap;
+                use settings::ShortcutId as Sid;
+                anyhow::ensure!(
+                    loaded.get(Sid::NewSession) == "mod-alt-n" && loaded.get(Sid::NewThreadChooser).is_empty() && loaded.get(Sid::ToggleTerminal) == "mod-t" && loaded.get(Sid::NextGroup) == "mod-alt-]",
+                    "the upgrade keeps saved bindings and leaves a taken new default unbound: {loaded:?}"
+                );
+                let punctuation_dir = old_dir.join("native-punctuation");
+                std::fs::create_dir_all(&punctuation_dir)?;
+                std::fs::write(settings::UiSettings::path(&punctuation_dir), serde_json::json!({"keymap": {"toggleTerminal": "mod-{"}}).to_string())?;
+                let punctuation_keymap = settings::UiSettings::load(&punctuation_dir).keymap;
+                anyhow::ensure!(punctuation_keymap.get(Sid::ToggleTerminal) == "mod-{" && punctuation_keymap.get(Sid::PreviousTab).is_empty(), "a saved native brace chord keeps ownership of the shifted-bracket default: {punctuation_keymap:?}");
+                let keymap_before = window.update(cx, |shell, _, _| shell.fixture_saved_keymap())?;
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_load_keymap(loaded.clone(), cx);
+                    shell.fixture_open_shortcuts(cx);
+                })?;
+                for _ in 0..4 {
+                    draw(window, cx)?;
+                    settle(cx, 80).await;
+                }
+                let page = window.update(cx, |shell, _, _| shell.fixture_shortcuts_page())?.ok_or_else(|| anyhow::anyhow!("the Shortcuts page"))?;
+                let loaded_json = serde_json::to_value(&loaded)?;
+                let saved = |cx: &mut AsyncApp| window.update(cx, |shell, _, _| shell.fixture_saved_keymap());
+                cx.update(|cx| page.update(cx, |page, cx| page.fixture_reset(Sid::NewThreadChooser, cx)));
+                let refused_reset = cx.update(|cx| page.read(cx).fixture_readback());
+                anyhow::ensure!(
+                    refused_reset["notice"].as_str().is_some_and(|notice| notice.starts_with("Can't reset:") && notice.contains("New session"))
+                        && refused_reset["keymap"] == loaded_json
+                        && saved(cx)? == loaded_json,
+                    "Reset onto New session's saved chord is refused and changes nothing: {refused_reset}"
+                );
+                shot(window, cx, output.join("w20j2-reset-refused.png")).await?;
+                let mut refused_records = Vec::new();
+                for (keystroke, owner) in [
+                    ("cmd-]", "the browser's Forward"),
+                    ("cmd-[", "the browser's Back"),
+                    ("cmd-s", "the composer's Stash prompt"),
+                    ("cmd-l", "the browser's address bar"),
+                    ("cmd-k", "the command palette"),
+                    ("cmd-shift-enter", "the composer's alternate send"),
+                    ("cmd-left", "text editing"),
+                    ("left", "text editing and focus navigation"),
+                    ("ctrl-a", "text editing"),
+                    ("x", "text entry"),
+                    ("cmd-alt-n", ""),
+                    ("cmd-{", ""),
+                    ("cmd-}", ""),
+                ] {
+                    cx.update(|cx| page.update(cx, |page, cx| page.fixture_record(Sid::NextGroup, keystroke, cx)));
+                    let readback = cx.update(|cx| page.read(cx).fixture_readback());
+                    let notice = readback["notice"].as_str().unwrap_or_default().to_string();
+                    anyhow::ensure!(
+                        !notice.is_empty() && (owner.is_empty() || notice.ends_with(&format!("is reserved for {owner}."))) && readback["keymap"] == loaded_json && saved(cx)? == loaded_json,
+                        "recording {keystroke} for Next group is refused ({owner}) and nothing changes: {readback}"
+                    );
+                    refused_records.push(serde_json::json!({"keystroke": keystroke, "notice": notice}));
+                }
+                cx.update(|cx| page.update(cx, |page, cx| {
+                    page.fixture_reset(Sid::SaveFile, cx);
+                    page.fixture_reset(Sid::BrowserReload, cx);
+                    page.fixture_record(Sid::NewThreadChooser, "cmd-alt-g", cx);
+                }));
+                settle(cx, 100).await;
+                let accepted = saved(cx)?;
+                anyhow::ensure!(
+                    accepted["saveFile"] == "mod-s" && accepted["browserReload"] == "mod-shift-r" && accepted["newThreadChooser"] == "mod-alt-g"
+                        && accepted["newSession"] == "mod-alt-n" && accepted["toggleTerminal"] == "mod-t",
+                    "compatible defaults reset, a free chord records, saved custom bindings stay: {accepted}"
+                );
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_load_keymap(serde_json::from_value(keymap_before.clone()).unwrap_or_default(), cx);
+                    shell.fixture_leave_settings(false, cx);
+                })?;
+                settle(cx, 300).await;
+                progress(&output, &mut record, "shortcutConflicts".into(), serde_json::json!({"loaded": loaded_json, "refusedReset": refused_reset, "refusedRecords": refused_records, "accepted": accepted}));
 
                 // w21-w30. The surrounding frame: one chrome surface around
                 // the inset canvas in every sidebar combination, while

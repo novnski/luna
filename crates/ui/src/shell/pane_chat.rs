@@ -36,7 +36,7 @@ impl PaneIdentity {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Side => "Side chat",
-            Self::Child => "Child chat",
+            Self::Child => "New thread",
             Self::Alongside => "Alongside",
         }
     }

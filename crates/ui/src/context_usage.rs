@@ -186,6 +186,7 @@ impl Render for UsageCard {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &Theme::of(cx).for_popup();
         let card = crate::popover::popover_card(theme)
+            .bg(theme.tooltip_surface())
             .p(px(12.0))
             .flex()
             .flex_col()

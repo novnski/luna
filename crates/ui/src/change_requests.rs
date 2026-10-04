@@ -79,7 +79,7 @@ impl Render for ChangeRequestTooltip {
             .rounded(px(6.0))
             .border_1()
             .border_color(theme.border_strong)
-            .bg(crate::popover::surface_bg(theme))
+            .bg(theme.tooltip_surface())
             .shadow_md()
             .child(
                 div()

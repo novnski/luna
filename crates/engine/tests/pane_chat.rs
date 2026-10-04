@@ -1647,6 +1647,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         "{side_published}"
     );
     assert_eq!(side_published["sideChatParentId"], parent.as_str());
+    assert_eq!(side_published["sideChatContextMode"], "nativeFork");
     assert_eq!(side_published["config"]["model"], "parent-model");
     assert!(
         rows.as_array()

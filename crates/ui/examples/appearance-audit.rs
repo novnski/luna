@@ -258,6 +258,30 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             theme.decorative_muted(0.35),
             chrome,
         ),
+        // Tooltips and rich hover cards: one opaque fill in every theme and
+        // surface preference (`Theme::tooltip_surface`), nothing behind it
+        // shows through.
+        p(
+            "tooltip",
+            "tooltip title",
+            Kind::Text,
+            theme.text,
+            theme.tooltip_surface(),
+        ),
+        p(
+            "tooltip",
+            "tooltip detail",
+            Kind::Text,
+            theme.text_muted,
+            theme.tooltip_surface(),
+        ),
+        p(
+            "tooltip",
+            "tooltip popup-role detail",
+            Kind::Text,
+            theme.for_popup().text_muted,
+            theme.for_popup().tooltip_surface(),
+        ),
         // Workbench (canvas, tabs, panes, frame row).
         p(
             "workbench",
@@ -1783,6 +1807,19 @@ fn main() -> anyhow::Result<()> {
                             // Failure case 15, every accent: floors keep each
                             // tone's color family, on both desktops.
                             for backdrop in [grey(0.0), grey(1.0)] {
+                                // Failure case: a tooltip fill that lets anything
+                                // behind it show through (normal or popup roles).
+                                for (role, fill) in [
+                                    ("tooltip", theme.tooltip_surface()),
+                                    ("popup tooltip", theme.for_popup().tooltip_surface()),
+                                ] {
+                                    if fill.a < 0.999 {
+                                        failures.push(format!(
+                                            "{} · {:?} · {role} fill is translucent (alpha {:.3})",
+                                            variant.id, surface, fill.a
+                                        ));
+                                    }
+                                }
                                 for (check, source, painted, delta) in hue_checks(&theme, backdrop) {
                                     let entry = hue_worst.entry(check).or_insert((0.0, Value::Null));
                                     if delta > entry.0 || entry.1.is_null() {

@@ -208,6 +208,55 @@ impl ShortcutsPage {
         });
     }
 
+    /// Why `id` may not take `combo`, if it may not: the one check both
+    /// recording and Reset use (fixed and contextual chords, the composer's
+    /// send, Activity's reserved chords, then another shortcut's binding).
+    fn assignment_refusal(&self, id: ShortcutId, combo: &str) -> Option<String> {
+        if combo.is_empty() {
+            return None;
+        }
+        if let Some(owner) = crate::settings::reserved_combo_owner(id, combo) {
+            return Some(format!("{} is reserved for {owner}.", display_combo(combo)));
+        }
+        if send_combo_is_reserved(self.composer_send_behavior, combo) {
+            return Some(format!(
+                "{} is reserved for the composer.",
+                display_combo(combo)
+            ));
+        }
+        if id == ShortcutId::OpenActivity && crate::settings::activity_combo_is_reserved(combo) {
+            return Some(format!(
+                "{} is reserved for an application action.",
+                display_combo(combo)
+            ));
+        }
+        // A combo already bound elsewhere is REFUSED, naming the owner
+        // (luna settings.shortcuts.tsx: "… is already assigned to …").
+        conflict_owner(&self.keymap, id, combo).map(|owner| {
+            format!(
+                "{} is already assigned to {}.",
+                display_combo(combo),
+                owner.label()
+            )
+        })
+    }
+
+    /// A row's Reset: back to the default unless that chord is now taken
+    /// (then nothing changes and the notice names the owner; saved
+    /// bindings are never moved to make room).
+    fn reset_shortcut(&mut self, id: ShortcutId, cx: &mut Context<Self>) {
+        self.stop_recording();
+        let default = id.default_combo();
+        if let Some(refusal) = self.assignment_refusal(id, default) {
+            self.conflict_notice = Some(format!("Can't reset: {refusal}").into());
+            cx.notify();
+            return;
+        }
+        self.keymap.reset(id);
+        self.conflict_notice = None;
+        self.commit(cx);
+    }
+
     fn record_keystroke(&mut self, keystroke: &Keystroke, cx: &mut Context<Self>) {
         let Some(recording) = self.recording else {
             return;
@@ -245,43 +294,11 @@ impl ShortcutsPage {
                     cx.stop_propagation();
                     return;
                 }
-                if send_combo_is_reserved(self.composer_send_behavior, &combo) {
-                    self.conflict_notice = Some(
-                        format!("{} is reserved for the composer.", display_combo(&combo)).into(),
-                    );
+                if let Some(refusal) = self.assignment_refusal(recording, &combo) {
+                    self.conflict_notice = Some(refusal.into());
                     self.stop_recording();
                     cx.notify();
                     cx.stop_propagation();
-                    return;
-                }
-                if recording == ShortcutId::OpenActivity
-                    && crate::settings::activity_combo_is_reserved(&combo)
-                {
-                    self.conflict_notice = Some(
-                        format!(
-                            "{} is reserved for an application action.",
-                            display_combo(&combo)
-                        )
-                        .into(),
-                    );
-                    self.stop_recording();
-                    cx.notify();
-                    cx.stop_propagation();
-                    return;
-                }
-                // A combo already bound elsewhere is REFUSED, naming the owner
-                // (luna settings.shortcuts.tsx: "… is already assigned to …").
-                if let Some(owner) = conflict_owner(&self.keymap, recording, &combo) {
-                    self.conflict_notice = Some(
-                        format!(
-                            "{} is already assigned to {}.",
-                            display_combo(&combo),
-                            owner.label()
-                        )
-                        .into(),
-                    );
-                    self.stop_recording();
-                    cx.notify();
                 } else {
                     self.keymap.set(recording, combo);
                     self.stop_recording();
@@ -376,9 +393,7 @@ impl ShortcutsPage {
                         .cursor_pointer()
                         .hover(|s| s.text_color(theme.text))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.keymap.reset(id);
-                            this.stop_recording();
-                            this.commit(cx);
+                            this.reset_shortcut(id, cx);
                         }))
                         .child(SharedString::from("Reset")),
                 )
@@ -475,9 +490,9 @@ impl popover::ScrollRailHost for ShortcutsPage {
 
 /// The shortcut (other than `id`) already bound to `combo`, if any. Pure.
 pub fn conflict_owner(keymap: &KeymapConfig, id: ShortcutId, combo: &str) -> Option<ShortcutId> {
-    ShortcutId::ALL
-        .into_iter()
-        .find(|&other| other.available() && other != id && keymap.get(other) == combo)
+    ShortcutId::ALL.into_iter().find(|&other| {
+        other.available() && other != id && crate::settings::same_combo(keymap.get(other), combo)
+    })
 }
 
 pub fn send_combo_is_reserved(_behavior: ComposerSendBehavior, combo: &str) -> bool {
@@ -493,11 +508,12 @@ pub fn modifier_send_label(is_macos: bool) -> &'static str {
 /// extends the match and appears on the page by construction
 /// (`every_shortcut_lands_in_a_rendered_group` holds the other half: its group
 /// name must be listed here).
-const GROUP_ORDER: [&str; 7] = [
+const GROUP_ORDER: [&str; 8] = [
     "Files",
     "Browser",
     "Panels",
     "Sessions",
+    "Tabs and splits",
     "Projects",
     "Jump to session",
     "Appshots",
@@ -519,6 +535,13 @@ fn group(id: ShortcutId) -> &'static str {
         | ShortcutId::PrevSession
         | ShortcutId::ArchiveSession => "Sessions",
         ShortcutId::OpenActivity => "Sessions",
+        ShortcutId::NewThreadChooser
+        | ShortcutId::NewThreadSplit
+        | ShortcutId::PreviousTab
+        | ShortcutId::NextTab
+        | ShortcutId::PreviousGroup
+        | ShortcutId::NextGroup
+        | ShortcutId::ReopenTab => "Tabs and splits",
         ShortcutId::JumpSession(_) => "Jump to session",
     }
 }
@@ -539,14 +562,52 @@ fn description(id: ShortcutId) -> &'static str {
         ShortcutId::NewSession => "Open a blank session canvas to start a new session.",
         ShortcutId::NewProject => "Open the new project dialog.",
         ShortcutId::OpenModelPicker => "Open the model picker for the current session.",
-        ShortcutId::NextSession => "Select the next session in the sidebar, wrapping at the end.",
-        ShortcutId::PrevSession => {
-            "Select the previous session in the sidebar, wrapping at the start."
+        ShortcutId::NextSession => {
+            "Select the next conversation in the sidebar list, wrapping at the end."
         }
+        ShortcutId::PrevSession => {
+            "Select the previous conversation in the sidebar list, wrapping at the start."
+        }
+        ShortcutId::NewThreadChooser => {
+            "Choose a New thread or a Side chat from the focused group's chat."
+        }
+        ShortcutId::NewThreadSplit => {
+            "Start a fresh New thread from the focused group's chat in a new group to the right."
+        }
+        ShortcutId::PreviousTab => "Select the previous tab in the focused group.",
+        ShortcutId::NextTab => "Select the next tab in the focused group.",
+        ShortcutId::PreviousGroup => "Focus the previous group and its composer.",
+        ShortcutId::NextGroup => "Focus the next group and its composer.",
+        ShortcutId::ReopenTab => "Reopen the most recently closed workbench tab.",
         ShortcutId::ArchiveSession => "Move the current session to the archived shelf.",
         // One line per slot would repeat itself nine times; the ordinal is
         // already in the row's label.
         ShortcutId::JumpSession(_) => "Open the session at this place in the sidebar list.",
+    }
+}
+
+/// Headless QA drives Reset and recording through the page's own paths.
+#[cfg(feature = "appshots-fixture")]
+impl ShortcutsPage {
+    /// A row's Reset, exactly as its button runs it.
+    pub fn fixture_reset(&mut self, id: ShortcutId, cx: &mut Context<Self>) {
+        self.reset_shortcut(id, cx);
+    }
+    /// Record `keystroke` (e.g. "cmd-]") for `id` through the recorder.
+    pub fn fixture_record(&mut self, id: ShortcutId, keystroke: &str, cx: &mut Context<Self>) {
+        let Ok(keystroke) = Keystroke::parse(keystroke) else {
+            return;
+        };
+        self.recording = Some(id);
+        self.record_keystroke(&keystroke, cx);
+        self.stop_recording();
+    }
+    /// The page's working keymap and its notice.
+    pub fn fixture_readback(&self) -> serde_json::Value {
+        serde_json::json!({
+            "keymap": serde_json::to_value(&self.keymap).unwrap_or_default(),
+            "notice": self.conflict_notice.as_ref().map(|notice| notice.to_string()),
+        })
     }
 }
 
@@ -783,6 +844,20 @@ impl Render for ShortcutsPage {
                                                      want to use. Changes apply immediately and stay on \
                                                      this device.",
                                                 )
+                                                .max_w(px(512.0))
+                                                .line_height(crate::typography::ui_rems(20.0)),
+                                            )
+                                            .child(
+                                                widgets::page_subtitle(
+                                                    &theme,
+                                                    format!(
+                                                        "Fixed application shortcuts: {} searches conversations and opens commands; {} opens Settings; {} closes the focused tab, pane or window.",
+                                                        display_combo("mod-k"),
+                                                        display_combo("mod-,"),
+                                                        display_combo("mod-w"),
+                                                    ),
+                                                )
+                                                .mt(px(12.0))
                                                 .max_w(px(512.0))
                                                 .line_height(crate::typography::ui_rems(20.0)),
                                             ),

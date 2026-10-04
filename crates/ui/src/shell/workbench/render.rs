@@ -129,6 +129,53 @@ fn overflow_fades(scroll: &gpui::ScrollHandle, theme: &Theme) -> Vec<AnyElement>
     fades
 }
 
+/// The contained content plane every main route shares: below the overlaid
+/// titlebar, inset from the chrome, a rounded hairline canvas with its
+/// darker fill, and an inner viewport inset so its rectangular clip never
+/// crosses a corner. `bottom` is the gutter under it (the chat frame keeps
+/// its footer row there instead). Navigation stays outside, in the chrome.
+pub(in crate::shell) fn contained_plane(
+    theme: &Theme,
+    id: &'static str,
+    content: AnyElement,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .flex()
+        .flex_col()
+        .pt(px(Theme::TITLEBAR_HEIGHT))
+        .px(px(CANVAS_INSET))
+        .pb(px(CANVAS_INSET))
+        .child(
+            div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .w_full()
+                .flex()
+                .flex_col()
+                .rounded(px(CANVAS_RADIUS))
+                .border_1()
+                .border_color(theme.hairline(0.08))
+                .bg(theme.canvas_fill())
+                .overflow_hidden()
+                .p(px(VIEWPORT_INSET - 1.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .overflow_hidden()
+                        .child(content),
+                ),
+        )
+}
+
 /// The smallest size the saved tree can take with every group at its
 /// minimum (320 x 240), keeping each split's saved ratio and axis: a
 /// horizontal split needs its first side's width at the ratio and its second
@@ -242,7 +289,7 @@ impl Render for WorkbenchTabGhost {
                     .flex_none()
                     .text_size(crate::typography::ui_rems(10.5))
                     .text_color(theme.text_muted)
-                    .child(self.role.label()),
+                    .child(self.role.display()),
             )
     }
 }
@@ -700,6 +747,10 @@ impl Shell {
         let focus_pane = pane.id.to_string();
         let pane_focused = frame.layout.focused_pane_id == pane.id;
         let pane_focus = self.workbench_pane_focus(pane.id, window, cx);
+        if self.workbench.focus_pane.as_deref() == Some(pane.id) {
+            self.workbench.focus_pane = None;
+            window.focus(&pane_focus, cx);
+        }
         let element = div()
             .id(SharedString::from(format!("wb-pane-{}", pane.id)))
             // Keyboard focus anywhere in the pane makes it the focused group.
@@ -863,17 +914,25 @@ impl Shell {
         let split_pane = pane.id.to_string();
         let close_pane = pane.id.to_string();
         let plus_pane = pane.id.to_string();
-        let plus = strip_button(
+        // `+` opens the creation chooser (source, kind, provider, explicit
+        // Create); it never creates by itself.
+        // The configured chord, not a static default label.
+        let plus = strip_button_titled(
             SharedString::from(format!("wb-new-child-{}", pane.id)),
-            "New child chat",
-            Some("A blank child of Main in this group. It starts on your first Send."),
+            "New thread or side chat…",
+            self.shortcut_badge(crate::settings::ShortcutId::NewThreadChooser),
+            Some("Choose a fresh New thread or a Side chat that carries this group's chat context. Nothing is created until you choose Create."),
             icons::PLUS,
             &theme,
         )
         .when(creating, |el| el.opacity(0.5).cursor_default())
         .on_click(cx.listener(move |this, _, _, cx| {
             cx.stop_propagation();
-            this.workbench_new_child(Some(plus_pane.clone()), cx);
+            this.workbench_open_chooser(
+                Some(plus_pane.clone()),
+                super::CreationKind::NewThread,
+                cx,
+            );
         }));
         let plus_geometry = self.workbench.geometry.clone();
         let plus_measure = pane.id.to_string();
@@ -913,11 +972,12 @@ impl Shell {
         } else {
             plus.into_any_element()
         };
-        let split = strip_button(
+        let split = strip_button_titled(
             SharedString::from(format!("wb-split-right-{}", pane.id)),
-            "New child chat in a split",
+            "New thread in a split",
+            self.shortcut_badge(crate::settings::ShortcutId::NewThreadSplit),
             Some(
-                "A blank child of Main in a new group to the right. It starts on your first Send.",
+                "A fresh thread from this group's chat, in a new group to the right. Its context is not carried over; nothing starts until you send.",
             ),
             icons::SPLIT_COLUMNS,
             &theme,
@@ -1025,9 +1085,9 @@ impl Shell {
     ) -> AnyElement {
         let theme = &frame.theme;
         let now = Utc::now();
-        let (role, title, harness, status, details) = {
+        let (role, title, harness, status, heading, details) = {
             let state = self.state.read(cx);
-            let (role, parent) = tab_role(state, &frame.layout.main_chat_id, tab);
+            let (role, _) = tab_role(state, &frame.layout.main_chat_id, tab);
             let title = tab_title(state, tab, role);
             let chat = state.chats.iter().find(|chat| chat.id == tab.chat_id);
             let harness = chat
@@ -1036,26 +1096,10 @@ impl Shell {
             let status = chat
                 .map(|chat| state.display_status_for(chat, now))
                 .unwrap_or(luna_proto::ChatIndicator::Idle);
-            let parent_title = state
-                .chats
-                .iter()
-                .find(|chat| chat.id == parent)
-                .and_then(|chat| chat.title.as_deref())
-                .map(transcript::single_line);
-            let details: SharedString = match (role, parent_title) {
-                (TabRole::Main, _) => {
-                    "Main · this workbench's own chat. It stays open.".to_string()
-                }
-                (TabRole::Child, Some(parent)) => format!("Child of {parent}"),
-                (TabRole::Child, None) => "Child chat".to_string(),
-                (TabRole::Side, Some(parent)) => format!("Side chat from {parent}"),
-                (TabRole::Side, None) => "Side chat".to_string(),
-                (TabRole::Alongside, _) => {
-                    "Alongside · your own chat, listed beside Main".to_string()
-                }
-            }
-            .into();
-            (role, title, harness, status, details)
+            // The source from lineage (never tab placement), and what
+            // context the tab carries (see `tab_help`).
+            let (heading, details) = tab_help(state, &frame.layout.main_chat_id, tab);
+            (role, title, harness, status, heading, details)
         };
         let is_main = role == TabRole::Main;
         let dragging = self.workbench.dragging.as_deref() == Some(tab.chat_id.as_str());
@@ -1068,11 +1112,11 @@ impl Shell {
         let close_chat = tab.chat_id.clone();
         let menu_chat = tab.chat_id.clone();
         let menu_pane = pane_id.to_string();
-        let tooltip_title = title.clone();
+        let tooltip_title = heading.clone();
         let tooltip_details = details.clone();
         let accessible: SharedString = format!(
             "{}{}: {title}",
-            role.label(),
+            role.display(),
             match status {
                 luna_proto::ChatIndicator::Working => ", running",
                 luna_proto::ChatIndicator::AwaitingApproval => ", needs approval",
@@ -1396,13 +1440,13 @@ impl Shell {
                             })),
                     )
                     .child(
-                        popover::btn_ghost(theme, "New child chat", "wb-btn-new-child-chat")
+                        popover::btn_ghost(theme, "New thread", "wb-btn-new-child-chat")
                             .id(SharedString::from(format!(
                                 "wb-empty-new-child-{}",
                                 pane.id
                             )))
                             .role(gpui::Role::Button)
-                            .aria_label("New child chat")
+                            .aria_label("New thread")
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.workbench_new_child(Some(pane_id.clone()), cx);
                             })),
@@ -1535,6 +1579,18 @@ impl Shell {
     /// the canvas bottom-left. The main workspace stays usable.
     fn render_workbench_notice(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(failure) = self.workbench.child_failure.clone() {
+            let unresolved = self.workbench_child_unresolved();
+            let (retry_label, retry_aria) = if unresolved {
+                ("Check status", "Check whether the new thread was created")
+            } else {
+                ("Retry", "Retry creating the new thread")
+            };
+            let blocked = (unresolved && self.workbench.child_blocked).then(|| {
+                div()
+                    .id("wb-child-blocked")
+                    .text_color(theme.text_muted)
+                    .child("A new thread can't start until this one's status is checked.")
+            });
             return Some(
                 div()
                     .id("wb-child-failure")
@@ -1553,38 +1609,49 @@ impl Shell {
                     .items_center()
                     .gap(px(8.0))
                     .text_size(crate::typography::ui_rems(12.0))
-                    .child(div().flex_1().min_w_0().child(failure.message.clone()))
                     .child(
-                        popover::btn_ghost(theme, "Retry", "wb-btn-retry")
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(failure.message.clone())
+                            .children(blocked),
+                    )
+                    .child(
+                        popover::btn_ghost(theme, retry_label, "wb-btn-retry")
                             .id("wb-child-retry")
                             .role(gpui::Role::Button)
-                            .aria_label("Retry creating the child chat")
+                            .aria_label(retry_aria)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.workbench_retry_child(cx);
                             })),
                     )
-                    .child(
-                        div()
-                            .id("wb-child-failure-dismiss")
-                            .role(gpui::Role::Button)
-                            .aria_label("Dismiss")
-                            .size(px(18.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(4.0))
-                            .cursor_pointer()
-                            .hover(|style| style.bg(crate::theme::wash(0.1)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.workbench_dismiss_child_failure(cx)
-                            }))
-                            .child(
-                                icon(icons::CLOSE)
-                                    .size(px(11.0))
-                                    .text_color(theme.text_muted),
-                            ),
-                    )
+                    .when(!unresolved, |el| {
+                        el.child(
+                            div()
+                                .id("wb-child-failure-dismiss")
+                                .role(gpui::Role::Button)
+                                .aria_label("Dismiss")
+                                .size(px(18.0))
+                                .flex_none()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(crate::theme::wash(0.1)))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.workbench_dismiss_child_failure(cx)
+                                }))
+                                .child(
+                                    icon(icons::CLOSE)
+                                        .size(px(11.0))
+                                        .text_color(theme.text_muted),
+                                ),
+                        )
+                    })
                     .into_any_element(),
             );
         }
@@ -1727,12 +1794,16 @@ impl Shell {
             let has_checkout = chat.is_some_and(|chat| chat.cwd.is_some());
             let (role, _) = tab_role(state, &layout.main_chat_id, &TabRef::chat(focused.clone()));
             let who: Option<SharedString> = (role != TabRole::Main).then(|| {
-                format!(
-                    "{} · {}",
-                    role.label(),
-                    tab_title(state, &TabRef::chat(focused.clone()), role)
-                )
-                .into()
+                let title = tab_title(state, &TabRef::chat(focused.clone()), role);
+                if title.as_ref() == role.display()
+                    || title
+                        .as_ref()
+                        .starts_with(&format!("{} · ", role.display()))
+                {
+                    title
+                } else {
+                    format!("{} · {}", role.display(), title).into()
+                }
             });
             (
                 who,
@@ -2094,6 +2165,22 @@ fn strip_button(
     glyph: &'static str,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
+    strip_button_titled(id, label, None, detail, glyph, theme)
+}
+
+/// [`strip_button`] whose tooltip also names its configured chord.
+fn strip_button_titled(
+    id: SharedString,
+    label: &'static str,
+    chord: Option<String>,
+    detail: Option<&'static str>,
+    glyph: &'static str,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let title: SharedString = match chord {
+        Some(chord) => format!("{label}  {chord}").into(),
+        None => label.into(),
+    };
     div()
         .id(id)
         .role(gpui::Role::Button)
@@ -2111,7 +2198,7 @@ fn strip_button(
         .cursor_pointer()
         .hover(|style| style.bg(crate::theme::wash(0.10)))
         .tooltip(move |_, cx| {
-            crate::pickers::ControlTooltip::view(label, detail.map(SharedString::from), cx)
+            crate::pickers::ControlTooltip::view(title.clone(), detail.map(SharedString::from), cx)
         })
         .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
         .on_key_down(crate::swallow_activation_key)

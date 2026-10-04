@@ -874,9 +874,11 @@ impl Shell {
                         }))
                     }
                     Entry::Settings => Some(crate::settings::badge_combo("mod-,")),
-                    Entry::Workbench(super::workbench::WorkbenchAction::Reopen) => {
-                        Some(crate::settings::badge_combo("mod-shift-t"))
-                    }
+                    // Workbench actions show the chord the user has now.
+                    Entry::Workbench(action) => action.shortcut().and_then(|id| {
+                        let combo = self.settings.keymap.get(id);
+                        (!combo.is_empty()).then(|| crate::settings::badge_combo(combo))
+                    }),
                     Entry::Activity => {
                         let combo = self.settings.keymap.get(ShortcutId::OpenActivity);
                         (!combo.is_empty()).then(|| crate::settings::badge_combo(combo))

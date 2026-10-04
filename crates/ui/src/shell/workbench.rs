@@ -17,8 +17,10 @@
 //! the chat) and its owner-token watch. Closing a tab drops the view only.
 //! Main renders the shell's own transcript and composer.
 
+mod chooser;
 mod model;
-mod render;
+pub(super) mod render;
+pub(super) use chooser::CreationKind;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -55,6 +57,19 @@ pub(super) enum TabRole {
 }
 
 impl TabRole {
+    /// What the UI calls this role: a context-carrying Side chat, or a fresh
+    /// New thread created from a parent.
+    pub(super) fn display(self) -> &'static str {
+        match self {
+            Self::Main => "Main",
+            Self::Child => "New thread",
+            Self::Side => "Side chat",
+            Self::Alongside => "Alongside",
+        }
+    }
+
+    /// The stable identifier QA readback and layout logs use (unchanged
+    /// by renames of the user-facing name).
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Main => "Main",
@@ -258,6 +273,12 @@ pub(super) struct ChildRequest {
     /// Open the child in a new group to the right of `pane_id` (the group's
     /// split control) rather than as a tab in it.
     pub(super) split: bool,
+    /// The New thread's source: the active chat of the group it was asked
+    /// from (Main only hosts the layout).
+    pub(super) parent: String,
+    /// The provider chosen in the creation chooser (`None`: the engine's
+    /// default). Never an account: the provider's own default applies.
+    pub(super) provider: Option<luna_proto::HarnessId>,
 }
 
 #[derive(Clone)]
@@ -313,6 +334,9 @@ pub(super) struct WorkbenchState {
     pub(super) geometry: Rc<RefCell<Geometry>>,
     pub(super) creating_child: Option<ChildRequest>,
     pub(super) child_failure: Option<ChildFailure>,
+    /// A new New thread was refused while an earlier outcome is unknown
+    /// (the failure card says why until its status is checked).
+    pub(super) child_blocked: bool,
     child_task: Option<Task<()>>,
     pub(super) menu: popover::Popup<TabMenu>,
     pub(super) notice: Option<SharedString>,
@@ -320,6 +344,11 @@ pub(super) struct WorkbenchState {
     pub(super) focus: FocusHandle,
     /// A chat whose composer takes focus once its view mounts.
     focus_composer: Option<String>,
+    /// A group (without a composer to focus) whose own focus scope takes
+    /// keyboard focus next frame, so keys never stay in another group.
+    pub(super) focus_pane: Option<String>,
+    /// The `+` creation chooser, while open (see `chooser`).
+    pub(super) chooser: Option<chooser::CreationChooser>,
     /// Keyboard focus for each tab (arrow-key navigation within a group).
     tab_focus: HashMap<String, FocusHandle>,
     /// The group and chat keyboard focus was last in, inside the canvas
@@ -348,6 +377,10 @@ pub(super) struct WorkbenchState {
     /// QA: park mutation completions to deliver them late.
     #[cfg(feature = "appshots-fixture")]
     hold_responses: bool,
+    /// QA: the next New thread's response is lost after the engine
+    /// handled it (an unknown outcome, as a dropped connection leaves).
+    #[cfg(feature = "appshots-fixture")]
+    lose_child_response: bool,
     /// QA: every shell Escape that reached the stop path, as
     /// (target chat, outcome), in order.
     #[cfg(feature = "appshots-fixture")]
@@ -408,11 +441,14 @@ impl WorkbenchState {
             geometry: Rc::new(RefCell::new(Geometry::default())),
             creating_child: None,
             child_failure: None,
+            child_blocked: false,
             child_task: None,
             menu: popover::Popup::default(),
             notice: None,
             focus: cx.focus_handle(),
             focus_composer: None,
+            focus_pane: None,
+            chooser: None,
             tab_focus: HashMap::new(),
             pane_focus: HashMap::new(),
             tab_scroll: HashMap::new(),
@@ -426,6 +462,8 @@ impl WorkbenchState {
             collapse: Vec::new(),
             #[cfg(feature = "appshots-fixture")]
             hold_responses: false,
+            #[cfg(feature = "appshots-fixture")]
+            lose_child_response: false,
             #[cfg(feature = "appshots-fixture")]
             escape_log: Vec::new(),
             #[cfg(feature = "appshots-fixture")]
@@ -517,8 +555,10 @@ impl WorkbenchState {
         self.press = None;
         self.creating_child = None;
         self.child_failure = None;
+        self.child_blocked = false;
         self.child_task = None;
         self.focus_composer = None;
+        self.chooser = None;
     }
 }
 
@@ -529,16 +569,87 @@ pub(super) fn tab_role(state: &AppState, main: &str, tab: &TabRef) -> (TabRole, 
     if tab.chat_id == main {
         return (TabRole::Main, String::new());
     }
+    tab_origin(state, tab).unwrap_or_else(|| (TabRole::Alongside, main.to_string()))
+}
+
+/// Where a chat came from, by lineage alone (never placement, and whatever
+/// workbench it is Main of): a Side chat of its source, a New thread
+/// created from its parent, or nothing for a parentless chat.
+fn tab_origin(state: &AppState, tab: &TabRef) -> Option<(TabRole, String)> {
     if let Some(parent) = &tab.side_parent_id {
-        return (TabRole::Side, parent.clone());
+        return Some((TabRole::Side, parent.clone()));
     }
     if let Some(row) = state.side_chat_rows.get(&tab.chat_id) {
-        return (TabRole::Side, row.parent_id.clone());
+        return Some((TabRole::Side, row.parent_id.clone()));
+    }
+    // A generic history fork carries its source's context too: it reads as
+    // a Side chat of that source (lineage, never placement), while its tab
+    // stays an ordinary chat tab with no side-parent hint.
+    if let Some(source) = state.fork_source_rows.get(&tab.chat_id)
+        && *source != tab.chat_id
+    {
+        return Some((TabRole::Side, source.clone()));
     }
     let chat = state.chats.iter().find(|chat| chat.id == tab.chat_id);
-    match chat.and_then(super::placement::lineage_parent_id) {
-        Some(parent) => (TabRole::Child, parent.to_string()),
-        None => (TabRole::Alongside, main.to_string()),
+    chat.and_then(super::placement::lineage_parent_id)
+        .map(|parent| (TabRole::Child, parent.to_string()))
+}
+
+/// A tab's help (its tooltip): the relationship to its source, from
+/// lineage, and what context it carries. A side chat that copied recent
+/// visible messages says so; absent metadata (older engines, generic forks)
+/// adds nothing and never implies full native context.
+///
+/// The origin comes from lineage for every tab, Main included: a Side chat
+/// or New thread opened as its own workbench's Main keeps its explanation
+/// (and says it is Main); only a parentless Main reads as plain Main.
+pub(super) fn tab_help(state: &AppState, main: &str, tab: &TabRef) -> (SharedString, SharedString) {
+    let (role, _) = tab_role(state, main, tab);
+    let is_main = role == TabRole::Main;
+    let (role, parent) = match tab_origin(state, tab) {
+        Some(origin) => origin,
+        None => (role, main.to_string()),
+    };
+    let main_note = if is_main {
+        " It is this workbench's Main and stays open."
+    } else {
+        ""
+    };
+    let title = tab_title(state, tab, role);
+    let parent_name = match state.chats.iter().find(|chat| chat.id == parent) {
+        Some(row) => row
+            .title
+            .as_deref()
+            .map(transcript::single_line)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| "Untitled chat".into()),
+        None => "a deleted chat".to_string(),
+    };
+    match role {
+        TabRole::Main => (
+            title,
+            "Main · this workbench's own chat. It stays open.".into(),
+        ),
+        TabRole::Side => {
+            let mut details = "Side chats carry the context of the parent thread. Context is captured when created; later parent messages are not copied.".to_string();
+            if state
+                .side_chat_context_modes
+                .get(&tab.chat_id)
+                .is_some_and(|mode| mode == "contextSnapshot")
+            {
+                details.push_str(" This side chat copied recent visible messages only.");
+            }
+            details.push_str(main_note);
+            (format!("Side chat of {parent_name}").into(), details.into())
+        }
+        TabRole::Child => (
+            format!("New thread created from {parent_name}").into(),
+            format!("New threads do not carry the context of the parent.{main_note}").into(),
+        ),
+        TabRole::Alongside => (
+            title,
+            "Alongside · your own chat, listed beside Main".into(),
+        ),
     }
 }
 
@@ -574,7 +685,7 @@ pub(super) fn tab_title(state: &AppState, tab: &TabRef, role: TabRole) -> Shared
         .filter(|title| !title.trim().is_empty());
     asked
         .unwrap_or_else(|| match role {
-            TabRole::Child => "New child chat".to_string(),
+            TabRole::Child => "New thread".to_string(),
             TabRole::Side => "Side chat".to_string(),
             _ => "Untitled chat".to_string(),
         })
@@ -582,6 +693,23 @@ pub(super) fn tab_title(state: &AppState, tab: &TabRef, role: TabRole) -> Shared
 }
 
 impl Shell {
+    /// The chord a configurable shortcut is bound to now, as a badge
+    /// (`None` when unbound): tooltips and the palette show the user's own
+    /// keys, never a static default.
+    pub(super) fn shortcut_badge(&self, id: crate::settings::ShortcutId) -> Option<String> {
+        let combo = self.settings.keymap.get(id);
+        (!combo.is_empty()).then(|| crate::settings::badge_combo(combo))
+    }
+
+    /// Whether a workbench shortcut (tabs, groups, chooser, reopen) acts
+    /// now: the chat route, a workbench, and no overlay owning the keyboard
+    /// (palette, picker, chooser, dialogs keep their own keys).
+    pub(super) fn workbench_keys_apply(&self, cx: &App) -> bool {
+        matches!(self.route, Route::Chat)
+            && !self.overlay_owns_keyboard(cx)
+            && self.workbench_available()
+    }
+
     /// Whether layout actions can reach the engine.
     pub(super) fn workbench_available(&self) -> bool {
         self.workbench.capable() && !self.workbench.main().is_empty()
@@ -660,6 +788,7 @@ impl Shell {
             wb.preview = None;
             wb.dragging = None;
             wb.child_failure = None;
+            wb.child_blocked = false;
             wb.authoritative = wb.cache.remove(&wb.main);
             wb.watch_task = None;
             wb.watching = None;
@@ -1816,6 +1945,64 @@ impl Shell {
 
     /// Palette Next/Previous tab: the focused group's neighbour, composer
     /// focused.
+    /// Focus the next (or previous) group in reading order, with its active
+    /// chat's composer focused (an empty group: the group itself).
+    pub(super) fn workbench_cycle_group(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let layout = self.workbench.layout();
+        let panes = model::panes(&layout);
+        if panes.len() < 2 {
+            return;
+        }
+        let at = panes
+            .iter()
+            .position(|pane| pane.id == layout.focused_pane_id)
+            .unwrap_or(0);
+        let next = if forward {
+            (at + 1) % panes.len()
+        } else {
+            at.checked_sub(1).unwrap_or(panes.len() - 1)
+        };
+        let pane_id = panes[next].id.to_string();
+        self.workbench_focus_group(&pane_id, None, cx);
+    }
+
+    /// Give `pane_id` the keyboard: `preferred` when it is still that
+    /// group's active chat, else the group's active chat, else (an empty
+    /// group) the group's own focus scope. A group that no longer exists
+    /// falls back to the focused group's chat, then Main.
+    pub(super) fn workbench_focus_group(
+        &mut self,
+        pane_id: &str,
+        preferred: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        let layout = self.workbench.layout();
+        let pane =
+            model::pane(&layout, pane_id).or_else(|| model::pane(&layout, &layout.focused_pane_id));
+        let Some(pane) = pane else {
+            self.focus_composer(cx);
+            return;
+        };
+        let pane_id = pane.id.to_string();
+        let active = pane.active_chat_id.map(str::to_string);
+        self.workbench_pane_focused(&pane_id, cx);
+        match active {
+            Some(active) => {
+                let chat = preferred
+                    .filter(|preferred| *preferred == active)
+                    .map(str::to_string)
+                    .unwrap_or(active);
+                self.workbench.focus_pane = None;
+                self.workbench_focus_composer(chat, cx);
+            }
+            None => {
+                self.workbench.focus_composer = None;
+                self.workbench.focus_pane = Some(pane_id);
+                cx.notify();
+            }
+        }
+    }
+
     pub(super) fn workbench_cycle_tab(&mut self, forward: bool, cx: &mut Context<Self>) {
         let layout = self.workbench.layout();
         let Some(pane) = model::pane(&layout, &layout.focused_pane_id) else {
@@ -2011,7 +2198,17 @@ impl Shell {
     /// focused) group. Same key across an ambiguous retry; one request per
     /// gesture, never a starter message, run, fork or worktree.
     pub(super) fn workbench_new_child(&mut self, pane_id: Option<String>, cx: &mut Context<Self>) {
-        self.request_child(pane_id, false, cx);
+        self.request_child(pane_id, false, None, cx);
+    }
+
+    /// The New thread source for a group: its active chat, or Main for an
+    /// empty group (Main hosts the layout).
+    pub(super) fn workbench_group_source(&self, pane_id: &str) -> String {
+        let layout = self.workbench.layout();
+        model::pane(&layout, pane_id)
+            .and_then(|pane| pane.active_chat_id)
+            .map(str::to_string)
+            .unwrap_or_else(|| self.workbench.main.clone())
     }
 
     /// A group's split control: one blank child of Main, opened in a new
@@ -2022,24 +2219,14 @@ impl Shell {
             self.no_room_notice(cx);
             return;
         }
-        self.request_child(Some(pane_id), true, cx);
+        self.request_child(Some(pane_id), true, None, cx);
     }
 
-    /// Retry the failed child creation where it was asked for (same group,
-    /// same placement; an ambiguous failure resends the same key).
+    /// Retry (or, for an unknown outcome, Check status of) the failed New
+    /// thread exactly as it was asked: same source, provider, group and
+    /// placement. An unknown outcome resends the same idempotency key, so
+    /// the engine returns the thread it may already have created.
     pub(super) fn workbench_retry_child(&mut self, cx: &mut Context<Self>) {
-        let Some(failure) = self.workbench.child_failure.as_ref() else {
-            return;
-        };
-        let (pane_id, split) = (failure.request.pane_id.clone(), failure.request.split);
-        if split {
-            self.workbench_new_child_in_split(pane_id, cx);
-        } else {
-            self.request_child(Some(pane_id), false, cx);
-        }
-    }
-
-    fn request_child(&mut self, pane_id: Option<String>, split: bool, cx: &mut Context<Self>) {
         if !self.workbench_ready() {
             self.workbench_unavailable_notice(cx);
             return;
@@ -2047,26 +2234,79 @@ impl Shell {
         if self.workbench.creating_child.is_some() {
             return;
         }
-        let pane_id = pane_id.unwrap_or_else(|| self.workbench.layout().focused_pane_id.clone());
-        let request = match self.workbench.child_failure.take() {
-            Some(failure)
-                if failure.ambiguous
-                    && failure.request.main == self.workbench.main
-                    && failure.request.generation == self.workbench.generation =>
+        let Some(failure) = self.workbench.child_failure.as_ref() else {
+            return;
+        };
+        if failure.request.main != self.workbench.main
+            || failure.request.generation != self.workbench.generation
+        {
+            self.workbench.child_failure = None;
+            cx.notify();
+            return;
+        }
+        let request = if failure.ambiguous {
+            failure.request.clone()
+        } else {
+            // Known not created: a fresh attempt of the same intent.
+            if failure.request.split
+                && !self.workbench_split_fits(Some(&failure.request.pane_id), Edge::Right)
             {
-                ChildRequest {
-                    pane_id,
-                    split,
-                    ..failure.request
-                }
+                self.no_room_notice(cx);
+                return;
             }
-            _ => ChildRequest {
+            ChildRequest {
                 key: uuid::Uuid::new_v4().to_string(),
-                main: self.workbench.main.clone(),
-                generation: self.workbench.generation,
-                pane_id,
-                split,
-            },
+                ..failure.request.clone()
+            }
+        };
+        self.workbench.child_failure = None;
+        self.send_child_request(request, cx);
+    }
+
+    /// Whether an earlier New thread's outcome is unknown: no new New
+    /// thread may start until its status is checked (it may exist).
+    pub(super) fn workbench_child_unresolved(&self) -> bool {
+        self.workbench
+            .child_failure
+            .as_ref()
+            .is_some_and(|failure| {
+                failure.ambiguous
+                    && failure.request.main == self.workbench.main
+                    && failure.request.generation == self.workbench.generation
+            })
+    }
+
+    pub(super) fn request_child(
+        &mut self,
+        pane_id: Option<String>,
+        split: bool,
+        provider: Option<luna_proto::HarnessId>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.workbench_ready() {
+            self.workbench_unavailable_notice(cx);
+            return;
+        }
+        if self.workbench.creating_child.is_some() {
+            return;
+        }
+        // An unknown earlier outcome is never reused for, or replaced by, a
+        // different intent: it stays until its own Check status resolves it.
+        if self.workbench_child_unresolved() {
+            self.workbench.child_blocked = true;
+            cx.notify();
+            return;
+        }
+        let pane_id = pane_id.unwrap_or_else(|| self.workbench.layout().focused_pane_id.clone());
+        self.workbench.child_failure = None;
+        let request = ChildRequest {
+            key: uuid::Uuid::new_v4().to_string(),
+            main: self.workbench.main.clone(),
+            generation: self.workbench.generation,
+            parent: self.workbench_group_source(&pane_id),
+            pane_id,
+            split,
+            provider,
         };
         self.send_child_request(request, cx);
     }
@@ -2076,10 +2316,10 @@ impl Shell {
             return;
         };
         let params = luna_proto::CreateChildTabRequest {
-            parent_task_id: request.main.clone(),
+            parent_task_id: request.parent.clone(),
             idempotency_key: request.key.clone(),
             title: None,
-            provider: None,
+            provider: request.provider,
             model: None,
             reasoning: None,
             model_options: Default::default(),
@@ -2117,6 +2357,14 @@ impl Shell {
         }
         self.workbench.creating_child = None;
         self.workbench.child_task = None;
+        #[cfg(feature = "appshots-fixture")]
+        let result = if std::mem::take(&mut self.workbench.lose_child_response) && result.is_ok() {
+            Err(luna_rpc::RpcError::Transport(
+                "fixture: response lost".into(),
+            ))
+        } else {
+            result
+        };
         if request.generation != self.workbench.generation {
             return;
         }
@@ -2147,7 +2395,7 @@ impl Shell {
                 );
                 if !opened && !self.workbench.layout().contains_chat(&receipt.task_id) {
                     self.sidebar_notice = Some(SidebarNotice::status(
-                        "The child chat was created. Open it from Related chats.",
+                        "The new thread was created. Open it from Related chats.",
                     ));
                 }
             }
@@ -2156,9 +2404,17 @@ impl Shell {
                     error,
                     luna_rpc::RpcError::Transport(_) | luna_rpc::RpcError::Closed
                 );
+                let message = if ambiguous {
+                    format!(
+                        "The new thread may have been created ({error}). Check its status before creating another."
+                    )
+                } else {
+                    format!("Couldn't create the new thread: {error}")
+                };
+                self.workbench.child_blocked = false;
                 self.workbench.child_failure = Some(ChildFailure {
                     request,
-                    message: format!("Couldn't create a child chat: {error}").into(),
+                    message: message.into(),
                     ambiguous,
                 });
             }
@@ -2166,7 +2422,12 @@ impl Shell {
         cx.notify();
     }
 
+    /// Dismiss a failure. An unknown outcome can't be dismissed (that
+    /// would let a new intent replace it); only its Check status settles it.
     pub(super) fn workbench_dismiss_child_failure(&mut self, cx: &mut Context<Self>) {
+        if self.workbench_child_unresolved() {
+            return;
+        }
         self.workbench.child_failure = None;
         cx.notify();
     }
@@ -2797,7 +3058,21 @@ impl Shell {
             return Vec::new();
         }
         let layout = self.workbench.layout();
-        let mut actions = vec![WorkbenchAction::NewChild];
+        let mut actions = vec![
+            WorkbenchAction::Chooser,
+            WorkbenchAction::SideChat,
+            WorkbenchAction::NewChild,
+            WorkbenchAction::NewThreadSplit,
+        ];
+        if model::has_split(&layout) {
+            actions.push(WorkbenchAction::NextGroup);
+            actions.push(WorkbenchAction::PreviousGroup);
+            if model::pane(&layout, &layout.focused_pane_id)
+                .is_some_and(|pane| !pane.holds(&layout.main_chat_id))
+            {
+                actions.push(WorkbenchAction::CloseGroup);
+            }
+        }
         if model::newest_reopenable(&layout).is_some() {
             actions.push(WorkbenchAction::Reopen);
         }
@@ -2827,7 +3102,23 @@ impl Shell {
         let layout = self.workbench.layout();
         let focused = layout.focused_chat_id().map(str::to_string);
         match action {
+            WorkbenchAction::Chooser => {
+                self.workbench_open_chooser(None, CreationKind::NewThread, cx)
+            }
+            WorkbenchAction::SideChat => {
+                self.workbench_open_chooser(None, CreationKind::SideChat, cx)
+            }
             WorkbenchAction::NewChild => self.workbench_new_child(None, cx),
+            WorkbenchAction::NewThreadSplit => {
+                let pane = layout.focused_pane_id.clone();
+                self.workbench_new_child_in_split(pane, cx);
+            }
+            WorkbenchAction::NextGroup => self.workbench_cycle_group(true, cx),
+            WorkbenchAction::PreviousGroup => self.workbench_cycle_group(false, cx),
+            WorkbenchAction::CloseGroup => {
+                let pane = layout.focused_pane_id.clone();
+                self.workbench_close_pane(&pane, cx);
+            }
             WorkbenchAction::Reopen => self.workbench_reopen(None, cx),
             WorkbenchAction::Close => {
                 if let Some(chat) = focused {
@@ -2854,7 +3145,16 @@ impl Shell {
 /// Palette entries for the workbench (dragging is never the only way).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum WorkbenchAction {
+    /// The focused group's `+` creation chooser.
+    Chooser,
+    /// The chooser with Side chat preselected.
+    SideChat,
     NewChild,
+    /// A fresh New thread in a new group to the right (the split shortcut).
+    NewThreadSplit,
+    NextGroup,
+    PreviousGroup,
+    CloseGroup,
     Reopen,
     Close,
     CloseOthers,
@@ -2867,7 +3167,13 @@ pub(super) enum WorkbenchAction {
 impl WorkbenchAction {
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::NewChild => "New child chat",
+            Self::Chooser => "New thread or side chat…",
+            Self::SideChat => "Side chat…",
+            Self::NewChild => "New thread",
+            Self::NewThreadSplit => "New thread in split",
+            Self::NextGroup => "Focus next group",
+            Self::PreviousGroup => "Focus previous group",
+            Self::CloseGroup => "Close group",
             Self::Reopen => "Reopen closed tab",
             Self::Close => "Close tab",
             Self::CloseOthers => "Close other tabs (keeps Main)",
@@ -2881,9 +3187,29 @@ impl WorkbenchAction {
         }
     }
 
+    /// The configurable shortcut that runs this action, if any.
+    pub(super) fn shortcut(self) -> Option<crate::settings::ShortcutId> {
+        use crate::settings::ShortcutId;
+        Some(match self {
+            Self::Chooser => ShortcutId::NewThreadChooser,
+            Self::NewThreadSplit => ShortcutId::NewThreadSplit,
+            Self::NextTab => ShortcutId::NextTab,
+            Self::PreviousTab => ShortcutId::PreviousTab,
+            Self::NextGroup => ShortcutId::NextGroup,
+            Self::PreviousGroup => ShortcutId::PreviousGroup,
+            Self::Reopen => ShortcutId::ReopenTab,
+            _ => return None,
+        })
+    }
+
     pub(super) fn icon(self) -> &'static str {
         match self {
-            Self::NewChild => icons::PLUS,
+            Self::Chooser | Self::NewChild => icons::PLUS,
+            Self::SideChat => icons::GIT_FORK,
+            Self::NewThreadSplit => icons::SPLIT_COLUMNS,
+            Self::NextGroup => icons::ALT_ARROW_RIGHT,
+            Self::PreviousGroup => icons::ALT_ARROW_LEFT,
+            Self::CloseGroup => icons::CLOSE,
             Self::Reopen => icons::RESTART,
             Self::Close | Self::CloseOthers => icons::CLOSE,
             Self::Move(_) => icons::SPLIT_COLUMNS,
@@ -2932,12 +3258,15 @@ impl Shell {
                     "active": active_chat_id,
                     "tabs": tabs.iter().map(|tab| {
                         let (role, parent) = tab_role(state, main, tab);
+                        let (heading, details) = tab_help(state, main, tab);
                         json!({
                             "chatId": tab.chat_id,
                             "sideParentId": tab.side_parent_id,
                             "role": role.label(),
                             "parent": parent,
                             "title": tab_title(state, tab, role).to_string(),
+                            // The tab's tooltip, as hovering shows it.
+                            "help": {"title": heading.to_string(), "details": details.to_string()},
                             // The tab's live state, as its glyph shows it
                             // (Completed: the accent unread dot).
                             "status": state
@@ -3025,6 +3354,22 @@ impl Shell {
                     "pendingMutations": self.workbench.pending.len() + usize::from(self.workbench.in_flight.is_some()),
                     "creatingChild": self.workbench.creating_child.is_some(),
                     "childFailure": self.workbench.child_failure.as_ref().map(|failure| failure.message.to_string()),
+                    "childFailureRequest": self.workbench.child_failure.as_ref().map(|failure| serde_json::json!({
+                        "key": failure.request.key,
+                        "parent": failure.request.parent,
+                        "provider": failure.request.provider.map(|provider| format!("{provider:?}")),
+                        "pane": failure.request.pane_id,
+                        "split": failure.request.split,
+                        "ambiguous": failure.ambiguous,
+                    })),
+                    "childBlocked": self.workbench.child_blocked,
+                    "creatingChildRequest": self.workbench.creating_child.as_ref().map(|request| serde_json::json!({
+                        "key": request.key,
+                        "parent": request.parent,
+                        "provider": request.provider.map(|provider| format!("{provider:?}")),
+                        "pane": request.pane_id,
+                        "split": request.split,
+                    })),
                     "notice": self.workbench.notice.as_ref().map(|notice| notice.to_string()),
                     "preview": self.workbench.preview.as_ref().map(|preview| preview.label.to_string()),
                     "resize": self.workbench.resize.as_ref().map(|(id, ratio)| json!({"split": id, "ratio": ratio})),
@@ -3393,6 +3738,25 @@ impl Shell {
     }
 
     /// An empty group below `pane_id` (the strip split control's path).
+    /// Lose the next New thread's response after the engine handled it.
+    pub fn fixture_workbench_lose_child_response(&mut self) {
+        self.workbench.lose_child_response = true;
+    }
+    /// A New thread from `pane_id`'s group with `provider`, as the chooser's
+    /// Create asks for it.
+    pub fn fixture_workbench_request_child(
+        &mut self,
+        pane_id: &str,
+        provider: Option<luna_proto::HarnessId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_child(Some(pane_id.to_string()), false, provider, cx);
+    }
+    /// The failure card's Retry / Check status.
+    pub fn fixture_workbench_retry_child(&mut self, cx: &mut Context<Self>) {
+        self.workbench_retry_child(cx);
+    }
+
     pub fn fixture_workbench_split_empty(&mut self, pane_id: &str, cx: &mut Context<Self>) {
         self.workbench_split_pane(pane_id, Edge::Bottom, cx);
     }
@@ -3445,6 +3809,19 @@ impl Shell {
         cx.notify();
     }
 
+    /// Open Settings on its General page (as the app menu does).
+    pub fn fixture_open_settings(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(SettingsSection::General, cx);
+    }
+    /// Leave Settings (its Back to the chat) or step back in route history.
+    pub fn fixture_leave_settings(&mut self, back: bool, cx: &mut Context<Self>) {
+        if back {
+            self.navigate_back(cx);
+        } else {
+            self.close_settings(cx);
+        }
+    }
+
     /// The surrounding frame as painted: sidebar and right widths (live,
     /// mid-tween included), their targets, and the canvas bounds.
     pub fn fixture_frame_readback(&self, cx: &App) -> serde_json::Value {
@@ -3454,6 +3831,11 @@ impl Shell {
             "sidebarNow": self.sidebar_now(),
             "sidebarTarget": self.sidebar_target(),
             "sidebarCollapsed": self.settings.sidebar_collapsed,
+            // The route's own visibility (Settings keeps a per-visit one) and
+            // the width actually painted.
+            "sidebarShown": !self.sidebar_collapsed(),
+            "settingsRoute": matches!(self.route, Route::Settings(_)),
+            "sidebarWidthNow": self.sidebar_now(),
             "rightNow": self.right_now(cx),
             "rightOpen": self.right_pane_open(cx),
             "rightActive": format!("{:?}", self.resolved_right_active(cx)),

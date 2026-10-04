@@ -672,7 +672,7 @@ impl Render for FileEditorTooltip {
             .rounded(px(6.0))
             .border_1()
             .border_color(theme.border)
-            .bg(crate::popover::surface_bg(theme))
+            .bg(theme.tooltip_surface())
             .font_family(theme.font_sans.clone())
             .text_size(crate::typography::ui_rems(10.5))
             .text_color(theme.text_muted)

@@ -317,6 +317,18 @@ pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
     }
 }
 
+/// The shared card for every tooltip and rich hover card: an opaque
+/// [`Theme::tooltip_surface`] fill (never translucent, never frosted), a
+/// strong hairline and a soft shadow. Content sets its own padding/width.
+pub fn tooltip_card(theme: &Theme) -> gpui::Div {
+    div()
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.border_strong)
+        .bg(theme.tooltip_surface())
+        .shadow_md()
+}
+
 pub fn popover_card(theme: &Theme) -> gpui::Div {
     div()
         .border_1()

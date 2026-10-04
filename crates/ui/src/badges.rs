@@ -170,6 +170,7 @@ impl Render for BadgeCard {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &Theme::of(cx).for_popup();
         let card = crate::popover::popover_card(theme)
+            .bg(theme.tooltip_surface())
             .w(px(CARD_WIDTH))
             .p(px(6.0))
             .flex()

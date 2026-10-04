@@ -331,7 +331,7 @@ impl Render for CodeBlockTooltip {
             .rounded(px(6.0))
             .border_1()
             .border_color(theme.border_strong)
-            .bg(theme.surface_raised)
+            .bg(theme.tooltip_surface())
             .shadow_md()
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
