@@ -92,6 +92,34 @@
 //!     moves the saved
 //!     layout, the left anchor, Balance, focus reveal, minimum sizes, or
 //!     drop/divider hit geometry relative to what is drawn.
+//! 31. A new Main whose engine registry is not ready yet (the layout read
+//!     refuses "Main chat is unavailable") latches a permanent "Main stays
+//!     open here" notice, or stops retrying, instead of loading the layout
+//!     quietly once the engine knows the chat (and clearing any notice).
+//! 32. A group's split control opens an empty group or a choice instead of
+//!     creating one blank child chat in a new group to its right; or it
+//!     starts a provider, makes two children on a repeat/retry, ignores the
+//!     group minimum (no room: nothing changes), or loses the failure state.
+//! 33. A blank child (never sent) cannot switch provider directly (it asks
+//!     for a switch confirmation or a context handoff), or its switch
+//!     changes the parent's provider; a started chat or a fork with history
+//!     switches without the ordinary confirmation; a second provider pick
+//!     replaces (or drops) a direct switch already sent; a late switch
+//!     result resets a picker since bound to another chat, engine or device,
+//!     or a refused direct switch rolls the row back over newer config; or
+//!     a provider's model catalog is queried with another provider's account
+//!     (a Claude chat's `claude-native` sent to Codex), or a catalog listed
+//!     for one account is reused (or left loading) after the account changes.
+//! 34. A child or fork pane still shows an always-visible context row
+//!     (status, "Child of"/"Side chat from", parent, provider/model); or its
+//!     tab loses live state: no spinner while working, no approval/input/
+//!     error glyph, no accent unread dot for an unseen completion (or a dot
+//!     that stays on the visible active tab); or the parent/source is no
+//!     longer reachable from the tab (tooltip, context menu).
+//! 35. Context usage still renders under the composer (or the reclaimed
+//!     space stays), is missing from the controls row next to Goal for
+//!     Main, a child or a fork, loses its details card or accessible name,
+//!     or overlaps/drops the model, access or Goal controls at narrow widths.
 //! 27. Balance panes counts tabs instead of groups, changes an axis, the
 //!     order, IDs, active chats or focus, leaves a mixed 2-over-1 or six-group
 //!     tree with unequal group areas, writes again on a repeat, is lost on a
@@ -510,6 +538,25 @@ fn panes(node: &Value, out: &mut Vec<Value>) {
             panes(&node["second"], out);
         }
         _ => {}
+    }
+}
+
+/// Session/read-attention status is live data, not part of the persisted
+/// split tree. Reopening a viewed chat can legitimately clear Completed.
+/// Keep every other tab and geometry field in the persistence comparison.
+fn layout_without_live_status(root: &Value) -> Value {
+    match root {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .filter(|(key, _)| key.as_str() != "status")
+                .map(|(key, value)| (key.clone(), layout_without_live_status(value)))
+                .collect(),
+        ),
+        Value::Array(values) => {
+            Value::Array(values.iter().map(layout_without_live_status).collect())
+        }
+        _ => root.clone(),
     }
 }
 
@@ -1210,6 +1257,10 @@ async fn assert_ordinary_fork(
         shell.fixture_workbench_tab_has_composer(chat, cx)
     })?;
     anyhow::ensure!(composer, "{what}: the fork's tab renders its own composer");
+    anyhow::ensure!(
+        strip["metaRow"] == false,
+        "{what}: the pane renders no context row (identity is on the tab): {strip}"
+    );
     Ok(())
 }
 
@@ -2546,7 +2597,7 @@ fn main() -> anyhow::Result<()> {
                 settle(cx, 600).await;
                 select(cx, Some(MAIN));
                 let restored = wait_for(window, cx, "the restored layout", |rb| rb["bootOverlay"] == false && rb["loaded"] == true && rb["main"] == MAIN && all_panes(rb).len() == all_panes(&saved).len()).await?;
-                anyhow::ensure!(restored["root"] == saved["root"] && restored["closed"] == saved["closed"], "layout survives a new Shell: {restored} vs {saved}");
+                anyhow::ensure!(layout_without_live_status(&restored["root"]) == layout_without_live_status(&saved["root"]) && restored["closed"] == saved["closed"] && restored["focusedPane"] == saved["focusedPane"], "layout survives a new Shell: {restored} vs {saved}");
                 shot(window, cx, output.join("w12-reloaded.png")).await?;
 
                 // w13. Switching main: each main has its own layout.
@@ -2555,7 +2606,7 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(all_panes(&other).len() == 1 && tabs_of(&all_panes(&other)[0]) == [MAIN2], "another main starts alone: {other}");
                 select(cx, Some(MAIN));
                 let back = wait_for(window, cx, "Main's layout again", |rb| rb["loaded"] == true && rb["main"] == MAIN).await?;
-                anyhow::ensure!(back["root"] == saved["root"], "switching back restores it: {back}");
+                anyhow::ensure!(layout_without_live_status(&back["root"]) == layout_without_live_status(&saved["root"]), "switching back restores it: {back}");
                 progress(&output, &mut record, "switched".into(), back.clone());
 
                 // w14. Light theme capture.
@@ -3400,6 +3451,188 @@ fn main() -> anyhow::Result<()> {
                 let back = related(window, cx)?;
                 anyhow::ensure!(tree_has(&back, MAIN, &fork_child, "Child chat", Some(fork_one.as_str())), "a child of a fork lists in Main's library under the fork: {back}");
                 progress(&output, &mut record, "forkOperations".into(), serde_json::json!({"archive": after_shortcut, "placed": placed["sidebarOrder"], "marks": marks, "forkMain": with_child, "library": back["relatedTrees"][MAIN]}));
+
+                // w20d. Failure case 31: a new Main before the engine's
+                // registry has it. The layout read is refused ("Main chat is
+                // unavailable") and retried quietly; a refusal that outlasts
+                // the grace is shown with Retry but never latched; once the
+                // engine registers the chat, the layout loads and the notice
+                // clears.
+                const FRESH: &str = "e0e0e0e0-0000-4000-8000-0000000000f1";
+                let main_row = chat_row(cx, &state, MAIN).ok_or_else(|| anyhow::anyhow!("Main's row"))?;
+                let mut fresh_row = main_row.clone();
+                fresh_row.id = FRESH.into();
+                fresh_row.title = Some("Fresh main before the registry".into());
+                fresh_row.child_thread = None;
+                fresh_row.pinned_order = None;
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.chats.push(fresh_row.clone());
+                        state.select_chat(Some(FRESH.into()), cx);
+                    })
+                });
+                settle(cx, 3000).await;
+                let early = wb(window, cx)?;
+                anyhow::ensure!(early["main"] == FRESH && early["loaded"] == false, "the fresh Main is selected, its layout not loaded yet: {early}");
+                anyhow::ensure!(early["unavailableLatched"] == false && early["loadNotice"].is_null(), "a fresh Main waits quietly (no notice, nothing latched): {early}");
+                settle(cx, 5000).await;
+                let late = wb(window, cx)?;
+                anyhow::ensure!(late["unavailableLatched"] == false, "a refused Main is never latched unavailable: {late}");
+                anyhow::ensure!(late["loadNotice"].as_str().is_some_and(|notice| notice.contains("Retrying")), "a refusal past the grace is shown, still retrying: {late}");
+                shot(window, cx, output.join("w20d-fresh-main-retrying.png")).await?;
+                reader
+                    .call(
+                        "Mutate",
+                        serde_json::json!({
+                            "op": "createChat",
+                            "chatId": FRESH,
+                            "spaceId": PROJECT,
+                            "cwd": main_row.cwd.clone().unwrap_or_default(),
+                            "config": serde_json::to_value(config())?,
+                        }),
+                    )
+                    .await?;
+                let ready = wait_for(window, cx, "the fresh Main's layout loads once the engine knows it", |rb| {
+                    rb["main"] == FRESH && rb["loaded"] == true && rb["loadNotice"].is_null() && rb["unavailableLatched"] == false
+                })
+                .await?;
+                cx.update(|cx| state.update(cx, |state, cx| state.select_chat(Some(MAIN.into()), cx)));
+                wait_for(window, cx, "back to Main's workbench", |rb| rb["main"] == MAIN && rb["loaded"] == true).await?;
+                progress(&output, &mut record, "freshMainReadiness".into(), serde_json::json!({"early": early["loadNotice"], "late": late["loadNotice"], "ready": ready["revision"]}));
+
+                // w20e. Failure case 32: a group's split control makes one
+                // blank child of Main in a new group to its right (no empty
+                // group, no choice, nothing started).
+                let before_split = wb(window, cx)?;
+                let main_group = pane_of(&before_split, MAIN).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("Main's group: {before_split}"))?;
+                let groups_before = all_panes(&before_split).len();
+                let known: std::collections::HashSet<String> = all_panes(&before_split).iter().flat_map(tabs_of).collect();
+                set_right_sidebar(window, cx, false).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_split_child(&main_group, cx))?;
+                let split_child = {
+                    let known = known.clone();
+                    wait_for(window, cx, "the split control's child in a new group", move |rb| {
+                        rb["creatingChild"] == false
+                            && all_panes(rb).len() == groups_before + 1
+                            && all_panes(rb).iter().flat_map(tabs_of).any(|tab| !known.contains(&tab))
+                    })
+                    .await?
+                };
+                let new_child = all_panes(&split_child).iter().flat_map(tabs_of).find(|tab| !known.contains(tab)).unwrap();
+                let new_group = pane_of(&split_child, &new_child).ok_or_else(|| anyhow::anyhow!("the child's group: {split_child}"))?;
+                anyhow::ensure!(tabs_of(&new_group) == [new_child.clone()] && new_group["active"] == new_child.as_str(), "the new group holds just the new child: {split_child}");
+                anyhow::ensure!(pane_of(&split_child, MAIN).is_some_and(|pane| pane["id"] == main_group.as_str()), "Main stays in its group: {split_child}");
+                let rows = merge_engine_chats(&reader, &state, cx).await?;
+                anyhow::ensure!(rows.iter().find(|chat| chat.id == new_child).is_some_and(|chat| chat.child_thread.as_ref().is_some_and(|child| child.parent_task_id == MAIN)), "the new chat is Main's child");
+                anyhow::ensure!(active_turn(&task_snapshot(&reader, &new_child).await?).is_none(), "the blank child starts nothing");
+                shot(window, cx, output.join("w20e-split-child.png")).await?;
+
+                // w20f. Failure case 33: the blank child switches provider
+                // directly (the ordinary SwitchProvider, no confirmation or
+                // handoff); a started chat or a fork confirms first.
+                let switch_path = |cx: &mut AsyncApp, chat: &str| {
+                    let chat = chat.to_string();
+                    window.update(cx, move |shell, _, cx| {
+                        shell
+                            .fixture_workbench_composer(&chat, cx)
+                            .map(|composer| composer.read(cx).pickers().read(cx).fixture_switch_path(cx))
+                    })
+                };
+                let mut blank_path = None;
+                for _ in 0..40 {
+                    blank_path = switch_path(cx, &new_child)?;
+                    if blank_path == Some("direct") {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(blank_path == Some("direct"), "a blank child switches provider directly: {blank_path:?}");
+                // Provider catalogs are queried with that provider's own
+                // account: a chat bound to one provider's account never
+                // sends it to another provider's catalog (the native repro:
+                // "Unknown Codex account selection: claude-native").
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        if let Some(config) = state
+                            .chats
+                            .iter_mut()
+                            .find(|chat| chat.id == new_child)
+                            .and_then(|chat| chat.config.as_mut())
+                        {
+                            config.provider_account_id = Some("claude-native".into());
+                        }
+                        cx.notify();
+                    })
+                });
+                let catalog_accounts = {
+                    let chat = new_child.clone();
+                    window.update(cx, move |shell, _, cx| {
+                        shell.fixture_workbench_composer(&chat, cx).map(|composer| {
+                            let pickers = composer.read(cx).pickers().read(cx);
+                            (
+                                pickers.fixture_catalog_account(HarnessId::Mock, cx),
+                                pickers.fixture_catalog_account(HarnessId::Codex, cx),
+                                pickers.fixture_catalog_account(HarnessId::ClaudeCode, cx),
+                            )
+                        })
+                    })?
+                };
+                anyhow::ensure!(
+                    catalog_accounts.as_ref().is_some_and(|(own, codex, claude)| {
+                        own.as_deref() == Some("claude-native")
+                            && codex.as_deref() != Some("claude-native")
+                            && claude.is_none()
+                    }),
+                    "each provider's catalog uses only its own account selection: {catalog_accounts:?}"
+                );
+                let started = switch_path(cx, MAIN)?;
+                anyhow::ensure!(started == Some("confirm"), "a started chat confirms a provider switch: {started:?}");
+                let fork_path = switch_path(cx, &fork_of_fork)?;
+                anyhow::ensure!(fork_path.is_none_or(|path| path == "confirm"), "a fork never switches without confirming: {fork_path:?}");
+                progress(&output, &mut record, "splitChild".into(), serde_json::json!({"layout": split_child, "child": new_child, "blankPath": blank_path, "startedPath": started}));
+
+                // w20g. Failure case 34: no context row in child/fork panes;
+                // an unseen completion on a hidden tab shows the accent
+                // unread dot (status Completed), cleared once the tab is
+                // on screen.
+                let strip = window.update(cx, |shell, _, cx| shell.fixture_workbench_strip(&new_child, cx))?;
+                anyhow::ensure!(strip["metaRow"] == false, "a child pane renders no context row: {strip}");
+                let hidden = all_panes(&wb(window, cx)?)
+                    .into_iter()
+                    .flat_map(|pane| {
+                        let active = pane["active"].as_str().unwrap_or_default().to_string();
+                        tabs_of(&pane).into_iter().filter(move |tab| *tab != active)
+                    })
+                    .find(|tab| tab != MAIN)
+                    .ok_or_else(|| anyhow::anyhow!("a hidden tab to receive an unseen completion"))?;
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        if let Some(chat) = state.chats.iter_mut().find(|chat| chat.id == hidden) {
+                            let now = chrono::Utc::now();
+                            chat.last_message_at = Some(now);
+                            chat.last_seen_at = Some(now - chrono::TimeDelta::minutes(1));
+                        }
+                        cx.notify();
+                    })
+                });
+                let dotted = {
+                    let id = hidden.clone();
+                    wait_for(window, cx, "the hidden tab shows its unread dot", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["status"] == "Completed")).await?
+                };
+                shot(window, cx, output.join("w20g-unread-tab.png")).await?;
+                activate(window, cx)?;
+                click_tab(window, cx, &hidden).await?;
+                let seen = {
+                    let id = hidden.clone();
+                    wait_for(window, cx, "the unread dot clears once the tab is on screen", move |rb| tab_json(rb, &id).is_some_and(|tab| tab["status"] == "Idle")).await?
+                };
+                progress(&output, &mut record, "tabStatus".into(), serde_json::json!({"dotted": tab_json(&dotted, &hidden), "seen": tab_json(&seen, &hidden)}));
+                // Restore the arrangement the frame steps expect: the split
+                // child's group closes (the child stays in Related chats).
+                let new_group_id = new_group["id"].as_str().unwrap_or_default().to_string();
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_close_pane(&new_group_id, cx))?;
+                wait_for(window, cx, "the split child's group closed", move |rb| all_panes(rb).len() == groups_before).await?;
+                set_right_sidebar(window, cx, true).await?;
 
                 // w21-w30. The surrounding frame: one chrome surface around
                 // the inset canvas in every sidebar combination, while

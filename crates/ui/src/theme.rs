@@ -948,6 +948,29 @@ impl Theme {
         }
     }
 
+    /// `color` floored where the composer pill paints it: on the pill's
+    /// frosted tint (or its opaque plate) over each reading surface. The
+    /// controls row's context-usage share and ring use it.
+    pub fn readable_on_composer(&self, color: Hsla, min: f32) -> Hsla {
+        let plate = if self.is_frost() {
+            self.composer_sidebar_tint()
+        } else {
+            self.input_glass_bg()
+        };
+        self.readable_on_stacks(color, &[&[plate]], min)
+    }
+
+    /// A workbench tab's unread dot (an unseen completion): the configured
+    /// accent, floored at the non-text target on every tab chip fill.
+    pub fn tab_unread_dot(&self) -> Hsla {
+        let [rest, hover, active] = self.tab_chip_washes();
+        self.readable_on_stacks(
+            self.accent,
+            &[&[rest], &[hover], &[active], &[self.tab_focused_fill()]],
+            NON_TEXT_CONTRAST_TARGET,
+        )
+    }
+
     /// A Main/accent badge on a workbench tab: `color` floored on the
     /// badge's `badge` wash over each tab chip fill (the focused tint too).
     pub fn readable_on_tab_badge(&self, color: Hsla, badge: Hsla, min: f32) -> Hsla {

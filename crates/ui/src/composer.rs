@@ -414,6 +414,8 @@ pub fn controls_row_budget(surface_width: f32) -> f32 {
 pub struct ControlsRowFit {
     pub model: crate::pickers::ModelChipFit,
     pub goal_icon_only: bool,
+    /// The context-usage chip shows its ring only (share in its card).
+    pub usage_icon_only: bool,
 }
 
 /// One measured controls row (see [`controls_row_fit`]).
@@ -423,48 +425,59 @@ struct ControlsRowMeasure {
     model_full: f32,
     model_name_only: f32,
     goal: Option<(f32, f32)>,
+    usage: Option<(f32, f32)>,
     fit: ControlsRowFit,
 }
 
 /// Choose the richest controls row that fits `budget` without truncating:
-/// the Goal label yields first, then the model chip's effort suffix, then its
-/// name (leaving the brand mark, like Codex's narrowest composer). The
-/// icon-only access chip always stays, and every dropped piece remains in a
-/// tooltip. `goal` is `(label, icon-only)` widths when the Goal switch is
-/// offered.
+/// the Goal label yields first, then the context share (its ring stays),
+/// then the model chip's effort suffix, then its name (leaving the brand
+/// mark, like Codex's narrowest composer). The icon-only access chip always
+/// stays, and every dropped piece remains in a tooltip or card. `goal` and
+/// `usage` are `(label, icon-only)` widths when the Goal switch and the
+/// context-usage chip are shown.
 pub fn controls_row_fit(
     budget: f32,
     model_full: f32,
     model_name_only: f32,
     goal: Option<(f32, f32)>,
+    usage: Option<(f32, f32)>,
 ) -> ControlsRowFit {
     use crate::pickers::{ACCESS_CHIP_SIZE, ModelChipFit};
-    let need = |model: f32, goal: Option<f32>| {
-        model + CHIP_GAP + ACCESS_CHIP_SIZE + goal.map_or(0.0, |goal| CHIP_GAP + goal)
+    let need = |model: f32, goal: Option<f32>, usage: Option<f32>| {
+        model
+            + CHIP_GAP
+            + ACCESS_CHIP_SIZE
+            + goal.map_or(0.0, |goal| CHIP_GAP + goal)
+            + usage.map_or(0.0, |usage| CHIP_GAP + usage)
     };
     let candidates = [
-        (ModelChipFit::Full, false),
-        (ModelChipFit::Full, true),
-        (ModelChipFit::NameOnly, true),
-        (ModelChipFit::IconOnly, true),
+        (ModelChipFit::Full, false, false),
+        (ModelChipFit::Full, true, false),
+        (ModelChipFit::Full, true, true),
+        (ModelChipFit::NameOnly, true, true),
+        (ModelChipFit::IconOnly, true, true),
     ];
-    for (model, goal_icon_only) in candidates {
+    for (model, goal_icon_only, usage_icon_only) in candidates {
         let model_width = match model {
             ModelChipFit::Full => model_full,
             ModelChipFit::NameOnly => model_name_only,
             ModelChipFit::IconOnly => ACCESS_CHIP_SIZE,
         };
         let goal_width = goal.map(|(label, icon)| if goal_icon_only { icon } else { label });
-        if need(model_width, goal_width) <= budget {
+        let usage_width = usage.map(|(label, icon)| if usage_icon_only { icon } else { label });
+        if need(model_width, goal_width, usage_width) <= budget {
             return ControlsRowFit {
                 model,
                 goal_icon_only,
+                usage_icon_only,
             };
         }
     }
     ControlsRowFit {
         model: ModelChipFit::IconOnly,
         goal_icon_only: true,
+        usage_icon_only: true,
     }
 }
 
@@ -5327,8 +5340,10 @@ impl Composer {
                 "modelFull": row.model_full,
                 "modelNameOnly": row.model_name_only,
                 "goal": row.goal.map(|(label, icon)| [label, icon]),
+                "usage": row.usage.map(|(label, icon)| [label, icon]),
                 "modelFit": format!("{:?}", row.fit.model),
                 "goalIconOnly": row.fit.goal_icon_only,
+                "usageIconOnly": row.fit.usage_icon_only,
             })),
         })
     }
@@ -12490,19 +12505,56 @@ impl Render for Composer {
         // model chip (both stay in the tooltips); the model name and the
         // access icon always remain.
         let goal_widths = self.goal_mode_chip_widths(window, cx);
+        // The bound session's context window, beside Goal in this row (Main,
+        // a child and a fork alike); no session, no chip.
+        let usage_chip = {
+            let state = self.state.read(cx);
+            (crate::settings::current(cx).show_context_usage
+                && self.binding.chat_row(state).is_some())
+            .then(|| {
+                (
+                    self.binding.context_usage(state),
+                    self.binding.context_control(state).compact.status,
+                )
+            })
+        };
+        let usage_widths = usage_chip.map(|(usage, status)| {
+            crate::context_usage::chip_widths(
+                &crate::context_usage::label(usage, status),
+                window,
+                &theme,
+            )
+        });
         let (model_full, model_name_only) = self.pickers.read(cx).model_chip_widths(window, cx);
         let row_budget = controls_row_budget(surface_width);
-        let fit = controls_row_fit(row_budget, model_full, model_name_only, goal_widths);
+        let fit = controls_row_fit(
+            row_budget,
+            model_full,
+            model_name_only,
+            goal_widths,
+            usage_widths,
+        );
         self.controls_row = Some(ControlsRowMeasure {
             budget: row_budget,
             model_full,
             model_name_only,
             goal: goal_widths,
+            usage: usage_widths,
             fit,
         });
         self.pickers
             .update(cx, |pickers, cx| pickers.set_model_chip_fit(fit.model, cx));
         let goal_mode_chip = self.render_goal_mode_chip(fit.goal_icon_only, cx);
+        let usage_chip = usage_chip.map(|(usage, status)| {
+            crate::context_usage::render(
+                usage,
+                status,
+                self.state.clone(),
+                self.binding.clone(),
+                &theme,
+                !fit.usage_icon_only,
+            )
+        });
         let model_picker = div()
             .min_w_0()
             .flex()
@@ -12510,7 +12562,8 @@ impl Render for Composer {
             .items_center()
             .gap(px(CHIP_GAP))
             .child(div().min_w_0().child(self.pickers.clone()))
-            .children(goal_mode_chip);
+            .children(goal_mode_chip)
+            .children(usage_chip);
         // Textarea on top (`px-4 pb-1 pt-4`), actions row (12px bottom + 2px
         // top, 32px chips → 46px) ABSOLUTE at the pill's stationary bottom —
         // the pill sits at the bottom of its column and grows upward, so the
@@ -12674,24 +12727,28 @@ impl Render for Composer {
         // old floating checkout/ref controls dissolve into the session footer.
         // Non-Git sessions grow the slot continuously from zero.
         let session_chrome = 1.0 - new_thread_chrome;
-        let bottom_slot = if has_new_thread_git_selectors || self.dock_frame.is_some() {
+        // In the workbench frame the session's checkout/branch live in the
+        // frame row and the context window in the controls row, so a
+        // session has nothing under its pill: the slot gives its height
+        // back as the session chrome comes in, and the pill sits lower.
+        let framed_session =
+            self.frame_footer && self.binding.chat_row(self.state.read(cx)).is_some();
+        let bottom_slot = if framed_session {
+            if has_new_thread_git_selectors {
+                new_thread_chrome
+            } else {
+                0.0
+            }
+        } else if has_new_thread_git_selectors || self.dock_frame.is_some() {
             1.0
         } else {
             session_chrome
         };
         let container = if bottom_slot > 0.0 {
-            let framed_session =
-                self.frame_footer && self.binding.chat_row(self.state.read(cx)).is_some();
             let footer = (session_chrome_opacity > 0.0 && !framed_session).then(|| {
                 self.pickers
                     .update(cx, |pickers, cx| pickers.render_footer(cx))
             });
-            let usage = self.binding.context_usage(self.state.read(cx));
-            let compact_status = self
-                .binding
-                .context_control(self.state.read(cx))
-                .compact
-                .status;
             container.child(
                 div()
                     .w_full()
@@ -12721,18 +12778,7 @@ impl Render for Composer {
                                 .flex()
                                 .items_center()
                                 .opacity(session_chrome_opacity)
-                                .child(div().flex_1().min_w_0().children(footer.flatten()))
-                                .when(crate::settings::current(cx).show_context_usage, |slot| {
-                                    slot.child(div().flex_none().pr(px(10.0)).child(
-                                        crate::context_usage::render(
-                                            usage,
-                                            compact_status,
-                                            self.state.clone(),
-                                            self.binding.clone(),
-                                            &theme,
-                                        ),
-                                    ))
-                                }),
+                                .child(div().flex_1().min_w_0().children(footer.flatten())),
                         )
                     }),
             )

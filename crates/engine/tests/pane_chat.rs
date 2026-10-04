@@ -2546,6 +2546,239 @@ async fn child_execution_rejects_invalid_choices_before_identity_or_worktree_cre
 // Central workbench failure cases were recorded before implementation in
 // docs/design/chat-workbench/failure-cases.md. This uses real registry/docs,
 // queue dispatch, child maintenance, side forks, persistence and restart.
+/// An unstarted child's provider is an initial choice, not a context reset.
+/// Failure cases are recorded in workbench-followup-2026-10-04/README.md.
+#[tokio::test(flavor = "multi_thread")]
+async fn blank_child_provider_choice_stays_unbound_and_independent_until_first_send() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("initial-provider-project");
+    init_repo(&project);
+    let (core, recorder) = assemble_multi_provider(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    core.workspace
+        .create_space(
+            "initial-provider-space",
+            &core.device_id,
+            project.to_str().unwrap(),
+            None,
+            true,
+        )
+        .unwrap();
+    let parent = uuid::Uuid::new_v4().to_string();
+    create_chat(
+        &client,
+        &parent,
+        "initial-provider-space",
+        &project,
+        config(HarnessId::Codex, "ask", "parent-model", "high"),
+    )
+    .await;
+    core.doc_host
+        .open(&parent)
+        .unwrap()
+        .write_user_message("private-parent", "PARENT_PRIVATE_CONTEXT", 1)
+        .unwrap();
+    let parent_before = core.workspace.chat(&parent).unwrap().unwrap();
+    let created = client
+        .call(
+            "CreateChildTab",
+            json!({
+                "parentTaskId":parent,"idempotencyKey":"initial-provider-child",
+                "title":"Independent blank child"
+            }),
+        )
+        .await
+        .unwrap();
+    let child = created["taskId"].as_str().unwrap().to_string();
+    let before = core.workspace.chat(&child).unwrap().unwrap();
+    let lineage = before.child_thread.clone();
+    let draft = json!({"version":1,"draftId":child,"taskId":child,"revision":1,
+        "text":"UNSENT_INDEPENDENT_CHILD_DRAFT","updatedAtMs":100});
+    client
+        .call("SaveComposerDraft", json!({"draft":draft}))
+        .await
+        .unwrap();
+    let saved_draft = client
+        .call("GetComposerDraft", json!({"taskId":child}))
+        .await
+        .unwrap();
+    let intent = json!({"kind":"switchProvider", "initialOnly":true, "config":
+        config(HarnessId::ClaudeCode, "ask", "child-model", "medium")});
+    let changed = command(&client, &child, "initial-provider-choice", intent.clone())
+        .await
+        .unwrap();
+    assert_eq!(changed["status"], "applied", "{changed}");
+    evidence(
+        "blank-child-provider-before-send.json",
+        &json!({
+            "created":created,"command":changed,"row":core.workspace.chat(&child).unwrap(),
+            "identity":core.task_identity.view(&child),
+            "messages":core.doc_host.open(&child).unwrap().doc().read_entries().unwrap(),
+            "draft":saved_draft
+        }),
+    );
+    assert_eq!(
+        entry_count(&core, &child),
+        0,
+        "an initial choice must not add a context-boundary message"
+    );
+    assert_eq!(queue_len(&core, &child), 0);
+    let identity = core.task_identity.view(&child).unwrap();
+    assert!(
+        identity.current_binding.is_none() && identity.bindings.is_empty(),
+        "provider choice alone must not materialize a binding: {identity:?}"
+    );
+    assert!(recorder.runs.lock().unwrap().is_empty());
+    let own = core.workspace.chat(&child).unwrap().unwrap();
+    assert_eq!(own.config.as_ref().unwrap().harness, HarnessId::ClaudeCode);
+    assert_eq!(own.child_thread, lineage);
+    assert_eq!(own.cwd, before.cwd);
+    assert_eq!(
+        core.workspace.chat(&parent).unwrap().unwrap(),
+        parent_before
+    );
+    assert_eq!(
+        client
+            .call("GetComposerDraft", json!({"taskId":child}))
+            .await
+            .unwrap(),
+        saved_draft
+    );
+    let duplicate = command(&client, &child, "initial-provider-choice", intent)
+        .await
+        .unwrap();
+    assert_eq!(duplicate, changed);
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+
+    let (core, recorder) = assemble_multi_provider(root.path());
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let restored = core.workspace.chat(&child).unwrap().unwrap();
+    assert_eq!(
+        restored.config.as_ref().unwrap().harness,
+        HarnessId::ClaudeCode
+    );
+    assert_eq!(restored.child_thread, lineage);
+    assert_eq!(entry_count(&core, &child), 0);
+    assert!(
+        core.task_identity
+            .view(&child)
+            .unwrap()
+            .current_binding
+            .is_none()
+    );
+    assert!(recorder.runs.lock().unwrap().is_empty());
+    assert_eq!(
+        client
+            .call("GetComposerDraft", json!({"taskId":child}))
+            .await
+            .unwrap(),
+        saved_draft
+    );
+    queue(
+        &client,
+        &child,
+        "independent-first-send",
+        "FIRST_CHILD_PROVIDER_SELECTION",
+    )
+    .await;
+    until("first child run uses its selected provider", || {
+        !runs_for(&recorder, &child).is_empty()
+            && core.task_identity.view(&child).is_some_and(|view| {
+                view.current_binding
+                    .is_some_and(|binding| !binding.provider_task_id.is_empty())
+            })
+            && !core.sessions.turn_in_flight(&child)
+    })
+    .await;
+    let runs = runs_for(&recorder, &child);
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].harness, Some(HarnessId::ClaudeCode));
+    assert!(runs[0].resume.is_none());
+    assert_eq!(runs[0].prompt, "FIRST_CHILD_PROVIDER_SELECTION");
+    assert!(
+        !serde_json::to_string(&runs[0])
+            .unwrap()
+            .contains("PARENT_PRIVATE_CONTEXT")
+    );
+    let bound = core
+        .task_identity
+        .view(&child)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(bound.provider_id, HarnessId::ClaudeCode);
+    assert_eq!(bound.generation, 1);
+    assert_eq!(
+        core.workspace.chat(&parent).unwrap().unwrap().config,
+        parent_before.config
+    );
+    // A stale direct-choice UI must never silently become a context reset.
+    let messages_before_guard = entry_count(&core, &child);
+    let guarded = command(
+        &client,
+        &child,
+        "stale-initial-choice",
+        json!({
+            "kind":"switchProvider", "initialOnly":true,
+            "config":config(HarnessId::Codex, "ask", "child-model", "low")
+        }),
+    )
+    .await
+    .unwrap();
+    assert_ne!(
+        guarded["status"], "applied",
+        "a started child requires an explicit boundary: {guarded}"
+    );
+    assert_eq!(
+        core.task_identity.view(&child).unwrap().current_binding,
+        Some(bound.clone())
+    );
+    assert_eq!(entry_count(&core, &child), messages_before_guard);
+    // Once execution exists, the same command retains the ordinary explicit
+    // context boundary rather than taking the blank-child fast path.
+    let started_switch = command(
+        &client,
+        &child,
+        "started-provider-choice",
+        json!({
+            "kind":"switchProvider", "config":config(HarnessId::Codex, "ask", "child-model", "low")
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(started_switch["status"], "applied", "{started_switch}");
+    let switched = core
+        .task_identity
+        .view(&child)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(switched.generation, 2);
+    assert_eq!(switched.provider_id, HarnessId::Codex);
+    assert_ne!(switched.binding_id, bound.binding_id);
+    assert!(
+        core.doc_host
+            .open(&child)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.id == "context-boundary:started-provider-choice")
+    );
+    evidence(
+        "blank-child-provider-after-send.json",
+        &json!({
+            "firstRun":runs[0],"firstBinding":bound,"nextBinding":switched,
+            "switch":started_switch,"row":core.workspace.chat(&child).unwrap()
+        }),
+    );
+    drop(client);
+    core.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn blank_child_tabs_preserve_drafts_and_running_sessions_across_view_changes() {
     let root = tempfile::tempdir().unwrap();

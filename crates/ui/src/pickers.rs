@@ -822,6 +822,21 @@ pub enum PickerKind {
     Device,
 }
 
+/// A blank chat's provider choice, waiting for that provider's model
+/// catalog before the ordinary switch is sent. One at a time: a newer pick
+/// replaces it; a change of chat, engine or target device drops it.
+#[derive(Clone, Debug)]
+struct DirectSwitch {
+    harness: HarnessId,
+    chat_id: String,
+    engine_generation: u64,
+    target_generation: u64,
+    /// The switch command is in flight (the catalog is loaded).
+    sending: bool,
+    /// Why it stopped: the catalog failed to load, or the switch failed.
+    error: Option<String>,
+}
+
 pub(crate) struct ReturnComposerFocus;
 
 impl gpui::EventEmitter<ReturnComposerFocus> for Pickers {}
@@ -886,6 +901,9 @@ pub struct Pickers {
     harnesses: Loadable<Vec<HarnessDescriptor>>,
     accounts: Loadable<AgentAccountsSnapshot>,
     models: HashMap<HarnessId, Loadable<Vec<Model>>>,
+    /// The Codex account the cached Codex catalog was listed for: a catalog
+    /// from another account (or none) is reloaded, never reused.
+    codex_catalog_account: Option<Option<String>>,
     refs: Loadable<Vec<RepoRef>>,
     /// Space id the `refs` slot belongs to (invalidated on space change).
     refs_space: Option<String>,
@@ -936,6 +954,7 @@ pub struct Pickers {
     clear_context_confirmation: bool,
     provider_switch_target: Option<HarnessId>,
     provider_switch_handoff: bool,
+    direct_switch: Option<DirectSwitch>,
     full_confirmation: Option<String>,
     mutate_task: Option<Task<()>>,
     _search_events: Subscription,
@@ -1046,6 +1065,7 @@ impl Pickers {
                 this.clear_context_confirmation = false;
                 this.provider_switch_target = None;
                 this.provider_switch_handoff = false;
+                this.direct_switch = None;
             }
             // A space switch invalidates the branch draft + cache — the folder
             // (and possibly the device) changed under them.
@@ -1056,6 +1076,7 @@ impl Pickers {
                 this.space_owner = space;
                 this.device_owner = device;
                 this.target_generation = this.target_generation.wrapping_add(1);
+                this.direct_switch = None;
                 this.setting_menu = None;
                 this.setting_bounds = None;
                 this.refs_task = None;
@@ -1167,6 +1188,7 @@ impl Pickers {
             harnesses: Loadable::Idle,
             accounts: Loadable::Idle,
             models: HashMap::new(),
+            codex_catalog_account: None,
             refs: Loadable::Idle,
             refs_space: None,
             active: 0,
@@ -1191,6 +1213,7 @@ impl Pickers {
             clear_context_confirmation: false,
             provider_switch_target: None,
             provider_switch_handoff: false,
+            direct_switch: None,
             full_confirmation: None,
             mutate_task: None,
             _search_events: search_events,
@@ -1220,6 +1243,31 @@ impl Pickers {
         self.pick_harness(harness, cx);
     }
 
+    /// The account a model-catalog query for `harness` would send (Codex:
+    /// its own selection or active account; others: their own selection).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_catalog_account(&self, harness: HarnessId, cx: &App) -> Option<String> {
+        if harness == HarnessId::Codex {
+            self.codex_model_account_id(cx)
+        } else {
+            self.selected_account_for(harness, cx)
+        }
+    }
+
+    /// How a provider change on the bound chat would go: `direct` (an
+    /// unstarted chat: the ordinary switch at once), `confirm` (a started
+    /// chat or a fork) or `draft` (no chat yet).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_switch_path(&self, cx: &App) -> &'static str {
+        if !self.harness_locked(cx) {
+            "draft"
+        } else if self.unstarted_chat(cx) {
+            "direct"
+        } else {
+            "confirm"
+        }
+    }
+
     /// The provider/account refusal currently shown, if any.
     #[cfg(feature = "appshots-fixture")]
     pub fn fixture_refusals(&self) -> Option<String> {
@@ -1241,6 +1289,123 @@ impl Pickers {
     /// Harness is locked once the chat exists (feature-inventory §1.7).
     fn harness_locked(&self, cx: &App) -> bool {
         self.binding.chat_id(self.state.read(cx)).is_some()
+    }
+
+    /// The bound chat exists but has never run: no message (row or loaded
+    /// history), nothing sending or queued, and not a fork. Its provider
+    /// can change without a confirmation or a context handoff, and nothing
+    /// ties it to its parent's provider.
+    fn unstarted_chat(&self, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        let Some(chat) = self.binding.chat_row(state) else {
+            return false;
+        };
+        let now = chrono::Utc::now();
+        chat.last_message_at.is_none()
+            && self.binding.transcript_replayed(state)
+            && self.binding.transcript(state).is_empty()
+            && !state.send_pending(&chat.id, now)
+            && !state.send_queued(&chat.id, now)
+            && !state.side_chat_rows.contains_key(&chat.id)
+    }
+
+    /// A blank chat's provider choice: wait for the provider's catalog (a
+    /// failed one is retried), then send the ordinary switch. Nothing runs
+    /// on the provider either way.
+    fn begin_direct_switch(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        // While the switch command is in flight, other provider picks are
+        // ignored (a choice still loading its catalog may be replaced).
+        if self
+            .direct_switch
+            .as_ref()
+            .is_some_and(|direct| direct.sending)
+        {
+            return;
+        }
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
+            return;
+        };
+        self.provider_switch_target = None;
+        self.provider_switch_handoff = false;
+        self.context_error = None;
+        self.direct_switch = Some(DirectSwitch {
+            harness,
+            chat_id,
+            engine_generation: self.state.read(cx).engine_generation(),
+            target_generation: self.target_generation,
+            sending: false,
+            error: None,
+        });
+        let failed = matches!(self.models.get(&harness), Some(Loadable::Error(_)));
+        self.ensure_models(harness, failed, cx);
+        self.resolve_direct_switch(harness, cx);
+    }
+
+    /// The catalog for `harness` settled (or was already loaded): complete,
+    /// or fail visibly, the pending direct choice for it. A stale one (the
+    /// chat, engine or target device changed, or the chat has started) is
+    /// dropped without effect.
+    fn resolve_direct_switch(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        let Some(pending) = self.direct_switch.clone() else {
+            return;
+        };
+        if pending.harness != harness || pending.sending || pending.error.is_some() {
+            return;
+        }
+        let current = {
+            let state = self.state.read(cx);
+            self.binding.chat_id(state) == Some(pending.chat_id.as_str())
+                && state.engine_generation() == pending.engine_generation
+        };
+        if !current
+            || self.target_generation != pending.target_generation
+            || !self.unstarted_chat(cx)
+        {
+            self.direct_switch = None;
+            cx.notify();
+            return;
+        }
+        match self.models.get(&harness) {
+            Some(Loadable::Ready(_)) => {
+                if let Some(direct) = self.direct_switch.as_mut() {
+                    direct.sending = true;
+                }
+                self.send_provider_switch(harness, true, cx);
+            }
+            Some(Loadable::Error(error)) => {
+                let error = format!("Couldn't load its models: {error}");
+                if let Some(direct) = self.direct_switch.as_mut() {
+                    direct.error = Some(error);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// A direct choice for `target` could not be sent: show why, with
+    /// Try again.
+    fn fail_direct_switch(&mut self, target: HarnessId, error: &str) {
+        if let Some(direct) = self
+            .direct_switch
+            .as_mut()
+            .filter(|direct| direct.harness == target)
+        {
+            direct.sending = false;
+            direct.error = Some(error.to_string());
+        }
+    }
+
+    /// Try a failed direct choice again (its catalog, or its switch).
+    fn retry_direct_switch(&mut self, cx: &mut Context<Self>) {
+        let Some(harness) = self.direct_switch.as_ref().map(|direct| direct.harness) else {
+            return;
+        };
+        self.begin_direct_switch(harness, cx);
     }
 
     fn engine(&self, cx: &App) -> Option<EngineHandle> {
@@ -1301,17 +1466,47 @@ impl Pickers {
             .and_then(|list| offered_harnesses(list).first().map(|d| d.id))
     }
 
+    /// The account the effective provider runs with (the draft's pick, or
+    /// the bound chat's), scoped to that provider.
     fn effective_provider_account_id(&self, cx: &App) -> Option<String> {
-        self.config.provider_account_id.clone().or_else(|| {
+        self.effective_harness(cx)
+            .and_then(|harness| self.selected_account_for(harness, cx))
+    }
+
+    /// The account explicitly selected for `harness`: the draft's pick while
+    /// the draft is on that provider, else the bound chat's when the chat
+    /// runs on it. Never another provider's account (a Claude chat's
+    /// `claude-native` must not reach Codex's catalog), and never an id the
+    /// loaded accounts list under a different provider.
+    fn selected_account_for(&self, harness: HarnessId, cx: &App) -> Option<String> {
+        let belongs = |id: &str| {
+            self.accounts.ready().is_none_or(|snapshot| {
+                snapshot
+                    .accounts
+                    .iter()
+                    .find(|account| account.id == id)
+                    .is_none_or(|account| account.harness == harness)
+            })
+        };
+        let draft = self
+            .config
+            .provider_account_id
+            .clone()
+            .filter(|_| self.effective_harness(cx) == Some(harness));
+        let chat = || {
             self.binding
                 .chat_row(self.state.read(cx))
                 .and_then(|chat| chat.config.as_ref())
+                .filter(|config| config.harness == harness)
                 .and_then(|config| config.provider_account_id.clone())
-        })
+        };
+        draft.or_else(chat).filter(|id| belongs(id))
     }
 
+    /// The account Codex's catalog is listed for: Codex's own selection,
+    /// else its active account.
     fn codex_model_account_id(&self, cx: &App) -> Option<String> {
-        self.effective_provider_account_id(cx).or_else(|| {
+        self.selected_account_for(HarnessId::Codex, cx).or_else(|| {
             self.accounts.ready().and_then(|snapshot| {
                 snapshot
                     .accounts
@@ -2038,10 +2233,18 @@ impl Pickers {
         // Normal prefetches load absent/Idle slots once. Picker-open refreshes
         // also retry Ready/Error slots, while an in-flight load is always
         // reused. Ready rows stay visible until the replacement lands.
+        // A settled Codex catalog listed for another account than the one
+        // now selected is stale: reload it (and stop showing it).
+        let stale_account = harness == HarnessId::Codex
+            && matches!(
+                self.models.get(&harness),
+                Some(Loadable::Ready(_)) | Some(Loadable::Error(_))
+            )
+            && self.codex_catalog_account.as_ref() != Some(&self.codex_model_account_id(cx));
         let reload = match self.models.get(&harness) {
             None | Some(Loadable::Idle) => true,
             Some(Loadable::Loading) => false,
-            Some(Loadable::Ready(_)) | Some(Loadable::Error(_)) => force,
+            Some(Loadable::Ready(_)) | Some(Loadable::Error(_)) => force || stale_account,
         };
         if !reload {
             return;
@@ -2054,7 +2257,7 @@ impl Pickers {
         let account_id = (harness == HarnessId::Codex)
             .then(|| self.codex_model_account_id(cx))
             .flatten();
-        if !matches!(self.models.get(&harness), Some(Loadable::Ready(_))) {
+        if stale_account || !matches!(self.models.get(&harness), Some(Loadable::Ready(_))) {
             self.models.insert(harness, Loadable::Loading);
             self.catalog_rev += 1;
         }
@@ -2108,6 +2311,13 @@ impl Pickers {
                     return;
                 }
                 if harness == HarnessId::Codex && pickers.codex_model_account_id(cx) != account_id {
+                    // Listed for an account no longer selected: drop it and
+                    // list again for the current one (never leave the slot
+                    // loading for good).
+                    if matches!(pickers.models.get(&harness), Some(Loadable::Loading)) {
+                        pickers.models.insert(harness, Loadable::Idle);
+                    }
+                    pickers.ensure_models(harness, false, cx);
                     return;
                 }
                 let loaded = match result {
@@ -2128,8 +2338,12 @@ impl Pickers {
                         pickers.save_defaults();
                     }
                 }
+                if harness == HarnessId::Codex {
+                    pickers.codex_catalog_account = Some(account_id.clone());
+                }
                 pickers.models.insert(harness, loaded);
                 pickers.catalog_rev += 1;
+                pickers.resolve_direct_switch(harness, cx);
                 // A list that landed while its popover is open re-anchors the
                 // keyboard highlight onto the selected row (it sat at 0 while
                 // loading).
@@ -2320,8 +2534,17 @@ impl Pickers {
     fn pick_harness(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
         if self.harness_locked(cx) {
             if self.effective_harness(cx) != Some(harness) {
-                self.begin_provider_switch_confirmation(harness);
-                self.ensure_models(harness, false, cx);
+                // A chat that has not started (a blank child) has no
+                // conversation to carry over: it takes the ordinary switch
+                // directly, once the provider's model catalog is loaded
+                // (cold or cached). A started chat, or any fork (its context
+                // is its source's provider session), confirms first.
+                if self.unstarted_chat(cx) {
+                    self.begin_direct_switch(harness, cx);
+                } else {
+                    self.ensure_models(harness, false, cx);
+                    self.begin_provider_switch_confirmation(harness);
+                }
                 cx.notify();
             }
             return;
@@ -2482,12 +2705,27 @@ impl Pickers {
         cx.notify();
     }
 
+    /// The user's confirmed provider switch (a started chat).
     fn confirm_provider_switch(&mut self, target: HarnessId, cx: &mut Context<Self>) {
+        self.send_provider_switch(target, false, cx);
+    }
+
+    /// The ordinary `switchProvider` command. `initial_only` marks a blank
+    /// chat's direct choice: the engine refuses it if the task has started
+    /// by the time it runs (another window, a queued send), rather than
+    /// turning it into a context reset. A confirmed switch omits it.
+    fn send_provider_switch(
+        &mut self,
+        target: HarnessId,
+        initial_only: bool,
+        cx: &mut Context<Self>,
+    ) {
         let Some(chat_id) = self
             .binding
             .chat_id(self.state.read(cx))
             .map(str::to_string)
         else {
+            self.direct_switch = None;
             return;
         };
         let Some(mut config) = self
@@ -2496,11 +2734,13 @@ impl Pickers {
             .and_then(|chat| chat.config.clone())
         else {
             self.context_error = Some("This task has no provider configuration.".into());
+            self.fail_direct_switch(target, "This task has no provider configuration.");
             cx.notify();
             return;
         };
         let Some(engine) = self.engine(cx) else {
             self.context_error = Some("Engine not connected".into());
+            self.fail_direct_switch(target, "Engine not connected");
             cx.notify();
             return;
         };
@@ -2535,37 +2775,55 @@ impl Pickers {
             self.provider_switch_handoff,
             self.binding.transcript(self.state.read(cx)),
         );
-        let previous = self
-            .binding
-            .chat_row(self.state.read(cx))
-            .and_then(|chat| chat.config.clone());
+        // The picker this command was sent from: a late result for another
+        // chat, engine or target device changes nothing here.
+        let engine_generation = self.state.read(cx).engine_generation();
+        let target_generation = self.target_generation;
         self.context_error = None;
         self.mutate_task = Some(cx.spawn(async move |this, cx| {
-            let result = crate::task_commands::execute(
-                &engine,
-                &chat_id,
-                serde_json::json!({
-                    "kind": "switchProvider",
-                    "config": config,
-                    "handoff": handoff,
-                }),
-            )
-            .await;
+            let mut intent = serde_json::json!({
+                "kind": "switchProvider",
+                "config": config,
+                "handoff": handoff,
+            });
+            if initial_only {
+                intent["initialOnly"] = serde_json::Value::Bool(true);
+            }
+            let result = crate::task_commands::execute(&engine, &chat_id, intent).await;
             this.update(cx, |pickers, cx| {
+                let current = {
+                    let state = pickers.state.read(cx);
+                    pickers.binding.chat_id(state) == Some(chat_id.as_str())
+                        && state.engine_generation() == engine_generation
+                };
+                if !current || pickers.target_generation != target_generation {
+                    return;
+                }
                 match result {
                     Ok(_) => {
                         pickers.provider_switch_target = None;
                         pickers.provider_switch_handoff = false;
                         pickers.config = DraftConfig::default();
+                        if pickers
+                            .direct_switch
+                            .as_ref()
+                            .is_some_and(|direct| direct.harness == target)
+                        {
+                            pickers.direct_switch = None;
+                        }
                     }
                     Err(error) => {
-                        pickers.context_error = Some(error.to_string());
-                        if let Some(previous) = previous.clone() {
-                            pickers.state.update(cx, |state, cx| {
-                                state.apply_chat_config(&chat_id, previous);
-                                cx.notify();
-                            });
+                        if let Some(direct) = pickers
+                            .direct_switch
+                            .as_mut()
+                            .filter(|direct| direct.harness == target)
+                        {
+                            direct.sending = false;
+                            direct.error = Some(error.to_string());
                         }
+                        // Nothing was applied optimistically: the watched row
+                        // keeps whatever config the engine has.
+                        pickers.context_error = Some(error.to_string());
                     }
                 }
                 cx.notify();
@@ -5011,7 +5269,9 @@ impl Pickers {
             Loadable::Ready(_) => {}
         }
 
-        let locked = self.harness_locked(cx);
+        // An unstarted chat switches provider directly: its other
+        // providers are not dimmed as switch-only targets.
+        let locked = self.harness_locked(cx) && !self.unstarted_chat(cx);
         let effective = self.effective_harness(cx);
         if effective == Some(HarnessId::Codex) {
             self.ensure_accounts(false, cx);
@@ -5141,6 +5401,104 @@ impl Pickers {
                         ))
                         .when(is_viewed, |el| el.child(tab_indicator(theme.accent))),
                 );
+        }
+
+        // A blank chat's direct provider choice: loading its catalog, then
+        // saving the choice; or why it stopped, with Try again. No
+        // confirmation and no context handoff (nothing has started).
+        if let Some(direct) = self.direct_switch.clone() {
+            let target_name = descriptors
+                .iter()
+                .find(|descriptor| descriptor.id == direct.harness)
+                .map(|descriptor| descriptor.name.clone())
+                .unwrap_or_else(|| format!("{:?}", direct.harness));
+            let failed = direct.error.is_some();
+            let title: SharedString = if failed {
+                format!("Couldn't switch to {target_name}").into()
+            } else {
+                format!("Switching to {target_name}…").into()
+            };
+            let body: SharedString = match (&direct.error, direct.sending) {
+                (Some(error), _) => error.clone().into(),
+                (None, true) => {
+                    format!("Saving {target_name} for this chat. Nothing starts until you send.")
+                        .into()
+                }
+                (None, false) => {
+                    format!("Loading {target_name}'s models. Nothing starts until you send.").into()
+                }
+            };
+            let button = |id: &'static str, label: &'static str| {
+                div()
+                    .id(id)
+                    .accessible_button(label, theme.accent)
+                    .px(px(10.0))
+                    .h(px(28.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(crate::theme::ink(0.06)))
+                    .child(label)
+            };
+            let panel = div()
+                .id("provider-direct-switch")
+                .role(gpui::Role::Status)
+                .aria_label(SharedString::from(format!("{title}. {body}")))
+                .p(px(14.0))
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .line_height(px(17.0))
+                        .text_color(if failed {
+                            theme.readable_tone(theme.danger_muted, 1.0)
+                        } else {
+                            theme.text_muted
+                        })
+                        .child(body),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap(px(8.0))
+                        // A choice still loading can be withdrawn; the sent
+                        // switch cannot, so it offers nothing to cancel.
+                        .when(!direct.sending, |row| {
+                            row.child(button("provider-direct-cancel", "Cancel").on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.direct_switch = None;
+                                    cx.notify();
+                                }),
+                            ))
+                        })
+                        .when(failed, |row| {
+                            row.child(
+                                button("provider-direct-retry", "Try again")
+                                    .bg(theme.accent.opacity(0.16))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.retry_direct_switch(cx);
+                                        cx.notify();
+                                    })),
+                            )
+                        }),
+                );
+            return div()
+                .flex()
+                .flex_col()
+                .child(tabs)
+                .child(panel)
+                .into_any_element();
         }
 
         if let Some(target) = self.provider_switch_target {

@@ -416,12 +416,198 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             theme.readable_icon(theme.danger),
             canvas,
         ),
+        // Workbench panes have no context row any more; the right pane's
+        // child view (no workbench) still has one.
         p(
             "workbench",
-            "pane context line",
+            "right-pane chat context line",
             Kind::Text,
             theme.readable_muted(0.7),
             canvas,
+        ),
+        p(
+            "workbench",
+            "tab unread dot, resting tab",
+            Kind::NonText,
+            theme.tab_unread_dot(),
+            canvas,
+        ),
+        p(
+            "workbench",
+            "tab unread dot, selected tab",
+            Kind::NonText,
+            theme.tab_unread_dot(),
+            tab_active,
+        ),
+        p(
+            "workbench",
+            "tab unread dot, focused group's selected tab",
+            Kind::NonText,
+            theme.tab_unread_dot(),
+            tab_focused,
+        ),
+        // The context-usage chip in the controls row, in each state, on
+        // the composer pill it now sits on (`context_usage::tone`, floored
+        // by `Theme::readable_on_composer` as painted).
+        p(
+            "composer",
+            "context usage share, under 75%",
+            Kind::Text,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Idle,
+                    Some(0.30),
+                    theme,
+                ),
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage ring, under 75%",
+            Kind::NonText,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Idle,
+                    Some(0.30),
+                    theme,
+                ),
+                theme::NON_TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage share, 75% or more",
+            Kind::Text,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Idle,
+                    Some(0.80),
+                    theme,
+                ),
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage ring, 75% or more",
+            Kind::NonText,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Idle,
+                    Some(0.80),
+                    theme,
+                ),
+                theme::NON_TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage share, 90% or more",
+            Kind::Text,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Idle,
+                    Some(0.95),
+                    theme,
+                ),
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage ring, 90% or more",
+            Kind::NonText,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Idle,
+                    Some(0.95),
+                    theme,
+                ),
+                theme::NON_TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage share, compacting",
+            Kind::Text,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Running,
+                    None,
+                    theme,
+                ),
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage ring, compacting",
+            Kind::NonText,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Running,
+                    None,
+                    theme,
+                ),
+                theme::NON_TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage share, compaction unknown",
+            Kind::Text,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Unknown,
+                    None,
+                    theme,
+                ),
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage ring, compaction unknown",
+            Kind::NonText,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(
+                    luna_proto::ContextOperationStatus::Unknown,
+                    None,
+                    theme,
+                ),
+                theme::NON_TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage share, not reported",
+            Kind::Text,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(luna_proto::ContextOperationStatus::Idle, None, theme),
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            pill,
+        ),
+        p(
+            "composer",
+            "context usage ring, not reported",
+            Kind::NonText,
+            theme.readable_on_composer(
+                luna_ui::context_usage::tone(luna_proto::ContextOperationStatus::Idle, None, theme),
+                theme::NON_TEXT_CONTRAST_TARGET,
+            ),
+            pill,
         ),
         p(
             "workbench",
@@ -1251,6 +1437,12 @@ fn hue_checks(theme: &Theme, backdrop: Hsla) -> Vec<(&'static str, f32, f32, f32
     let overlay = flat(theme.glass_overlay(), chrome);
     let [_, _, chip_active] = theme.tab_chip_washes();
     let tab_active = flat(chip_active, canvas);
+    // The composer pill (as `pairs` composites it).
+    let composer_pill = if theme.is_frost() {
+        flat(theme.composer_sidebar_tint(), canvas)
+    } else {
+        flat(theme.input_glass_bg(), canvas)
+    };
     let text = theme::TEXT_CONTRAST_TARGET;
     let non_text = theme::NON_TEXT_CONTRAST_TARGET;
     let mut checks: Vec<(&'static str, Hsla, Hsla, Hsla)> = vec![
@@ -1315,6 +1507,18 @@ fn hue_checks(theme: &Theme, backdrop: Hsla) -> Vec<(&'static str, f32, f32, f32
             flat(theme.accent.opacity(0.10), chrome),
         ),
         ("focus ring", theme.accent, theme.focus_ring(), tab_active),
+        (
+            "context usage share, warning",
+            theme.warning,
+            theme.readable_on_composer(theme.warning, text),
+            composer_pill,
+        ),
+        (
+            "context usage share, danger",
+            theme.danger,
+            theme.readable_on_composer(theme.danger, text),
+            composer_pill,
+        ),
         (
             "focused tab role glyph",
             theme.accent,

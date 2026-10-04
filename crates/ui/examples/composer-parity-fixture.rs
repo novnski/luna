@@ -31,6 +31,10 @@
 //! 10. Groups never shrink below their 320 px minimum, so the old forced
 //!    240 px right pane is replaced by a fork group at that minimum (the
 //!    canvas scrolls): its controls row must still fit, yielding whole.
+//! 11. Context usage renders under the pill instead of in the controls row
+//!    after Goal (Main and fork alike), the row's budget ignores it (a chip
+//!    truncates or overlaps), or the pill does not sit lower in the frame
+//!    once the slot under it is gone.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example composer-parity-fixture
@@ -293,7 +297,15 @@ fn row_fits(name: &str, composer: &serde_json::Value) -> anyhow::Result<()> {
             f(&goal[0])
         }
     });
-    let need = model + 4.0 + 32.0 + goal;
+    // Failure case 11: the context-usage chip shares the row's budget.
+    let usage = row["usage"].as_array().map_or(0.0, |usage| {
+        4.0 + if row["usageIconOnly"] == true {
+            f(&usage[1])
+        } else {
+            f(&usage[0])
+        }
+    });
+    let need = model + 4.0 + 32.0 + goal + usage;
     anyhow::ensure!(
         need <= f(&row["budget"]) + 0.5,
         "{name} controls row needs {need:.1}px but has {:.1}px: {composer}",
@@ -487,7 +499,9 @@ fn main() -> anyhow::Result<()> {
                             gpui::point(px(20.), px(20.)),
                             // Leave room to create two 320px groups with the
                             // rounded viewport inset; later steps shrink them.
-                            size(px(1480.), px(900.)),
+                            // The wide baseline includes the in-row context
+                            // share; later steps still exercise 320px groups.
+                            size(px(1600.), px(900.)),
                         ))),
                         show: false,
                         focus: false,
@@ -563,6 +577,13 @@ fn main() -> anyhow::Result<()> {
                         anyhow::ensure!(chips["access"] == "Full access" && chips["accessIcon"] == "icons/lock-keyhole-minimalistic-unlocked.svg", "{name} access chip: {chips}");
                     }
                     anyhow::ensure!(main["controlsRow"]["modelFit"] == "Full" && main["controlsRow"]["goalIconOnly"] == false, "the wide main row must show everything: {main}");
+                    for (name, composer) in [("main", &main), ("fork", &pane)] {
+                        anyhow::ensure!(
+                            composer["controlsRow"]["usage"].is_array(),
+                            "{name}: context usage sits in the controls row: {composer}"
+                        );
+                    }
+                    anyhow::ensure!(main["controlsRow"]["usageIconOnly"] == false, "the wide main row shows the context share: {main}");
                     record.insert("c01".into(), serde_json::json!({"main": main, "pane": pane}));
 
                     // c02. Hover the main model chip: only the main chip lights.

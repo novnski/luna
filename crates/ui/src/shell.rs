@@ -12145,10 +12145,15 @@ impl Shell {
             self.transcript
                 .update(cx, |transcript, cx| transcript.finish_route_exit(cx));
         }
+        // The inline parent jump is for the single-chat view only: in the
+        // workbench the titlebar breadcrumb and the tab's context menu
+        // already lead to the parent, so the row would only duplicate them.
+        let workbench_active = self.workbench_available();
         let parent_navigation = self
             .state
             .read(cx)
             .selected_chat_row()
+            .filter(|_| !workbench_active)
             .and_then(|chat| {
                 chat.child_thread
                     .as_ref()
@@ -14727,6 +14732,12 @@ impl Render for Shell {
                             .map(|c| c.id.clone())
                     };
                     if let Some(chat_id) = unseen_selected {
+                        self.state
+                            .update(cx, |s, cx| s.mark_chat_seen(&chat_id, cx));
+                    }
+                    // The same for every workbench tab on screen (each
+                    // group's active tab): its unread dot clears once seen.
+                    for chat_id in self.workbench_visible_unseen(cx) {
                         self.state
                             .update(cx, |s, cx| s.mark_chat_seen(&chat_id, cx));
                     }

@@ -378,102 +378,6 @@ pub(super) fn render_pane_header<V: 'static>(
         .child(strip)
 }
 
-/// A workbench tab's context strip. The tab already names the chat and its
-/// role, so this is one quiet row: status, the chat's actual parent (a link
-/// for children and side chats; an alongside chat, or a fork whose source
-/// was deleted, names no link) and provider facts. A side chat is an
-/// ordinary thread: no End, lease or expiry here.
-fn render_embedded_strip(
-    chrome: &PaneChatChrome,
-    parent: &str,
-    theme: &Theme,
-    cx: &mut Context<PaneChatView>,
-) -> gpui::Div {
-    let muted = theme.readable_muted(0.7);
-    let identity = chrome.identity;
-    let parent_label: SharedString = match identity {
-        PaneIdentity::Child => format!("Child of {}", chrome.parent_title).into(),
-        PaneIdentity::Side => format!("Side chat from {}", chrome.parent_title).into(),
-        PaneIdentity::Alongside => "Alongside · your own chat, not a child".into(),
-    };
-    let parent_control: AnyElement = if identity == PaneIdentity::Alongside || parent.is_empty() {
-        div()
-            .min_w_0()
-            .truncate()
-            .text_color(muted)
-            .child(parent_label)
-            .into_any_element()
-    } else {
-        let parent_id = parent.to_string();
-        header_control(
-            "pane-chat-parent",
-            format!("Open parent chat: {}", chrome.parent_title),
-            theme,
-            Rc::new(
-                move |_: &mut PaneChatView, cx: &mut Context<PaneChatView>| {
-                    cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
-                },
-            ),
-            cx,
-        )
-        .h(px(20.0))
-        .px(px(4.0))
-        .min_w_0()
-        .text_color(muted)
-        .child(
-            icon(match identity {
-                PaneIdentity::Side => icons::GIT_FORK,
-                _ => icons::BOT,
-            })
-            .size(px(11.0))
-            .flex_none()
-            .text_color(theme.readable_muted(0.6)),
-        )
-        .child(div().min_w_0().truncate().child(parent_label))
-        .into_any_element()
-    };
-    // A caption of the tab above it, not a separate band: no rule, a
-    // little shorter, its first glyph under the tab's icon column, so the
-    // tabs, this line and the transcript read as one conversation.
-    div()
-        .w_full()
-        .h(px(24.0))
-        .flex_none()
-        .pl(px(14.0))
-        .pr(px(12.0))
-        .flex()
-        .items_center()
-        .gap(px(6.0))
-        .text_size(crate::typography::ui_rems(11.5))
-        .min_w_0()
-        .when_some(chrome.status.clone(), |el, (label, color, _)| {
-            el.child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
-                .child(
-                    div()
-                        .flex_none()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(color)
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(theme.decorative_muted(0.4))
-                        .child("·"),
-                )
-        })
-        .child(div().min_w_0().child(parent_control))
-        .when_some(chrome.meta.clone(), |el, meta| {
-            el.child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.readable_muted(0.6))
-                    .child(format!("· {meta}")),
-            )
-        })
-}
-
 /// A side chat inherits its checkout, access and provider from the main chat
 /// beside it, so its header is one quiet row (Codex's side tab): Back to the
 /// list, the chat's name, then the trailing controls (Close). The lease
@@ -849,8 +753,11 @@ impl Render for PaneChatView {
         } else {
             String::new()
         };
+        // A workbench tab has no context row: its tab carries the identity
+        // (role glyph, tooltip, context menu) and live status, so the chat
+        // starts right under the tabs.
         let header = if self.embedded {
-            render_embedded_strip(&chrome, &parent_id, &theme, cx)
+            div()
         } else {
             self.render_full_header(&chrome, open_id, parent_id, &theme, cx)
         };
@@ -1020,9 +927,10 @@ impl PaneChatView {
 
 #[cfg(feature = "appshots-fixture")]
 impl PaneChatView {
-    /// What the view's header says (QA): its title, the parent label and
-    /// whether it links, its status word and provider facts. A fork's is
-    /// an ordinary thread's: no End, lease, expiry or read-only state.
+    /// The view's identity facts (QA): its title, the parent label and
+    /// whether it links, its status word and provider facts (in a workbench
+    /// tab these live on the tab and its tooltip, not in a row). A fork's
+    /// are an ordinary thread's: no End, lease, expiry or read-only state.
     pub(super) fn fixture_strip(&self, cx: &App) -> serde_json::Value {
         let (chrome, archived, loading) = self.chrome(cx);
         let linked = self
@@ -1040,6 +948,8 @@ impl PaneChatView {
             "meta": chrome.meta.as_ref().map(|meta| meta.to_string()),
             "archived": archived,
             "loading": loading,
+            // A workbench tab renders no context row (identity is on the tab).
+            "metaRow": !self.embedded,
         })
     }
 }

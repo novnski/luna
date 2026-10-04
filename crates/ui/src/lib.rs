@@ -27,7 +27,7 @@ mod comment_ui;
 pub mod comments;
 pub mod composer;
 mod composer_dock;
-mod context_usage;
+pub mod context_usage;
 pub mod drafts;
 pub mod edge_fade;
 mod empty_project_moon;

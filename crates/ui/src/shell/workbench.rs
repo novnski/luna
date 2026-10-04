@@ -255,6 +255,9 @@ pub(super) struct ChildRequest {
     pub(super) main: String,
     pub(super) generation: u64,
     pub(super) pane_id: String,
+    /// Open the child in a new group to the right of `pane_id` (the group's
+    /// split control) rather than as a tab in it.
+    pub(super) split: bool,
 }
 
 #[derive(Clone)]
@@ -682,6 +685,16 @@ impl Shell {
         self.workbench.watching = Some((main.clone(), generation));
         self.workbench.watch_task = Some(cx.spawn(async move |this, cx| {
             const RETRY: Duration = Duration::from_secs(2);
+            // A Main the engine does not host *yet* (a chat created a moment
+            // ago, before its registry has it) is refused until it does:
+            // keep asking, quietly at first, never latching a permanent
+            // refusal. Only a refusal that outlasts the grace says so (with
+            // Retry), and the next delivered layout clears it.
+            const REFUSAL_GRACE: Duration = Duration::from_secs(6);
+            const REFUSAL_BACKOFF: Duration = Duration::from_secs(1);
+            const REFUSAL_BACKOFF_MAX: Duration = Duration::from_secs(10);
+            let mut refusals: u32 = 0;
+            let mut refused_since: Option<std::time::Instant> = None;
             let params = serde_json::to_value(luna_proto::GetChatWorkbenchRequest {
                 main_chat_id: main.clone(),
             })
@@ -723,6 +736,8 @@ impl Shell {
                     .await
                 {
                     Ok(layout) => {
+                        refusals = 0;
+                        refused_since = None;
                         if !deliver(&this, cx, layout) {
                             return;
                         }
@@ -731,11 +746,33 @@ impl Shell {
                         refuse(&this, cx, "Tabs and splits need a newer engine.".into());
                         return;
                     }
-                    Err(
-                        luna_rpc::RpcError::Failed(reason) | luna_rpc::RpcError::BadParams(reason),
-                    ) => {
+                    Err(luna_rpc::RpcError::BadParams(reason)) => {
                         refuse(&this, cx, reason);
                         return;
+                    }
+                    Err(luna_rpc::RpcError::Failed(reason)) => {
+                        refusals = refusals.saturating_add(1);
+                        tracing::debug!(%reason, refusals, "chat workbench main not hosted yet; retrying");
+                        let since = *refused_since.get_or_insert_with(std::time::Instant::now);
+                        let show = since.elapsed() >= REFUSAL_GRACE;
+                        let alive = this.update(cx, |shell, cx| {
+                            if show
+                                && shell.workbench.main == main
+                                && shell.workbench.generation == generation
+                            {
+                                shell.workbench.load_error =
+                                    Some(format!("{reason}. Retrying…").into());
+                                cx.notify();
+                            }
+                        });
+                        if alive.is_err() {
+                            return;
+                        }
+                        let backoff = REFUSAL_BACKOFF
+                            .saturating_mul(refusals)
+                            .min(REFUSAL_BACKOFF_MAX);
+                        cx.background_executor().timer(backoff).await;
+                        continue;
                     }
                     Err(error) => {
                         tracing::debug!(%error, "chat workbench unavailable; retrying");
@@ -1974,6 +2011,35 @@ impl Shell {
     /// focused) group. Same key across an ambiguous retry; one request per
     /// gesture, never a starter message, run, fork or worktree.
     pub(super) fn workbench_new_child(&mut self, pane_id: Option<String>, cx: &mut Context<Self>) {
+        self.request_child(pane_id, false, cx);
+    }
+
+    /// A group's split control: one blank child of Main, opened in a new
+    /// group to the right of `pane_id`. Nothing happens without room for
+    /// another group at its minimum size.
+    pub(super) fn workbench_new_child_in_split(&mut self, pane_id: String, cx: &mut Context<Self>) {
+        if self.workbench_ready() && !self.workbench_split_fits(Some(&pane_id), Edge::Right) {
+            self.no_room_notice(cx);
+            return;
+        }
+        self.request_child(Some(pane_id), true, cx);
+    }
+
+    /// Retry the failed child creation where it was asked for (same group,
+    /// same placement; an ambiguous failure resends the same key).
+    pub(super) fn workbench_retry_child(&mut self, cx: &mut Context<Self>) {
+        let Some(failure) = self.workbench.child_failure.as_ref() else {
+            return;
+        };
+        let (pane_id, split) = (failure.request.pane_id.clone(), failure.request.split);
+        if split {
+            self.workbench_new_child_in_split(pane_id, cx);
+        } else {
+            self.request_child(Some(pane_id), false, cx);
+        }
+    }
+
+    fn request_child(&mut self, pane_id: Option<String>, split: bool, cx: &mut Context<Self>) {
         if !self.workbench_ready() {
             self.workbench_unavailable_notice(cx);
             return;
@@ -1990,6 +2056,7 @@ impl Shell {
             {
                 ChildRequest {
                     pane_id,
+                    split,
                     ..failure.request
                 }
             }
@@ -1998,6 +2065,7 @@ impl Shell {
                 main: self.workbench.main.clone(),
                 generation: self.workbench.generation,
                 pane_id,
+                split,
             },
         };
         self.send_child_request(request, cx);
@@ -2062,11 +2130,16 @@ impl Shell {
                 }
                 let tab = TabRef::chat(receipt.task_id.clone());
                 let layout = self.workbench.layout();
-                let destination =
-                    model::pane(&layout, &request.pane_id).map(|pane| Destination::Pane {
-                        pane_id: pane.id.to_string(),
-                        index: None,
-                    });
+                let destination = model::pane(&layout, &request.pane_id).map(|pane| {
+                    if request.split {
+                        model::split_destination(pane.id.to_string(), Edge::Right)
+                    } else {
+                        Destination::Pane {
+                            pane_id: pane.id.to_string(),
+                            index: None,
+                        }
+                    }
+                });
                 let opened = self.workbench_mutate_then(
                     command::open_tab(&tab, destination),
                     Some(receipt.task_id.clone()),
@@ -2147,6 +2220,23 @@ impl Shell {
                     .map(|row| row.parent_id.clone())
             })
             .unwrap_or_else(|| self.active_chat.clone())
+    }
+
+    /// Each group's active (on-screen) tab chat that has unseen activity.
+    pub(super) fn workbench_visible_unseen(&self, cx: &App) -> Vec<String> {
+        if !self.workbench_available() {
+            return Vec::new();
+        }
+        let state = self.state.read(cx);
+        model::visible_chat_ids(&self.workbench.layout())
+            .into_iter()
+            .filter(|id| {
+                state
+                    .chats
+                    .iter()
+                    .any(|chat| chat.id == *id && chat.unseen())
+            })
+            .collect()
     }
 
     /// Every chat in the workbench: open tabs, then recently closed ones.
@@ -2848,6 +2938,13 @@ impl Shell {
                             "role": role.label(),
                             "parent": parent,
                             "title": tab_title(state, tab, role).to_string(),
+                            // The tab's live state, as its glyph shows it
+                            // (Completed: the accent unread dot).
+                            "status": state
+                                .chats
+                                .iter()
+                                .find(|chat| chat.id == tab.chat_id)
+                                .map(|chat| format!("{:?}", state.display_status_for(chat, chrono::Utc::now()))),
                         })
                     }).collect::<Vec<_>>(),
                 }),
@@ -2903,6 +3000,10 @@ impl Shell {
         json!({
                     "available": self.workbench_available(),
                     "loaded": self.workbench.loaded(),
+                    // The layout notice (a latched refusal, or a load that is
+                    // still being retried) and whether it is latched.
+                    "loadNotice": self.workbench.unavailable.clone().or_else(|| self.workbench.load_error.clone()).map(|notice| notice.to_string()),
+                    "unavailableLatched": self.workbench.unavailable.is_some(),
                     // The boot splash still covers the window (fading or visible).
                     "bootOverlay": self.splash != SplashPhase::Gone,
                     "main": layout.main_chat_id,
@@ -3296,8 +3397,15 @@ impl Shell {
         self.workbench_split_pane(pane_id, Edge::Bottom, cx);
     }
 
-    /// A group's own split control on `edge` ("right" or "bottom"): an
-    /// empty group beside it, if there is room.
+    /// The group's split control: a new blank child of Main in a new group
+    /// to the right of `pane_id` (nothing without room).
+    pub fn fixture_workbench_split_child(&mut self, pane_id: &str, cx: &mut Context<Self>) {
+        self.workbench_new_child_in_split(pane_id.to_string(), cx);
+    }
+
+    /// An empty group on `edge` ("right" or "bottom") beside `pane_id`, if
+    /// there is room (the layout's split command, as drag-to-edge and the
+    /// move-to-split paths use; the strip control now makes a child).
     pub fn fixture_workbench_split(&mut self, pane_id: &str, edge: &str, cx: &mut Context<Self>) {
         let edge = if edge == "right" {
             Edge::Right

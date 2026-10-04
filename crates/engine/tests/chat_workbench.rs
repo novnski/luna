@@ -134,6 +134,61 @@ async fn stop(core: EngineCore, client: RpcClient) {
     drop(core);
 }
 
+/// The new-chat UI may select its stable ID before CreateChat has committed.
+/// A later read/watch must succeed for that exact ID without weakening the
+/// refusal for genuinely absent or deleted conversations.
+#[tokio::test]
+async fn optimistic_main_becomes_available_after_creation_without_recreating_deleted_chats() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(dir.path(), "optimistic-main");
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let main = uuid::Uuid::new_v4().to_string();
+    let before = client
+        .call("GetChatWorkbench", json!({"mainChatId":main}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(before.contains("Main chat is unavailable"));
+    assert!(core.workspace.chat(&main).unwrap().is_none());
+    assert!(!store_path(dir.path(), "optimistic-main", &main).exists());
+    seed(&core, &client, &dir.path().join("project"), &[main.clone()]).await;
+    let ready = get(&client, &main).await;
+    assert_eq!(ready.main_chat_id, main);
+    assert!(ready.contains_chat(&main));
+    let mut watch = client
+        .subscribe("WatchChatWorkbench", json!({"mainChatId":main}))
+        .await
+        .unwrap();
+    let published: ChatWorkbenchSnapshot = serde_json::from_value(
+        tokio::time::timeout(Duration::from_secs(2), watch.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(published, ready);
+    drop(watch);
+    client
+        .call("Mutate", json!({"op":"deleteChat","chatId":main}))
+        .await
+        .unwrap();
+    let deleted = client
+        .call("GetChatWorkbench", json!({"mainChatId":main}))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(deleted.contains("Main chat is unavailable"));
+    assert!(core.workspace.chat(&main).unwrap().is_none());
+    evidence(
+        "optimistic-main-readiness.json",
+        json!({
+            "beforeCreation":before,"created":ready,"watch":published,
+            "afterDeletion":deleted,"deletedChatRecreated":false
+        }),
+    );
+    stop(core, client).await;
+}
+
 #[tokio::test]
 async fn balance_panes_preserves_mixed_layouts_and_equalizes_leaf_area() {
     // Failure cases 28-29 were recorded before implementation. Exercise the

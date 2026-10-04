@@ -915,14 +915,16 @@ impl Shell {
         };
         let split = strip_button(
             SharedString::from(format!("wb-split-right-{}", pane.id)),
-            "Split right",
-            Some("Add an empty group beside this one"),
+            "New child chat in a split",
+            Some(
+                "A blank child of Main in a new group to the right. It starts on your first Send.",
+            ),
             icons::SPLIT_COLUMNS,
             &theme,
         )
         .on_click(cx.listener(move |this, _, _, cx| {
             cx.stop_propagation();
-            this.workbench_split_pane(&split_pane, Edge::Right, cx);
+            this.workbench_new_child_in_split(split_pane.clone(), cx);
         }));
         let close = can_close_pane.then(|| {
             strip_button(
@@ -1076,6 +1078,7 @@ impl Shell {
                 luna_proto::ChatIndicator::AwaitingApproval => ", needs approval",
                 luna_proto::ChatIndicator::AwaitingInput => ", needs input",
                 luna_proto::ChatIndicator::Errored => ", failed",
+                luna_proto::ChatIndicator::Completed => ", unread",
                 _ => "",
             }
         )
@@ -1109,7 +1112,17 @@ impl Shell {
             luna_proto::ChatIndicator::Errored => {
                 Some(status_glyph(icons::DANGER_TRIANGLE, theme.danger))
             }
-            _ => None,
+            // Finished while you were elsewhere (the sidebar's unread): a
+            // small dot in the configured accent, gone once it is seen.
+            luna_proto::ChatIndicator::Completed => Some(
+                div()
+                    .size(px(6.0))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(theme.tab_unread_dot())
+                    .into_any_element(),
+            ),
+            luna_proto::ChatIndicator::Idle => None,
         };
         let drag = WorkbenchTabDrag {
             tab: tab.clone(),
@@ -1522,7 +1535,6 @@ impl Shell {
     /// the canvas bottom-left. The main workspace stays usable.
     fn render_workbench_notice(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         if let Some(failure) = self.workbench.child_failure.clone() {
-            let retry_pane = failure.request.pane_id.clone();
             return Some(
                 div()
                     .id("wb-child-failure")
@@ -1548,7 +1560,7 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label("Retry creating the child chat")
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.workbench_new_child(Some(retry_pane.clone()), cx);
+                                this.workbench_retry_child(cx);
                             })),
                     )
                     .child(
@@ -1950,13 +1962,26 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let layout = self.workbench.layout();
         let is_main = menu.chat_id == layout.main_chat_id;
-        let (role, _) = tab_role(
+        let (role, parent) = tab_role(
             self.state.read(cx),
             &layout.main_chat_id,
             &model::tab(&layout, &menu.chat_id)
                 .cloned()
                 .unwrap_or_else(|| TabRef::chat(menu.chat_id.clone())),
         );
+        // A child's parent or a fork's source, while it still exists: the
+        // tab has no context row, so its menu leads there.
+        let parent = matches!(role, TabRole::Child | TabRole::Side)
+            .then_some(parent)
+            .filter(|parent| {
+                !parent.is_empty()
+                    && self
+                        .state
+                        .read(cx)
+                        .chats
+                        .iter()
+                        .any(|chat| chat.id == *parent)
+            });
         let others = model::pane(&layout, &menu.pane_id).is_some_and(|pane| pane.tabs.len() > 1);
         let reopen = model::newest_reopenable(&layout).is_some();
         let closing = self.workbench.menu.closing_since();
@@ -2018,6 +2043,21 @@ impl Shell {
                     |this, _, _, cx| {
                         this.close_workbench_menu(cx);
                         this.workbench_reopen(None, cx);
+                    },
+                )),
+            );
+        }
+        if let Some(parent) = parent {
+            let text = if role == TabRole::Side {
+                "Go to source chat"
+            } else {
+                "Go to parent chat"
+            };
+            card = card.child(popover::menu_separator()).child(
+                row("wb-menu-show-parent", role.icon(), text).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.close_workbench_menu(cx);
+                        this.workbench_show_parent(parent.clone(), cx);
                     },
                 )),
             );

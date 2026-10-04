@@ -479,6 +479,15 @@ enum TaskCommandIntent {
         config: ChatConfig,
         #[serde(default)]
         handoff: Option<ContextHandoff>,
+        /// A direct picker choice must not become a context reset if another
+        /// client starts this task while the provider catalog is loading.
+        /// Omission preserves existing command payload hashes and behavior.
+        #[serde(
+            default,
+            rename = "initialOnly",
+            skip_serializing_if = "Option::is_none"
+        )]
+        initial_only: Option<bool>,
     },
     #[serde(rename_all = "camelCase")]
     SetPermission {
@@ -4903,6 +4912,57 @@ impl EngineRpc {
         })
     }
 
+    /// A saved but unstarted task still has an initial provider choice. The
+    /// command lane is held by admission, so queue/run commands cannot race
+    /// these checks and the config projection. Forks and imports always use
+    /// an explicit context boundary, even if their own transcript is empty.
+    fn has_pristine_provider_choice(
+        &self,
+        task_id: &str,
+        chat: &luna_proto::Chat,
+    ) -> Result<bool, crate::EngineError> {
+        let Some(identity) = self.task_identity.view(task_id) else {
+            return Ok(false);
+        };
+        if identity.task.origin != luna_proto::TaskOrigin::LunaCreated
+            || identity.task.tombstoned
+            || identity.task.lineage.source_task_id.is_some()
+            || identity.current_binding.is_some()
+            || !identity.bindings.is_empty()
+            || chat.source_context.is_some()
+            || chat
+                .harness_session_id
+                .as_ref()
+                .is_some_and(|id| !id.is_empty())
+            || chat
+                .child_thread
+                .as_ref()
+                .is_some_and(|child| !child.initial_prompt.is_empty())
+            || self.sessions.has_live_run(task_id)
+            || self.sessions.turn_in_flight(task_id)
+        {
+            return Ok(false);
+        }
+        if let Some(sides) = &self.side_chats
+            && sides
+                .layout_identity(task_id)
+                .map_err(|error| crate::EngineError::Other(error.to_string()))?
+                .is_some()
+        {
+            return Ok(false);
+        }
+        let handle = self.doc_host.open(task_id)?;
+        let doc = handle.doc();
+        let context = doc.context_control();
+        Ok(doc.read_entries()?.is_empty()
+            && doc.read_queue()?.is_empty()
+            && doc.read_commands()?.is_empty()
+            && context.binding_generation.is_none()
+            && context.last_boundary.is_none()
+            && context.pending_handoff.is_none()
+            && context.pending_rewind.is_none())
+    }
+
     fn apply_context_boundary(
         &self,
         command_id: &str,
@@ -4910,6 +4970,7 @@ impl EngineRpc {
         target_config: ChatConfig,
         kind: ContextBoundaryKind,
         handoff: Option<ContextHandoff>,
+        initial_only: bool,
     ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
         let handoff = handoff
             .as_ref()
@@ -4925,7 +4986,7 @@ impl EngineRpc {
                     "context boundary requires an existing task".into(),
                 ))
             })?;
-        let current_config = chat.config.ok_or_else(|| {
+        let current_config = chat.config.clone().ok_or_else(|| {
             TaskProjectionError::Mutation(crate::EngineError::Other(
                 "context boundary requires a provider configuration".into(),
             ))
@@ -4942,7 +5003,6 @@ impl EngineRpc {
                 "provider switch requires a different harness".into(),
             )));
         }
-        let cwd = chat.cwd.unwrap_or_else(|| ".".into());
         let recovery = self
             .sessions
             .prepare_supersede_recovery(
@@ -4957,6 +5017,31 @@ impl EngineRpc {
                 },
             )
             .map_err(TaskProjectionError::Mutation)?;
+        if kind == ContextBoundaryKind::ProviderSwitched
+            && handoff.is_none()
+            && recovery.is_none()
+            && self
+                .has_pristine_provider_choice(task_id, &chat)
+                .map_err(TaskProjectionError::Mutation)?
+        {
+            let owned_task_id = task_id.to_string();
+            let (_, receipt) =
+                self.commit_task_projection(command_id, task_id, move |registry| {
+                    if !registry.set_chat_config(&owned_task_id, &target_config)? {
+                        return Err(crate::EngineError::Other(
+                            "task vanished while choosing its initial provider".into(),
+                        ));
+                    }
+                    Ok(())
+                })?;
+            return Ok(Some(receipt));
+        }
+        if initial_only {
+            return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
+                "An initial provider choice requires an unstarted chat with no queued work. Use the explicit provider-switch action.".into(),
+            )));
+        }
+        let cwd = chat.cwd.unwrap_or_else(|| ".".into());
         let boundary_id = format!("context-boundary:{command_id}");
         let origin = match kind {
             ContextBoundaryKind::Cleared => BindingOrigin::ContextReset,
@@ -6805,15 +6890,19 @@ impl EngineRpc {
                     config,
                     ContextBoundaryKind::Cleared,
                     None,
+                    false,
                 )
             }
-            TaskCommandIntent::SwitchProvider { config, handoff } => self.apply_context_boundary(
-                command_id,
-                task_id,
-                config,
-                ContextBoundaryKind::ProviderSwitched,
-                handoff,
-            ),
+            TaskCommandIntent::SwitchProvider { config, handoff, initial_only } => {
+                self.apply_context_boundary(
+                    command_id,
+                    task_id,
+                    config,
+                    ContextBoundaryKind::ProviderSwitched,
+                    handoff,
+                    initial_only.unwrap_or(false),
+                )
+            }
             TaskCommandIntent::SetModel { config } => {
                 self.apply_model_change(command_id, task_id, config)
             }

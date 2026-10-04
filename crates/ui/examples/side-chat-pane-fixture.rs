@@ -251,6 +251,10 @@ fn ordinary(readback: &serde_json::Value, fork: &str, when: &str) -> anyhow::Res
             "{when}: no separate fork lifecycle ({lifecycle:?}) in the header: {strip}"
         );
     }
+    anyhow::ensure!(
+        strip["metaRow"] == false,
+        "{when}: the fork's pane renders no context row (identity is on its tab): {strip}"
+    );
     Ok(())
 }
 
