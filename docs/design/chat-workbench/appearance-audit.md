@@ -14,6 +14,16 @@ non-color cues, motion and assistive-technology semantics.
 
 ## Status
 
+**2026-10-04 follow-up:** the persistent-fork milestone replaces selection
+underlines with rounded neutral/accent tab fills and removes both horizontal
+header rules. The current matrix passes all 810 combinations in
+`target/qa/persistent-fork-threads/appearance-attempt-2/`. Workbench
+`ui-attempt-8` passes all 144 rendered pairs, with minima 4.68:1 for text and
+3.11:1 for the measured non-text role. Native dark/light confirmation is in
+that milestone's `native/n08-final-tab-fill-dark.png` and
+`native/n09-final-tab-fill-light.png`. The earlier measurements below remain
+the evidence for the original color-system milestone.
+
 | Item | State |
 | --- | --- |
 | Fixes in `crates/ui` | F1–F27, compiled and measured. |
@@ -48,7 +58,8 @@ Colors are measured as composited, never by token name:
 2. **Foregrounds.** Each foreground uses its real call-site value: the
    readable helper with the opacity the component passes
    (`readable_muted(0.5)` for a sidebar subline, `for_popup()` roles in
-   menus, `readable_icon(accent × 0.45)` for the focused-pane outline), so
+   menus, `readable_icon(text_muted × 0.45)` for the unfocused tab
+   indicator), so
    faded secondary text is measured as painted. Where the production
    painter is a function, the audit calls it rather than re-deriving it (see
    UI families below).
@@ -124,8 +135,13 @@ color.
   (`readable_on_tab_badge`) [text], its glyph on resting and active chips
   [non-text]; focused-group indicator and tab keyboard focus ring
   (`focus_ring`, on the active and hovered chip), unfocused indicator,
-  focused-pane outline, drop-preview outline, approval and error glyphs
-  [non-text]; pane context line, frame footer checkout/branch [text].
+  drop-preview outline, approval and error glyphs [non-text]; pane context
+  line, frame footer checkout/branch [text]. A selected tab is shown by its
+  own rounded fill, with no underline or outline: the focused group's active
+  tab by `tab_focused_fill` (a quiet accent tint) with `tab_title` [text] and
+  the accent `tab_role_icon` [non-text] floored on it; other groups' by the
+  neutral selected fill. The outline and underline pairs were replaced by
+  these.
 - **Related chats and tools**: toolbar title, Open badge on its 10% accent
   tint over chrome and a selected row [text], its glyph [non-text]; diff file
   path, ±N counts, hunk header (`text_faint` floored on the hunk band) [text];

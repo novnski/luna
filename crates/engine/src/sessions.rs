@@ -1360,14 +1360,15 @@ struct Inner {
     turn_listener: OnceLock<TurnListener>,
     git_checkpoints: OnceLock<crate::git_checkpoints::GitCheckpoints>,
     side_chat_lookup: OnceLock<SideChatLookup>,
+    legacy_side_send_lookup: OnceLock<LegacySideSendLookup>,
     side_chat_admission: OnceLock<SideChatAdmission>,
 }
 
 /// Turn-start hook: called with `(chat_id, cwd)`.
 pub type TurnListener = Arc<dyn Fn(&str, &str) + Send + Sync>;
 type SideChatLookup = Arc<dyn Fn(&str) -> bool + Send + Sync>;
-/// Lease-gated admission of an ordinary-path run for a side chat: checks the
-/// durable writable state, applies the parent ceiling and returns frozen context.
+type LegacySideSendLookup = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
+/// Materialization and binding admission for a fork, plus frozen quoted context.
 pub(crate) type SideChatAdmission = Arc<
     dyn Fn(&str, &mut RunRequest) -> Result<Vec<luna_proto::RuntimeInstructionSection>, EngineError>
         + Send
@@ -1439,6 +1440,7 @@ impl SessionsEngine {
                 turn_listener: OnceLock::new(),
                 git_checkpoints: OnceLock::new(),
                 side_chat_lookup: OnceLock::new(),
+                legacy_side_send_lookup: OnceLock::new(),
                 side_chat_admission: OnceLock::new(),
             }),
         }
@@ -1548,23 +1550,7 @@ impl SessionsEngine {
         };
         let authority =
             crate::cross_task_tools::CrossTaskAuthority::from_context(context, delivery, false);
-        let (mut tools, mut omitted) =
-            crate::cross_task_tools::CrossTaskTools::new(backend).catalog(&authority);
-        // The backend rejects children of side chats; never advertise their
-        // creation or its model-discovery helper on this role.
-        if context
-            .chat
-            .as_ref()
-            .is_some_and(|chat| chat.role == luna_proto::RuntimeChatRole::Side)
-        {
-            for name in ["create_thread", "list_child_models"] {
-                if let Some(index) = tools.iter().position(|tool| tool.name == name) {
-                    tools.remove(index);
-                    omitted.push(luna_proto::OmittedRuntimeTool { name: name.into(), reason: "side chats cannot create child chats; create them from the main conversation".into() });
-                }
-            }
-        }
-        (tools, omitted)
+        crate::cross_task_tools::CrossTaskTools::new(backend).catalog(&authority)
     }
 
     pub fn set_agent_accounts(&self, accounts: crate::agent_accounts::AgentAccounts) {
@@ -2962,6 +2948,29 @@ impl SessionsEngine {
             access_capped_by_parent: false,
         };
         if side {
+            let native_fork = self
+                .inner
+                .task_identity
+                .get()
+                .and_then(|identity| identity.view(chat_id))
+                .is_some_and(|view| {
+                    view.bindings
+                        .iter()
+                        .any(|binding| binding.origin == luna_proto::BindingOrigin::Forked)
+                });
+            let fresh_context = self
+                .doc_handle(chat_id)
+                .is_ok_and(|handle| handle.doc().context_control().last_boundary.is_some());
+            let checkout = if side_parent
+                .as_deref()
+                .and_then(|source| workspace.chat(source).ok().flatten())
+                .and_then(|source| source.cwd)
+                .is_some_and(|cwd| chat.and_then(|chat| chat.cwd.as_deref()) == Some(cwd.as_str()))
+            {
+                RuntimeCheckoutOwnership::SharedWithParent
+            } else {
+                RuntimeCheckoutOwnership::Own
+            };
             return RuntimeChatIdentity {
                 role: RuntimeChatRole::Side,
                 parent_thread_id: side_parent.or_else(|| {
@@ -2973,14 +2982,16 @@ impl SessionsEngine {
                     })
                 }),
                 capabilities: RuntimeChatCapabilities {
-                    context_origin: if native_fork {
+                    context_origin: if fresh_context {
+                        RuntimeContextOrigin::Fresh
+                    } else if native_fork {
                         RuntimeContextOrigin::NativeFork
                     } else {
                         RuntimeContextOrigin::ContextSnapshot
                     },
-                    checkout: RuntimeCheckoutOwnership::SharedWithParent,
+                    checkout,
                     persistent: true,
-                    access_capped_by_parent: true,
+                    access_capped_by_parent: false,
                     ..base
                 },
             };
@@ -3287,8 +3298,7 @@ impl SessionsEngine {
             .as_ref()
             .map(|child| self.child_permission_ceiling(child));
         self.admit_side_chat_run(chat_id, &mut preview)?;
-        // Admission caps a side-chat run's requested mode. Keep the original
-        // picker intent so the audit names the ceiling and hidden Ask rejects.
+        // Keep the explicit picker intent through normal policy resolution.
         preview.permission_mode = mode;
         let policy = crate::permissions::resolve_run_policy(harness, &mut preview);
         if crate::permissions::hidden_ask_fallback(&policy) {
@@ -3301,6 +3311,11 @@ impl SessionsEngine {
         let ceiling_source = config.permission_ceiling_source;
         let degradation_reason = config.permission_degradation_reason;
         config.permission_mode = mode;
+        if self.fork_task(chat_id) {
+            // An explicit grant replaces this fork's legacy saved sandbox.
+            // A running provider keeps its effective policy until turnover.
+            config.sandbox = preview.sandbox;
+        }
         push_permission_audit(
             &mut config,
             PermissionAuditEntry {
@@ -3628,6 +3643,91 @@ impl SessionsEngine {
         let _ = self.inner.side_chat_lookup.set(lookup);
     }
 
+    pub(crate) fn set_legacy_side_send_lookup(&self, lookup: LegacySideSendLookup) {
+        let _ = self.inner.legacy_side_send_lookup.set(lookup);
+    }
+
+    fn fork_task(&self, id: &str) -> bool {
+        self.inner
+            .side_chat_lookup
+            .get()
+            .is_some_and(|lookup| lookup(id))
+    }
+
+    fn materialized_fork_task(&self, id: &str) -> bool {
+        !self.fork_task(id)
+            || (self
+                .inner
+                .workspace()
+                .and_then(|workspace| workspace.chat(id).ok().flatten())
+                .is_some_and(|chat| chat.device_id == self.inner.device_id)
+                && self
+                    .inner
+                    .task_identity
+                    .get()
+                    .and_then(|identity| identity.view(id))
+                    .is_some_and(|view| !view.task.tombstoned))
+    }
+
+    /// Importing history cannot implicitly adopt or replace a native session.
+    /// Fresh snapshot threads already have a managed identity, without a binding.
+    pub(crate) fn validate_fork_binding(&self, id: &str, native: bool) -> Result<(), EngineError> {
+        let view = self.inner.task_identity.get().and_then(|identity| identity.view(id))
+            .filter(|view| !view.task.tombstoned)
+            .ok_or_else(|| EngineError::Other("This thread's managed provider identity is unavailable. Restore its original managed profile and provider account before continuing; its saved history is preserved.".into()))?;
+        let chat = self
+            .inner
+            .workspace()
+            .and_then(|workspace| workspace.chat(id).ok().flatten());
+        let cached_session = chat
+            .as_ref()
+            .and_then(|chat| chat.harness_session_id.as_deref())
+            .filter(|session| !session.is_empty());
+        if (native || cached_session.is_some()) && view.current_binding.is_none() {
+            return Err(EngineError::Other("This thread's provider binding is unavailable. Restore its original managed binding before continuing; a replacement conversation will not be started.".into()));
+        }
+        if let Some(binding) = view.current_binding.as_ref() {
+            let provider_mismatch = chat
+                .as_ref()
+                .and_then(|chat| chat.config.as_ref())
+                .is_some_and(|config| config.harness != binding.provider_id);
+            let session_mismatch =
+                cached_session.is_some_and(|session| session != binding.provider_task_id);
+            let native_session_missing = native
+                && cached_session.is_none()
+                && (!binding.provider_task_id.is_empty()
+                    || self
+                        .doc_handle(id)?
+                        .doc()
+                        .context_control()
+                        .last_boundary
+                        .is_none());
+            if provider_mismatch || session_mismatch || native_session_missing {
+                return Err(EngineError::Other("This thread's saved provider session and managed binding disagree. Reconcile its binding or explicitly clear context before continuing; its history is preserved and no replacement conversation was started.".into()));
+            }
+        }
+        Ok(())
+    }
+
+    fn recoverable_fork_run(&self, id: &str, message_id: &str) -> Result<bool, EngineError> {
+        if !self.fork_task(id) {
+            return Ok(true);
+        }
+        if !self.materialized_fork_task(id)
+            || self
+                .inner
+                .legacy_side_send_lookup
+                .get()
+                .is_none_or(|lookup| lookup(id, message_id))
+        {
+            return Ok(false);
+        }
+        let handle = self.doc_handle(id)?;
+        // Stop and explicit retry use the ordinary recovery state machine.
+        // Keep stopped commands identifiable so startup can restore their hold.
+        Ok(frozen_run_for_message(&handle, message_id)?.is_some())
+    }
+
     pub(crate) fn set_side_chat_admission(&self, admission: SideChatAdmission) {
         let _ = self.inner.side_chat_admission.set(admission);
     }
@@ -3913,16 +4013,16 @@ impl SessionsEngine {
             .model_options
             .remove(luna_harness::codex::LUNA_ATTACH_EXISTING_GOAL_OPTION);
         crate::provider_inputs::admit(harness_id, &request.attachments, &request.input_items)?;
-        if recovery.is_some()
-            && self
-                .inner
-                .side_chat_lookup
-                .get()
-                .is_some_and(|lookup| lookup(chat_id))
-        {
-            return Err(EngineError::Other(
-                "Side chat recovery never replays a send".into(),
-            ));
+        if let Some(attempt) = recovery.as_ref() {
+            let record = self.inner.recovery.latest(chat_id)?;
+            if record.as_ref().is_none_or(|record| {
+                record.view.chain_id != attempt.chain_id
+                    || !self
+                        .recoverable_fork_run(chat_id, &record.view.original_message_id)
+                        .unwrap_or(false)
+            }) {
+                return Err(EngineError::Other("Recovery has no verified ordinary Run command; the saved send will not be replayed".into()));
+            }
         }
         if let Some(goal) = request.goal.as_ref() {
             if !matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode) {
@@ -4187,11 +4287,8 @@ impl SessionsEngine {
                     .map_or(ceiling, |requested| std::cmp::min(requested, ceiling)),
             );
         }
-        // Side conversations preserve even a legacy stricter sandbox. The
-        // ordinary resolver intentionally derives sandbox from product mode;
-        // carrying a parent's ReadOnly value through that resolver would
-        // otherwise widen it to WorkspaceWrite. Only adapters with an actual
-        // read-only wire contract can retain that ceiling.
+        // A migrated fork retains its own legacy read-only sandbox until an
+        // explicit permission change. Source changes never alter this thread.
         let side_sandbox = self
             .inner
             .side_chat_lookup
@@ -4202,8 +4299,7 @@ impl SessionsEngine {
         if side_sandbox == Some(SandboxLevel::ReadOnly) {
             if !matches!(harness_id, HarnessId::Codex | HarnessId::Mock) {
                 return Err(EngineError::Other(
-                    "This provider cannot preserve the parent's read-only sandbox in a side chat"
-                        .into(),
+                    "This provider cannot preserve this thread's read-only sandbox".into(),
                 ));
             }
             request.permission_mode = PermissionMode::Ask;
@@ -5498,14 +5594,9 @@ impl SessionsEngine {
         provider_session_id: Option<String>,
         attempt: Option<&RecoveryAttemptContext>,
     ) -> Result<Option<TaskRecovery>, EngineError> {
-        // The side-chat admission ledger deliberately has no automatic replay
-        // or recovery continuation. Its transcript retains the actual failure.
-        if self
-            .inner
-            .side_chat_lookup
-            .get()
-            .is_some_and(|lookup| lookup(chat_id))
-        {
+        // Legacy direct side sends have their own no-replay ledger. Ordinary
+        // composer/queue commands recover through the same contract as main.
+        if !self.recoverable_fork_run(chat_id, &message_id)? {
             return Ok(None);
         }
         let now = now_ms();
@@ -5877,6 +5968,13 @@ impl SessionsEngine {
     ) -> Result<(), EngineError> {
         let task_id = record.view.task_id.as_str();
         let chain_id = record.view.chain_id.as_str();
+        if !self.recoverable_fork_run(task_id, &record.view.original_message_id)? {
+            return self.hold_recovery(
+                task_id,
+                "Saved send has no verified ordinary Run command; it will not be replayed.",
+            );
+        }
+
         if record.workspace_repair_revision
             != self.inner.recovery.workspace_repair_revision(task_id)?
         {
@@ -6167,25 +6265,17 @@ impl SessionsEngine {
     /// and L07 receipt. It never replays the last transcript text blindly.
     pub fn recover_stale(&self) -> Result<usize, EngineError> {
         let permit = self.inner.journal.try_admit()?;
-        let stale = self.inner.journal.stale_sessions_filtered(|id| {
-            !self
-                .inner
-                .side_chat_lookup
-                .get()
-                .is_some_and(|lookup| lookup(id))
-        })?;
+        let stale = self
+            .inner
+            .journal
+            .stale_sessions_filtered(|id| self.materialized_fork_task(id))?;
         let mut recovered = 0usize;
         let mut reconciled_running = std::collections::HashSet::new();
         // Stop is authoritative even when the process died after the doc
         // command landed but before receipt/recovery finalization. Restore the
         // hold before any stale/terminal sweep can make the chain runnable.
         for record in self.inner.recovery.latest_records()? {
-            if self
-                .inner
-                .side_chat_lookup
-                .get()
-                .is_some_and(|lookup| lookup(&record.view.task_id))
-            {
+            if !self.recoverable_fork_run(&record.view.task_id, &record.view.original_message_id)? {
                 continue;
             }
             if !record.view.status.active() {
@@ -6202,14 +6292,6 @@ impl SessionsEngine {
             }
         }
         for chat_id in stale {
-            if self
-                .inner
-                .side_chat_lookup
-                .get()
-                .is_some_and(|lookup| lookup(&chat_id))
-            {
-                continue;
-            }
             if lock(&self.inner.runs).contains_key(&chat_id) {
                 continue; // a live run owns this journal
             }
@@ -6345,12 +6427,7 @@ impl SessionsEngine {
         // for the same task must never mask a newer failed Run command.
         if let Some(workspace) = self.inner.workspace() {
             for chat in workspace.read_chats()? {
-                if self
-                    .inner
-                    .side_chat_lookup
-                    .get()
-                    .is_some_and(|lookup| lookup(&chat.id))
-                {
+                if !self.materialized_fork_task(&chat.id) {
                     continue;
                 }
                 if chat.device_id != self.inner.device_id
@@ -6468,12 +6545,7 @@ impl SessionsEngine {
         // Reconcile every remaining Running row as delivery-unknown instead of
         // replaying it or minting a replacement chain/deadline.
         for record in self.inner.recovery.latest_records()? {
-            if self
-                .inner
-                .side_chat_lookup
-                .get()
-                .is_some_and(|lookup| lookup(&record.view.task_id))
-            {
+            if !self.recoverable_fork_run(&record.view.task_id, &record.view.original_message_id)? {
                 continue;
             }
             if record.view.status != RecoveryStatus::Running
@@ -6515,12 +6587,7 @@ impl SessionsEngine {
             )?;
         }
         for record in self.inner.recovery.latest_records()? {
-            if self
-                .inner
-                .side_chat_lookup
-                .get()
-                .is_some_and(|lookup| lookup(&record.view.task_id))
-            {
+            if !self.recoverable_fork_run(&record.view.task_id, &record.view.original_message_id)? {
                 continue;
             }
             self.inner

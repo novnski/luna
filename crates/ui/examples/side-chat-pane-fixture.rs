@@ -1,17 +1,47 @@
-//! Headless GPUI E2E for side chats in the right pane's shared chat layout,
-//! on the persistent side-chat contract (`side-chat-persistence-v1`): no view
-//! lease, expiry or heartbeat; Back, closing the pane, switching chats and an
-//! engine re-attach never end a side chat; only the user's End does.
+//! Headless GPUI E2E for a persistent fork (side thread) as an ordinary
+//! thread in the chat workbench.
 //!
-//! Drives the production `Shell` and `SideChatPanel` in a hidden window against
-//! an in-process `EngineCore` with a scripted Mock harness, attached through
-//! the production engine boundary (real `WatchChats`, sessions, transcripts).
-//! The engine advertises `side-chat-task-commands-v1` and publishes the live
-//! side chat spaceless in `WatchChats` (contract §5.1), so the pane shows the
-//! FULL main composer and live transcript bound to the side chat; the lease
-//! is kept by the `RenewSideChat` heartbeat (§5.2).
+//! A side chat starts as a fork (here: from recent context) of its source
+//! and is then an ordinary thread: published with its real project and its
+//! source as a link, opened as a Side tab under that source, with its own
+//! cached composer and live transcript. Closing the tab, closing the right
+//! sidebar, switching chats and an engine re-attach never end it; there is
+//! no End, lease, expiry, heartbeat, unload or read-only "ended" state.
 //!
-//! Failure cases: `2026-10-02-pane-chat/evidence/pane-ui/failure-cases.md`.
+//! Drives the production `Shell` (side chat creator, workbench, pane views)
+//! in a hidden window against an in-process `EngineCore` with a scripted Mock
+//! harness, attached through the production engine boundary (real
+//! `WatchChats`, sessions, transcripts, workbench layout).
+//!
+//! Failure cases this run must catch (written before the migration):
+//! 1. New side chat never opens as a Side tab under its exact source, the
+//!    fork is published without its real project, or the creator keeps its
+//!    retry id after a completed create.
+//! 2. The fork's tab has no composer of its own, shares Main's (bound chat),
+//!    or its header shows an End, lease, countdown, expiry, unload or
+//!    read-only state.
+//! 3. A send from the fork's composer is not answered, or changes the
+//!    source's transcript.
+//! 4. Closing the fork's tab loses its draft, or an in-flight send arrives
+//!    twice (or never) after close and reopen.
+//! 5. The fork's provider picker refuses with the old side-chat lock instead
+//!    of taking the ordinary provider-switch path of an existing chat.
+//! 6. An approval request in the fork shows in Main's composer, or not in
+//!    the fork's (dark, light and a narrow canvas).
+//! 7. Idling past the old 30 s lease, closing the right sidebar, switching
+//!    chats and an engine re-attach end, unload or unbind the fork (its tab
+//!    loses its composer, or its published state leaves `active`).
+//! 8. Archive (the ordinary operation that replaced End) keeps a composer, or
+//!    loses the saved history; unarchive does not restore the composer.
+//! 9. The fork cannot become the workbench Main (its own composer as Main's).
+//!
+//! Retired with the side panel (no hook exists for them, and the behavior is
+//! gone, so they are not claimed): the panel's list/page readback (pageId,
+//! historyCount, parked), RenewSideChat timing, the right-pane transcript
+//! clearance above the approval card (the tab now uses the workbench pane
+//! view; its composer geometry is covered by `composer-parity-fixture`), and
+//! End's read-only history.
+//!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example side-chat-pane-fixture
 //! Run:   target/debug/examples/side-chat-pane-fixture ABSOLUTE_EVIDENCE_DIR
@@ -131,11 +161,28 @@ fn capture(
     Ok(())
 }
 
+/// Everything the run asserts about `fork` (empty before one exists): the
+/// creator, the workbench, the fork's tab header and both composers.
 fn readback(
     window: WindowHandle<shell::Shell>,
     cx: &mut AsyncApp,
+    fork: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))
+    window.update(cx, |shell, _, cx| {
+        let (main, pane) = shell.fixture_composer_readbacks(fork, cx);
+        serde_json::json!({
+            "creator": shell.fixture_side_chat_readback(cx),
+            "workbench": shell.fixture_workbench_readback(cx),
+            "related": shell.fixture_related_readback(cx),
+            "strip": shell.fixture_workbench_strip(fork, cx),
+            "hasComposer": shell.fixture_workbench_tab_has_composer(fork, cx),
+            "draft": shell.fixture_workbench_draft(fork, cx),
+            "forkTexts": shell.fixture_workbench_user_texts(fork, cx),
+            "parentTexts": shell.fixture_workbench_user_texts(PARENT, cx),
+            "mainComposer": main,
+            "forkComposer": pane,
+        })
+    })
 }
 
 async fn settle(cx: &mut AsyncApp, ms: u64) {
@@ -144,59 +191,110 @@ async fn settle(cx: &mut AsyncApp, ms: u64) {
         .await;
 }
 
-fn live(value: &serde_json::Value) -> String {
-    value["liveTexts"].to_string()
+fn panes(node: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+    if node["kind"] == "pane" {
+        out.push(node.clone());
+    } else {
+        panes(&node["first"], out);
+        panes(&node["second"], out);
+    }
 }
 
-/// The saved-history view after End: its transcript draws every saved
-/// message (both questions and both answers), and no question or approval
-/// reads as awaiting an answer.
-fn rendered_history(readback: &serde_json::Value, when: &str) -> anyhow::Result<()> {
-    let texts = readback["historyTexts"].to_string();
+/// `chat`'s tab in the workbench readback.
+fn tab(readback: &serde_json::Value, chat: &str) -> Option<serde_json::Value> {
+    let mut all = Vec::new();
+    panes(&readback["workbench"]["root"], &mut all);
+    all.into_iter()
+        .flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default())
+        .find(|tab| tab["chatId"] == chat)
+}
+
+/// The first Side tab in the workbench readback.
+fn side_tab(readback: &serde_json::Value) -> Option<String> {
+    let mut all = Vec::new();
+    panes(&readback["workbench"]["root"], &mut all);
+    all.into_iter()
+        .flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default())
+        .find(|tab| tab["role"] == "Side")
+        .and_then(|tab| tab["chatId"].as_str().map(str::to_string))
+}
+
+/// The fork's tab is an ordinary thread's: its own composer bound to it, a
+/// fork identity linking its source, and no separate lifecycle anywhere in
+/// its header.
+fn ordinary(readback: &serde_json::Value, fork: &str, when: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
-        [SIDE_QUESTION, SIDE_PENDING, SIDE_ANSWER]
-            .iter()
-            .all(|text| texts.contains(text)),
-        "saved messages missing from the rendered history {when}: {readback}"
+        readback["hasComposer"] == true && readback["forkComposer"]["boundChat"] == fork,
+        "{when}: the fork's tab renders its own composer: {readback}"
     );
     anyhow::ensure!(
-        readback["historyTranscript"]["items"].as_u64().unwrap_or(0) >= 4,
-        "the history transcript laid out no rows {when}: {readback}"
+        readback["mainComposer"]["boundChat"] != fork,
+        "{when}: Main's composer is not the fork's: {readback}"
     );
+    let strip = &readback["strip"];
     anyhow::ensure!(
-        readback["historyAwaiting"] == 0,
-        "an ended side chat still shows a question awaiting an answer {when}: {readback}"
+        strip["identity"] == "Side chat" && strip["parentLinked"] == true,
+        "{when}: the header names the fork's source as a link: {strip}"
     );
+    let words = strip["status"].as_str().unwrap_or_default().to_lowercase();
+    for lifecycle in [
+        "ended",
+        "read-only",
+        "writable",
+        "expire",
+        "min left",
+        "lease",
+        "unload",
+    ] {
+        anyhow::ensure!(
+            !words.contains(lifecycle),
+            "{when}: no separate fork lifecycle ({lifecycle:?}) in the header: {strip}"
+        );
+    }
     Ok(())
 }
 
-fn ids(value: &serde_json::Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_string))
-                .collect()
+/// Assistant answers to `prompt` in `chat`'s view (completed ones).
+fn answers(
+    window: WindowHandle<shell::Shell>,
+    cx: &mut AsyncApp,
+    chat: &str,
+    prompt: &str,
+) -> anyhow::Result<usize> {
+    let after = window.update(cx, |shell, _, cx| {
+        shell.fixture_workbench_turn_after(chat, prompt, cx)
+    })?;
+    Ok(after
+        .iter()
+        // Count this turn only; later user turns have their own replies.
+        .take_while(|entry| entry["role"] != "User")
+        .filter(|entry| {
+            entry["role"] == "Assistant"
+                && entry["status"] == "Complete"
+                && entry["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(SIDE_ANSWER))
         })
-        .unwrap_or_default()
+        .count())
 }
 
 async fn wait_for(
     window: WindowHandle<shell::Shell>,
     cx: &mut AsyncApp,
+    fork: &str,
     tries: usize,
+    what: &str,
     done: impl Fn(&serde_json::Value) -> bool,
 ) -> anyhow::Result<serde_json::Value> {
     let mut last = serde_json::Value::Null;
     for _ in 0..tries {
         settle(cx, 100).await;
-        last = readback(window, cx)?;
+        last = readback(window, cx, fork)?;
         if done(&last) {
-            break;
+            return Ok(last);
         }
     }
-    Ok(last)
+    anyhow::bail!("{what}: {last}")
 }
 
 fn main() -> anyhow::Result<()> {
@@ -379,96 +477,114 @@ fn main() -> anyhow::Result<()> {
                     let mut record = serde_json::Map::new();
                     settle(cx, 900).await;
 
-                    // s01. The side chats surface: no saved side chats yet.
+                    // f00. Related chats with no forks yet; the workbench is
+                    // Main's.
                     window.update(cx, |shell, _, cx| {
                         shell.fixture_open_right_pane(cx);
                         shell.fixture_open_side_chats(cx);
                     })?;
-                    let list = wait_for(window, cx, 60, |r| r["historyCount"].is_number()).await?;
-                    capture(window, cx, output.join("f00-side-list.png"))?;
-                    anyhow::ensure!(list["historyCount"] == 0 && list["pageId"].is_null(), "unexpected side chat list: {list}");
-                    anyhow::ensure!(list["persistent"] == true, "the engine must advertise side-chat-persistence-v1: {list}");
-                    let parent_rows = list["parentTranscriptRows"].as_u64().unwrap_or(0);
-                    record.insert("list".into(), list);
-
-                    // f01. Start one with the parent's recent context: with the
-                    // engine gate on, the full composer binds the side chat.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("snapshot", "", cx))?;
-                    let created = wait_for(window, cx, 200, |r| {
-                        r["firstClass"] == true && r["fullComposer"]["boundChat"] == r["pageId"] && r["busy"] == false
+                    let empty = wait_for(window, cx, "", 60, "the workbench loads with Main", |r| {
+                        r["workbench"]["loaded"] == true && r["workbench"]["main"] == PARENT && r["creator"]["busy"] == false
                     })
                     .await?;
+                    capture(window, cx, output.join("f00-side-list.png"))?;
+                    anyhow::ensure!(empty["related"]["relatedTrees"].get(PARENT).is_none() && side_tab(&empty).is_none(), "no forks yet: {empty}");
+                    let parent_texts = empty["parentTexts"].clone();
+                    record.insert("empty".into(), empty);
+
+                    // f01. Start one from recent context: it opens as a Side
+                    // tab under its source, with its own composer.
+                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("snapshot", "", cx))?;
+                    let opened = wait_for(window, cx, "", 200, "New side chat opens as a Side tab", |r| side_tab(r).is_some()).await?;
+                    let side_id = side_tab(&opened).unwrap_or_default();
+                    let created = wait_for(window, cx, &side_id, 100, "the fork's composer mounts", |r| r["forkComposer"]["boundChat"] == side_id.as_str()).await?;
                     settle(cx, 500).await;
                     capture(window, cx, output.join("f01-side-full-new-dark.png"))?;
-                    anyhow::ensure!(created["firstClass"] == true, "engine gate did not enable the full composer: {created}");
-                    let side_id = created["pageId"].as_str().unwrap_or_default().to_string();
-                    anyhow::ensure!(created["fullComposer"]["boundChat"] == side_id.as_str(), "full composer must bind the side chat: {created}");
-                    anyhow::ensure!(created["mainComposer"]["boundChat"] == PARENT, "main composer must stay on the parent: {created}");
-                    anyhow::ensure!(ids(&created["paneChats"]) == [side_id.clone()], "one live pane watch for the side chat: {created}");
-                    anyhow::ensure!(created["lease"] == false && created["expiresAtMs"] == 0, "a persistent side chat has no lease or expiry: {created}");
-                    anyhow::ensure!(created["pendingCreate"].is_null(), "a completed create must drop its retry id: {created}");
+                    let fork_tab = tab(&created, &side_id).unwrap_or_default();
+                    anyhow::ensure!(fork_tab["sideParentId"] == PARENT && fork_tab["parent"] == PARENT && fork_tab["role"] == "Side", "the Side tab keeps its exact source: {fork_tab}");
+                    anyhow::ensure!(created["creator"]["pendingCreate"].is_null() && created["creator"]["error"].is_null(), "a completed create drops its retry id: {created}");
+                    let row = cx.update(|cx| state_for_task.read(cx).chats.iter().find(|chat| chat.id == side_id).cloned());
+                    anyhow::ensure!(row.as_ref().is_some_and(|row| row.space_id.as_deref() == Some(PROJECT)), "the fork is published with its real project: {row:?}");
+                    ordinary(&created, &side_id, "a new fork")?;
+                    anyhow::ensure!(created["mainComposer"]["boundChat"] == PARENT, "Main's composer stays on the source: {created}");
                     record.insert("created".into(), created);
 
-                    // f02. Send with the full composer: live transcript, parent untouched.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("send_full", SIDE_QUESTION, cx))?;
-                    let replied = wait_for(window, cx, 250, |r| {
-                        live(r).contains(SIDE_QUESTION) && live(r).contains(SIDE_ANSWER) && r["fullComposer"]["sending"] == false
-                    })
-                    .await?;
+                    // f02. Send from the fork's own composer: answered, the
+                    // source's transcript untouched.
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&side_id, SIDE_QUESTION, true, cx))?;
+                    for _ in 0..250 {
+                        settle(cx, 100).await;
+                        if answers(window, cx, &side_id, SIDE_QUESTION)? == 1 {
+                            break;
+                        }
+                    }
                     settle(cx, 600).await;
                     capture(window, cx, output.join("f02-side-full-reply-dark.png"))?;
-                    anyhow::ensure!(live(&replied).contains(SIDE_ANSWER), "side chat never answered through the full composer: {replied}");
-                    anyhow::ensure!(replied["fullComposer"]["input"] == "" && replied["fullComposer"]["failure"].is_null(), "send did not settle cleanly: {replied}");
-                    anyhow::ensure!(replied["parentTranscriptRows"].as_u64().unwrap_or(0) == parent_rows, "the side chat changed the parent transcript: {replied}");
+                    let replied = readback(window, cx, &side_id)?;
+                    anyhow::ensure!(answers(window, cx, &side_id, SIDE_QUESTION)? == 1, "the fork answered its own send: {replied}");
+                    anyhow::ensure!(replied["forkComposer"]["input"] == "" && replied["forkComposer"]["failure"].is_null(), "the send settled cleanly: {replied}");
+                    anyhow::ensure!(replied["parentTexts"] == parent_texts, "the fork changed the source's transcript: {replied}");
                     record.insert("replied".into(), replied);
 
-                    // f03-f04. Draft across Back: Back only leaves the page. The
-                    // chat stays active (nothing parked, no unload) and reopening
-                    // restores the draft without a lease.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("type_full", SIDE_DRAFT, cx))?;
-                    settle(cx, 300).await;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("back", "", cx))?;
-                    let listed = wait_for(window, cx, 100, |r| r["pageId"].is_null() && r["historyCount"] == 1 && r["busy"] == false).await?;
-                    settle(cx, 300).await;
+                    // f03-f04. A draft across closing and reopening the tab:
+                    // Close is not End.
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&side_id, SIDE_DRAFT, false, cx))?;
+                    settle(cx, 600).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_close(&side_id, cx))?;
+                    let closed = wait_for(window, cx, &side_id, 100, "the fork's tab closed", |r| tab(r, &side_id).is_none()).await?;
                     capture(window, cx, output.join("f03-side-back-list.png"))?;
-                    anyhow::ensure!(ids(&listed["parked"]).is_empty(), "persistent Back must not park: {listed}");
-                    anyhow::ensure!(listed["historyStates"].to_string().contains("active"), "Back must leave the side chat active: {listed}");
-                    anyhow::ensure!(ids(&listed["paneChats"]).is_empty(), "Back must release the pane watches: {listed}");
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
-                    let restored = wait_for(window, cx, 150, |r| r["firstClass"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
+                    anyhow::ensure!(closed["related"]["relatedTrees"][PARENT].to_string().contains(side_id.as_str()), "a closed fork stays in its source's library: {closed}");
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_open(&side_id, cx))?;
+                    let restored = wait_for(window, cx, &side_id, 150, "the fork reopens with its draft", |r| {
+                        tab(r, &side_id).is_some() && r["draft"] == SIDE_DRAFT
+                    })
+                    .await?;
                     settle(cx, 500).await;
                     capture(window, cx, output.join("f04-side-draft-restored.png"))?;
-                    anyhow::ensure!(restored["writable"] == true && restored["lease"] == false && restored["fullComposer"]["input"] == SIDE_DRAFT, "draft lost across Back: {restored}");
-                    record.insert("backList".into(), listed);
+                    anyhow::ensure!(tab(&restored, &side_id).is_some_and(|tab| tab["role"] == "Side" && tab["parent"] == PARENT), "reopened as a Side tab under its source: {restored}");
+                    ordinary(&restored, &side_id, "after close and reopen")?;
+                    record.insert("closed".into(), closed);
                     record.insert("draftRestored".into(), restored);
 
-                    // f05. A send in flight across Back: exactly one prompt and one reply.
+                    // f05. A send in flight across closing the tab: exactly
+                    // one prompt and one reply.
                     window.update(cx, |shell, _, cx| {
-                        shell.fixture_side_chat("send_full", SIDE_PENDING, cx);
-                        shell.fixture_side_chat("back", "", cx);
+                        shell.fixture_workbench_type(&side_id, SIDE_PENDING, true, cx);
+                        shell.fixture_workbench_close(&side_id, cx);
                     })?;
-                    settle(cx, 50).await;
-                    let in_flight = readback(window, cx)?;
-                    anyhow::ensure!(in_flight["pageId"].is_null() && ids(&in_flight["parked"]).is_empty(), "Back during the send must just leave the page: {in_flight}");
                     settle(cx, 3000).await;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
-                    let settled = wait_for(window, cx, 250, |r| live(r).contains(SIDE_PENDING) && live(r).matches(SIDE_ANSWER).count() >= 2).await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_open(&side_id, cx))?;
+                    for _ in 0..250 {
+                        settle(cx, 100).await;
+                        if answers(window, cx, &side_id, SIDE_PENDING)? >= 1 {
+                            break;
+                        }
+                    }
                     settle(cx, 500).await;
                     capture(window, cx, output.join("f05-side-send-across-back.png"))?;
-                    let texts: Vec<String> = settled["liveTexts"].as_array().into_iter().flatten().filter_map(|text| text.as_str().map(str::to_string)).collect();
-                    anyhow::ensure!(texts.iter().filter(|text| text.contains(SIDE_PENDING)).count() == 1, "the in-flight send must arrive exactly once: {settled}");
-                    anyhow::ensure!(texts.iter().filter(|text| text.contains(SIDE_ANSWER)).count() == 2, "expected one reply per question: {settled}");
-                    anyhow::ensure!(settled["fullComposer"]["input"] == "" && settled["fullComposer"]["failure"].is_null(), "the in-flight send did not settle cleanly: {settled}");
-                    record.insert("sendAcrossBack".into(), settled);
+                    let settled = readback(window, cx, &side_id)?;
+                    let prompts = settled["forkTexts"].as_array().into_iter().flatten().filter(|text| text.as_str().is_some_and(|text| text.contains(SIDE_PENDING))).count();
+                    anyhow::ensure!(prompts == 1, "the in-flight send arrives exactly once: {settled}");
+                    anyhow::ensure!(answers(window, cx, &side_id, SIDE_PENDING)? == 1, "one reply to the in-flight send: {settled}");
+                    anyhow::ensure!(settled["forkComposer"]["input"] == "" && settled["forkComposer"]["failure"].is_null(), "the in-flight send settled cleanly: {settled}");
+                    record.insert("sendAcrossClose".into(), settled);
 
-                    // f06. Provider/account changes are refused truthfully.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("pick_other_provider", "", cx))?;
-                    settle(cx, 300).await;
-                    let refused = readback(window, cx)?;
-                    anyhow::ensure!(refused["pickerRefusal"].as_str().is_some_and(|text| text.contains("keeps its parent's provider and account")), "provider switch must be refused with the engine's reason: {refused}");
-                    record.insert("providerRefused".into(), refused["pickerRefusal"].clone());
+                    // f06. Provider: the fork's own settings, through the
+                    // ordinary path of an existing chat (no side-chat lock).
+                    let refusal = window.update(cx, |shell, _, cx| {
+                        let composer = shell.fixture_workbench_composer(&side_id, cx)?;
+                        let pickers = composer.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.fixture_pick_harness(HarnessId::Codex, cx));
+                        let refusal = pickers.read(cx).fixture_refusals();
+                        pickers.update(cx, |pickers, cx| pickers.fixture_close(cx));
+                        Some(refusal)
+                    })?;
+                    let refusal = refusal.ok_or_else(|| anyhow::anyhow!("the fork's composer must exist for its provider picker"))?;
+                    anyhow::ensure!(!refusal.as_deref().is_some_and(|text| text.contains("parent's provider")), "the fork's provider is its own, not locked to its source: {refusal:?}");
+                    record.insert("providerRefusal".into(), serde_json::json!(refusal));
 
-                    // f07-f10. Approval card through the live watch; light/dark, narrow.
+                    // f07-f10. An approval card through the fork's live watch,
+                    // in its own composer only; light/dark, narrow canvas.
                     let device_id = device.clone();
                     let target = side_id.clone();
                     let docs_for_task = docs.clone();
@@ -479,110 +595,101 @@ fn main() -> anyhow::Result<()> {
                             anyhow::Ok(())
                         })
                         .await??;
-                    let approval = wait_for(window, cx, 100, |r| r["fullComposer"]["wizard"] == SIDE_REQUEST).await?;
+                    let approval = wait_for(window, cx, &side_id, 100, "the approval card in the fork's composer", |r| r["forkComposer"]["wizard"] == SIDE_REQUEST).await?;
                     settle(cx, 400).await;
                     capture(window, cx, output.join("f07-side-full-approval-dark.png"))?;
-                    anyhow::ensure!(approval["fullComposer"]["wizard"] == SIDE_REQUEST, "approval card missing from the side chat's composer: {approval}");
-                    anyhow::ensure!(approval["mainComposer"]["wizard"].is_null(), "the parent composer must not show the side approval: {approval}");
+                    anyhow::ensure!(approval["mainComposer"]["wizard"].is_null(), "Main's composer must not show the fork's approval: {approval}");
                     record.insert("approval".into(), approval);
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Light, cx));
                     settle(cx, 600).await;
                     capture(window, cx, output.join("f08-side-full-light.png"))?;
-                    window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(360.0, cx))?;
+                    window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(760.0, cx))?;
                     settle(cx, 700).await;
                     capture(window, cx, output.join("f09-side-full-light-narrow.png"))?;
-                    let narrow = readback(window, cx)?;
-                    // The latest message scrolls into view above the stacked
-                    // approval card + composer: pinned at the end, clearance =
-                    // the measured stack.
-                    anyhow::ensure!(
-                        narrow["paneTranscript"]["pinned"] == true
-                            && narrow["paneTranscript"]["distanceFromBottom"].as_f64().unwrap_or(f64::MAX) <= 2.0
-                            && narrow["paneTranscript"]["bottomClearance"].as_f64().unwrap_or(0.0) > 300.0,
-                        "the narrow pane must keep the latest message above the approval card: {narrow}"
-                    );
+                    let narrow = readback(window, cx, &side_id)?;
+                    anyhow::ensure!(narrow["forkComposer"]["wizard"] == SIDE_REQUEST && narrow["forkComposer"]["boundChat"] == side_id.as_str(), "the narrow canvas keeps the fork's approval card: {narrow}");
                     record.insert("narrowApproval".into(), narrow);
                     cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
                     settle(cx, 700).await;
                     capture(window, cx, output.join("f10-side-full-dark-narrow.png"))?;
                     window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(520.0, cx))?;
 
-                    // f11. No heartbeat: 35 s idle (past the old 30 s lease) stays
-                    // writable without a single RenewSideChat.
+                    // f11. Idle past the old 30 s lease: still an ordinary,
+                    // active thread.
                     settle(cx, 35_000).await;
-                    let idle = readback(window, cx)?;
-                    anyhow::ensure!(idle["writable"] == true && idle["error"].is_null(), "an idle persistent side chat must stay writable: {idle}");
-                    anyhow::ensure!(idle["lastRenewAgoMs"].as_u64().unwrap_or(0) >= 30_000, "a persistent side chat must not renew a lease: {idle}");
-                    anyhow::ensure!(ids(&idle["watchedDocs"]) == [side_id.clone()], "idling must not reopen or drop the live watch: {idle}");
+                    let idle = readback(window, cx, &side_id)?;
+                    ordinary(&idle, &side_id, "after 35 s idle")?;
+                    let published = |cx: &mut AsyncApp| cx.update(|cx| state_for_task.read(cx).side_chat_rows.get(&side_id).and_then(|row| row.state.clone()));
+                    anyhow::ensure!(published(cx).as_deref() == Some("active"), "an idle fork stays active: {:?}", published(cx));
                     record.insert("afterIdle".into(), idle);
 
-                    // f12. Close the pane (releases the side panel), reopen: the
-                    // chat is still active and writable.
+                    // f12. Closing the right sidebar (the creator goes with
+                    // it) leaves the fork's tab alone.
                     window.update(cx, |shell, _, cx| shell.fixture_close_right_pane(cx))?;
                     settle(cx, 600).await;
+                    let sidebar_closed = readback(window, cx, &side_id)?;
+                    ordinary(&sidebar_closed, &side_id, "with the right sidebar closed")?;
+                    capture(window, cx, output.join("f12-side-reopened-after-close.png"))?;
                     window.update(cx, |shell, _, cx| {
                         shell.fixture_open_right_pane(cx);
                         shell.fixture_open_side_chats(cx);
                     })?;
-                    wait_for(window, cx, 100, |r| r["historyStates"].to_string().contains("active") && r["busy"] == false).await?;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
-                    let reopened = wait_for(window, cx, 150, |r| r["writable"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
-                    settle(cx, 400).await;
-                    capture(window, cx, output.join("f12-side-reopened-after-close.png"))?;
-                    anyhow::ensure!(reopened["lease"] == false, "reopening must not need a lease: {reopened}");
-                    record.insert("reopenedAfterClose".into(), reopened);
+                    record.insert("rightSidebarClosed".into(), sidebar_closed);
 
-                    // f13. Switch chats and back (releases both panels): still active.
+                    // f13. Switch chats and back: the fork's tab is still in
+                    // the source's workbench, with its composer.
                     cx.update(|cx| state_for_task.update(cx, |state, cx| state.select_chat(Some(OTHER.into()), cx)));
                     settle(cx, 600).await;
                     cx.update(|cx| state_for_task.update(cx, |state, cx| state.select_chat(Some(PARENT.into()), cx)));
-                    settle(cx, 600).await;
-                    window.update(cx, |shell, _, cx| shell.fixture_open_side_chats(cx))?;
-                    wait_for(window, cx, 100, |r| r["historyStates"].to_string().contains("active") && r["busy"] == false).await?;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
-                    let switched = wait_for(window, cx, 150, |r| r["writable"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
-                    record.insert("reopenedAfterSwitch".into(), switched);
+                    let switched = wait_for(window, cx, &side_id, 150, "the fork's tab after switching back", |r| {
+                        r["workbench"]["main"] == PARENT && r["workbench"]["loaded"] == true && tab(r, &side_id).is_some() && r["hasComposer"] == true
+                    })
+                    .await?;
+                    ordinary(&switched, &side_id, "after switching chats")?;
+                    record.insert("afterSwitch".into(), switched);
 
-                    // f14. Engine re-attach (a reconnect: new engine generation,
-                    // fresh watches) never ends it either.
+                    // f14. An engine re-attach (new generation, fresh watches)
+                    // keeps it an active thread.
                     let reattach = handle_for_task.clone();
                     cx.update(|cx| state_for_task.update(cx, |state, cx| state.fixture_attach_engine(reattach, cx)));
                     settle(cx, 1500).await;
-                    window.update(cx, |shell, _, cx| shell.fixture_open_side_chats(cx))?;
-                    wait_for(window, cx, 150, |r| r["historyStates"].to_string().contains("active") && r["busy"] == false).await?;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
-                    let reattached = wait_for(window, cx, 200, |r| r["writable"] == true && r["fullComposer"]["boundChat"] == side_id.as_str()).await?;
-                    settle(cx, 400).await;
-                    capture(window, cx, output.join("f14-side-after-reattach.png"))?;
-                    anyhow::ensure!(reattached["lease"] == false && reattached["sideRowState"] != "ended", "a re-attach must keep the side chat active: {reattached}");
-                    record.insert("reopenedAfterReattach".into(), reattached);
-
-                    // f15. End (the explicit action): the saved history renders in
-                    // place, read-only, with nothing awaiting an answer.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("unload", "", cx))?;
-                    wait_for(window, cx, 200, |r| {
-                        r["pageId"] == side_id.as_str() && r["busy"] == false && r["state"] == "ended"
+                    let reattached = wait_for(window, cx, &side_id, 200, "the fork's tab after a re-attach", |r| {
+                        r["workbench"]["loaded"] == true && tab(r, &side_id).is_some() && r["hasComposer"] == true
                     })
                     .await?;
-                    settle(cx, 600).await;
-                    capture(window, cx, output.join("f15-side-ended-readonly.png"))?;
-                    let ended = readback(window, cx)?;
-                    anyhow::ensure!(ended["writable"] == false && ended["fullComposer"].is_null(), "an ended side chat must be read-only: {ended}");
-                    rendered_history(&ended, "right after End")?;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("back", "", cx))?;
-                    let listed_ended = wait_for(window, cx, 100, |r| r["pageId"].is_null() && r["historyStates"].to_string().contains("ended")).await?;
+                    settle(cx, 400).await;
+                    capture(window, cx, output.join("f14-side-after-reattach.png"))?;
+                    ordinary(&reattached, &side_id, "after a re-attach")?;
+                    anyhow::ensure!(published(cx).as_deref() == Some("active"), "a re-attach keeps the fork active: {:?}", published(cx));
+                    record.insert("afterReattach".into(), reattached);
 
-                    // f16. Reopened from the list: the same rendered history.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("open", "", cx))?;
-                    wait_for(window, cx, 100, |r| r["pageId"] == side_id.as_str() && r["busy"] == false).await?;
+                    // f15. Archive, the ordinary operation (no End): the tab
+                    // turns read-only with its history; unarchive restores it.
+                    window.update(cx, |shell, _, cx| shell.fixture_chat_action(&side_id, "archive", cx))?;
+                    let archived = wait_for(window, cx, &side_id, 200, "the fork archived", |r| r["hasComposer"] == false && r["strip"]["archived"] == true).await?;
                     settle(cx, 600).await;
+                    capture(window, cx, output.join("f15-side-archived.png"))?;
+                    let texts = archived["forkTexts"].to_string();
+                    anyhow::ensure!(texts.contains(SIDE_QUESTION) && texts.contains(SIDE_PENDING), "an archived fork keeps its history: {archived}");
+                    anyhow::ensure!(answers(window, cx, &side_id, SIDE_QUESTION)? == 1, "its answers stay too: {archived}");
+                    window.update(cx, |shell, _, cx| shell.fixture_chat_action(&side_id, "unarchive", cx))?;
+                    let unarchived = wait_for(window, cx, &side_id, 200, "the fork unarchived", |r| r["hasComposer"] == true && r["strip"]["archived"] == false).await?;
+                    ordinary(&unarchived, &side_id, "after unarchive")?;
+                    record.insert("archived".into(), archived);
+                    record.insert("unarchived".into(), unarchived);
+
+                    // f16. The fork as its own workbench Main: Main's composer
+                    // binds it; then back to the source.
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&side_id, cx))?;
+                    let as_main = wait_for(window, cx, &side_id, 150, "the fork as Main", |r| {
+                        r["workbench"]["main"] == side_id.as_str() && r["mainComposer"]["boundChat"] == side_id.as_str()
+                    })
+                    .await?;
+                    settle(cx, 500).await;
                     capture(window, cx, output.join("f16-side-ended-reopened.png"))?;
-                    let reopened_ended = readback(window, cx)?;
-                    anyhow::ensure!(reopened_ended["writable"] == false && reopened_ended["firstClass"] == false, "an ended row must not bind the full composer: {reopened_ended}");
-                    rendered_history(&reopened_ended, "after reopening")?;
-                    record.insert("ended".into(), ended);
-                    record.insert("endedListed".into(), listed_ended);
-                    record.insert("endedReopened".into(), reopened_ended);
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(PARENT, cx))?;
+                    wait_for(window, cx, &side_id, 150, "back to the source's workbench", |r| r["workbench"]["main"] == PARENT && r["workbench"]["loaded"] == true).await?;
+                    record.insert("forkAsMain".into(), as_main);
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -595,7 +702,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("side-chat-pane.pass"),
-                                "PASS: headless production Shell on the production engine boundary; side-chat-persistence-v1 + side-chat-task-commands-v1 + spaceless WatchChats row -> the FULL main composer and live transcript bound to the side chat, with no lease and no expiry; send answered with the parent untouched; draft and an in-flight send survive Back without parking or unloading; provider switch refused with the engine's reason; approval card in light/dark and a 360 px pane; 35 s idle stays writable with no heartbeat; closing the pane, switching chats and an engine re-attach keep it active and writable; End leaves read-only history listed as ended that never binds the composer, rendered (every saved message laid out, no question awaiting an answer) right after End and after reopening\n",
+                                "PASS: headless production Shell on the production engine boundary; New side chat (recent context) opens as a Side tab under its exact source, published with its real project, with its own composer and no End/lease/expiry/read-only header; its send is answered with the source untouched; its draft and an in-flight send survive closing and reopening the tab (one prompt, one reply); its provider picker takes the ordinary path (no side-chat lock); an approval card shows in the fork's composer only, in dark, light and a narrow canvas; 35 s idle, closing the right sidebar, switching chats and an engine re-attach keep it an active thread with its composer; archive turns it read-only with its history and unarchive restores the composer; it opens as its own workbench Main. Retired with the side panel and not claimed: panel list/page readback, lease renewal timing, right-pane transcript clearance, End history\n",
                             )
                         });
                         if let Err(error) = written {

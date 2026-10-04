@@ -14,7 +14,8 @@
 //! (older engines, pre-profile bootstrap) placement is off, never guessed.
 //! Entries that no longer apply (a deleted chat, a missing or archived host,
 //! a chat that is not a child) are ignored, and pruned on the next change.
-//! Side chats belong to their chat and never move.
+//! A side chat (a fork) is an ordinary root row placed like any chat; its
+//! source is only a link.
 
 use super::*;
 use crate::settings::ChatPlacements;
@@ -271,8 +272,9 @@ impl Shell {
 
     /// A related row dropped on the left sidebar: a child is listed there as
     /// its own row (still its parent's child); an alongside chat returns. A
-    /// side chat stays with its chat. A drop slot places it under Manual
-    /// sort, exactly like dragging a sidebar row there.
+    /// fork is an ordinary sidebar row already: the drop only places it
+    /// (its source link stays). A drop slot places it under Manual sort,
+    /// exactly like dragging a sidebar row there.
     pub(super) fn place_in_sidebar(
         &mut self,
         drag: &SidebarChatDrag,
@@ -282,13 +284,6 @@ impl Shell {
     ) {
         let id = drag.chat_id.clone();
         match kind {
-            related_chats::RelatedKind::Side => {
-                self.sidebar_notice = Some(SidebarNotice::transient_status(
-                    "Side chats stay with the chat they came from. Only child chats can move to the sidebar.",
-                ));
-                cx.notify();
-                return;
-            }
             _ if self.placement_unavailable(cx) => return,
             related_chats::RelatedKind::Child => {
                 let Some(parent) = self
@@ -308,7 +303,7 @@ impl Shell {
                     "Listed in the sidebar. It is still a child of {parent_title}."
                 )));
             }
-            related_chats::RelatedKind::Alongside => {
+            related_chats::RelatedKind::Alongside | related_chats::RelatedKind::Side => {
                 self.update_placements(cx, |placements| {
                     placements.docked.remove(&id);
                 });

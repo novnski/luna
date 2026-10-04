@@ -63,6 +63,35 @@
 //!     focused group, the frame's checkout/Git row and Cmd-W/New child bound
 //!     to the previous one (an alongside chat on another checkout shows
 //!     Main's checkout).
+//! 29. Persistent forks (side threads) keep a separate lifecycle: an End
+//!     control, expiry/countdown, lease or renewal, unload/reload, a
+//!     read-only "ended" panel, or a provider/account/project picker lock;
+//!     closing or reopening a fork's tab stops its run or loses its draft;
+//!     two forks share a draft, a send, model keys or Stop; Escape leaves a
+//!     fork's open model picker open (or reaches the stop path under it,
+//!     or takes the keys away from that fork); an archived fork
+//!     lets the model shortcut fall back to Main; a fork cannot become the
+//!     workbench Main, be placed, pinned, settled or archived like any chat,
+//!     or loses its fork icon/source link; nested forks (fork of a fork,
+//!     child of a fork) or orphan forks (source deleted) disappear from the
+//!     Related library or the sidebar; old device-local side marks are lost
+//!     or cleared before the ordinary marks are acknowledged.
+//! 30. With either sidebar open (or a narrower window), the workbench is
+//!     not contained: a group, its composer pill or a focus outline is
+//!     clipped square at the canvas's rounded corner or paints over its
+//!     radius-14 hairline (the clip is not inset at least 4.1px, the
+//!     arc-safe minimum, on every side); the overflow cue is a bright
+//!     border or an opaque patch instead of a pointer-transparent fade
+//!     shown only toward the side with more content (fades take presses,
+//!     scroll or drops; one shows with nothing beyond it); a selected tab
+//!     is marked by an underline, or a group by a full colored pane or tab
+//!     outline, instead of the tab's own rounded fill (the focused group's
+//!     active tab: a quiet accent tint with an accent role icon; other
+//!     groups' active tabs: the neutral selected fill), or the two fills
+//!     are the same, or a keyboard focus-visible ring is lost; or the inset
+//!     moves the saved
+//!     layout, the left anchor, Balance, focus reveal, minimum sizes, or
+//!     drop/divider hit geometry relative to what is drawn.
 //! 27. Balance panes counts tabs instead of groups, changes an axis, the
 //!     order, IDs, active chats or focus, leaves a mixed 2-over-1 or six-group
 //!     tree with unequal group areas, writes again on a repeat, is lost on a
@@ -87,8 +116,8 @@
 //!     Changes bound to the focused chat's checkout.
 //! 24. With both sidebars open after a wider split, an active tab is wider
 //!     than its strip, so its close control sits under the trailing
-//!     controls; or after End (or archive) removes the focused composer,
-//!     Cmd-/ (without a click in between) opens Main's model picker.
+//!     controls; or after archive removes the focused composer, Cmd-/
+//!     (without a click in between) opens Main's model picker.
 //! 23. A one-move drag (a fast flick or a native synthetic drag) only
 //!     selects a tab, or leaves a divider or Related row unchanged, because
 //!     no drag move reached the workbench; or its release fallback commits
@@ -103,14 +132,13 @@
 //! 20. An empty group cannot be focused again (pointer or Tab) after
 //!     another group was, so Cmd-W closes, and New child opens in, the
 //!     group focused before it.
-//! 19. Two ended Side tabs from different parents, open side by side, share
-//!     one panel (one shows a placeholder), lose their exact source parent,
-//!     or start a provider process again; a tab without a rendered composer
-//!     (ended Side, archived) still opens a hidden picker or falls back to
-//!     Main's.
-//! 15. A side chat opens as a Side tab without its exact source parent, End
-//!     is confused with Close, or a closed Side tab cannot be reopened from
-//!     Main's Related library (including ended, read-only history).
+//! 19. Forks from different sources (Main, a fork, Child A) lose their
+//!     exact source in Main's Related library; a tab without a rendered
+//!     composer (an archived fork) still opens a hidden picker or falls back
+//!     to Main's.
+//! 15. A side chat opens as a Side tab without its exact source parent,
+//!     closing its tab stops or ends it, or a closed Side tab cannot be
+//!     reopened from Main's Related library.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example chat-workbench-fixture
@@ -646,6 +674,67 @@ fn strip_overflows(rb: &Value, pane_id: &str) -> bool {
 }
 
 /// Every group's painted area (w x h), from the readback.
+/// Failure case 30: the workbench stays contained in its rounded canvas.
+/// The viewport's rectangular clip sits at least 4.1 px (the arc-safe
+/// minimum for the 14 px radius) inside the canvas on every side; overflow
+/// fades show exactly toward the sides with more content; no group or tab
+/// has an outline or underline: each group's active tab is marked by its
+/// own rounded fill, the focused group's by the accent tint (distinct from
+/// the others' neutral fill), with a full-strength title.
+fn assert_contained(rb: &Value, what: &str) -> anyhow::Result<()> {
+    let insets: Vec<f64> = rb["viewportInsets"]
+        .as_array()
+        .map(|values| values.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default();
+    anyhow::ensure!(
+        insets.len() == 4 && insets.iter().all(|inset| (4.1..=6.5).contains(inset)),
+        "{what}: the viewport clip is inset 4.1-6.5 px inside the rounded canvas on every side: {:?} in {rb}",
+        insets
+    );
+    let (x, y) = (
+        rb["canvasScroll"]["x"].as_f64().unwrap_or(0.0),
+        rb["canvasScroll"]["y"].as_f64().unwrap_or(0.0),
+    );
+    let (max_x, max_y) = (
+        rb["canvasScroll"]["maxX"].as_f64().unwrap_or(0.0),
+        rb["canvasScroll"]["maxY"].as_f64().unwrap_or(0.0),
+    );
+    let expected = serde_json::json!([x < -0.5, max_x + x > 0.5, y < -0.5, max_y + y > 0.5]);
+    anyhow::ensure!(
+        rb["overflowFades"] == expected,
+        "{what}: fades show only toward more content (expected {expected}): {rb}"
+    );
+    anyhow::ensure!(rb["paneOutline"] == false, "{what}: no group outline: {rb}");
+    let selection = rb["tabSelection"].as_array().cloned().unwrap_or_default();
+    let multi = all_panes(rb).len() > 1;
+    anyhow::ensure!(
+        selection.len() == all_panes(rb).len(),
+        "{what}: every group reports its selected tab: {rb}"
+    );
+    for tab in &selection {
+        let focused = multi && tab["pane"] == rb["focusedPane"];
+        anyhow::ensure!(
+            tab["focused"] == focused
+                && tab["accentTint"] == focused
+                && tab["underline"] == false
+                && tab["outline"] == false
+                && tab["fill"][3].as_f64().is_some_and(|alpha| alpha > 0.0),
+            "{what}: the selected tab is its rounded fill (the accent tint only in the focused group), no underline or outline: {tab} in {rb}"
+        );
+    }
+    if multi {
+        let fills: std::collections::HashSet<String> = selection
+            .iter()
+            .map(|tab| tab["fill"].to_string())
+            .collect();
+        anyhow::ensure!(
+            fills.len() == 2,
+            "{what}: the focused group's selected fill differs from the other groups': {selection:?}"
+        );
+    }
+    Ok(())
+}
+
 fn pane_areas(rb: &Value) -> Vec<f32> {
     rb["paneBounds"]
         .as_array()
@@ -937,6 +1026,231 @@ async fn merge_engine_chats(
     Ok(rows)
 }
 
+/// A tab's readback entry.
+fn tab_json(rb: &Value, chat: &str) -> Option<Value> {
+    all_panes(rb)
+        .into_iter()
+        .flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default())
+        .find(|tab| tab["chatId"] == chat)
+}
+
+/// A title on one line, as tabs show it.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `chat`'s row as the UI state holds it.
+fn chat_row(
+    cx: &mut AsyncApp,
+    state: &gpui::Entity<state::AppState>,
+    chat: &str,
+) -> Option<luna_proto::Chat> {
+    cx.update(|cx| {
+        state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|row| row.id == chat)
+            .cloned()
+    })
+}
+
+/// Whether `parent`'s Related library lists `chat` as `kind`, under `via`
+/// (its actual source when nested) or directly.
+fn tree_has(rb: &Value, parent: &str, chat: &str, kind: &str, via: Option<&str>) -> bool {
+    rb["relatedTrees"][parent].as_array().is_some_and(|rows| {
+        rows.iter().any(|row| {
+            row[0] == chat
+                && row[1] == kind
+                && match via {
+                    Some(source) => row[2] == source,
+                    None => row[2].is_null(),
+                }
+        })
+    })
+}
+
+/// The engine's command snapshot for `chat`.
+async fn task_snapshot(reader: &luna_rpc::RpcClient, chat: &str) -> anyhow::Result<Value> {
+    Ok(reader
+        .call(
+            luna_rpc::methods::GET_TASK_COMMAND_SNAPSHOT,
+            serde_json::json!({ "taskId": chat }),
+        )
+        .await?["snapshot"]
+        .clone())
+}
+
+fn active_turn(snapshot: &Value) -> Option<String> {
+    snapshot["activeTurnId"]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+}
+
+/// Wait until the engine reports an active turn for `chat`.
+async fn wait_active_turn(
+    cx: &mut AsyncApp,
+    reader: &luna_rpc::RpcClient,
+    chat: &str,
+    what: &str,
+) -> anyhow::Result<String> {
+    for _ in 0..100 {
+        settle(cx, 100).await;
+        if let Some(turn) = active_turn(&task_snapshot(reader, chat).await?) {
+            return Ok(turn);
+        }
+    }
+    anyhow::bail!(
+        "{what}: the engine never reported an active turn: {}",
+        task_snapshot(reader, chat).await?
+    )
+}
+
+/// Whether the engine still publishes `chat`.
+async fn engine_has(reader: &luna_rpc::RpcClient, chat: &str) -> anyhow::Result<bool> {
+    let mut rx = reader
+        .subscribe(luna_rpc::methods::WATCH_CHATS, serde_json::json!({}))
+        .await?;
+    let frame = rx
+        .recv()
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no chats frame"))?;
+    Ok(frame
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|row| row["id"] == chat))
+}
+
+/// Merge engine rows until `chat`'s row satisfies `done`.
+async fn wait_row(
+    cx: &mut AsyncApp,
+    reader: &luna_rpc::RpcClient,
+    state: &gpui::Entity<state::AppState>,
+    chat: &str,
+    what: &str,
+    done: impl Fn(&luna_proto::Chat) -> bool,
+) -> anyhow::Result<luna_proto::Chat> {
+    for _ in 0..80 {
+        merge_engine_chats(reader, state, cx).await?;
+        if let Some(row) = chat_row(cx, state, chat).filter(|row| done(row)) {
+            return Ok(row);
+        }
+        settle(cx, 150).await;
+    }
+    anyhow::bail!("{what}: {:?}", chat_row(cx, state, chat))
+}
+
+/// The user's New side chat, until it opens as a Side tab that is not one
+/// of `known`.
+async fn create_fork(
+    window: Window,
+    cx: &mut AsyncApp,
+    reader: &luna_rpc::RpcClient,
+    state: &gpui::Entity<state::AppState>,
+    known: &[String],
+    what: &str,
+) -> anyhow::Result<String> {
+    window.update(cx, |shell, _, cx| shell.fixture_side_chat("new", "", cx))?;
+    for _ in 0..80 {
+        merge_engine_chats(reader, state, cx).await?;
+        settle(cx, 150).await;
+        let rb = wb(window, cx)?;
+        let created = all_panes(&rb)
+            .into_iter()
+            .flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default())
+            .filter(|tab| tab["role"] == "Side")
+            .filter_map(|tab| tab["chatId"].as_str().map(str::to_string))
+            .find(|id| !known.contains(id));
+        if let Some(id) = created {
+            return Ok(id);
+        }
+    }
+    let side = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
+    anyhow::bail!("{what}: New side chat never opened as a Side tab: {side}")
+}
+
+/// A fork's tab is an ordinary thread's: a live composer (unless archived),
+/// a fork identity, a source that links only while it exists, and no End,
+/// lease, countdown, expiry or read-only state anywhere in its header.
+async fn assert_ordinary_fork(
+    window: Window,
+    cx: &mut AsyncApp,
+    chat: &str,
+    linked: bool,
+    what: &str,
+) -> anyhow::Result<()> {
+    draw(window, cx)?;
+    settle(cx, 200).await;
+    let strip = window.update(cx, |shell, _, cx| shell.fixture_workbench_strip(chat, cx))?;
+    anyhow::ensure!(
+        strip["identity"] == "Side chat" && strip["parentLinked"] == linked,
+        "{what}: a fork names its source (linked: {linked}): {strip}"
+    );
+    // Titles and provider/model labels are user content (the source here is
+    // named "Release plan"). Inspect the generated lifecycle status only.
+    let words = strip["status"].as_str().unwrap_or_default().to_lowercase();
+    for lifecycle in [
+        "ended",
+        "read-only",
+        "writable",
+        "expire",
+        "min left",
+        "lease",
+        "unload",
+        "end side chat",
+    ] {
+        anyhow::ensure!(
+            !words.contains(lifecycle),
+            "{what}: no separate fork lifecycle ({lifecycle:?}) in its header: {strip}"
+        );
+    }
+    let composer = window.update(cx, |shell, _, cx| {
+        shell.fixture_workbench_tab_has_composer(chat, cx)
+    })?;
+    anyhow::ensure!(composer, "{what}: the fork's tab renders its own composer");
+    Ok(())
+}
+
+/// Close `chat`'s tab, then reopen it from Main's Related library with a
+/// real click: it returns as a Side tab under `source`.
+async fn close_and_reopen(
+    window: Window,
+    cx: &mut AsyncApp,
+    chat: &str,
+    source: &str,
+    what: &str,
+) -> anyhow::Result<()> {
+    if occurrences(&wb(window, cx)?, chat) > 0 {
+        window.update(cx, |shell, _, cx| shell.fixture_workbench_close(chat, cx))?;
+        let id = chat.to_string();
+        wait_for(window, cx, "the fork's tab closed", move |rb| {
+            occurrences(rb, &id) == 0
+        })
+        .await?;
+    }
+    window.update(cx, |shell, _, cx| {
+        shell.fixture_open_right_pane(cx);
+        shell.fixture_open_child_chats(cx);
+    })?;
+    settle(cx, 600).await;
+    let pane_x = WIDTH - PANE_WIDTH / 2.0;
+    let rows = related_rows(window, cx, pane_x)?;
+    click(window, cx, (pane_x, row_y(&rows, chat)?), MouseButton::Left).await?;
+    let id = chat.to_string();
+    let reopened = wait_for(window, cx, "the fork's tab reopened", move |rb| {
+        occurrences(rb, &id) == 1
+    })
+    .await?;
+    let tab = tab_json(&reopened, chat).unwrap_or_default();
+    anyhow::ensure!(
+        tab["role"] == "Side" && tab["parent"] == source,
+        "{what}: reopened as a Side tab under its source: {tab}"
+    );
+    Ok(())
+}
+
 /// Record a milestone and save the readback so far to
 /// `readback-progress.json`, so a later failure keeps every earlier
 /// milestone's evidence (the final `readback.json` is written at the end).
@@ -1016,7 +1330,8 @@ fn frame(window: Window, cx: &mut AsyncApp) -> anyhow::Result<Value> {
     window.update(cx, |shell, _, cx| shell.fixture_frame_readback(cx))
 }
 
-/// The canvas sits below the titlebar and 8 px inside whatever is open.
+/// The content viewport sits 6 px inside the rounded canvas, whose outer
+/// frame starts below the titlebar and 8 px inside either sidebar.
 fn assert_frame(state: &Value, what: &str) -> anyhow::Result<()> {
     assert_frame_within(state, what, 2.0)
 }
@@ -1028,17 +1343,17 @@ fn assert_frame_within(state: &Value, what: &str, tolerance: f32) -> anyhow::Res
     let (x, y, w) = (get(&canvas["x"]), get(&canvas["y"]), get(&canvas["w"]));
     let titlebar = get(&state["titlebarHeight"]);
     anyhow::ensure!(
-        (y - titlebar).abs() <= 1.5,
-        "{what}: the canvas starts below the titlebar: {state}"
+        (y - (titlebar + 6.0)).abs() <= 1.5,
+        "{what}: the content viewport is inset below the titlebar: {state}"
     );
     let left = get(&state["sidebarNow"]);
     anyhow::ensure!(
-        (x - (left + 8.0)).abs() <= 2.0,
+        (x - (left + 14.0)).abs() <= 2.0,
         "{what}: canvas inset from the left sidebar: {state}"
     );
     let right_edge = get(&state["viewportWidth"]) - get(&state["rightNow"]);
     anyhow::ensure!(
-        ((x + w) - (right_edge - 8.0)).abs() <= tolerance,
+        ((x + w) - (right_edge - 14.0)).abs() <= tolerance,
         "{what}: canvas inset from the right sidebar: {state}"
     );
     Ok(())
@@ -2380,6 +2695,8 @@ fn main() -> anyhow::Result<()> {
                     let visible = all_panes(&narrow_base).iter().any(|pane| pane["active"] == chat.as_str());
                     anyhow::ensure!(!visible || width.as_f64().unwrap_or(0.0) >= 280.0, "{chat}'s composer has room for its controls: {width} in {narrow_base}");
                 }
+                assert_contained(&narrow_base, "scrolled canvas")?;
+                anyhow::ensure!(narrow_base["overflowFades"][1] == true, "more content to the right fades there: {narrow_base}");
                 shot(window, cx, output.join("w15c-scrolled-canvas.png")).await?;
                 // Focus into the canvas (a press on the visible group), then
                 // Tab into another group: it scrolls into view.
@@ -2610,6 +2927,7 @@ fn main() -> anyhow::Result<()> {
                 set_right_sidebar(window, cx, false).await?;
                 let wide_fit = wb(window, cx)?;
                 anyhow::ensure!(wide_fit["canvasScroll"]["maxX"].as_f64().unwrap_or(1.0) < 0.5, "the split fits without the sidebar: {wide_fit}");
+                assert_contained(&wide_fit, "a fitting split")?;
                 let right_active = all_panes(&wide_fit).into_iter().find(|pane| pane["id"] == right_group.as_str()).and_then(|pane| pane["active"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the right group has an active tab: {wide_fit}"))?;
                 click_tab(window, cx, &right_active).await?;
                 {
@@ -2626,6 +2944,8 @@ fn main() -> anyhow::Result<()> {
                 let right_pane = pane_rect(&covered, &right_group)?;
                 anyhow::ensure!(left_pane.0 >= view.0 - 0.5 && left_pane.0 < view.0 + 0.5, "the left group stays in view at the left: {covered}");
                 anyhow::ensure!(right_pane.0 + right_pane.2 > view.0 + view.2 + 0.5, "the rightmost group is the covered one: {covered}");
+                assert_contained(&covered, "left-anchored overflow")?;
+                anyhow::ensure!(covered["overflowFades"] == serde_json::json!([false, true, false, false]), "anchored left: only the right edge fades: {covered}");
                 shot(window, cx, output.join("w16c-left-anchored.png")).await?;
                 // Explicit focus: the left group, then the right one again
                 // (a click on its partly visible tab) reveals it.
@@ -2645,6 +2965,9 @@ fn main() -> anyhow::Result<()> {
                     })
                     .await?
                 };
+                assert_contained(&revealed_right, "revealed right group")?;
+                anyhow::ensure!(revealed_right["overflowFades"][0] == true, "scrolled right: content beyond the left edge fades there: {revealed_right}");
+                shot(window, cx, output.join("w16d-revealed-fades.png")).await?;
 
                 // Six groups, mixed axes: the right group split down, each
                 // left group split right (with the sidebar closed, for room),
@@ -2771,164 +3094,312 @@ fn main() -> anyhow::Result<()> {
                     wait_for(window, cx, "the notice dismissed", |rb| rb["notice"].is_null()).await?;
                 }
 
-                // w18. Side tabs: New side chat opens as a Side tab with its
-                // exact source; End leaves read-only history (the tab stays);
-                // Close then reopen from Main's Related library.
+                // w18. Persistent forks (failure case 29): New side chat
+                // makes an ordinary thread. It opens as a Side tab under its
+                // exact source, published with its real project, titled by
+                // its own row, with a live composer and no End, lease,
+                // countdown or read-only state; it is a sidebar row and in
+                // Main's Related library.
                 window.update(cx, |shell, _, cx| {
                     shell.fixture_open_right_pane(cx);
                     shell.fixture_open_side_chats(cx);
                 })?;
                 settle(cx, 600).await;
-                window.update(cx, |shell, _, cx| shell.fixture_side_chat("new", "", cx))?;
-                let mut side_id = None;
-                for _ in 0..80 {
-                    merge_engine_chats(&reader, &state, cx).await?;
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("refresh", "", cx))?;
-                    settle(cx, 150).await;
-                    let rb = wb(window, cx)?;
-                    side_id = all_panes(&rb).into_iter().flat_map(|pane| {
-                        pane["tabs"].as_array().cloned().unwrap_or_default()
-                    }).find(|tab| tab["role"] == "Side").and_then(|tab| tab["chatId"].as_str().map(str::to_string));
-                    if side_id.is_some() {
+                let fork_one = create_fork(window, cx, &reader, &state, &[], "the first fork").await?;
+                let forked = wb(window, cx)?;
+                let tab = tab_json(&forked, &fork_one).ok_or_else(|| anyhow::anyhow!("the fork's tab: {forked}"))?;
+                anyhow::ensure!(tab["sideParentId"] == MAIN && tab["parent"] == MAIN && tab["role"] == "Side", "the Side tab keeps its exact source: {tab}");
+                let row = chat_row(cx, &state, &fork_one).ok_or_else(|| anyhow::anyhow!("the fork's ordinary row is published"))?;
+                anyhow::ensure!(row.space_id.is_some(), "the fork is published with its real project (spaceId): {row:?}");
+                if let Some(title) = row.title.as_deref().filter(|title| !title.trim().is_empty()) {
+                    anyhow::ensure!(tab["title"] == one_line(title).as_str(), "the tab uses the fork's own chat title: {tab} vs {title}");
+                }
+                assert_ordinary_fork(window, cx, &fork_one, true, "the new fork").await?;
+                let listed = related(window, cx)?;
+                anyhow::ensure!(has(&listed["sidebarOrder"], &fork_one), "the fork is a sidebar row: {listed}");
+                anyhow::ensure!(tree_has(&listed, MAIN, &fork_one, "Side chat", None), "Main's Related library lists the fork: {listed}");
+                shot(window, cx, output.join("w18-fork-tab.png")).await?;
+
+                // w19. Its own draft and run survive closing and reopening
+                // the tab: Close is not End, and nothing stops the run.
+                const FORK_DRAFT: &str = "fork draft kept across close";
+                const FORK_PROMPT: &str = "Fork: keep investigating the release notes";
+                let main_draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))?;
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&fork_one, FORK_DRAFT, false, cx))?, "the fork's own composer takes a draft");
+                settle(cx, 600).await;
+                close_and_reopen(window, cx, &fork_one, MAIN, "the drafted fork").await?;
+                let mut draft = None;
+                for _ in 0..40 {
+                    draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(&fork_one, cx))?;
+                    if draft.as_deref() == Some(FORK_DRAFT) {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(draft.as_deref() == Some(FORK_DRAFT), "the fork's draft survives close and reopen: {draft:?}");
+                let main_draft_after = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))?;
+                anyhow::ensure!(main_draft_after == main_draft, "Main's draft is untouched: {main_draft:?} -> {main_draft_after:?}");
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&fork_one, FORK_PROMPT, true, cx))?, "the fork sends from its own composer");
+                let fork_turn = wait_active_turn(cx, &reader, &fork_one, "the fork's run").await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_close(&fork_one, cx))?;
+                {
+                    let id = fork_one.clone();
+                    wait_for(window, cx, "the running fork's tab closed", move |rb| occurrences(rb, &id) == 0).await?;
+                }
+                let running = task_snapshot(&reader, &fork_one).await?;
+                anyhow::ensure!(active_turn(&running).as_deref() == Some(fork_turn.as_str()), "closing the tab does not stop the fork's run: {running}");
+                close_and_reopen(window, cx, &fork_one, MAIN, "the running fork").await?;
+                let mut fork_output = Vec::new();
+                for _ in 0..200 {
+                    settle(cx, 100).await;
+                    fork_output = window.update(cx, |shell, _, cx| shell.fixture_workbench_turn_after(&fork_one, FORK_PROMPT, cx))?;
+                    if fork_output.iter().any(|entry| entry["role"] == "Assistant" && entry["status"] == "Complete" && entry["text"].as_str().is_some_and(|text| text.contains(MOCK_ANSWER))) {
                         break;
                     }
                 }
-                let side_id = side_id.ok_or_else(|| anyhow::anyhow!("New side chat never became a Side tab"))?;
-                let side_tab = wb(window, cx)?;
-                let tab = all_panes(&side_tab).into_iter().flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default()).find(|tab| tab["chatId"] == side_id.as_str()).unwrap();
-                anyhow::ensure!(tab["sideParentId"] == MAIN && tab["parent"] == MAIN, "the Side tab keeps its exact source: {tab}");
-                shot(window, cx, output.join("w18-side-tab.png")).await?;
-                // End by its own button (a real click: focus goes to that
-                // button, which then disappears with the composer).
-                let end_at = window
-                    .update(cx, |shell, _, cx| shell.fixture_workbench_end_bounds(&side_id, cx))?
-                    .ok_or_else(|| anyhow::anyhow!("the Side tab shows its End control"))?;
-                click(window, cx, end_at, MouseButton::Left).await?;
-                let mut ended = false;
+                anyhow::ensure!(fork_output.iter().any(|entry| entry["role"] == "Assistant" && entry["status"] == "Complete"), "the fork's run completes after close and reopen: {fork_output:?}");
+                assert_ordinary_fork(window, cx, &fork_one, true, "the reopened fork").await?;
+                shot(window, cx, output.join("w19-fork-run-survives-close.png")).await?;
+                progress(&output, &mut record, "forkDraftAndRun".into(), serde_json::json!({"fork": fork_one, "turn": fork_turn, "output": fork_output}));
+
+                // w20. A second fork is independent: its own draft, model
+                // keys and Stop. Escape in it stops only it.
+                let fork_two = create_fork(window, cx, &reader, &state, std::slice::from_ref(&fork_one), "the second fork").await?;
+                anyhow::ensure!(fork_two != fork_one && occurrences(&wb(window, cx)?, &fork_one) == 1, "two forks, two tabs");
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_workbench_type(&fork_one, "draft one", false, cx);
+                    shell.fixture_workbench_type(&fork_two, "draft two", false, cx);
+                })?;
+                settle(cx, 400).await;
+                let drafts = window.update(cx, |shell, _, cx| (shell.fixture_workbench_draft(&fork_one, cx), shell.fixture_workbench_draft(&fork_two, cx)))?;
+                anyhow::ensure!(drafts == (Some(String::from("draft one")), Some(String::from("draft two"))), "each fork keeps its own draft: {drafts:?}");
+                activate(window, cx)?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(&fork_two, window, cx))?, "focus the second fork's composer");
+                draw(window, cx)?;
+                settle(cx, 150).await;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?.as_deref() == Some(fork_two.as_str()), "keys reach the second fork");
+                key(window, cx, "cmd-/")?;
+                settle(cx, 300).await;
+                let pickers = window.update(cx, |shell, _, cx| {
+                    (shell.fixture_workbench_model(&fork_one, cx), shell.fixture_workbench_model(&fork_two, cx), shell.fixture_workbench_model(MAIN, cx))
+                })?;
+                anyhow::ensure!(pickers.1.as_ref().is_some_and(|(_, open)| *open) && pickers.0.as_ref().is_some_and(|(_, open)| !*open) && pickers.2.as_ref().is_some_and(|(_, open)| !*open), "Cmd-/ opens only the focused fork's model picker: {pickers:?}");
+                // The real Escape key closes the open popover (its pane's own,
+                // like Main's) and never reaches the stop path underneath.
+                let escapes_before = window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log().len())?;
+                key(window, cx, "escape")?;
+                settle(cx, 300).await;
+                draw(window, cx)?;
+                let after_escape = window.update(cx, |shell, window, cx| {
+                    (
+                        shell.fixture_overlay_owns_keyboard(cx),
+                        shell.fixture_workbench_model(&fork_two, cx),
+                        shell.fixture_workbench_keyboard_chat(window, cx),
+                        shell.fixture_workbench_escape_log(),
+                    )
+                })?;
+                anyhow::ensure!(!after_escape.0 && after_escape.1.as_ref().is_some_and(|(_, open)| !*open), "Escape closed the picker: {after_escape:?}");
+                anyhow::ensure!(after_escape.3.len() == escapes_before, "an Escape that closes a popover stops nothing: {after_escape:?}");
+                anyhow::ensure!(after_escape.2.as_deref() == Some(fork_two.as_str()), "focus returns to the second fork's composer: {after_escape:?}");
+                const RACE_ONE: &str = "Fork one: keep going";
+                const RACE_TWO: &str = "Fork two: keep going";
+                anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&fork_one, RACE_ONE, true, cx) && shell.fixture_workbench_type(&fork_two, RACE_TWO, true, cx))?, "both forks send");
+                let turn_one = wait_active_turn(cx, &reader, &fork_one, "fork one's run").await?;
+                let turn_two = wait_active_turn(cx, &reader, &fork_two, "fork two's run").await?;
+                let live = |indicator: &str| matches!(indicator, "Working" | "AwaitingApproval" | "AwaitingInput");
+                let mut both_live = false;
+                for _ in 0..80 {
+                    let (one, two) = cx.update(|cx| (state.read(cx).fixture_session_indicator(&fork_one), state.read(cx).fixture_session_indicator(&fork_two)));
+                    if live(&one.0) && live(&two.0) {
+                        both_live = true;
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(both_live, "the sessions feed shows both forks running ({turn_one} / {turn_two})");
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(&fork_two, window, cx))?, "refocus the second fork");
+                draw(window, cx)?;
+                settle(cx, 120).await;
+                key(window, cx, "escape")?;
+                let escapes = window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log())?;
+                anyhow::ensure!(escapes.last().is_some_and(|(chat, outcome)| chat.as_deref() == Some(fork_two.as_str()) && *outcome == "interrupt"), "Escape interrupts the second fork: {escapes:?}");
+                let mut stop = Value::Null;
+                for _ in 0..80 {
+                    settle(cx, 100).await;
+                    stop = window.update(cx, |shell, _, cx| shell.fixture_workbench_last_stop(&fork_two, cx))?;
+                    if !stop.is_null() {
+                        break;
+                    }
+                }
+                anyhow::ensure!(stop["taskId"] == fork_two.as_str() && matches!(stop["status"].as_str(), Some("pending" | "applied")), "the second fork's own stop was accepted: {stop}");
+                let other_stop = window.update(cx, |shell, _, cx| (shell.fixture_workbench_last_stop(&fork_one, cx), shell.fixture_workbench_last_stop(MAIN, cx)))?;
+                anyhow::ensure!(other_stop.0.is_null() && other_stop.1.is_null(), "neither the first fork nor Main sent a stop: {other_stop:?}");
+                let mut one_done = Vec::new();
+                for _ in 0..200 {
+                    settle(cx, 100).await;
+                    one_done = window.update(cx, |shell, _, cx| shell.fixture_workbench_turn_after(&fork_one, RACE_ONE, cx))?;
+                    if one_done.iter().any(|entry| entry["role"] == "Assistant" && entry["status"] == "Complete") {
+                        break;
+                    }
+                }
+                anyhow::ensure!(one_done.iter().any(|entry| entry["role"] == "Assistant" && entry["status"] == "Complete"), "the first fork completes its own run: {one_done:?}");
+                let two_out = window.update(cx, |shell, _, cx| shell.fixture_workbench_turn_after(&fork_two, RACE_TWO, cx))?;
+                anyhow::ensure!(!two_out.iter().any(|entry| entry["role"] == "Assistant" && entry["status"] == "Complete"), "the stopped fork has no completed answer: {two_out:?}");
+                shot(window, cx, output.join("w20-independent-forks.png")).await?;
+                progress(&output, &mut record, "independentForks".into(), serde_json::json!({"one": fork_one, "two": fork_two, "stop": stop, "escapes": format!("{escapes:?}")}));
+
+                // w20b. Nested lineage and orphans: a fork of a fork and a
+                // fork of Child A list in Main's library under their actual
+                // sources; deleting a fork's source leaves it a thread (a
+                // sidebar row, openable, with its source named but not
+                // linked).
+                let fork_via_rpc = |parent: String| {
+                    let reader = reader.clone();
+                    async move {
+                        let created = reader
+                            .call(
+                                luna_rpc::methods::CREATE_SIDE_CHAT,
+                                serde_json::json!({"parentId": parent, "requestId": uuid::Uuid::new_v4().to_string(), "forceSnapshot": false}),
+                            )
+                            .await?;
+                        anyhow::Ok(created["meta"]["id"].as_str().unwrap_or_default().to_string())
+                    }
+                };
+                let fork_of_fork = fork_via_rpc(fork_two.clone()).await?;
+                let child_fork = fork_via_rpc(CHILD_A.to_string()).await?;
+                anyhow::ensure!(!fork_of_fork.is_empty() && !child_fork.is_empty(), "a fork of a fork and a fork of Child A");
+                let mut nested = Value::Null;
                 for _ in 0..60 {
                     merge_engine_chats(&reader, &state, cx).await?;
                     settle(cx, 150).await;
-                    if window.update(cx, |shell, _, cx| shell.fixture_workbench_side_active(&side_id, cx))? == Some(false) {
-                        ended = true;
+                    nested = related(window, cx)?;
+                    if tree_has(&nested, MAIN, &fork_of_fork, "Side chat", Some(fork_two.as_str())) && tree_has(&nested, MAIN, &child_fork, "Side chat", Some(CHILD_A)) {
                         break;
                     }
                 }
-                anyhow::ensure!(ended, "End leaves the side chat ended");
-                // Immediately, with no click in between: the model shortcut
-                // must not reach Main (the ended tab has no composer), and
-                // the group and frame row stay on the side chat.
+                anyhow::ensure!(tree_has(&nested, MAIN, &fork_of_fork, "Side chat", Some(fork_two.as_str())), "a fork of a fork lists in Main's library under its source: {nested}");
+                anyhow::ensure!(tree_has(&nested, MAIN, &child_fork, "Side chat", Some(CHILD_A)), "a fork of a child lists in Main's library under the child: {nested}");
+                anyhow::ensure!(tree_has(&nested, &fork_two, &fork_of_fork, "Side chat", None), "the fork's own library lists its fork: {nested}");
+                window.update(cx, |shell, _, cx| shell.fixture_chat_action(&fork_two, "delete", cx))?;
+                let mut source_gone = false;
+                for _ in 0..80 {
+                    settle(cx, 150).await;
+                    if !engine_has(&reader, &fork_two).await? {
+                        source_gone = true;
+                        break;
+                    }
+                }
+                // The merge only adds rows; drop the deleted one as the live
+                // chats watch does.
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.chats.retain(|chat| chat.id != fork_two);
+                        cx.notify();
+                    })
+                });
+                anyhow::ensure!(source_gone, "the second fork (a source) is deleted");
+                settle(cx, 300).await;
+                let orphaned = related(window, cx)?;
+                anyhow::ensure!(has(&orphaned["sidebarOrder"], &fork_of_fork), "the orphan fork is still a sidebar row: {orphaned}");
+                anyhow::ensure!(orphaned["forkSources"][fork_of_fork.as_str()] == fork_two.as_str(), "its source stays a link to the deleted chat: {orphaned}");
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open(&fork_of_fork, cx))?;
+                {
+                    let id = fork_of_fork.clone();
+                    wait_for(window, cx, "the orphan fork opens as a tab", move |rb| occurrences(rb, &id) == 1).await?;
+                }
+                draw(window, cx)?;
+                settle(cx, 300).await;
+                let orphan_strip = window.update(cx, |shell, _, cx| shell.fixture_workbench_strip(&fork_of_fork, cx))?;
+                anyhow::ensure!(orphan_strip["parentLinked"] == false && orphan_strip["parentTitle"] == "a deleted chat", "an orphan names its deleted source without a link: {orphan_strip}");
+                assert_ordinary_fork(window, cx, &fork_of_fork, false, "the orphan fork").await?;
+                anyhow::ensure!(tree_has(&related(window, cx)?, MAIN, &fork_of_fork, "Side chat", Some(fork_two.as_str())), "Main's library still lists the orphan (it is in Main's workbench)");
+                shot(window, cx, output.join("w20b-nested-and-orphan.png")).await?;
+                progress(&output, &mut record, "nestedAndOrphan".into(), serde_json::json!({"nested": nested, "orphaned": orphaned, "orphanStrip": orphan_strip}));
+
+                // w20c. Ordinary chat operations on forks: archive (then
+                // the model shortcut cannot fall back to Main), the fork as
+                // its own workbench Main with a child of its own, sidebar
+                // placement, and legacy device-local marks migrated to the
+                // fork's synced flags before they are cleared.
+                click_tab(window, cx, &fork_one).await?;
+                {
+                    let id = fork_one.clone();
+                    wait_for(window, cx, "the first fork focused", move |rb| rb["focusedChat"] == id.as_str()).await?;
+                }
+                window.update(cx, |shell, _, cx| shell.fixture_chat_action(&fork_one, "archive", cx))?;
+                wait_row(cx, &reader, &state, &fork_one, "the fork archived", |row| row.archived).await?;
+                draw(window, cx)?;
+                settle(cx, 300).await;
+                anyhow::ensure!(!window.update(cx, |shell, _, cx| shell.fixture_workbench_tab_has_composer(&fork_one, cx))?, "an archived fork's tab offers no composer");
                 activate(window, cx)?;
                 key(window, cx, "cmd-/")?;
                 settle(cx, 300).await;
                 draw(window, cx)?;
                 let after_shortcut = wb(window, cx)?;
                 let main_picker = window.update(cx, |shell, _, cx| shell.fixture_workbench_model(MAIN, cx))?;
-                anyhow::ensure!(main_picker.as_ref().is_some_and(|(_, open)| !*open), "Cmd-/ after End does not open Main's model picker: {main_picker:?}");
+                anyhow::ensure!(main_picker.as_ref().is_some_and(|(_, open)| !*open), "Cmd-/ on an archived fork does not open Main's model picker: {main_picker:?}");
                 anyhow::ensure!(!window.update(cx, |shell, _, cx| shell.fixture_overlay_owns_keyboard(cx))?, "no picker opened anywhere");
-                anyhow::ensure!(after_shortcut["focusedChat"] == side_id.as_str() && after_shortcut["footer"]["chat"] == side_id.as_str(), "the side chat's group and frame row stay focused: {after_shortcut}");
+                anyhow::ensure!(after_shortcut["focusedChat"] == fork_one.as_str() && after_shortcut["footer"]["chat"] == fork_one.as_str(), "the archived fork's group and frame row stay focused: {after_shortcut}");
                 let chip = window.update(cx, |shell, window, _| shell.fixture_workbench_focused_tab(window))?;
-                anyhow::ensure!(chip.as_deref() == Some(side_id.as_str()), "keyboard focus stays on the ended tab's chip: {chip:?}");
-                progress(&output, &mut record, "endThenModelShortcut".into(), serde_json::json!({"layout": after_shortcut, "focusedTab": chip}));
-                let after_end = wb(window, cx)?;
-                anyhow::ensure!(occurrences(&after_end, &side_id) == 1, "End is not Close: the tab stays: {after_end}");
-                shot(window, cx, output.join("w19-side-ended.png")).await?;
-                click_tab(window, cx, &side_id).await?;
-                let alive = cmd_w(window, cx).await?;
-                let side_closed = wait_for(window, cx, "the Side tab closed", |rb| occurrences(rb, &side_id) == 0).await?;
-                anyhow::ensure!(alive, "closing a Side tab keeps the window");
-                window.update(cx, |shell, _, cx| {
-                    shell.fixture_open_right_pane(cx);
-                    shell.fixture_open_child_chats(cx);
-                })?;
-                settle(cx, 600).await;
-                let pane_x = WIDTH - PANE_WIDTH / 2.0;
-                let rows = related_rows(window, cx, pane_x)?;
-                click(window, cx, (pane_x, row_y(&rows, &side_id)?), MouseButton::Left).await?;
-                let reopened_side = wait_for(window, cx, "the Side tab reopened", |rb| occurrences(rb, &side_id) == 1).await?;
-                let tab = all_panes(&reopened_side).into_iter().flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default()).find(|tab| tab["chatId"] == side_id.as_str()).unwrap();
-                anyhow::ensure!(tab["sideParentId"] == MAIN && tab["role"] == "Side", "reopened with its exact source: {tab}");
-                shot(window, cx, output.join("w20-side-reopened.png")).await?;
-                progress(&output, &mut record, "side".into(), serde_json::json!({"closed": side_closed, "reopened": reopened_side}));
-
-                // w20b. Two ended side chats from different parents (Main's,
-                // and one forked from Child A), side by side: each tab has
-                // its own read-only history under its exact source parent,
-                // both visible at once, and neither starts a provider again;
-                // neither tab offers a composer, picker or Stop.
-                let (child_side, child_lease) = async {
-                    let created = reader
-                        .call(
-                            luna_rpc::methods::CREATE_SIDE_CHAT,
-                            serde_json::json!({"parentId": CHILD_A, "requestId": uuid::Uuid::new_v4().to_string(), "forceSnapshot": false}),
-                        )
-                        .await?;
-                    let id = created["meta"]["id"].as_str().unwrap_or_default().to_string();
-                    let lease = created["lease"].clone();
-                    reader
-                        .call(luna_rpc::methods::UNLOAD_SIDE_CHAT, serde_json::json!({"id": id, "lease": lease}))
-                        .await?;
-                    anyhow::Ok((id, lease))
-                }
-                .await?;
-                anyhow::ensure!(!child_side.is_empty(), "a side chat forked from Child A");
-                let mut child_side_ended = false;
-                for _ in 0..60 {
-                    merge_engine_chats(&reader, &state, cx).await?;
-                    settle(cx, 100).await;
-                    if window.update(cx, |shell, _, cx| shell.fixture_workbench_side_active(&child_side, cx))? == Some(false) {
-                        child_side_ended = true;
-                        break;
-                    }
-                }
-                anyhow::ensure!(child_side_ended, "Child A's side chat is ended before it opens");
-                click_tab(window, cx, &side_id).await?;
-                let opened = window.update(cx, |shell, _, cx| shell.fixture_workbench_open_side_split(&child_side, CHILD_A, cx))?;
-                anyhow::ensure!(opened, "open Child A's side chat in a split");
-                let both_sides = wait_for(window, cx, "both ended side histories visible", |rb| {
-                    pane_of(rb, &side_id).is_some_and(|pane| pane["active"] == side_id.as_str())
-                        && pane_of(rb, &child_side).is_some_and(|pane| pane["active"] == child_side.as_str())
-                })
-                .await?;
-                let child_tab = all_panes(&both_sides).into_iter().flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default()).find(|tab| tab["chatId"] == child_side.as_str()).unwrap();
-                anyhow::ensure!(child_tab["sideParentId"] == CHILD_A && child_tab["role"] == "Side", "Child A's side tab keeps its exact source: {child_tab}");
-                wait_for(window, cx, "every active tab fits beside two histories", active_tabs_fit).await?;
-                let mut histories = (Value::Null, Value::Null);
-                for _ in 0..60 {
-                    draw(window, cx)?;
-                    settle(cx, 100).await;
-                    histories = window.update(cx, |shell, _, cx| {
-                        (shell.fixture_workbench_history(&side_id, cx), shell.fixture_workbench_history(&child_side, cx))
-                    })?;
-                    if histories.0["page"] == side_id.as_str() && histories.1["page"] == child_side.as_str() {
-                        break;
-                    }
-                }
-                anyhow::ensure!(histories.0["page"] == side_id.as_str() && histories.0["fixed"] == side_id.as_str() && histories.0["parent"] == MAIN, "Main's side history shows in its own panel under Main: {histories:?}");
-                anyhow::ensure!(histories.1["page"] == child_side.as_str() && histories.1["fixed"] == child_side.as_str() && histories.1["parent"] == CHILD_A, "Child A's side history shows in its own panel under Child A: {histories:?}");
-                shot(window, cx, output.join("w20b-two-side-histories.png")).await?;
-                // Read-only and inert: still ended after a few seconds of
-                // display, no composer to type into, no picker to open.
-                settle(cx, 1500).await;
-                merge_engine_chats(&reader, &state, cx).await?;
-                let still_ended = window.update(cx, |shell, _, cx| {
-                    (shell.fixture_workbench_side_active(&side_id, cx), shell.fixture_workbench_side_active(&child_side, cx))
-                })?;
-                anyhow::ensure!(still_ended == (Some(false), Some(false)), "showing history restarts neither side chat: {still_ended:?}");
-                let composers = window.update(cx, |shell, _, cx| {
-                    (shell.fixture_workbench_tab_has_composer(&side_id, cx), shell.fixture_workbench_tab_has_composer(&child_side, cx))
-                })?;
-                anyhow::ensure!(composers == (false, false), "an ended side tab renders no composer: {composers:?}");
-                click_tab(window, cx, &child_side).await?;
-                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_keyboard_chat(window, cx))?.is_none(), "keys on a history tab reach no composer");
-                key(window, cx, "cmd-/")?;
+                anyhow::ensure!(chip.as_deref() == Some(fork_one.as_str()), "keyboard focus stays on the archived fork's tab: {chip:?}");
+                shot(window, cx, output.join("w20c-archived-fork.png")).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_chat_action(&fork_one, "unarchive", cx))?;
+                wait_row(cx, &reader, &state, &fork_one, "the fork unarchived", |row| !row.archived).await?;
+                // Placement: a fork's Related row dropped on the sidebar is
+                // placed there like any chat (no refusal).
+                window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&child_fork, "side", cx))?;
                 settle(cx, 300).await;
-                anyhow::ensure!(!window.update(cx, |shell, _, cx| shell.fixture_overlay_owns_keyboard(cx))?, "the model shortcut opens no hidden picker on a history tab");
-                let main_model = window.update(cx, |shell, _, cx| shell.fixture_workbench_model(MAIN, cx))?;
-                anyhow::ensure!(main_model.as_ref().is_some_and(|(_, open)| !*open), "nor does it fall back to Main's picker: {main_model:?}");
-                progress(&output, &mut record,
-                    "sideHistories".into(),
-                    serde_json::json!({"main": histories.0, "child": histories.1, "childLease": child_lease, "layout": both_sides}),
-                );
+                let placed = related(window, cx)?;
+                anyhow::ensure!(!placed["notice"].as_str().is_some_and(|notice| notice.contains("stay with")), "a fork is not refused the sidebar: {placed}");
+                anyhow::ensure!(has(&placed["sidebarOrder"], &child_fork), "the fork is a sidebar row: {placed}");
+                // Legacy marks: archive intent on one fork, a pin on another.
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_seed_side_marks(&child_fork, luna_ui::settings::SideChatMarks { pinned_at_ms: Some(1), settled: false, archived: true }, cx);
+                })?;
+                wait_row(cx, &reader, &state, &child_fork, "the legacy archive mark is applied", |row| row.archived).await?;
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_seed_side_marks(&fork_of_fork, luna_ui::settings::SideChatMarks { pinned_at_ms: Some(2), settled: false, archived: false }, cx);
+                })?;
+                wait_row(cx, &reader, &state, &fork_of_fork, "the legacy pin mark is applied", |row| row.pinned_order.is_some()).await?;
+                let mut marks = Value::Null;
+                for _ in 0..60 {
+                    settle(cx, 150).await;
+                    marks = related(window, cx)?["sideMarks"].clone();
+                    if marks.get(child_fork.as_str()).is_none() && marks.get(fork_of_fork.as_str()).is_none() {
+                        break;
+                    }
+                }
+                anyhow::ensure!(marks.get(child_fork.as_str()).is_none() && marks.get(fork_of_fork.as_str()).is_none(), "legacy marks clear only after the rows read back their flags: {marks}");
+                // The fork as its own workbench Main, with a child of its own.
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(&fork_one, cx))?;
+                {
+                    let id = fork_one.clone();
+                    wait_for(window, cx, "the fork is the workbench Main", move |rb| rb["main"] == id.as_str() && rb["loaded"] == true).await?;
+                }
+                let fork_main = wb(window, cx)?;
+                let fork_pane = pane_of(&fork_main, &fork_one).and_then(|pane| pane["id"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the fork's group: {fork_main}"))?;
+                click(window, cx, plus_center(&fork_main, &fork_pane)?, MouseButton::Left).await?;
+                let created_in_fork = {
+                    let id = fork_one.clone();
+                    wait_for(window, cx, "a new tab created under the fork", move |rb| rb["creatingChild"] == false && all_panes(rb).iter().flat_map(tabs_of).any(|tab| tab != id)).await?
+                };
+                // This fixture deliberately merges registry rows explicitly,
+                // as w07 does. A layout can name the new ID before that merge;
+                // its Child label comes from the actual registry lineage.
+                let fork_child = all_panes(&created_in_fork).iter().flat_map(tabs_of).find(|tab| *tab != fork_one).unwrap();
+                let rows = merge_engine_chats(&reader, &state, cx).await?;
+                anyhow::ensure!(rows.iter().find(|chat| chat.id == fork_child).is_some_and(|chat| chat.child_thread.as_ref().is_some_and(|child| child.parent_task_id == fork_one)), "the child's parent is the fork");
+                let with_child = {
+                    let id = fork_child.clone();
+                    wait_for(window, cx, "the fork child's published lineage", move |rb| role_of(rb, &id).as_deref() == Some("Child")).await?
+                };
+                shot(window, cx, output.join("w20c-fork-as-main.png")).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(MAIN, cx))?;
+                wait_for(window, cx, "back to Main's workbench", |rb| rb["main"] == MAIN && rb["loaded"] == true).await?;
+                settle(cx, 300).await;
+                let back = related(window, cx)?;
+                anyhow::ensure!(tree_has(&back, MAIN, &fork_child, "Child chat", Some(fork_one.as_str())), "a child of a fork lists in Main's library under the fork: {back}");
+                progress(&output, &mut record, "forkOperations".into(), serde_json::json!({"archive": after_shortcut, "placed": placed["sidebarOrder"], "marks": marks, "forkMain": with_child, "library": back["relatedTrees"][MAIN]}));
 
                 // w21-w30. The surrounding frame: one chrome surface around
                 // the inset canvas in every sidebar combination, while

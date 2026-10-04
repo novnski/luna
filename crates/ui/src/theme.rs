@@ -906,25 +906,74 @@ impl Theme {
         [hsla(0.0, 0.0, 0.0, 0.0), self.wash(0.05), self.wash(0.09)]
     }
 
+    /// The focused group's active tab: a quiet accent tint, a step above
+    /// the neutral selected fill ([`Self::tab_chip_washes`]'s active), so
+    /// the tab that owns the keyboard reads first without an underline or
+    /// an outline.
+    pub fn tab_focused_fill(&self) -> Hsla {
+        self.accent.opacity(if self.appearance.is_dark() {
+            0.16
+        } else {
+            0.10
+        })
+    }
+
+    /// A tab title: muted at rest; full text, floored on its own selected
+    /// fill, when the tab is its group's active one (`focused`: the focused
+    /// group's).
+    pub fn tab_title(&self, active: bool, focused: bool) -> Hsla {
+        if !active {
+            return self.text_muted;
+        }
+        let [_, _, selected] = self.tab_chip_washes();
+        let fill = if focused {
+            self.tab_focused_fill()
+        } else {
+            selected
+        };
+        self.readable_on_stacks(self.text, &[&[fill]], TEXT_CONTRAST_TARGET)
+    }
+
+    /// A tab's role glyph (child, side, alongside): the accent on the
+    /// focused group's active tab, else the quiet muted glyph.
+    pub fn tab_role_icon(&self, focused_active: bool) -> Hsla {
+        if focused_active {
+            self.readable_on_stacks(
+                self.accent,
+                &[&[self.tab_focused_fill()]],
+                NON_TEXT_CONTRAST_TARGET,
+            )
+        } else {
+            self.readable_muted(0.6)
+        }
+    }
+
     /// A Main/accent badge on a workbench tab: `color` floored on the
-    /// badge's `badge` wash over each tab chip fill.
+    /// badge's `badge` wash over each tab chip fill (the focused tint too).
     pub fn readable_on_tab_badge(&self, color: Hsla, badge: Hsla, min: f32) -> Hsla {
         let [rest, hover, active] = self.tab_chip_washes();
+        let focused = self.tab_focused_fill();
         self.readable_on_stacks(
             color,
-            &[&[rest, badge], &[hover, badge], &[active, badge]],
+            &[
+                &[rest, badge],
+                &[hover, badge],
+                &[active, badge],
+                &[focused, badge],
+            ],
             min,
         )
     }
 
-    /// The keyboard focus ring and focused-group indicator: the accent,
+    /// The keyboard focus-visible ring: the accent,
     /// floored at the non-text target on every reading surface and on the
     /// tab chip fills it outlines.
     pub fn focus_ring(&self) -> Hsla {
         let [rest, hover, active] = self.tab_chip_washes();
+        let focused = self.tab_focused_fill();
         self.readable_on_stacks(
             self.accent,
-            &[&[rest], &[hover], &[active]],
+            &[&[rest], &[hover], &[active], &[focused]],
             NON_TEXT_CONTRAST_TARGET,
         )
     }
@@ -1008,6 +1057,15 @@ impl Theme {
         } else {
             self.text_muted.opacity(dark_opacity)
         }
+    }
+
+    /// The color workbench content dissolves toward at a viewport edge with
+    /// more content beyond it (the end of an overflow fade). The window
+    /// surface, translucent like the canvas over the frosted chrome, so the
+    /// fade never reads as an opaque patch.
+    pub fn overflow_fade(&self) -> Hsla {
+        self.bg
+            .opacity(if self.appearance.is_dark() { 0.6 } else { 0.55 })
     }
 
     /// The workbench canvas tint over the shell chrome: slightly darker in

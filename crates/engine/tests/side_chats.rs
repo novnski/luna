@@ -103,6 +103,317 @@ async fn setup(root: &std::path::Path, recorder: Arc<Recorder>) -> EngineCore {
     core
 }
 
+fn fork_evidence(name: &str, value: Value) {
+    if let Ok(dir) = std::env::var("FORK_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join(name),
+            serde_json::to_vec_pretty(&value).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn persistent_forks_migrate_legacy_states_without_recreating_identity() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let core = setup(dir.path(), recorder.clone()).await;
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let mut saved = Vec::new();
+    for state in [
+        "ended",
+        "expired",
+        "unloaded",
+        "closing",
+        "closeFailed",
+        "recovered",
+        "preparing",
+    ] {
+        let created = client.call("CreateSideChat", json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
+        let id = created["meta"]["id"].as_str().unwrap().to_owned();
+        core.doc_host
+            .open(&id)
+            .unwrap()
+            .write_user_message("saved-before-migration", &format!("SAVED_{state}"), 1)
+            .unwrap();
+        saved.push((
+            id.clone(),
+            state.to_owned(),
+            serde_json::to_value(core.task_identity.view(&id).unwrap()).unwrap(),
+        ));
+    }
+    let db_path = core.side_chats.database_path().to_owned();
+    drop(client);
+    core.shutdown().await;
+    drop(core);
+    let db = rusqlite::Connection::open(&db_path).unwrap();
+    for (id, state, _) in &saved {
+        db.execute("UPDATE side_chats SET state=?2,expires_at_ms=1,detail='legacy close marker' WHERE id=?1", rusqlite::params![id,state]).unwrap();
+    }
+    drop(db);
+    let mut evidence = Vec::new();
+    for restart in 0..2 {
+        let core = setup(dir.path(), recorder.clone()).await;
+        let client = luna_rpc::memory_client(core.rpc_service());
+        for (id, state, identity) in &saved {
+            let page = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+            assert_eq!(page["meta"]["state"], "active", "{state}: {page}");
+            assert_eq!(page["meta"]["expiresAtMs"], 0);
+            assert!(page.to_string().contains(&format!("SAVED_{state}")));
+            let current = serde_json::to_value(core.task_identity.view(id).unwrap()).unwrap();
+            assert_eq!(current["task"]["taskId"], identity["task"]["taskId"]);
+            assert_eq!(current["currentBinding"], identity["currentBinding"]);
+            assert_eq!(current["task"]["lineage"], identity["task"]["lineage"]);
+            client
+                .call("GetTaskIdentity", json!({"taskId":id}))
+                .await
+                .unwrap();
+            client
+                .call("GetChatWorkbench", json!({"mainChatId":id}))
+                .await
+                .unwrap();
+            evidence.push(json!({"restart":restart,"legacyState":state,"id":id,"identity":current,"page":page}));
+        }
+        assert!(
+            recorder.0.lock().unwrap().is_empty(),
+            "migration and reads never start a provider"
+        );
+        drop(client);
+        core.shutdown().await;
+        drop(core);
+    }
+    fork_evidence("legacy-migration.json", json!(evidence));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn persistent_forks_are_nested_discoverable_and_independent_of_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let core = setup(dir.path(), recorder.clone()).await;
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let created = client.call("CreateSideChat", json!({"parentId":"parent","requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
+    let id = created["meta"]["id"].as_str().unwrap();
+    let nested = client.call("CreateSideChat", json!({"parentId":id,"requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
+    let nested_id = nested["meta"]["id"].as_str().unwrap();
+    for target in [id, nested_id] {
+        client
+            .call("GetChatWorkbench", json!({"mainChatId":target}))
+            .await
+            .unwrap();
+        for archived in [true, false] {
+            let result = client
+                .call(
+                    "Mutate",
+                    json!({"op":"setChatArchived","chatId":target,"archived":archived}),
+                )
+                .await
+                .unwrap();
+            assert_eq!(result["receipt"]["status"], "applied", "{result}");
+        }
+    }
+    client
+        .call("Mutate", json!({"op":"deleteChat","chatId":"parent"}))
+        .await
+        .unwrap();
+    assert!(core.workspace.chat("parent").unwrap().is_none());
+    assert!(core.workspace.chat(id).unwrap().is_some());
+    assert!(core.workspace.chat(nested_id).unwrap().is_some());
+    let mut watch = client.subscribe("WatchChats", json!({})).await.unwrap();
+    let snapshot = watch.recv().await.unwrap();
+    for target in [id, nested_id] {
+        let row = snapshot
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == target)
+            .unwrap();
+        assert_eq!(row["spaceId"], "space-side", "{row}");
+        assert!(row["sideChatParentId"].is_string());
+    }
+    client
+        .call(
+            "SendSideChat",
+            json!({"id":id,"messageId":"orphan-send","text":"SOURCE_INDEPENDENT"}),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while core.sessions.turn_in_flight(id) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    let page = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+    assert!(page.to_string().contains("SOURCE_INDEPENDENT"));
+    client
+        .call("Mutate", json!({"op":"deleteChat","chatId":id}))
+        .await
+        .unwrap();
+    assert!(core.workspace.chat(id).unwrap().is_none());
+    assert!(core.workspace.chat(nested_id).unwrap().is_some());
+    fork_evidence(
+        "source-independence.json",
+        json!({"created":created,"nested":nested,"snapshot":snapshot,"page":page}),
+    );
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn imported_fork_history_stays_visible_without_implicit_provider_adoption() {
+    let root = tempfile::tempdir().unwrap();
+    let recorder = Arc::new(Recorder::default());
+    let assemble = |profile| {
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(recorder.clone());
+        EngineCore::assemble_with_profile(profile, registry, HarnessId::Mock, None).unwrap()
+    };
+    let local = assemble(luna_engine::EngineProfile::local(root.path()).unwrap());
+    local
+        .workspace
+        .create_space("import-fork-space", &local.device_id, "/tmp", None, false)
+        .unwrap();
+    let client = luna_rpc::memory_client(local.rpc_service());
+    client.call("Mutate", json!({"op":"createChat","chatId":"import-fork-source","spaceId":"import-fork-space",
+        "config":{"harness":"mock","model":"fixture","sandbox":"workspace-write","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
+    let created = client.call("CreateSideChat", json!({"parentId":"import-fork-source","requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
+    let id = created["meta"]["id"].as_str().unwrap().to_owned();
+    local
+        .doc_host
+        .open(&id)
+        .unwrap()
+        .write_user_message("import-preserved", "IMPORTED_FORK_HISTORY", 1)
+        .unwrap();
+    local
+        .doc_host
+        .open(&id)
+        .unwrap()
+        .doc()
+        .push_message(&luna_doc::SessionMessageEntry {
+            id: "import-partial".into(),
+            role: luna_doc::MessageRole::Assistant,
+            parts: vec![luna_doc::MessagePart::Text {
+                id: "partial-text".into(),
+                text: "IMPORTED_PARTIAL_HISTORY".into(),
+            }],
+            created_at: 2,
+            device_id: local.device_id.clone(),
+            status: Some(luna_doc::MessageStatus::Streaming),
+            continuation_of: None,
+        })
+        .unwrap();
+    let source_db = local.side_chats.database_path().to_owned();
+    drop(client);
+    local.shutdown().await;
+    drop(local);
+    // Model a legacy import with only its cold SQL projection. This profile
+    // is closed; no live document writer can recreate the removed snapshot.
+    let source = rusqlite::Connection::open(&source_db).unwrap();
+    assert_eq!(
+        source
+            .execute("DELETE FROM snapshots WHERE doc_id=?1", [&id])
+            .unwrap(),
+        1
+    );
+    source.execute("UPDATE side_chat_entries SET entry=json_set(entry,'$.status','streaming') WHERE chat_id=?1 AND json_extract(entry,'$.id')='import-partial'", [&id]).unwrap();
+    drop(source);
+    let synced = assemble(luna_engine::EngineProfile::synced(
+        root.path(),
+        "fork-org",
+        "fork-user",
+    ));
+    let mut imported = Vec::new();
+    synced
+        .local_import
+        .as_ref()
+        .unwrap()
+        .run(|event| imported.push(event))
+        .unwrap();
+    assert!(synced.workspace.chat(&id).unwrap().is_some());
+    assert!(
+        synced.task_identity.view(&id).is_none(),
+        "local import does not adopt managed provider bindings"
+    );
+    let client = luna_rpc::memory_client(synced.rpc_service());
+    let history = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+    assert!(history.to_string().contains("IMPORTED_FORK_HISTORY"));
+    let mut messages = client
+        .subscribe("WatchDocMessages", json!({"chatId":id}))
+        .await
+        .unwrap();
+    let initial = messages.recv().await.unwrap();
+    assert!(initial.to_string().contains("IMPORTED_PARTIAL_HISTORY"));
+    drop(messages);
+    client
+        .call("GetChatWorkbench", json!({"mainChatId":id}))
+        .await
+        .unwrap();
+    let rejected = client
+        .call(
+            "SendSideChat",
+            json!({"id":id,"messageId":"import-must-not-run","text":"DO_NOT_START_REPLACEMENT"}),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        rejected
+            .to_string()
+            .contains("managed provider identity is unavailable"),
+        "{rejected}"
+    );
+    assert!(recorder.0.lock().unwrap().is_empty());
+    assert!(
+        !synced
+            .doc_host
+            .open(&id)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap()
+            .iter()
+            .any(|entry| entry.id == "import-must-not-run")
+    );
+    fork_evidence(
+        "local-import-binding-guard.json",
+        json!({"id":id,"history":history,"error":rejected.to_string(),"providerRuns":0}),
+    );
+    drop(client);
+    synced.shutdown().await;
+    drop(synced);
+    let synced = assemble(luna_engine::EngineProfile::synced(
+        root.path(),
+        "fork-org",
+        "fork-user",
+    ));
+    let client = luna_rpc::memory_client(synced.rpc_service());
+    let restarted = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+    assert!(
+        restarted["meta"]["detail"]
+            .as_str()
+            .unwrap()
+            .starts_with("Imported fork:")
+    );
+    assert_eq!(
+        restarted["entries"], history["entries"],
+        "imported history is preserved exactly through ordinary open and restart"
+    );
+    assert_eq!(
+        restarted["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "import-partial")
+            .unwrap()["status"],
+        "streaming"
+    );
+    fork_evidence("local-import-after-restart.json", restarted);
+    assert!(recorder.0.lock().unwrap().is_empty());
+    drop(client);
+    synced.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn side_history_projection_removes_rewound_tail_and_empty_history() {
     let dir = tempfile::tempdir().unwrap();
@@ -194,21 +505,11 @@ async fn side_history_projection_removes_rewound_tail_and_empty_history() {
         0,
         "{reopened:#}"
     );
-    for method in ["PreviewNativeFileRewind", "ApplyNativeFileRewind"] {
-        let rejected = client
-            .call(
-                method,
-                json!({
-                    "taskId": id, "messageId": "projection-a", "digest": "old-preview",
-                }),
-            )
-            .await
-            .unwrap_err();
-        assert!(
-            rejected.to_string().contains("read-only"),
-            "{method}: {rejected}"
-        );
-    }
+    client
+        .call("GetTaskIdentity", json!({"taskId":id}))
+        .await
+        .unwrap();
+    assert_eq!(reopened["meta"]["state"], "active");
     core.shutdown().await;
 }
 
@@ -252,10 +553,7 @@ async fn side_chat_lifecycle_is_durable_isolated_and_history_does_not_run() {
     assert!(request.prompt.contains("PARENT_CONTEXT_SENTINEL"));
     assert!(request.resume.is_none());
     assert_eq!(request.sandbox, luna_proto::SandboxLevel::ReadOnly);
-    assert_eq!(
-        request.parent_permission_ceiling,
-        Some(luna_proto::PermissionMode::Ask)
-    );
+    assert_eq!(request.parent_permission_ceiling, None);
     assert!(
         !core
             .doc_host
@@ -274,17 +572,8 @@ async fn side_chat_lifecycle_is_durable_isolated_and_history_does_not_run() {
         .await
         .unwrap();
     assert!(!core.sessions.has_live_run(id));
-    assert!(
-        client
-            .call(
-                "SendSideChat",
-                json!({"id":id,"lease":lease,"messageId":"late","text":"late"})
-            )
-            .await
-            .is_err()
-    );
     let history = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
-    assert_ne!(history["meta"]["state"], "active");
+    assert_eq!(history["meta"]["state"], "active");
     assert!(history.to_string().contains("SIDE_CHAT_ACK"));
     let list = client
         .call("ListSideChats", json!({"parentId":"parent"}))
@@ -376,14 +665,12 @@ async fn deadlines_and_restart_do_not_end_side_chats_or_replay_turns() {
         .call("UnloadSideChat", json!({"id":ids[0]}))
         .await
         .unwrap();
-    assert!(
+    assert_eq!(
         client
-            .call(
-                "SendSideChat",
-                json!({"id":ids[0],"messageId":"after-end","text":"must not run"})
-            )
+            .call("ReadSideChat", json!({"id":ids[0]}))
             .await
-            .is_err()
+            .unwrap()["meta"]["state"],
+        "active"
     );
     drop(client);
     reopened.shutdown().await;
@@ -399,7 +686,7 @@ async fn deadlines_and_restart_do_not_end_side_chats_or_replay_turns() {
             .find(|meta| meta.id == ids[0])
             .unwrap()
             .state,
-        "ended"
+        "active"
     );
     assert_eq!(recorder.0.lock().unwrap().len(), 1);
     reopened.shutdown().await;
@@ -471,7 +758,7 @@ async fn creation_replay_rejects_changed_anchor_text() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn paged_history_stays_cold_on_restart_and_releases_loaded_documents() {
+async fn paged_history_and_restart_never_start_a_provider() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
     let core = setup(dir.path(), recorder.clone()).await;
@@ -501,14 +788,6 @@ async fn paged_history_stays_cold_on_restart_and_releases_loaded_documents() {
             .call("UnloadSideChat", json!({"id":id,"lease":created["lease"]}))
             .await
             .unwrap();
-        assert!(
-            !core
-                .doc_host
-                .sync_statuses()
-                .iter()
-                .any(|(open, _)| open == &id)
-        );
-        assert!(core.sessions.session_status(&id).is_none());
         ids.push(id);
     }
     let list = client
@@ -544,33 +823,16 @@ async fn paged_history_stays_cold_on_restart_and_releases_loaded_documents() {
         .await
         .unwrap();
     assert_eq!(oldest["entries"].as_array().unwrap().len(), 20);
-    assert!(
-        !core
-            .doc_host
-            .sync_statuses()
-            .iter()
-            .any(|(id, _)| ids.contains(id))
-    );
     core.shutdown().await;
     drop(client);
     drop(core);
     let reopened = setup(dir.path(), recorder.clone()).await;
-    // Covers the existing five-second startup transcript salvage task too.
-    tokio::time::sleep(Duration::from_secs(6)).await;
-    assert!(
-        !reopened
-            .doc_host
-            .sync_statuses()
-            .iter()
-            .any(|(id, _)| ids.contains(id)),
-        "startup must not hydrate hidden side documents"
-    );
     assert!(recorder.0.lock().unwrap().is_empty());
     reopened.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn parent_deletion_seals_and_retires_owned_side_history() {
+async fn parent_deletion_preserves_fork_and_explicit_delete_retires_it() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
     let core = setup(dir.path(), recorder.clone()).await;
@@ -588,6 +850,12 @@ async fn parent_deletion_seals_and_retires_owned_side_history() {
         .await
         .unwrap();
     assert!(core.workspace.chat("parent").unwrap().is_none());
+    assert!(core.workspace.chat(id).unwrap().is_some());
+    assert!(client.call("ReadSideChat", json!({"id":id})).await.is_ok());
+    client
+        .call("Mutate", json!({"op":"deleteChat","chatId":id}))
+        .await
+        .unwrap();
     assert!(core.workspace.chat(id).unwrap().is_none());
     assert!(client.call("ReadSideChat", json!({"id":id})).await.is_err());
     assert!(client.call("SendSideChat", json!({"id":id,"lease":created["lease"],"messageId":"after-delete","text":"must not run"})).await.is_err());
@@ -596,13 +864,13 @@ async fn parent_deletion_seals_and_retires_owned_side_history() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn side_chat_permission_ceiling_preserves_legacy_and_full_boundaries() {
+async fn fork_permissions_follow_explicit_own_configuration() {
     use luna_proto::{PermissionMode, SandboxLevel};
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
     let core = setup(dir.path(), recorder.clone()).await;
     let client = luna_rpc::memory_client(core.rpc_service());
-    for (index, (sandbox, mode, expected_mode)) in [
+    for (index, (sandbox, mode, _expected_mode)) in [
         (
             SandboxLevel::ReadOnly,
             PermissionMode::Ask,
@@ -650,14 +918,7 @@ async fn side_chat_permission_ceiling_preserves_legacy_and_full_boundaries() {
             )
             .await
             .unwrap();
-        if expected_mode == PermissionMode::Ask {
-            assert_eq!(
-                changed["receipt"]["status"], "failed",
-                "an Ask-only side chat must refuse Full: {changed}"
-            );
-        } else {
-            assert_eq!(changed["receipt"]["status"], "applied", "{changed}");
-        }
+        assert_eq!(changed["receipt"]["status"], "applied", "{changed}");
         assert_eq!(
             core.workspace
                 .chat(side_id)
@@ -666,8 +927,8 @@ async fn side_chat_permission_ceiling_preserves_legacy_and_full_boundaries() {
                 .config
                 .unwrap()
                 .effective_permission_mode,
-            expected_mode,
-            "the side-chat picker must publish the same ceiling as dispatch"
+            PermissionMode::Full,
+            "an explicit user grant changes the fork itself"
         );
         client.call("SendSideChat", json!({"id":created["meta"]["id"],"lease":created["lease"],"messageId":uuid::Uuid::new_v4().to_string(),"text":"PERMISSION_BOUNDARY_ONLY"})).await.unwrap();
         tokio::time::timeout(Duration::from_secs(3), async {
@@ -678,12 +939,12 @@ async fn side_chat_permission_ceiling_preserves_legacy_and_full_boundaries() {
         .await
         .unwrap();
         let request = recorder.0.lock().unwrap()[index].clone();
-        assert_eq!(request.sandbox, sandbox);
+        assert_eq!(request.sandbox, SandboxLevel::DangerFullAccess);
         assert_eq!(
             request.permission_policy.as_ref().unwrap().effective_mode,
-            expected_mode
+            PermissionMode::Full
         );
-        assert_eq!(request.auto_approve, expected_mode == PermissionMode::Full);
+        assert!(request.auto_approve);
         client
             .call(
                 "UnloadSideChat",
@@ -720,7 +981,7 @@ async fn side_chat_permission_ceiling_preserves_legacy_and_full_boundaries() {
     .unwrap();
     assert_eq!(
         recorder.0.lock().unwrap()[3].sandbox,
-        SandboxLevel::ReadOnly
+        SandboxLevel::DangerFullAccess
     );
     core.shutdown().await;
 }
@@ -933,8 +1194,8 @@ async fn side_documents_and_tool_blobs_do_not_export_to_configured_edge() {
         client
             .subscribe_checked("WatchDocMessages", json!({"chatId":subdoc}))
             .await
-            .is_err(),
-        "an unloaded side owner must still refuse derived reads"
+            .is_ok(),
+        "closing a view must preserve ordinary derived transcript reads"
     );
     core.shutdown().await;
     drop(client);
@@ -1040,7 +1301,7 @@ async fn abandoned_creation_is_reconciled_after_restart_without_runtime_or_repla
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn failed_unload_storage_still_stops_generation_and_can_be_repaired() {
+async fn legacy_view_close_does_not_write_lifecycle_or_stop_a_turn() {
     let dir = tempfile::tempdir().unwrap();
     let recorder = Arc::new(Recorder::default());
     let core = setup(dir.path(), recorder.clone()).await;
@@ -1053,7 +1314,13 @@ async fn failed_unload_storage_still_stops_generation_and_can_be_repaired() {
         .await
         .unwrap();
     let id = created["meta"]["id"].as_str().unwrap();
-    client.call("SendSideChat", json!({"id":id,"lease":created["lease"],"messageId":"hold-runtime","text":"HOLD_SIDE_RUNTIME"})).await.unwrap();
+    client
+        .call(
+            "SendSideChat",
+            json!({"id":id,"messageId":"hold-runtime","text":"HOLD_SIDE_RUNTIME"}),
+        )
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
         while recorder.0.lock().unwrap().is_empty() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1062,31 +1329,27 @@ async fn failed_unload_storage_still_stops_generation_and_can_be_repaired() {
     .await
     .unwrap();
     let db = rusqlite::Connection::open(core.side_chats.database_path()).unwrap();
-    db.execute_batch("CREATE TRIGGER reject_side_close BEFORE UPDATE OF state ON side_chats WHEN NEW.state='closing' BEGIN SELECT RAISE(ABORT, 'synthetic metadata write failure'); END;").unwrap();
-    assert!(
-        client
-            .call("UnloadSideChat", json!({"id":id,"lease":created["lease"]}))
-            .await
-            .is_err()
-    );
-    assert!(
-        !core.sessions.has_live_run(id),
-        "metadata failure must not keep generation running"
-    );
-    assert!(client.call("SendSideChat", json!({"id":id,"lease":created["lease"],"messageId":"after-failed-unload","text":"must not run"})).await.is_err());
-    db.execute_batch("DROP TRIGGER reject_side_close").unwrap();
-    // Reopening saved history after a failed close must finish the stopped
-    // transcript projection, without requiring a lost view's lease token.
-    let history = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
-    assert_eq!(history["meta"]["state"], "ended");
-    assert!(
-        !core
-            .doc_host
-            .sync_statuses()
-            .iter()
-            .any(|(chat, _)| chat == id)
-    );
-    assert!(history.to_string().contains("SIDE_PARTIAL_BEFORE_STOP"));
+    db.execute_batch("CREATE TRIGGER reject_side_close BEFORE UPDATE OF state ON side_chats BEGIN SELECT RAISE(ABORT, 'view close must not mutate lifecycle'); END;").unwrap();
+    let closed = client
+        .call("UnloadSideChat", json!({"id":id}))
+        .await
+        .unwrap();
+    assert_eq!(closed["state"], "active");
+    assert!(core.sessions.has_live_run(id));
+    client.call("StopSideChat", json!({"id":id})).await.unwrap();
+    assert!(!core.sessions.has_live_run(id));
     assert_eq!(recorder.0.lock().unwrap().len(), 1);
+    let history = client.call("ReadSideChat", json!({"id":id})).await.unwrap();
+    assert!(history.to_string().contains("SIDE_PARTIAL_BEFORE_STOP"));
+    assert_eq!(history["meta"]["state"], "active");
+    assert!(
+        core.store.task_recovery(id).unwrap().is_none(),
+        "legacy direct send never acquires a replay chain"
+    );
+    fork_evidence(
+        "legacy-view-close.json",
+        json!({"closed":closed,"history":history}),
+    );
+    db.execute_batch("DROP TRIGGER reject_side_close").unwrap();
     core.shutdown().await;
 }

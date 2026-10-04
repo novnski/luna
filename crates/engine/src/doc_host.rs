@@ -2160,7 +2160,28 @@ impl DocHost {
         // room's fat doc would merge into the unrelated thin lineage and
         // duplicate every message. Local epoch >= 2 forces the chat2 branch
         // and best-effort completes the flip.
-        let stored = self.inner.store.load_snapshot_with_cursor(chat_id)?;
+        let mut stored = self.inner.store.load_snapshot_with_cursor(chat_id)?;
+        if local_only && stored.is_none() {
+            let entries = self.inner.store.saved_side_chat_entries(chat_id)?;
+            if !entries.is_empty() {
+                // Old imports can carry only the indexed transcript. Recover
+                // it before an ordinary watch can create an empty document.
+                // Preserve message IDs/status exactly; no executable commands
+                // or provider identity are inferred from these history rows.
+                let recovered = SessionDoc::init(chat_id)?;
+                for entry in &entries {
+                    recovered.push_message(entry)?;
+                }
+                let bytes = recovered.export_snapshot()?;
+                self.inner.store.save_snapshot_with_cursor(
+                    chat_id,
+                    &bytes,
+                    0,
+                    crate::chat2_host::CHAT2_DOC_EPOCH,
+                )?;
+                stored = Some((bytes, 0, crate::chat2_host::CHAT2_DOC_EPOCH));
+            }
+        }
         let stored_epoch = stored.as_ref().map(|(_, _, e)| *e).unwrap_or(0);
         let room_gen = if stored_epoch >= crate::chat2_host::CHAT2_DOC_EPOCH {
             if registry_gen < 2

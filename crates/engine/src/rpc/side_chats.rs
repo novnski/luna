@@ -126,7 +126,7 @@ impl EngineRpc {
                         "intent": { "kind":"createChat", "sideParentId":p.parent_id,
                             "deviceId":chat.device_id, "spaceId":chat.space_id, "cwd":chat.cwd,
                             "branch":chat.branch, "config":created.meta.config,
-                            "lineage":{"parentTaskId":p.parent_id,"sourceTaskId":p.parent_id,"lifecycleOwnerTaskId":p.parent_id}
+                            "lineage":{"sourceTaskId":p.parent_id,"lifecycleOwnerTaskId":id}
                         }
                     }))?;
                     return match self.execute_task_command(command, false).await {
@@ -204,9 +204,27 @@ impl EngineRpc {
                     }
                     result => {
                         let detail = match result {
+                            Ok(receipt)
+                                if receipt.status == luna_proto::CommandReceiptStatus::Pending =>
+                            {
+                                format!(
+                                    "Native fork did not complete ({:?}): {}. Creation will not be replayed; receipt {} preserves the outcome.",
+                                    receipt.status,
+                                    receipt.reason.as_ref().map_or(
+                                        "Inspect the saved receipt for the provider result",
+                                        |reason| reason.message.as_str()
+                                    ),
+                                    receipt.command_id
+                                )
+                            }
                             Ok(receipt) => format!(
-                                "Native fork did not complete ({:?}). Creation will not be replayed; receipt {} preserves the outcome.",
-                                receipt.status, receipt.command_id
+                                "Native fork could not be created ({:?}): {}. Receipt {} records the refusal.",
+                                receipt.status,
+                                receipt.reason.as_ref().map_or(
+                                    "The request did not pass history validation",
+                                    |reason| reason.message.as_str()
+                                ),
+                                receipt.command_id,
                             ),
                             Err(error) => format!(
                                 "Native fork failed: {error}. Creation will not be replayed."

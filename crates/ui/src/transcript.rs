@@ -3221,10 +3221,6 @@ pub enum TranscriptEvent {
 impl gpui::EventEmitter<TranscriptEvent> for Transcript {}
 
 impl Transcript {
-    pub(crate) fn allow_side_chat_handoff(&mut self) {
-        self.side_chat_handoff = true;
-    }
-
     pub(crate) fn set_workspace_link_handler(&mut self, handler: render::LinkUi) {
         self.workspace_link = Some(handler);
     }

@@ -9,7 +9,8 @@ to the left sidebar keeps its parent and reporting ownership and need not be
 pinned. An existing chat dragged right opens alongside the selected main chat;
 it keeps its history, provider and real ancestry and does not become a child.
 Placement persists on this device and is scoped to its engine/profile. Side
-forks retain their dedicated lifecycle and cannot be promoted to ordinary chats.
+forks are ordinary threads (root sidebar rows): they are placed and docked like
+any chat, and stay listed under their source, which is only a link.
 
 Children in the left sidebar have an explicit child marker. Opening a child
 shows a clickable parent link at the top. That link always follows the stored
@@ -40,8 +41,9 @@ configuration is persisted on the child for subsequent turns/restarts.
 1. Dragging must never rewrite parent/source/lifecycle lineage, duplicate a
    conversation, copy its history, or implicitly pin/unpin it. Existing left
    sidebar ordering and pinned boundaries remain valid.
-2. Reject/no-op self drops, duplicate docks, missing/deleted destinations,
-   side-fork promotion and unsupported remote placement. Cross-project docking
+2. Reject/no-op self drops, duplicate docks, missing/deleted destinations and
+   unsupported remote placement; a side fork's drop to the sidebar is accepted
+   and records no dock or promotion. Cross-project docking
    is presentation only and cannot move a checkout or change permissions.
 3. Moving, switching, closing and reopening preserve the correct composer,
    draft and run; stale view releases cannot clear a newer pane. Restored
@@ -81,7 +83,8 @@ The repeatable evidence root is `target/qa/chat-placement-models/`.
   have distinct opaque profile IDs, stable after restart.
 - `placement-final/`: the production Shell pointer fixture passed promotion,
   pin boundaries, ordinary alongside chats and their own composers, cycle
-  rejection, side-fork refusal, child badges, real-parent navigation (including
+  rejection, side-fork refusal (since replaced: p06 now proves a fork is
+  placed, docked and returned like any chat; rerun pending), child badges, real-parent navigation (including
   archived/missing parents), disk reload, profile A/B/unknown isolation and
   reverse moves. It writes screenshots, `readback.json` and
   `chat-placement.pass`. Its initial reload setup lacked the startup selection
@@ -137,7 +140,8 @@ Placements are device-local presentation settings keyed by an opaque engine
 profile ID. They do not sync as ancestry. Older engines without `profileId`
 refuse placement changes and neither apply nor prune stored placements.
 Ordinary chats may dock beside chats on the same device. Children return to
-their actual parent's Related chats; side forks stay with their source chat.
+their actual parent's Related chats; side forks stay listed under their source
+chat wherever they are placed.
 Pins retain their meaning, so a pinned child can also appear in its parent's
 Related chats. Provider availability and offered model choices are checked
 against the selected execution account; approval freezes that selection and

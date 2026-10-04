@@ -8,11 +8,14 @@ import crypto from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 
 const root=path.resolve(import.meta.dirname,'..');
-const output=path.join(root,'target/qa/super-chat-workbench/native');
+const fixture=path.join(root,'target/qa/super-chat-workbench/native');
+const persistentForks=process.argv.includes('--persistent-forks');
+const output=persistentForks?path.join(root,'target/qa/persistent-fork-threads/native'):fixture;
 const bundle=path.join(root,'target/luna-macos-dev/LUNA QA Workbench.app');
 const port=59805;
 const mode=process.argv[2] ?? 'snapshot';
-assert.ok(['seed','name-children','snapshot','verify-drafts','run-main','open-other','checkpoint-restart','verify-restart','verify'].includes(mode));
+assert.ok(['seed','name-children','snapshot','verify-drafts','run-main','open-other','checkpoint-restart','verify-restart','verify','verify-forks'].includes(mode));
+assert.ok(!persistentForks || mode!=='seed','Persistent-fork QA must reuse the existing ended native fork.');
 fs.mkdirSync(output,{recursive:true});
 const executable=fs.realpathSync(path.join(bundle,'Contents/MacOS/luna'));
 execFileSync('codesign',['--verify','--deep','--strict',bundle]);
@@ -21,7 +24,7 @@ assert.ok(pid,'QA listener is absent');
 assert.equal(execFileSync('ps',['-p',pid,'-o','comm='],{encoding:'utf8'}).trim(),executable);
 const plist=JSON.parse(execFileSync('plutil',['-convert','json','-o','-',path.join(bundle,'Contents/Info.plist')],{encoding:'utf8'}));
 assert.equal(plist.CFBundleIdentifier,'com.novnski.luna.qa.workbench');
-assert.equal(plist.LSEnvironment.LUNA_DATA_DIR,path.join(output,'data'));
+assert.equal(plist.LSEnvironment.LUNA_DATA_DIR,path.join(fixture,'data'));
 const ws=new WebSocket(`ws://127.0.0.1:${port}`);
 await new Promise((resolve,reject)=>{ws.onopen=resolve;ws.onerror=reject;});
 let seq=0;
@@ -40,16 +43,16 @@ const call=(method,params={})=>new Promise((resolve,reject)=>{
   ws.addEventListener('message',receive);ws.send(JSON.stringify({id,method,params}));
 });
 const save=(name,value)=>fs.writeFileSync(path.join(output,`${name}.json`),JSON.stringify(value,null,2)+'\n');
-const manifestPath=path.join(output,'manifest.json');
+const manifestPath=path.join(fixture,'manifest.json');
 const entries=value=>value.frame?.reset??value.reset??[];
 const messageText=entry=>(entry.parts??[]).filter(part=>part.kind==='text').map(part=>part.text).join('\n');
 const tabs=node=>node.kind==='pane'?node.tabs:[...tabs(node.first),...tabs(node.second)];
 const fields=(value,keys)=>value?Object.fromEntries(keys.map(key=>[key,value[key]??null])):null;
 const bindingFields=['bindingId','taskId','generation','providerId','providerInstanceId','providerTaskId','workspaceId','worktreeId'];
-// Ended side chats deliberately admit ReadSideChat, not generic task RPCs.
-// Inspect only this guarded QA profile's immutable identity ledger, read-only.
+// Cross-check the public identity against this guarded QA profile's immutable
+// creation ledger. Migration must preserve its one original native binding.
 function savedSideBinding(id){
-  const database=path.join(output,'data/profiles/local/docs.sqlite3');
+  const database=path.join(fixture,'data/profiles/local/docs.sqlite3');
   assert.equal(fs.realpathSync(database),database);
   const ledger=JSON.parse(execFileSync('sqlite3',['-readonly',database,"select cast(bytes as text) from snapshots where doc_id='luna-task-identity-events-v1';"],{encoding:'utf8'}));
   assert.ok([1,2].includes(ledger.schemaVersion));
@@ -117,18 +120,20 @@ try{
     }
     const sideHistory=await call('ListSideChats',{parentId:manifest.main});
     const sideHistoryByParent={[manifest.main]:sideHistory};
-    for(const child of children)sideHistoryByParent[child.id]=await call('ListSideChats',{parentId:child.id});
+    const sources=new Set(children.map(child=>child.id));
+    if(persistentForks)for(const chat of chats)if(chat.sideChatParentId){sources.add(chat.sideChatParentId);sources.add(chat.id);}
+    for(const parentId of sources)sideHistoryByParent[parentId]=await call('ListSideChats',{parentId});
     const allSides=Object.values(sideHistoryByParent).flatMap(history=>history.items);
     const sidePages=[];
     for(const side of allSides){
       const page=await call('ReadSideChat',{id:side.id});
-      const identity=page.meta.state==='active'?await call('GetTaskIdentity',{taskId:side.id}):null;
+      const identity=persistentForks||page.meta.state==='active'?await call('GetTaskIdentity',{taskId:side.id}):null;
       const binding=savedSideBinding(side.id);
       if(identity)assert.deepEqual(fields(identity.currentBinding,bindingFields),binding);
-      sidePages.push({page,identity,binding,bindingReadback:'QA profile identity ledger, sqlite3 -readonly'});
+      sidePages.push({page,identity,binding,bindingReadback:'GetTaskIdentity cross-checked against QA profile identity ledger, sqlite3 -readonly'});
     }
     const mainMessages=entries(await call('WatchDocMessages',{chatId:manifest.main}));
-    const snapshot={checkedAt:new Date().toISOString(),pid:Number(pid),binarySha256:crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex'),bundleId:plist.CFBundleIdentifier,ipcPort:port,dataDir:plist.LSEnvironment.LUNA_DATA_DIR,layout,mainMessages,children:snapshots,sideHistory,sideHistoryByParent,sidePages};
+    const snapshot={checkedAt:new Date().toISOString(),pid:Number(pid),binarySha256:crypto.createHash('sha256').update(fs.readFileSync(executable)).digest('hex'),bundleId:plist.CFBundleIdentifier,ipcPort:port,dataDir:plist.LSEnvironment.LUNA_DATA_DIR,chats,layout,mainMessages,children:snapshots,sideHistory,sideHistoryByParent,sidePages};
     save(`snapshot-${Date.now()}`,snapshot);
     const stable=value=>({
       layout:{main:value.layout.mainChatId,root:value.layout.root,focusedPaneId:value.layout.focusedPaneId,closedTabs:value.layout.closedTabs},
@@ -170,12 +175,32 @@ try{
       const fork=sidePages.find(side=>manifest.children.includes(side.page.meta.parentId)&&side.page.entries.some(entry=>entry.role==='assistant'&&messageText(entry).includes('SIDE_WORKBENCH_QA_OK')));
       assert.ok(fork,'The reopened side history must contain its own real assistant reply.');
       assert.equal(fork.page.meta.contextMode,'nativeFork');
-      assert.equal(fork.page.meta.state,'ended','Exercise explicit End separately from closing its tab.');
+      assert.equal(fork.page.meta.state,'active','View close/reopen never ends a persistent fork.');
       const parent=snapshots.find(child=>child.chat.id===fork.page.meta.parentId);
       assert.ok(fork.binding.providerTaskId);
       assert.ok(parent.identity.currentBinding?.providerTaskId);
       assert.notEqual(fork.binding.providerTaskId,parent.identity.currentBinding.providerTaskId,'The side fork must have its own provider conversation.');
       save('verified-native',snapshot);
+    }
+    if(mode==='verify-forks'){
+      assert.ok(persistentForks);
+      const baseline=JSON.parse(fs.readFileSync(path.join(root,'target/qa/super-chat-workbench/native-workbench-final/verified-native.json'),'utf8'));
+      const oldFork=baseline.sidePages.find(side=>side.page.meta.state==='ended');
+      assert.ok(oldFork,'Phase-one evidence must contain the actual ended native fork.');
+      const migrated=sidePages.find(side=>side.page.meta.id===oldFork.page.meta.id);
+      assert.ok(migrated);
+      assert.equal(migrated.page.meta.state,'active');assert.equal(migrated.page.meta.expiresAtMs,0);
+      assert.deepEqual(migrated.binding,oldFork.binding,'Migration and resume must preserve the exact native binding.');
+      for(const old of oldFork.page.entries){
+        const current=migrated.page.entries.find(entry=>entry.id===old.id);
+        assert.deepEqual(current,old,'Preserve every existing message, including its role, parts, status and timestamps.');
+      }
+      assert.ok(migrated.page.entries.some(entry=>entry.role==='assistant'&&messageText(entry).includes('PERSISTENT_FORK_RESUME_QA_OK')),'Resume the original ended fork with its real provider.');
+      const row=chats.find(chat=>chat.id===migrated.page.meta.id);
+      assert.ok(row.spaceId);assert.equal(row.sideChatParentId,oldFork.page.meta.parentId);
+      const ownWorkbench=await call('GetChatWorkbench',{mainChatId:row.id});
+      assert.equal(ownWorkbench.mainChatId,row.id);
+      save('verified-persistent-forks',{...snapshot,baselineBinding:oldFork.binding,ownWorkbench});
     }
     console.log(JSON.stringify({mode,main:manifest.main,revision:layout.revision,open:open.map(tab=>tab.chatId),closed:layout.closedTabs.map(item=>item.tab.chatId),children:snapshots.map(child=>({id:child.chat.id,title:child.chat.title,messages:child.messages.length,draft:child.draft.draft?.text??'',provider:child.chat.config?.harness})),sides:allSides.map(side=>({id:side.id,state:side.state,parent:side.parentId}))}));
   }

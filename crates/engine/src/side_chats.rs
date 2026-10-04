@@ -105,32 +105,36 @@ impl SideChats {
         let db = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         db.busy_timeout(Duration::from_secs(3))?;
         db.pragma_update(None, "synchronous", "FULL")?;
-        // Upgrade automatic legacy expiry/unload states only when the durable
-        // workspace row exists. A new explicit `ended` state is never revived.
+        // Fork provenance does not own a thread's lifetime. Upgrade legacy
+        // lifecycle rows only when their exact durable workspace row exists.
         // A row committed just before activation proves completed creation;
         // an unmaterialized reservation must never replay a native fork.
-        let rows: Vec<(String, String)> = {
-            let mut query = db.prepare("SELECT id,state FROM side_chats WHERE state<>'deleted' AND COALESCE(detail,'')<>'Imported saved side chat. Read-only.'")?;
+        let rows: Vec<(String, String, String)> = {
+            let mut query =
+                db.prepare("SELECT id,state,parent_id FROM side_chats WHERE state<>'deleted'")?;
             query
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
                 .collect::<std::result::Result<_, _>>()?
         };
-        for (id, state) in rows {
-            let materialized = workspace.is_side_chat(&id) && workspace.chat(&id)?.is_some();
+        for (id, state, parent) in rows {
+            let materialized = workspace.side_chat_parent(&id).as_deref() == Some(parent.as_str())
+                && workspace.chat(&id)?.is_some();
             if matches!(
                 state.as_str(),
-                "active" | "recovered" | "expired" | "unloaded"
+                "active"
+                    | "recovered"
+                    | "expired"
+                    | "unloaded"
+                    | "ended"
+                    | "closing"
+                    | "closeFailed"
+                    | "preparing"
+                    | "creationFailed"
             ) && materialized
-                || state == "preparing" && materialized
             {
-                db.execute("UPDATE side_chats SET state='active',expires_at_ms=0,needs_recovery=1,detail=NULL WHERE id=?1", [&id])?;
+                db.execute("UPDATE side_chats SET state='active',expires_at_ms=0,needs_recovery=1,detail=CASE WHEN detail IN ('Imported saved side chat. Read-only.','Imported fork: verify its managed provider binding before continuing.') THEN 'Imported fork: verify its managed provider binding before continuing.' ELSE NULL END WHERE id=?1", [&id])?;
             } else if state == "preparing" {
                 db.execute("UPDATE side_chats SET state='creationFailed',detail='Creation was interrupted before publication. Inspect its saved receipt; it will not be replayed.' WHERE id=?1", [&id])?;
-            } else if matches!(state.as_str(), "closing" | "closeFailed") {
-                db.execute(
-                    "UPDATE side_chats SET state='ended',needs_recovery=1,detail=NULL WHERE id=?1",
-                    [&id],
-                )?;
             }
         }
         let this = Self(Arc::new(Inner {
@@ -157,6 +161,15 @@ impl SideChats {
                 )
                 .unwrap_or(true)
         }));
+        let db = this.0.db.clone();
+        this.0
+            .sessions
+            .set_legacy_side_send_lookup(Arc::new(move |id, message_id| {
+                lock(&db).query_row(
+                "SELECT EXISTS(SELECT 1 FROM side_chat_sends WHERE chat_id=?1 AND message_id=?2)",
+                params![id, message_id], |row| row.get(0),
+            ).unwrap_or(true)
+            }));
         // Ordinary task commands and queue drains share durable admission.
         // Weak: the sessions engine must not keep the
         // side-chat service (which owns it) alive.
@@ -191,11 +204,16 @@ impl SideChats {
         gate.lock_owned().await
     }
 
-    /// The durable state owns writability; a view, heartbeat or wall clock does not.
+    /// Only successful materialization admits execution. View state and time
+    /// have no bearing on an ordinary fork thread's writability.
     pub(crate) fn admit_ordinary(&self, id: &str) -> Result<()> {
+        let meta = self.meta(id)?;
         ensure!(
-            self.meta(id)?.state == "active",
-            "This side chat is read-only because it was ended or creation did not complete"
+            meta.state != "deleted"
+                && self.0.workspace.side_chat_parent(id).as_deref()
+                    == Some(meta.parent_id.as_str())
+                && self.0.workspace.chat(id)?.is_some(),
+            "Fork creation did not complete or the thread was deleted. Inspect its saved creation receipt."
         );
         Ok(())
     }
@@ -226,79 +244,31 @@ impl SideChats {
     }
 
     /// Admission for a provider run reached through the ordinary path (queue
-    /// drain, Run command, goal, steer fallback). Applies the same parent
-    /// ceiling as `send` and supplies the frozen, bounded context separately.
+    /// drain, Run command, goal, steer fallback). Its own managed configuration
+    /// controls execution; the source contributes only frozen quoted context.
     fn admit_run(
         &self,
         id: &str,
-        request: &mut RunRequest,
+        _request: &mut RunRequest,
     ) -> Result<Vec<luna_proto::RuntimeInstructionSection>> {
         self.admit_ordinary(id)?;
         let meta = self.meta(id)?;
-        let parent_config = self
+        self.0
+            .sessions
+            .validate_fork_binding(id, meta.context_mode == "nativeFork")?;
+        // Clear context and provider switch establish an ordinary fresh
+        // boundary. Do not re-inject the source snapshot behind that action.
+        if self
             .0
-            .workspace
-            .chat(&meta.parent_id)?
-            .and_then(|parent| parent.config)
-            .context("Parent configuration is unavailable")?;
-        use luna_proto::{PermissionMode, SandboxLevel};
-        let rank = |level: SandboxLevel| match level {
-            SandboxLevel::ReadOnly => 0,
-            SandboxLevel::WorkspaceWrite => 1,
-            SandboxLevel::DangerFullAccess => 2,
-        };
-        let sandbox = [
-            effective_sandbox(
-                meta.config.harness,
-                request.sandbox,
-                request.permission_mode,
-            ),
-            effective_sandbox(
-                meta.config.harness,
-                meta.config.sandbox,
-                meta.config.effective_permission_mode,
-            ),
-            effective_sandbox(
-                meta.config.harness,
-                parent_config.sandbox,
-                parent_config.effective_permission_mode,
-            ),
-        ]
-        .into_iter()
-        .min_by_key(|level| rank(*level))
-        .unwrap_or(SandboxLevel::ReadOnly);
-        ensure!(
-            sandbox != SandboxLevel::ReadOnly
-                || matches!(
-                    meta.config.harness,
-                    luna_proto::HarnessId::Codex | luna_proto::HarnessId::Mock
-                ),
-            "This provider cannot preserve the parent's read-only sandbox in a side chat"
-        );
-        let sandbox_mode_ceiling = match sandbox {
-            SandboxLevel::ReadOnly => PermissionMode::Ask,
-            SandboxLevel::WorkspaceWrite => PermissionMode::Auto,
-            SandboxLevel::DangerFullAccess => PermissionMode::Full,
-        };
-        let ceiling = [
-            meta.config.effective_permission_mode,
-            parent_config.effective_permission_mode,
-            parent_config.permission_mode,
-            sandbox_mode_ceiling,
-        ]
-        .into_iter()
-        .min()
-        .unwrap_or(PermissionMode::Ask);
-        // Capped, never run as a hidden Ask behind a higher label.
-        request.permission_mode = std::cmp::min(request.permission_mode, ceiling);
-        request.parent_permission_ceiling = Some(
-            request
-                .parent_permission_ceiling
-                .map_or(ceiling, |requested| std::cmp::min(requested, ceiling)),
-        );
-        request.sandbox = sandbox;
-        // The forked provider session lives in the account frozen at creation.
-        request.provider_account_id = meta.config.provider_account_id.clone();
+            .docs
+            .open(id)?
+            .doc()
+            .context_control()
+            .last_boundary
+            .is_some()
+        {
+            return Ok(Vec::new());
+        }
         let context: String = lock(&self.0.db).query_row(
             "SELECT context FROM side_chats WHERE id=?1",
             [id],
@@ -434,10 +404,6 @@ impl SideChats {
         ensure!(
             self.0.workspace.chat(&id)?.is_none(),
             "Creation request ID belongs to an existing task"
-        );
-        ensure!(
-            !self.contains(parent_id) && !self.0.workspace.is_side_chat(parent_id),
-            "Start side chats from a main conversation"
         );
         let parent = self
             .0
@@ -638,8 +604,6 @@ impl SideChats {
             let result = async {
                 if state == "preparing" {
                     self.set_state(&id, "creationFailed", Some("Application closed during creation. Inspect its saved receipt; the operation will not be replayed."))?;
-                } else if state != "active" {
-                    self.seal(&id, "ended").await?;
                 } else {
                     self.0.sessions.interrupt(&id).await?;
                     // Only loaded chats need flushing. Cold persistent chats
@@ -659,24 +623,6 @@ impl SideChats {
             }
         }
         clean
-    }
-
-    pub(crate) fn child_ids(&self, parent: &str) -> Result<Vec<String>> {
-        let db = lock(&self.0.db);
-        let mut stmt = db.prepare(
-            "SELECT id FROM side_chats WHERE parent_id=?1 AND state<>'deleted' ORDER BY seq",
-        )?;
-        Ok(stmt
-            .query_map([parent], |row| row.get(0))?
-            .collect::<Result<_, _>>()?)
-    }
-
-    pub(crate) async fn seal_children(&self, parent: &str) -> Result<()> {
-        for id in self.child_ids(parent)? {
-            let _gate = self.gate(&id).await;
-            self.seal(&id, "ended").await?;
-        }
-        Ok(())
     }
 
     pub(crate) fn retire(&self, id: &str) -> Result<()> {
@@ -798,79 +744,39 @@ impl SideChats {
             "Wait for this side chat's current response"
         );
         let mut meta = self.meta(id)?;
-        let creation_ceiling = meta.config.effective_permission_mode;
-        // Model, effort and access changes made through ordinary commands live
-        // on the side chat's row; the creation-time ceiling still applies.
-        if let Some(config) = self.0.workspace.chat(id)?.and_then(|chat| chat.config)
-            && config.harness == meta.config.harness
-        {
-            // The provider account stays the one frozen at creation: the
-            // forked provider session lives in that account's home.
-            let account = meta.config.provider_account_id.clone();
-            meta.config = config;
-            meta.config.provider_account_id = account;
-        }
-        let cwd: String =
-            lock(&self.0.db).query_row("SELECT cwd FROM side_chats WHERE id=?1", [id], |row| {
-                row.get(0)
-            })?;
+        let chat = self
+            .0
+            .workspace
+            .chat(id)?
+            .context("Fork thread is unavailable")?;
+        meta.config = chat.config.context("Choose a provider for this thread")?;
+        self.0
+            .sessions
+            .validate_fork_binding(id, meta.context_mode == "nativeFork")?;
+        let cwd = chat.cwd.context("Thread workspace is unavailable")?;
         let first: bool = lock(&self.0.db).query_row(
             "SELECT COUNT(*)=0 FROM side_chat_sends WHERE chat_id=?1",
             [id],
             |row| row.get(0),
         )?;
-        let parent_config = self
-            .0
-            .workspace
-            .chat(&meta.parent_id)?
-            .and_then(|parent| parent.config)
-            .context("Parent configuration is unavailable")?;
-        let ceiling = std::cmp::min(creation_ceiling, parent_config.effective_permission_mode);
-        use luna_proto::{PermissionMode, SandboxLevel};
-        let sandbox = match (
-            effective_sandbox(
-                meta.config.harness,
-                meta.config.sandbox,
-                meta.config.effective_permission_mode,
-            ),
-            effective_sandbox(
-                meta.config.harness,
-                parent_config.sandbox,
-                parent_config.effective_permission_mode,
-            ),
-        ) {
-            (SandboxLevel::ReadOnly, _) | (_, SandboxLevel::ReadOnly) => SandboxLevel::ReadOnly,
-            (SandboxLevel::WorkspaceWrite, _) | (_, SandboxLevel::WorkspaceWrite) => {
-                SandboxLevel::WorkspaceWrite
-            }
-            _ => SandboxLevel::DangerFullAccess,
-        };
-        let sandbox_mode_ceiling = match sandbox {
-            SandboxLevel::ReadOnly => PermissionMode::Ask,
-            SandboxLevel::WorkspaceWrite => PermissionMode::Auto,
-            SandboxLevel::DangerFullAccess => PermissionMode::Full,
-        };
-        let mode = [
-            meta.config.permission_mode,
-            parent_config.permission_mode,
-            ceiling,
-            sandbox_mode_ceiling,
-        ]
-        .into_iter()
-        .min()
-        .unwrap_or(PermissionMode::Ask);
-        ensure!(
-            sandbox != SandboxLevel::ReadOnly
-                || matches!(
-                    meta.config.harness,
-                    luna_proto::HarnessId::Codex | luna_proto::HarnessId::Mock
-                ),
-            "This provider cannot preserve the parent's read-only sandbox in a side chat"
+        let sandbox = effective_sandbox(
+            meta.config.harness,
+            meta.config.sandbox,
+            meta.config.effective_permission_mode,
         );
+        let mode = meta.config.permission_mode;
         // Legacy providers without an instruction channel still receive the
         // bounded seed in their first ordinary prompt. Codex and Claude use
         // the stable runtime-contract section, including for goals/reviews.
         let prompt = if first
+            && self
+                .0
+                .docs
+                .open(id)?
+                .doc()
+                .context_control()
+                .last_boundary
+                .is_none()
             && !matches!(
                 meta.config.harness,
                 luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode
@@ -901,19 +807,15 @@ impl SideChats {
             sandbox,
             auto_approve: false,
             permission_mode: mode,
-            parent_permission_ceiling: Some(ceiling),
+            parent_permission_ceiling: None,
             environment_permission_ceiling: None,
             permission_policy: None,
             attachments: vec![],
             worktree: None,
-            resume: if first && meta.context_mode == "nativeFork" {
-                self.0
-                    .workspace
-                    .chat(id)?
-                    .and_then(|chat| chat.harness_session_id)
-            } else {
-                None
-            },
+            // Managed identity owns resume, including fresh generations after
+            // ClearContext/ProviderSwitch. Never forward the registry cache as
+            // an explicit resume (it can intentionally contain an empty id).
+            resume: None,
         };
         {
             let _permit =
@@ -1026,42 +928,9 @@ impl SideChats {
         Ok(())
     }
 
-    async fn seal(&self, id: &str, state: &str) -> Result<()> {
-        let meta = self.meta(id)?;
-        if !matches!(meta.state.as_str(), "active" | "closing" | "closeFailed") {
-            return Ok(());
-        }
-        let marker_error = self
-            .set_state(
-                id,
-                "closing",
-                Some("Stopping work and saving the transcript…"),
-            )
-            .err();
-        self.0.sessions.interrupt(id).await?;
-        ensure!(
-            !self.0.sessions.has_live_run(id),
-            "Provider has not stopped; unload is incomplete. Retry shortly."
-        );
-        self.project(id)?;
-        self.0.docs.flush_chat_checked(id)?;
-        self.0.sessions.release_side_chat_runtime(id)?;
-        if let Some(error) = marker_error {
-            self.0.docs.evict_chat(id);
-            return Err(error);
-        }
-        self.set_state(id, state, None)?;
-        self.0.docs.evict_chat(id);
-        Ok(())
-    }
-
-    /// Explicit user End action. View teardown never calls this on new clients.
+    /// Wire compatibility for old view teardown. Closing a view never stops,
+    /// unloads or ends an ordinary thread; Stop/Archive/Delete are explicit.
     pub async fn unload(&self, id: &str, _token: Option<&str>) -> Result<SideChatMeta> {
-        let _gate = self.gate(id).await;
-        if let Err(error) = self.seal(id, "ended").await {
-            let _ = self.set_state(id, "closeFailed", Some(&error.to_string()));
-            return Err(error);
-        }
         self.meta(id)
     }
 
@@ -1073,19 +942,20 @@ impl SideChats {
     ) -> Result<SideChatPage> {
         let _gate = self.gate(id).await;
         let meta = self.meta(id)?;
-        ensure!(
-            meta.state != "deleted",
-            "Side chat was deleted with its parent"
-        );
-        if matches!(meta.state.as_str(), "closing" | "closeFailed") {
-            self.seal(id, "ended").await?;
-        }
+        ensure!(meta.state != "deleted", "Thread was deleted");
         let recovery: bool = lock(&self.0.db).query_row(
             "SELECT needs_recovery FROM side_chats WHERE id=?1",
             [id],
             |row| row.get(0),
         )?;
-        if recovery {
+        if recovery
+            && !self.0.sessions.turn_in_flight(id)
+            && self
+                .0
+                .sessions
+                .validate_fork_binding(id, meta.context_mode == "nativeFork")
+                .is_ok()
+        {
             self.0.docs.open(id)?.mark_abandoned_streams(
                 "Previous turn interrupted by application restart. Send a new message to continue.",
             )?;
@@ -1148,8 +1018,8 @@ impl SideChats {
 
 /// Import is already admitted by LocalImporter; this connection performs only
 /// the side-chat portion of that same profile transfer. Existing target rows
-/// win. Imported histories stay read-only; moving a profile is not permission
-/// to resume a provider session owned by its source profile.
+/// win. Imported threads retain history and provenance. Execution requires a
+/// verified managed binding; import alone cannot adopt a provider session.
 pub(crate) fn import_saved(source: &Path, target: &Path) -> Result<()> {
     let source_db =
         Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -1174,7 +1044,7 @@ pub(crate) fn import_saved(source: &Path, target: &Path) -> Result<()> {
         INSERT INTO main.side_chats (id,parent_id,title,created_at_ms,expires_at_ms,state,detail,config,cwd,context,context_mode,origin_message_id,anchor_text,creation_hash,needs_recovery)
         SELECT id,parent_id,title,created_at_ms,expires_at_ms,
             CASE WHEN state='deleted' THEN 'deleted' ELSE 'recovered' END,
-            'Imported saved side chat. Read-only.',config,cwd,context,context_mode,origin_message_id,anchor_text,creation_hash,1
+            'Imported fork: verify its managed provider binding before continuing.',config,cwd,context,context_mode,origin_message_id,anchor_text,creation_hash,1
         FROM side_import.side_chats WHERE id IN (SELECT id FROM side_import_ids);
         INSERT INTO main.side_chat_entries SELECT * FROM side_import.side_chat_entries WHERE chat_id IN (SELECT id FROM side_import_ids);
         INSERT INTO main.side_chat_sends SELECT * FROM side_import.side_chat_sends WHERE chat_id IN (SELECT id FROM side_import_ids);

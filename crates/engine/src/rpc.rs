@@ -1351,88 +1351,10 @@ impl EngineRpc {
         })
     }
 
-    fn is_side_chat(&self, id: &str) -> bool {
-        let owner = id.split_once("--sub--").map_or(id, |(owner, _)| owner);
-        self.workspace.is_side_chat(owner) || self.store.is_side_chat(owner).unwrap_or(true)
-    }
-
-    /// Ordinary task commands a persistent side chat accepts. Everything that would
-    /// move it off the parent's checkout, provider session or lifecycle is
-    /// refused with the reason the UI shows.
-    fn side_chat_command_allowed(
-        &self,
-        task_id: &str,
-        intent: &TaskCommandIntent,
-    ) -> Result<(), String> {
-        let same_provider = |config: &ChatConfig| {
-            self.workspace
-                .chat(task_id)
-                .ok()
-                .flatten()
-                .and_then(|chat| chat.config)
-                .is_some_and(|current| {
-                    current.harness == config.harness
-                        && current.provider_account_id == config.provider_account_id
-                })
-        };
-        match intent {
-            TaskCommandIntent::Session { .. }
-            | TaskCommandIntent::NativeReview { .. }
-            | TaskCommandIntent::QueueMessage { .. }
-            | TaskCommandIntent::EditQueuedMessage { .. }
-            | TaskCommandIntent::RemoveQueuedMessage { .. }
-            | TaskCommandIntent::SendQueuedNow { .. }
-            | TaskCommandIntent::SteerQueuedNow { .. }
-            | TaskCommandIntent::SetPermission { .. }
-            | TaskCommandIntent::Goal { .. }
-            | TaskCommandIntent::CompactContext {}
-            | TaskCommandIntent::ClearContext {}
-            | TaskCommandIntent::Rename { .. }
-            | TaskCommandIntent::SetRead { .. }
-            | TaskCommandIntent::MarkSeen { .. }
-            | TaskCommandIntent::SetActivity { .. }
-            | TaskCommandIntent::EditEarlierMessage { .. }
-            | TaskCommandIntent::RewindConversation { .. }
-            | TaskCommandIntent::ReconcileConversationRewind { .. }
-            | TaskCommandIntent::RestoreHistoryRecovery { .. }
-            | TaskCommandIntent::RetryRecovery { .. }
-            | TaskCommandIntent::CancelRecovery { .. } => Ok(()),
-            TaskCommandIntent::ForkTask { side_chat: false, .. } => Ok(()),
-            TaskCommandIntent::ForkTask { side_chat: true, .. } => {
-                Err("Start side chats from a main conversation".into())
-            }
-            TaskCommandIntent::SetModel { config } | TaskCommandIntent::SetConfig { config } => {
-                if same_provider(config) {
-                    Ok(())
-                } else {
-                    Err("A side chat keeps its parent's provider and account: its context is the parent's forked provider session".into())
-                }
-            }
-            TaskCommandIntent::SwitchProvider { .. }
-            | TaskCommandIntent::SetProviderAccount { .. } => Err(
-                "A side chat keeps its parent's provider and account: its context is the parent's forked provider session".into(),
-            ),
-            TaskCommandIntent::SetBranch { .. }
-            | TaskCommandIntent::SetCwd { .. }
-            | TaskCommandIntent::SetHost { .. }
-            | TaskCommandIntent::MoveProject { .. }
-            | TaskCommandIntent::RepairWorkspaceIdentity { .. } => Err(
-                "A side chat shares its parent's checkout, branch and project; change them in the parent".into(),
-            ),
-            TaskCommandIntent::SetArchived { .. }
-            | TaskCommandIntent::SetPinned { .. }
-            | TaskCommandIntent::SetSettled { .. } => Err(
-                "Side chat marks are managed from Related chats".into(),
-            ),
-            TaskCommandIntent::CreateChildChat { .. }
-            | TaskCommandIntent::ChildOutcome { .. }
-            | TaskCommandIntent::ChildOutcomeDelivered { .. } => {
-                Err("Side chats cannot create or own child chats".into())
-            }
-            TaskCommandIntent::CreateChat { .. } | TaskCommandIntent::Delete {} => Err(
-                "Side chats are created and deleted only by their side panel and parent".into(),
-            ),
-        }
+    fn derived_fork_document(&self, id: &str) -> bool {
+        id.split_once("--sub--").is_some_and(|(owner, _)| {
+            self.workspace.is_side_chat(owner) || self.store.is_side_chat(owner).unwrap_or(true)
+        })
     }
 
     pub(crate) fn with_side_chats(mut self, side_chats: crate::side_chats::SideChats) -> Self {
@@ -2188,7 +2110,6 @@ impl EngineRpc {
                     }
                 }
                 for chat in current {
-                    if store.is_side_chat(&chat.id).unwrap_or(true) || workspace.is_side_chat(&chat.id) { continue; }
                     let fingerprint = activity_metadata_fingerprint(&chat);
                     if indexed.get(&chat.id) == Some(&fingerprint) {
                         continue;
@@ -2362,10 +2283,6 @@ impl EngineRpc {
         }
         for chat in chats
             .iter()
-            .filter(|chat| {
-                !self.store.is_side_chat(&chat.id).unwrap_or(true)
-                    && !self.workspace.is_side_chat(&chat.id)
-            })
             .filter(|chat| chat.device_id == self.engine_info.device_id)
         {
             let handle = self
@@ -3081,6 +2998,11 @@ impl EngineRpc {
         legacy: bool,
         send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
     ) -> Result<CommandReceipt, RpcError> {
+        if self.derived_fork_document(&command.task_id) {
+            return Err(RpcError::Failed(
+                "Native-agent transcripts are derived documents, not writable threads".into(),
+            ));
+        }
         if let TaskCommandIntent::NativeReview {
             request,
             message_id,
@@ -3096,35 +3018,6 @@ impl EngineRpc {
                 },
                 transfers: Vec::new(),
             };
-        }
-        if self.is_side_chat(&command.task_id) {
-            let owned_delete = matches!(command.intent, TaskCommandIntent::Delete {})
-                && self
-                    .side_chats
-                    .as_ref()
-                    .is_some_and(|service| service.contains(&command.task_id))
-                && self
-                    .workspace
-                    .chat(&command.task_id)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|chat| chat.device_id == self.engine_info.device_id);
-            let reserved_create = matches!(&command.intent, TaskCommandIntent::CreateChat { side_parent_id: Some(parent), .. }
-                if self.side_chats.as_ref().is_some_and(|service| service.reserved_for(&command.task_id, parent)));
-            if !owned_delete && !reserved_create {
-                if send_fence.is_some() {
-                    return Err(RpcError::Failed(
-                        "Side chats accept messages only from their own panel, not from another task's LUNA tools".into(),
-                    ));
-                }
-                self.side_chat_command_allowed(&command.task_id, &command.intent)
-                    .map_err(RpcError::Failed)?;
-                self.side_chats
-                    .as_ref()
-                    .ok_or_else(|| RpcError::Failed("Side chat service unavailable".into()))?
-                    .admit_ordinary(&command.task_id)
-                    .map_err(|error| RpcError::Failed(error.to_string()))?;
-            }
         }
         let _lane = self.doc_host.task_command_gate(&command.task_id).await;
         let current = self.current_task_command_snapshot(&command.task_id)?;
@@ -3326,41 +3219,6 @@ impl EngineRpc {
             }
         }
         if matches!(command.intent, TaskCommandIntent::Delete {}) {
-            if let Some(service) = &self.side_chats {
-                service
-                    .seal_children(&command.task_id)
-                    .await
-                    .map_err(|error| RpcError::Failed(error.to_string()))?;
-                for child in service
-                    .child_ids(&command.task_id)
-                    .map_err(|error| RpcError::Failed(error.to_string()))?
-                {
-                    if self
-                        .workspace
-                        .chat(&child)
-                        .map_err(|error| RpcError::Failed(error.to_string()))?
-                        .is_some()
-                    {
-                        let mut child_command =
-                            legacy_task_command(child.clone(), TaskCommandIntent::Delete {});
-                        child_command.command_id =
-                            format!("side-delete:{}:{child}", command.command_id);
-                        child_command.issued_at_ms = command.issued_at_ms;
-                        let receipt =
-                            Box::pin(self.execute_task_command(child_command, true)).await?;
-                        if receipt.status != CommandReceiptStatus::Applied {
-                            return Err(RpcError::Failed(format!(
-                                "Side chat deletion is incomplete: {:?}",
-                                receipt.status
-                            )));
-                        }
-                    } else {
-                        service
-                            .retire(&child)
-                            .map_err(|error| RpcError::Failed(error.to_string()))?;
-                    }
-                }
-            }
             if let Err(error) = self.sessions.interrupt(&command.task_id).await {
                 return self.finish_task_command(
                     &command.command_id,
@@ -4222,6 +4080,30 @@ impl EngineRpc {
         Ok(prefix.turns)
     }
 
+    fn fork_hidden_turns(
+        &self,
+        source: &Chat,
+        source_binding: &luna_proto::ExecutionBinding,
+        plan: &crate::history_operations::HistoryPlan,
+        side_chat: bool,
+    ) -> Result<Vec<String>, crate::EngineError> {
+        let mut source_turns = self.hidden_turn_prefix(source, source_binding)?;
+        if side_chat {
+            for entry in &plan.entries {
+                if entry.role == MessageRole::Assistant {
+                    source_turns.push(plan.checkpoints.get(&entry.id).cloned().ok_or_else(
+                        || {
+                            crate::EngineError::Other(
+                                "This history contains a display segment without an exact provider checkpoint. Create a context snapshot instead of a native fork.".into(),
+                            )
+                        },
+                    )?);
+                }
+            }
+        }
+        Ok(source_turns)
+    }
+
     fn preserve_fork_hidden_turns(
         &self,
         target_task: &str,
@@ -4231,20 +4113,7 @@ impl EngineRpc {
         plan: &crate::history_operations::HistoryPlan,
         side_chat: bool,
     ) -> Result<(), crate::EngineError> {
-        let mut source_turns = self.hidden_turn_prefix(source, source_binding)?;
-        if side_chat {
-            for entry in &plan.entries {
-                if entry.role == MessageRole::Assistant {
-                    source_turns.push(plan.checkpoints.get(&entry.id).cloned().ok_or_else(
-                        || {
-                            crate::EngineError::Other(
-                                "Inherited side history lacks an exact provider checkpoint".into(),
-                            )
-                        },
-                    )?);
-                }
-            }
-        }
+        let source_turns = self.fork_hidden_turns(source, source_binding, plan, side_chat)?;
         let turns = source_turns
             .iter()
             .map(|turn| {
@@ -5617,6 +5486,11 @@ impl EngineRpc {
                     .or_else(|| source.title.as_ref().map(|title| format!("{title} (fork)")));
                 let provider_name =
                     format!("[LUNA] {}", target_title.as_deref().unwrap_or("New task"));
+
+                // Fail before mutating a provider when inherited display
+                // segments cannot be mapped to exact native history.
+                self.fork_hidden_turns(&source, &binding, &plan, side_chat)
+                    .map_err(TaskProjectionError::Mutation)?;
 
                 let provider_result = self
                     .fork_provider_history(
@@ -8930,32 +8804,16 @@ impl RpcService for EngineRpc {
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
         }
-        if let Some(id) = params
-            .get("chatId")
-            .or_else(|| params.get("taskId"))
-            .and_then(|id| id.as_str())
-            .filter(|id| self.is_side_chat(id))
+        if method != methods::WATCH_DOC_MESSAGES
+            && params
+                .get("chatId")
+                .or_else(|| params.get("taskId"))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| self.derived_fork_document(id))
         {
-            // A durably active side chat is an ordinary local chat for per-chat
-            // RPCs; explicitly ended chats use the saved-history panel.
-            // Native-agent transcripts are derived documents, not side-chat
-            // metadata rows. Admit only their read through the owning chat;
-            // keep the original document id for the watch below. Other methods
-            // retain exact-id admission, so derived ids never gain mutation.
-            let admission_id = if method == methods::WATCH_DOC_MESSAGES {
-                id.split_once("--sub--").map_or(id, |(owner, _)| owner)
-            } else {
-                id
-            };
-            self.side_chats
-                .as_ref()
-                .ok_or_else(|| RpcError::Failed("Side chat service unavailable".into()))?
-                .admit_ordinary(admission_id)
-                .map_err(|error| {
-                    RpcError::Failed(format!(
-                        "{error}. Historical side chats are read through the side chat panel."
-                    ))
-                })?;
+            return Err(RpcError::Failed(
+                "Native-agent transcripts are derived documents, not writable threads".into(),
+            ));
         }
         if claude_history::handles(method) {
             return self.handle_native_file_rewind(method, params).await;
@@ -9888,10 +9746,27 @@ impl RpcService for EngineRpc {
             }
             methods::WATCH_CHAT_WORKBENCH => {
                 let p: luna_proto::GetChatWorkbenchRequest = parse_params(params)?;
-                self.read_chat_workbench(&p.main_chat_id)?;
+                let reader = self.chat_workbench_reader()?;
+                reader.read_chat_workbench(&p.main_chat_id)?;
                 let receiver = self.chat_workbenches_service()?.watch(&p.main_chat_id)
                     .map_err(|error| RpcError::Failed(error.to_string()))?;
-                Ok(RpcReply::Stream(watch_stream(receiver)))
+                // Deleting a chat must publish its pruned layout before the
+                // next user action. Otherwise that action itself performs the
+                // prune and conflicts with the client's still-current revision.
+                let changes = futures::stream::select(
+                    watch_stream(receiver).map(|_| ()),
+                    watch_stream(self.workspace.watch_chats()).map(|_| ()),
+                );
+                let mut last_revision = None;
+                Ok(RpcReply::Stream(changes.filter_map(move |_| {
+                    let value = reader.read_chat_workbench(&p.main_chat_id).ok()
+                        .filter(|snapshot| last_revision != Some(snapshot.revision))
+                        .and_then(|snapshot| {
+                            last_revision = Some(snapshot.revision);
+                            serde_json::to_value(snapshot).ok()
+                        });
+                    futures::future::ready(value)
+                }).boxed()))
             }
             methods::MUTATE_CHAT_WORKBENCH => {
                 let p: luna_proto::MutateChatWorkbenchRequest = parse_params(params)?;
@@ -10864,23 +10739,24 @@ impl RpcService for EngineRpc {
                     })).boxed()
                 } else { changes };
                 Ok(RpcReply::Stream(changes.map(move |mut value| {
-                    // One indexed metadata read per snapshot, not a query and
-                    // document load for each row. Ended sides remain discoverable
-                    // for counts/history without becoming top-level sidebar chats.
+                    // Fork origin augments the ordinary project row. A source
+                    // disappearing never hides a surviving fork.
                     let side_states = side_chats.as_ref().and_then(|service| service.published_states().ok()).unwrap_or_default();
                     if let Some(items) = value.as_array_mut() {
                         items.retain_mut(|chat| {
                             let Some(id) = chat.get("id").and_then(|id| id.as_str()).map(str::to_owned) else { return false };
                             if let Some((parent, state)) = side_states.get(&id) {
                                 if let Some(object) = chat.as_object_mut() {
-                                    object.remove("spaceId");
                                     object.insert("sideChatParentId".into(), parent.clone().into());
                                     object.insert("sideChatState".into(), state.clone().into());
                                 }
                                 true
-                            } else if workspace.is_side_chat(&id) {
-                                false // deleted, remote-only or metadata unavailable
                             } else {
+                                if let Some(parent) = workspace.side_chat_parent(&id)
+                                    && let Some(object) = chat.as_object_mut() {
+                                    object.insert("sideChatParentId".into(), parent.into());
+                                    object.insert("sideChatState".into(), "active".into());
+                                }
                                 chat.get("spaceId").and_then(|id| id.as_str()).is_some()
                             }
                         });

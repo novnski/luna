@@ -1536,6 +1536,13 @@ impl WorkspaceHost {
     /// message's text. Claims the row first so a pre-workspace chat gains one.
     pub fn note_message(&self, chat_id: &str, text: &str) {
         if self.is_side_chat(chat_id) {
+            // Fork transcripts remain profile-local. Publish ordinary freshness
+            // without copying private transcript text into the synced registry.
+            if let Err(error) =
+                self.set_chat_activity(chat_id, Some(Utc::now().timestamp_millis()), None)
+            {
+                tracing::warn!(chat = %chat_id, %error, "fork activity write failed");
+            }
             return;
         }
         let preview: String = text.chars().take(120).collect();

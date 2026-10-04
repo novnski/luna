@@ -130,6 +130,8 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
     let selected = flat(theme.element_active, chrome);
     let canvas = flat(theme.canvas_fill(), chrome);
     let tab_active = flat(theme.wash(0.09), canvas);
+    // The focused group's selected tab: its accent tint over the pane.
+    let tab_focused = flat(theme.tab_focused_fill(), canvas);
     let code = flat(theme.ink(0.035), canvas);
     let raised = flat(theme.surface_raised, chrome);
     let overlay = flat(theme.glass_overlay(), chrome);
@@ -261,8 +263,47 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             "workbench",
             "active tab title",
             Kind::Text,
-            theme.text,
+            theme.tab_title(true, false),
             tab_active,
+        ),
+        p(
+            "workbench",
+            "focused group's active tab title",
+            Kind::Text,
+            theme.tab_title(true, true),
+            tab_focused,
+        ),
+        p(
+            "workbench",
+            "focused group's active tab role glyph",
+            Kind::NonText,
+            theme.tab_role_icon(true),
+            tab_focused,
+        ),
+        p(
+            "workbench",
+            "focused group's active tab close glyph",
+            Kind::NonText,
+            theme.text_muted,
+            tab_focused,
+        ),
+        p(
+            "workbench",
+            "focused group's active tab close glyph, hovered",
+            Kind::NonText,
+            theme.text_muted,
+            flat(theme.wash(0.12), tab_focused),
+        ),
+        p(
+            "workbench",
+            "Main badge, focused group's active tab",
+            Kind::Text,
+            theme.readable_on_tab_badge(
+                theme.accent,
+                theme.accent_wash,
+                theme::TEXT_CONTRAST_TARGET,
+            ),
+            flat(theme.accent_wash, tab_focused),
         ),
         p(
             "workbench",
@@ -328,10 +369,10 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
         ),
         p(
             "workbench",
-            "focused-group tab indicator",
+            "tab keyboard focus ring, focused group's active tab",
             Kind::NonText,
             theme.focus_ring(),
-            canvas,
+            tab_focused,
         ),
         p(
             "workbench",
@@ -349,17 +390,10 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
         ),
         p(
             "workbench",
-            "unfocused tab indicator",
+            "tab role glyph",
             Kind::NonText,
-            theme.readable_icon(theme.text_muted.opacity(0.45)),
-            canvas,
-        ),
-        p(
-            "workbench",
-            "focused pane outline",
-            Kind::NonText,
-            theme.readable_icon(theme.accent.opacity(0.45)),
-            canvas,
+            theme.tab_role_icon(false),
+            tab_active,
         ),
         p(
             "workbench",
@@ -1281,6 +1315,12 @@ fn hue_checks(theme: &Theme, backdrop: Hsla) -> Vec<(&'static str, f32, f32, f32
             flat(theme.accent.opacity(0.10), chrome),
         ),
         ("focus ring", theme.accent, theme.focus_ring(), tab_active),
+        (
+            "focused tab role glyph",
+            theme.accent,
+            theme.tab_role_icon(true),
+            flat(theme.tab_focused_fill(), canvas),
+        ),
         (
             "selected-row checkmark",
             theme.accent,

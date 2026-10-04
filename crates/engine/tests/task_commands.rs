@@ -5697,10 +5697,10 @@ async fn side_chat_native_fork_preserves_binding_and_never_replays_unknown_creat
                 client
                     .call(
                         "QueueMessage",
-                        serde_json::json!({"chatId":child,"text":"must not resume"})
+                        serde_json::json!({"chatId":child,"text":"resume after closing view"})
                     )
                     .await
-                    .is_err()
+                    .is_ok()
             );
         } else {
             assert!(first.is_err());

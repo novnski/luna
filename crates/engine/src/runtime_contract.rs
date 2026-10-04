@@ -137,11 +137,13 @@ fn role_text(context: &RuntimeContext, chat: &RuntimeChatIdentity) -> String {
             }
         ),
         RuntimeChatRole::Side => format!(
-            "Chat role: side chat. This is a persistent, user-created LUNA side conversation (thread {thread}) opened from parent conversation @thread:{parent}. {} It works in the parent's checkout and branch with the parent's permissions, so file changes here affect the parent's working tree. Its turns and Stop are independent of the parent's run and queue: the parent is not paused, and it does not see this conversation. This side chat survives closed views and application restarts until the user explicitly ends it. Only the user can create side chats. Side chats cannot create child chats.",
-            if caps.context_origin == RuntimeContextOrigin::NativeFork {
+            "Chat role: fork thread. This is an ordinary persistent LUNA conversation (thread {thread}) forked from source @thread:{parent}. {} It has its own configuration, permissions, turns and queue. Closing its view does not stop or end it, and source archive or deletion does not change its lifetime. It initially uses the source checkout, so edits affect any thread still using that same path. The source is provenance, not an execution or permission owner. Normal thread operations and the attached tools are available under the same user-authorization rules as other threads.",
+            if caps.context_origin == RuntimeContextOrigin::Fresh {
+                "The current provider context was explicitly reset; do not assume the source conversation is available. Only an explicit handoff can carry selected context into this generation."
+            } else if caps.context_origin == RuntimeContextOrigin::NativeFork {
                 "It began as a native fork of the parent conversation, so the parent's earlier context is already in this history."
             } else {
-                "It began with a bounded snapshot of the parent conversation in its first message."
+                "It began with a bounded, frozen snapshot of the source conversation as quoted context."
             }
         ),
         RuntimeChatRole::Child => format!(

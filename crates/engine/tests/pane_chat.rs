@@ -1262,22 +1262,23 @@ async fn side_chat_forks_inherits_and_runs_independently(id: HarnessId, mode: &s
         RuntimeCheckoutOwnership::SharedWithParent
     );
     assert!(identity.capabilities.persistent);
-    assert!(!identity.capabilities.create_child_threads);
+    assert!(identity.capabilities.create_child_threads);
+    assert!(!identity.capabilities.access_capped_by_parent);
     assert!(
-        !side_contract
+        side_contract
             .tools
             .iter()
             .any(|tool| tool.name == "create_thread")
     );
     assert!(
-        side_contract
+        !side_contract
             .omitted_tools
             .iter()
             .any(|tool| tool.name == "create_thread"
                 && tool.reason.contains("side chats cannot create child chats"))
     );
     let text = instructions(&side_contract);
-    assert!(text.contains("Chat role: side chat"), "{text}");
+    assert!(text.contains("Chat role: fork thread"), "{text}");
     assert!(text.contains(&format!("@thread:{parent}")), "{text}");
     assert_eq!(side_contract.context.branch.as_deref(), Some("parent-wt"));
     evidence(
@@ -1604,8 +1605,16 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .harness_session_id
         .unwrap();
 
+    let nested_request = uuid::Uuid::new_v4().to_string();
+    let nested_fork = client.call("CreateSideChat", json!({"parentId":side,"requestId":nested_request})).await.unwrap_or_else(|error| {
+        let receipt = core.doc_host.task_command_receipt(&format!("side-chat-create:{nested_request}")).unwrap();
+        evidence("nested-fork-error.json", &json!({"error":error.to_string(),"receipt":receipt,"entries":core.doc_host.open(&side).unwrap().doc().read_entries().unwrap(),"checkpoints":recorder.checkpoints.lock().unwrap().clone()}));
+        panic!("nested native fork failed: {error}; receipt={receipt:?}")
+    });
+    assert_eq!(nested_fork["meta"]["contextMode"], "nativeFork");
+
     // pane-ui gate: the capability is advertised and the live side chat is
-    // published in WatchChats without spaceId (never a sidebar task).
+    // published in WatchChats with ordinary project membership and provenance.
     let info: Value = client
         .call(luna_rpc::methods::ENGINE_INFO, json!({}))
         .await
@@ -1633,7 +1642,10 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .find(|row| row["id"] == side.as_str())
         .cloned()
         .expect("live side chat row published");
-    assert!(side_published.get("spaceId").is_none(), "{side_published}");
+    assert_eq!(
+        side_published["spaceId"], "space-ordinary",
+        "{side_published}"
+    );
     assert_eq!(side_published["sideChatParentId"], parent.as_str());
     assert_eq!(side_published["config"]["model"], "parent-model");
     assert!(
@@ -1859,7 +1871,7 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     assert_eq!(run.reasoning, Some(ReasoningLevel::Low));
     parent_untouched(&core, &recorder, "model change");
 
-    // G6: access change on the side chat; above the parent's ceiling it is capped.
+    // Explicit user access changes affect the fork independently of its source.
     command(
         &client,
         &side,
@@ -1919,12 +1931,8 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
             .unwrap();
         assert_eq!(
             policy.effective_mode,
-            parent_before
-                .config
-                .as_ref()
-                .unwrap()
-                .effective_permission_mode,
-            "a side chat never runs above its parent"
+            PermissionMode::Full,
+            "the user grants this ordinary fork its own access"
         );
         until_diag_side(&core, &recorder, &side, "side idle", || {
             !core.sessions.turn_in_flight(&side)
@@ -1933,32 +1941,22 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
     }
     parent_untouched(&core, &recorder, "access change");
 
-    // G7: commands that would leave the parent's checkout/provider are refused.
-    for (key, intent, reason) in [
-        (
-            "side-cwd",
-            json!({"kind":"setCwd","cwd": base}),
-            "shares its parent's checkout",
-        ),
-        (
-            "side-branch",
-            json!({"kind":"setBranch","branch":"other"}),
-            "shares its parent's checkout",
-        ),
-        (
-            "side-archive",
-            json!({"kind":"setArchived","archived":true}),
-            "Related chats",
-        ),
-        (
-            "side-account",
-            json!({"kind":"setProviderAccount","accountId":"other"}),
-            "keeps its parent's provider",
-        ),
-    ] {
-        let error = command(&client, &side, key, intent).await.expect_err(key);
-        assert!(error.contains(reason), "{key}: {error}");
+    // Organization uses the normal task-command receipts. Invalid account
+    // choices fail through provider validation, not a side-role ban.
+    for (key, intent) in [("fork-pin", json!({"kind":"setPinned","pinned":true}))] {
+        let receipt = command(&client, &side, key, intent).await.unwrap();
+        assert_eq!(receipt["status"], "applied", "{receipt}");
     }
+    let refused = command(
+        &client,
+        &side,
+        "fork-invalid-account",
+        json!({"kind":"setProviderAccount","accountId":"other"}),
+    )
+    .await
+    .unwrap();
+    assert_ne!(refused["status"], "applied");
+    assert!(!refused.to_string().contains("keeps its parent's provider"));
 
     // G10: the legacy side-panel send still works alongside.
     client
@@ -1996,41 +1994,204 @@ async fn side_chat_ordinary_commands(id: HarnessId, mode: &str) {
         .unwrap();
     assert_eq!(renewed["state"], "active");
 
-    // G2: after unload the side chat is read-only for ordinary commands too.
+    // An old client's view close is compatible and has no lifecycle effect.
+    let binding_before_close = core
+        .task_identity
+        .view(&side)
+        .unwrap()
+        .current_binding
+        .unwrap();
     client
         .call("UnloadSideChat", json!({"id":side,"lease":lease}))
         .await
         .unwrap();
-    let error = queue_with(
+    queue_with(
         &client,
         &side,
-        json!({"messageId":"side-late","text":"late","holdForTurnEnd":true}),
+        json!({"messageId":"side-late","text":"after closing view","holdForTurnEnd":true}),
     )
     .await
-    .unwrap_err();
-    assert!(error.contains("read-only"), "{error}");
-    let error = command(
+    .unwrap();
+    until_diag_side(&core, &recorder, &side, "send after view close", || {
+        runs_for(&recorder, &side)
+            .iter()
+            .any(|run| run.prompt == "after closing view")
+            && !core.sessions.turn_in_flight(&side)
+    })
+    .await;
+    let binding_after_close = core
+        .task_identity
+        .view(&side)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(
+        binding_after_close.binding_id,
+        binding_before_close.binding_id
+    );
+    assert_eq!(
+        binding_after_close.generation,
+        binding_before_close.generation
+    );
+    assert_eq!(binding_after_close.provider_task_id, fork_session);
+    assert!(
+        client
+            .subscribe_checked(
+                luna_rpc::methods::WATCH_DOC_MESSAGES,
+                json!({"chatId":side})
+            )
+            .await
+            .is_ok()
+    );
+    client
+        .call("GetChatWorkbench", json!({"mainChatId":side}))
+        .await
+        .unwrap();
+    let blank_child = client.call("CreateChildTab", json!({"parentTaskId":side,"idempotencyKey":"fork-blank-child","title":"Child from fork","provider":id,"model":"child-model","reasoning":"medium"})).await.unwrap();
+    assert_eq!(blank_child["startupState"], "awaiting-first-message");
+    assert!(runs_for(&recorder, blank_child["taskId"].as_str().unwrap()).is_empty());
+    // Steered display segments without a checkpoint must fail before any
+    // provider mutation; the native-fork alternative remains explicit.
+    let rejected_request = uuid::Uuid::new_v4().to_string();
+    let provider_operations = recorder.sequence.load(Ordering::SeqCst);
+    assert!(
+        client
+            .call(
+                "CreateSideChat",
+                json!({"parentId":side,"requestId":rejected_request})
+            )
+            .await
+            .is_err()
+    );
+    let rejected = core
+        .doc_host
+        .task_command_receipt(&format!("side-chat-create:{rejected_request}"))
+        .unwrap()
+        .unwrap();
+    assert_ne!(rejected.status, luna_proto::CommandReceiptStatus::Pending);
+    assert_eq!(
+        recorder.sequence.load(Ordering::SeqCst),
+        provider_operations,
+        "unmapped history is rejected before native effects"
+    );
+    parent_untouched(&core, &recorder, "after view close and nested creation");
+    let deleted = command(
         &client,
-        &side,
-        "side-late-stop",
-        json!({"kind":"session","command":{"kind":"interrupt"}}),
+        &parent,
+        "delete-fork-source",
+        json!({"kind":"delete"}),
     )
     .await
-    .unwrap_err();
-    assert!(error.contains("read-only"), "{error}");
-    assert!(!queued_ids(&core, &side).contains(&"side-late".to_string()));
-    let stream = client
-        .subscribe_checked(
-            luna_rpc::methods::WATCH_DOC_MESSAGES,
-            json!({"chatId": side}),
+    .unwrap();
+    assert_eq!(deleted["status"], "applied", "{deleted}");
+    assert!(core.workspace.chat(&side).unwrap().is_some());
+    queue_with(&client, &side, json!({"messageId":"side-source-gone","text":"after source deletion","holdForTurnEnd":true})).await.unwrap();
+    until_diag_side(
+        &core,
+        &recorder,
+        &side,
+        "send after source deletion",
+        || {
+            runs_for(&recorder, &side)
+                .iter()
+                .any(|run| run.prompt == "after source deletion")
+                && !core.sessions.turn_in_flight(&side)
+        },
+    )
+    .await;
+    assert_eq!(
+        runs_for(&recorder, &side).last().unwrap().resume.as_deref(),
+        Some(fork_session.as_str())
+    );
+    // Mismatched native identity is held before any direct send effect.
+    // ClearContext then starts a fresh generation for the first legacy send.
+    let nested_id = nested_fork["meta"]["id"].as_str().unwrap();
+    let nested_binding = core
+        .task_identity
+        .view(nested_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    let nested_cwd = core
+        .workspace
+        .chat(nested_id)
+        .unwrap()
+        .unwrap()
+        .cwd
+        .unwrap();
+    core.workspace
+        .set_chat_harness_session(nested_id, "mismatched-native-session", &nested_cwd);
+    let blocked = client
+        .call(
+            "SendSideChat",
+            json!({"id":nested_id,"messageId":"mismatch-held","text":"must not run"}),
         )
-        .await;
-    assert!(stream.is_err(), "an unloaded side chat is not a live chat");
-    parent_untouched(&core, &recorder, "after unload");
+        .await
+        .unwrap_err();
+    assert!(
+        blocked.to_string().contains("managed binding disagree"),
+        "{blocked}"
+    );
+    assert!(runs_for(&recorder, nested_id).is_empty());
+    core.workspace.set_chat_harness_session(
+        nested_id,
+        &nested_binding.provider_task_id,
+        &nested_cwd,
+    );
+    let cleared = command(
+        &client,
+        nested_id,
+        "nested-clear",
+        json!({"kind":"clearContext"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(cleared["status"], "applied", "{cleared}");
+    client
+        .call(
+            "SendSideChat",
+            json!({"id":nested_id,"messageId":"after-clear","text":"fresh nested context"}),
+        )
+        .await
+        .unwrap();
+    until_diag_side(
+        &core,
+        &recorder,
+        nested_id,
+        "fresh direct send after clear",
+        || runs_for(&recorder, nested_id).len() == 1 && !core.sessions.turn_in_flight(nested_id),
+    )
+    .await;
+    let fresh_run = runs_for(&recorder, nested_id)[0].clone();
+    assert!(fresh_run.resume.is_none());
+    assert_eq!(
+        contract(&fresh_run)
+            .context
+            .chat
+            .unwrap()
+            .capabilities
+            .context_origin,
+        RuntimeContextOrigin::Fresh
+    );
+    assert!(
+        !instructions(&contract(&fresh_run)).contains("earlier context is already in this history")
+    );
+    let fresh_binding = core
+        .task_identity
+        .view(nested_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(fresh_binding.generation, nested_binding.generation + 1);
+    assert_ne!(
+        fresh_binding.provider_task_id,
+        nested_binding.provider_task_id
+    );
     evidence(
         &format!("side-ordinary-{}-summary.json", provider_name(id)),
         &json!({
             "parent": parent, "side": side, "forkSession": fork_session,
+            "blankChild": blank_child, "nestedFork": nested_fork, "sourceDeleted":true,
             "sideRuns": runs_for(&recorder, &side).iter().map(|run| json!({
                 "prompt": run.prompt, "model": run.model, "reasoning": run.reasoning,
                 "attachments": run.attachments, "resume": run.resume,
@@ -2554,7 +2715,12 @@ async fn blank_child_tabs_preserve_drafts_and_running_sessions_across_view_chang
     )
     .await;
     until("manual child running", || {
-        runs_for(&recorder, first).len() == 1 && core.sessions.turn_in_flight(first)
+        runs_for(&recorder, first).len() == 1
+            && core.sessions.turn_in_flight(first)
+            && core
+                .task_identity
+                .view(first)
+                .is_some_and(|view| view.current_binding.is_some())
     })
     .await;
     let native = core
@@ -2684,7 +2850,47 @@ async fn blank_child_tabs_preserve_drafts_and_running_sessions_across_view_chang
         client
             .call("GetChatWorkbench", json!({"mainChatId":side_id}))
             .await
-            .is_err()
+            .is_ok()
+    );
+    let switched = command(&client, side_id, "fork-switch-provider", json!({
+        "kind":"switchProvider", "config":config(HarnessId::ClaudeCode, "ask", "child-model", "medium"),
+    })).await.unwrap();
+    assert_eq!(switched["status"], "applied", "{switched}");
+    client.call("SendSideChat", json!({"id":side_id,"messageId":"first-direct-after-switch","text":"new provider after explicit switch"})).await.unwrap();
+    until_diag_side(&core, &recorder, side_id, "fork switched provider", || {
+        runs_for(&recorder, side_id).len() == 1 && !core.sessions.turn_in_flight(side_id)
+    })
+    .await;
+    let switched_run = runs_for(&recorder, side_id)[0].clone();
+    assert_eq!(switched_run.harness, Some(HarnessId::ClaudeCode));
+    assert!(switched_run.resume.is_none());
+    assert_eq!(
+        contract(&switched_run)
+            .context
+            .chat
+            .unwrap()
+            .capabilities
+            .context_origin,
+        RuntimeContextOrigin::Fresh
+    );
+    let switched_binding = core
+        .task_identity
+        .view(side_id)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(switched_binding.provider_id, HarnessId::ClaudeCode);
+    assert_eq!(
+        switched_binding.generation,
+        side_binding.as_ref().unwrap().generation + 1
+    );
+    assert_ne!(
+        switched_binding.provider_task_id,
+        side_binding.as_ref().unwrap().provider_task_id
+    );
+    evidence(
+        "fork-explicit-provider-switch.json",
+        &json!({"originalBinding":side_binding,"newBinding":switched_binding,"request":switched_run,"receipt":switched}),
     );
     let final_layout = client
         .call("GetChatWorkbench", json!({"mainChatId":codex}))

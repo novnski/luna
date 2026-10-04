@@ -417,7 +417,9 @@ impl ChatWorkbenchSnapshot {
             .iter()
             .any(|tab| tab.chat_id == self.main_chat_id && tab.side_parent_id.is_some())
         {
-            return Err(invalid("A side chat cannot be the Main chat"));
+            return Err(invalid(
+                "The Main tab stores its provenance on the chat row",
+            ));
         }
         if self.pane(&self.focused_pane_id).is_none() {
             return Err(invalid("Focused pane is missing"));

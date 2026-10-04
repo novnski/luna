@@ -772,13 +772,32 @@ async fn malformed_targets_limits_and_missing_chats_do_not_corrupt_layouts() {
     assert!(state.contains_chat(main));
     assert!(state.contains_chat(a));
     assert!(!state.contains_chat(b));
-    // A real registry deletion is reconciled on read; closing/reopening never
-    // recreates a missing identity or leaves it in recently closed history.
+    // A real deletion updates the watch before the next user mutation. Otherwise
+    // pruning during OpenTab creates a stale revision and loses that action.
+    let mut changes = client
+        .subscribe("WatchChatWorkbench", json!({"mainChatId":main}))
+        .await
+        .unwrap();
+    let initial: ChatWorkbenchSnapshot =
+        serde_json::from_value(changes.recv().await.unwrap()).unwrap();
+    assert!(initial.contains_chat(a));
     client
         .call("Mutate", json!({"op":"deleteChat","chatId":a}))
         .await
         .unwrap();
-    let reconciled = get(&client, main).await;
+    let reconciled = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let update: ChatWorkbenchSnapshot =
+                serde_json::from_value(changes.recv().await.expect("layout watch stays open"))
+                    .unwrap();
+            if !update.contains_chat(a) {
+                break update;
+            }
+        }
+    })
+    .await
+    .expect("deletion must publish a pruned layout without a Get or mutation");
+    drop(changes);
     assert!(!reconciled.contains_chat(a));
     assert!(
         !reconciled

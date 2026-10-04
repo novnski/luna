@@ -264,19 +264,6 @@ impl ChildChatPanel {
             .map(|open| open.view.read(cx).identity().label())
     }
 
-    pub(super) fn reveal_message(&mut self, id: String, message: String, cx: &mut Context<Self>) {
-        self.open_child(id.clone(), cx);
-        if let Some(open) = &self.open {
-            open.view
-                .read(cx)
-                .transcript()
-                .clone()
-                .update(cx, |view, cx| {
-                    view.navigate_to_message(id, message, cx);
-                });
-        }
-    }
-
     pub(super) fn new(
         state: Entity<AppState>,
         composers: Entity<PaneComposers>,
@@ -360,7 +347,6 @@ impl ChildChatPanel {
             PaneChatEvent::Back => panel.back(cx),
             PaneChatEvent::OpenAsMain(id) => cx.emit(ChildChatEvent::OpenAsMain(id.clone())),
             PaneChatEvent::ShowParent(id) => cx.emit(ChildChatEvent::ShowParent(id.clone())),
-            PaneChatEvent::Unload => {}
         });
         let transcript = view.read(cx).transcript().clone();
         self.open = Some(OpenChild {

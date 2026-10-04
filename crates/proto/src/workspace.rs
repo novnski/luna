@@ -17,11 +17,11 @@ pub mod capabilities {
     pub const TASK_IDENTITY_V1: &str = "task-identity-v1";
     pub const SESSION_HISTORY_SEARCH_V1: &str = "session-history-search-v1";
     pub const REMOTE_AUTH_V1: &str = "remote-auth-v1";
-    /// A writable side chat accepts ordinary task commands and
-    /// per-chat RPCs, and is published in `WatchChats` without `spaceId`.
+    /// Fork threads accept ordinary task commands and per-chat RPCs, and
+    /// publish project membership together with source provenance.
     pub const SIDE_CHAT_TASK_COMMANDS_V1: &str = "side-chat-task-commands-v1";
 
-    /// Durable side chats have no view lease or expiry; only explicit End closes them.
+    /// Persistent fork threads have no separate lease, expiry or End lifecycle.
     pub const SIDE_CHAT_PERSISTENCE_V1: &str = "side-chat-persistence-v1";
 
     /// Profile-local tab/split layouts and user-created blank child tabs.

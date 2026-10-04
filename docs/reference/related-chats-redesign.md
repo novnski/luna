@@ -1,5 +1,12 @@
 # Persistent side chats and related conversations
 
+> Historical design from 2026-10-03. The 2026-10-04
+> [persistent fork threads](../design/persistent-fork-threads/README.md)
+> supersede the End/read-only lifecycle below: materialized forks are ordinary
+> threads with normal close/reopen, configuration, archive and delete behavior.
+> See [chat placement](chat-placement-and-child-models.md) for current child
+> creation and workbench behavior. The original evidence below is retained.
+
 ## Scope and evidence
 
 Iulian requested this redesign on 2026-10-03: side chats are user-created

@@ -16,11 +16,11 @@ Side chats, child chats and the main chat use one composer geometry, modelled on
   - Choice not yet made: shield warning.
   - A requested level that hasn't applied yet keeps the effective icon and adds a corner dot.
 - **Independent composers.** Hover fades are keyed per picker entity. Before, every composer shared keys such as `picker-model`, so hovering the main chips lit the side chat's too. Model, effort, speed and access changes were already written to the bound chat only; the fixture now asserts it.
-- **Side chat header.** A side chat inherits checkout, access and provider from the main chat beside it, so its header is one row: Back (all side chats), the title and Close (Unload). The lease time, parent and provider facts move to the title's tooltip, and the title reveals where the chat started. Only non-live states (saving, read-only) stay visible. Child chat headers are unchanged.
+- **Side chat header.** A side chat is a persistent fork: an ordinary thread opened as a workbench Side tab. Its tab strip and compact status/source caption form one header without horizontal rules. Selected tabs use a rounded fill, with an accent tint for the focused group. Forks follow their own settings and have no End, lease, expiry or side-only read-only state. Child chats share the same header treatment.
 
 ## Fixture
 
-`composer-parity-fixture` drives the production `Shell` against an in-process engine with a scripted provider that has a Claude-shaped catalog. The provider keeps the Mock id: the Claude Code id makes the engine probe the real `claude` CLI for its catalog. Its failure cases are listed in the example's header. The fixture asserts each case and captures c01–c11 (dark and light; 520/360/300/760/480 px panes and a forced 240 px pane).
+`composer-parity-fixture` drives the production `Shell` against an in-process engine with a scripted provider that has a Claude-shaped catalog. The provider keeps the Mock id: the Claude Code id makes the engine probe the real `claude` CLI for its catalog. Its failure cases are listed in the example's header. The fork is created with New side chat and moved into a split beside Main (Move tab to split right), so the two composers sit in two workbench groups. The fixture asserts each case and captures c01–c11 (dark and light; 520/360/300/760/480 px right sidebars, and the fork's group at its 320 px minimum, which replaced the old forced 240 px pane: groups never shrink below 320 px).
 
 ```sh
 scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture --example composer-parity-fixture

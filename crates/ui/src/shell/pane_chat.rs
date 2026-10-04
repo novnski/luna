@@ -380,12 +380,12 @@ pub(super) fn render_pane_header<V: 'static>(
 
 /// A workbench tab's context strip. The tab already names the chat and its
 /// role, so this is one quiet row: status, the chat's actual parent (a link
-/// for children and side chats; an alongside chat names no parent), provider
-/// facts, and a side chat's explicit End. Closing the tab is not End.
+/// for children and side chats; an alongside chat, or a fork whose source
+/// was deleted, names no link) and provider facts. A side chat is an
+/// ordinary thread: no End, lease or expiry here.
 fn render_embedded_strip(
     chrome: &PaneChatChrome,
     parent: &str,
-    end_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
     theme: &Theme,
     cx: &mut Context<PaneChatView>,
 ) -> gpui::Div {
@@ -432,61 +432,18 @@ fn render_embedded_strip(
         .child(div().min_w_0().truncate().child(parent_label))
         .into_any_element()
     };
-    let end_side = (identity == PaneIdentity::Side).then(|| {
-        let border_strong = theme.border_strong;
-        let hover = crate::theme::ink(0.06);
-        div()
-            .id("pane-chat-unload")
-            .role(gpui::Role::Button)
-            .aria_label("End side chat: stop it and keep its history read-only")
-            .tab_index(0)
-            .h(px(20.0))
-            .px(px(6.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-            .border_1()
-            .border_color(gpui::transparent_black())
-            .cursor_pointer()
-            .text_color(theme.text_muted)
-            .hover(move |style| style.bg(hover))
-            .focus_visible(move |style| style.border_color(border_strong))
-            .on_click(cx.listener(|_, _, _, cx| cx.emit(PaneChatEvent::Unload)))
-            .on_key_down(crate::swallow_activation_key)
-            .tooltip(|_, cx| {
-                crate::pickers::ControlTooltip::view(
-                    "End side chat",
-                    Some(
-                        "Stops it for good; the history stays readable. Closing the tab only hides it."
-                            .into(),
-                    ),
-                    cx,
-                )
-            })
-            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-            .child(icon(icons::STOP).size(px(12.0)).text_color(theme.text_muted))
-            .child("End")
-            .child(
-                gpui::canvas(
-                    move |bounds, _, _| end_bounds.set(Some(bounds)),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .inset_0(),
-            )
-    });
+    // A caption of the tab above it, not a separate band: no rule, a
+    // little shorter, its first glyph under the tab's icon column, so the
+    // tabs, this line and the transcript read as one conversation.
     div()
         .w_full()
-        .h(px(28.0))
+        .h(px(24.0))
         .flex_none()
-        .px(px(12.0))
+        .pl(px(14.0))
+        .pr(px(12.0))
         .flex()
         .items_center()
         .gap(px(6.0))
-        .border_b_1()
-        .border_color(theme.border.opacity(0.6))
         .text_size(crate::typography::ui_rems(11.5))
         .min_w_0()
         .when_some(chrome.status.clone(), |el, (label, color, _)| {
@@ -515,8 +472,6 @@ fn render_embedded_strip(
                     .child(format!("· {meta}")),
             )
         })
-        .child(div().flex_1())
-        .children(end_side)
 }
 
 /// A side chat inherits its checkout, access and provider from the main chat
@@ -624,48 +579,10 @@ fn render_side_header<V: 'static>(
         .children(actions.extra)
 }
 
-/// Body below the header: notices, the transcript, then the composer slot
-/// (the bound main composer, or a read-only strip).
-pub(super) fn render_pane_body(
-    notices: Vec<AnyElement>,
-    transcript: AnyElement,
-    loading: bool,
-    composer: AnyElement,
-    theme: &Theme,
-) -> gpui::Div {
-    div()
-        .flex_1()
-        .min_h_0()
-        .w_full()
-        .flex()
-        .flex_col()
-        .children(notices)
-        .child(
-            div()
-                .flex_1()
-                .min_h_0()
-                .relative()
-                .child(transcript)
-                .when(loading, |el| {
-                    el.child(
-                        div()
-                            .absolute()
-                            .top(px(16.0))
-                            .left(px(16.0))
-                            .text_color(theme.text_muted)
-                            .child("Loading messages…"),
-                    )
-                }),
-        )
-        .child(composer)
-}
-
 pub(super) enum PaneChatEvent {
     Back,
     OpenAsMain(String),
     ShowParent(String),
-    /// Side chats: stop work and seal the history (read-only afterwards).
-    Unload,
 }
 
 impl gpui::EventEmitter<PaneChatEvent> for PaneChatView {}
@@ -688,11 +605,6 @@ pub(super) struct PaneChatView {
     composer_height: Rc<Cell<f32>>,
     /// The pane width and stack height the transcript last laid out for.
     last_layout: (f32, f32),
-    /// Owner-supplied status for chats without a session-derived one (a side
-    /// chat's lease lifetime).
-    status_override: Option<(SharedString, gpui::Hsla)>,
-    /// Where the embedded strip's End control painted (QA readback).
-    end_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
     /// A workbench tab: the tab names the chat, so the view keeps only a
     /// slim context strip (parent, status, provider) above the transcript.
     embedded: bool,
@@ -796,8 +708,6 @@ impl PaneChatView {
             composer_width: Rc::new(Cell::new(0.0)),
             composer_height: Rc::new(Cell::new(0.0)),
             last_layout: (0.0, 0.0),
-            status_override: None,
-            end_bounds: Rc::new(Cell::new(None)),
             embedded,
             _subscriptions: subscriptions,
         }
@@ -812,11 +722,6 @@ impl PaneChatView {
         self.composer_width.get()
     }
 
-    /// Where the embedded strip's End control last painted.
-    pub(super) fn end_bounds(&self) -> Option<gpui::Bounds<Pixels>> {
-        self.end_bounds.get()
-    }
-
     /// The identity can change under a live view (a reopened chat, a child
     /// whose row arrived after the tab opened); the view keeps its watch.
     pub(super) fn set_identity(
@@ -828,17 +733,6 @@ impl PaneChatView {
         if self.identity != identity || self.parent != parent {
             self.identity = identity;
             self.parent = parent;
-            cx.notify();
-        }
-    }
-
-    pub(super) fn set_status(
-        &mut self,
-        status: Option<(SharedString, gpui::Hsla)>,
-        cx: &mut Context<Self>,
-    ) {
-        if self.status_override != status {
-            self.status_override = status;
             cx.notify();
         }
     }
@@ -860,17 +754,23 @@ impl PaneChatView {
         let state = self.state.read(cx);
         let now = Utc::now();
         let chat = state.chats.iter().find(|chat| chat.id == self.chat_id);
-        let parent_title = state
-            .chats
-            .iter()
-            .find(|chat| chat.id == self.parent)
+        let parent_row = state.chats.iter().find(|chat| chat.id == self.parent);
+        let parent_title = parent_row
             .and_then(|chat| chat.title.clone())
             .map(|title| transcript::single_line(&title))
-            .unwrap_or_else(|| "Parent chat".into());
-        let title = match self.identity {
-            // Named by its first question, like the leased side view: the
-            // engine's row title only repeats "Side chat · <parent>".
-            PaneIdentity::Side => ChatBinding::Chat(self.chat_id.clone())
+            .unwrap_or_else(|| match self.identity {
+                // The source is a link, not a lifetime: a fork outlives it.
+                PaneIdentity::Side => "a deleted chat".into(),
+                _ => "Parent chat".into(),
+            });
+        let own_title = chat
+            .and_then(|chat| chat.title.clone())
+            .map(|title| transcript::single_line(&title))
+            .filter(|title| !title.trim().is_empty());
+        let title = match (self.identity, own_title) {
+            (_, Some(title)) => title,
+            // An untitled fork is named by its first question.
+            (PaneIdentity::Side, None) => ChatBinding::Chat(self.chat_id.clone())
                 .transcript(state)
                 .iter()
                 .find(|entry| entry.role == luna_doc::MessageRole::User)
@@ -884,14 +784,11 @@ impl PaneChatView {
                 })
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or_else(|| "New side chat".into()),
-            PaneIdentity::Child | PaneIdentity::Alongside => chat
-                .and_then(|chat| chat.title.clone())
-                .map(|title| transcript::single_line(&title))
-                .unwrap_or_else(|| self.identity.label().to_string()),
+            (identity, None) => identity.label().to_string(),
         };
         let theme = Theme::of(cx);
         let (status, archived) = match (self.identity, chat) {
-            (PaneIdentity::Child | PaneIdentity::Alongside, Some(chat)) => {
+            (_, Some(chat)) => {
                 let status = super::child_chats::child_chat_status(state, chat, now);
                 (
                     Some((
@@ -902,12 +799,7 @@ impl PaneChatView {
                     chat.archived,
                 )
             }
-            _ => (
-                self.status_override
-                    .clone()
-                    .map(|(label, color)| (label, color, false)),
-                chat.is_some_and(|chat| chat.archived),
-            ),
+            (_, None) => (None, false),
         };
         let meta = chat.and_then(|chat| chat.config.as_ref()).map(|config| {
             let provider = super::child_chats::provider_label(config.harness);
@@ -945,9 +837,20 @@ impl Render for PaneChatView {
         let theme = Theme::of(cx).clone();
         let (chrome, archived, loading) = self.chrome(cx);
         let open_id = self.chat_id.clone();
-        let parent_id = self.parent.clone();
+        // A deleted source is named, never linked.
+        let parent_id = if self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .any(|chat| chat.id == self.parent)
+        {
+            self.parent.clone()
+        } else {
+            String::new()
+        };
         let header = if self.embedded {
-            render_embedded_strip(&chrome, &self.parent, self.end_bounds.clone(), &theme, cx)
+            render_embedded_strip(&chrome, &parent_id, &theme, cx)
         } else {
             self.render_full_header(&chrome, open_id, parent_id, &theme, cx)
         };
@@ -968,61 +871,21 @@ impl PaneChatView {
             chrome,
             PaneHeaderActions {
                 back_label: self.back_label,
-                // (Side chats: Back parks the side chat; see SideChatPanel.)
                 back: Rc::new(|_, cx| cx.emit(PaneChatEvent::Back)),
-                // A side chat is never a main chat; a child or an alongside
-                // chat opens as one.
-                open_main: (self.identity != PaneIdentity::Side).then(|| {
-                    Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
-                        cx.emit(PaneChatEvent::OpenAsMain(open_id.clone()))
-                    }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
-                }),
-                // An alongside chat has no parent to show; its host is named
-                // as text only.
-                show_parent: (self.identity != PaneIdentity::Alongside).then(|| {
-                    Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
-                        cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
-                    }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
-                }),
-                extra: if self.identity == PaneIdentity::Side {
-                    let border_strong = theme.border_strong;
-                    let hover = crate::theme::ink(0.06);
-                    vec![
-                        div()
-                            .id("pane-chat-unload")
-                            .role(gpui::Role::Button)
-                            .aria_label("End side chat: stop it and keep its history read-only")
-                            .tab_index(0)
-                            .size(px(crate::surface_chrome::CONTROL_SIZE))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-                            .border_1()
-                            .border_color(gpui::transparent_black())
-                            .cursor_pointer()
-                            .hover(move |style| style.bg(hover))
-                            .focus_visible(move |style| style.border_color(border_strong))
-                            .on_click(cx.listener(|_, _, _, cx| cx.emit(PaneChatEvent::Unload)))
-                            .tooltip(|_, cx| {
-                                crate::pickers::ControlTooltip::view(
-                                    "End side chat",
-                                    Some("Stops it for good; the history stays readable.".into()),
-                                    cx,
-                                )
-                            })
-                            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-                            .child(
-                                icon(icons::STOP)
-                                    .size(px(crate::surface_chrome::ICON_SIZE))
-                                    .text_color(theme.text_muted),
-                            )
-                            .into_any_element(),
-                    ]
-                } else {
-                    Vec::new()
-                },
+                // Any thread, a fork included, can become the main chat.
+                open_main: Some(Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
+                    cx.emit(PaneChatEvent::OpenAsMain(open_id.clone()))
+                })
+                    as Rc<dyn Fn(&mut Self, &mut Context<Self>)>),
+                // An alongside chat has no parent to show (its host is named
+                // as text only), nor does a fork whose source was deleted.
+                show_parent: (self.identity != PaneIdentity::Alongside && !parent_id.is_empty())
+                    .then(|| {
+                        Rc::new(move |_: &mut Self, cx: &mut Context<Self>| {
+                            cx.emit(PaneChatEvent::ShowParent(parent_id.clone()))
+                        }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
+                    }),
+                extra: Vec::new(),
             },
             theme,
             cx,
@@ -1152,6 +1015,32 @@ impl PaneChatView {
             .text_color(theme.text)
             .child(header)
             .child(body)
+    }
+}
+
+#[cfg(feature = "appshots-fixture")]
+impl PaneChatView {
+    /// What the view's header says (QA): its title, the parent label and
+    /// whether it links, its status word and provider facts. A fork's is
+    /// an ordinary thread's: no End, lease, expiry or read-only state.
+    pub(super) fn fixture_strip(&self, cx: &App) -> serde_json::Value {
+        let (chrome, archived, loading) = self.chrome(cx);
+        let linked = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .any(|chat| chat.id == self.parent);
+        serde_json::json!({
+            "identity": chrome.identity.label(),
+            "title": chrome.title.to_string(),
+            "parentTitle": chrome.parent_title.to_string(),
+            "parentLinked": linked && self.identity != PaneIdentity::Alongside,
+            "status": chrome.status.as_ref().map(|(label, _, _)| label.to_string()),
+            "meta": chrome.meta.as_ref().map(|meta| meta.to_string()),
+            "archived": archived,
+            "loading": loading,
+        })
     }
 }
 

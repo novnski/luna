@@ -116,7 +116,11 @@ pub(super) struct DropPreview {
 /// frames (and the next render) read the last complete frame.
 #[derive(Default)]
 pub(super) struct Geometry {
+    /// The scroll viewport: where workbench content is shown (inset inside
+    /// the canvas's rounded hairline).
     pub(super) root: Option<Bounds<Pixels>>,
+    /// The whole rounded canvas, gutter included.
+    pub(super) canvas: Option<Bounds<Pixels>>,
     /// Whole pane (strip + body) by pane id; see `render::pane_regions`.
     pub(super) panes: HashMap<String, Bounds<Pixels>>,
     /// Pane id -> `(chat id, tab bounds)` in strip order.
@@ -317,7 +321,7 @@ pub(super) struct WorkbenchState {
     tab_focus: HashMap<String, FocusHandle>,
     /// The group and chat keyboard focus was last in, inside the canvas
     /// (kept so focus can stay in that tab when the element holding it
-    /// disappears, e.g. a Side chat's composer when it ends).
+    /// disappears, e.g. a chat's composer when the chat is archived).
     keyboard_home: Option<(String, String)>,
     /// The composer-less tab a follow-up frame was already requested for
     /// (once per tab, not every frame).
@@ -336,14 +340,8 @@ pub(super) struct WorkbenchState {
     tab_reveal: HashMap<String, TabReveal>,
     /// Each pane's focus scope and its focus-in listener.
     pub(super) pane_focus: HashMap<String, (FocusHandle, gpui::Subscription)>,
-    /// Each ended Side tab's own read-only history (a history-only side
-    /// panel under its exact source parent), so several can show at once.
-    pub(super) side_histories:
-        HashMap<String, (Entity<super::side_chats::SideChatPanel>, gpui::Subscription)>,
     pub(super) leaving: Vec<LeavingTab>,
     pub(super) collapse: Vec<Collapse>,
-    /// Side chats already handed from the side panel to a tab.
-    side_handoffs: HashSet<String>,
     /// QA: park mutation completions to deliver them late.
     #[cfg(feature = "appshots-fixture")]
     hold_responses: bool,
@@ -421,10 +419,8 @@ impl WorkbenchState {
             vanish_watch: None,
             tab_caps: HashMap::new(),
             tab_reveal: HashMap::new(),
-            side_histories: HashMap::new(),
             leaving: Vec::new(),
             collapse: Vec::new(),
-            side_handoffs: HashSet::new(),
             #[cfg(feature = "appshots-fixture")]
             hold_responses: false,
             #[cfg(feature = "appshots-fixture")]
@@ -520,8 +516,6 @@ impl WorkbenchState {
         self.child_failure = None;
         self.child_task = None;
         self.focus_composer = None;
-        self.side_handoffs.clear();
-        self.side_histories.clear();
     }
 }
 
@@ -545,31 +539,37 @@ pub(super) fn tab_role(state: &AppState, main: &str, tab: &TabRef) -> (TabRole, 
     }
 }
 
-/// A tab's title from the live row (side chats: their first question).
+/// A tab's title: the chat's own title from the live row (a fork's too);
+/// an untitled fork falls back to its first question.
 pub(super) fn tab_title(state: &AppState, tab: &TabRef, role: TabRole) -> SharedString {
-    if role == TabRole::Side {
-        let asked = crate::chat_binding::ChatBinding::Chat(tab.chat_id.clone())
-            .transcript(state)
-            .iter()
-            .find(|entry| entry.role == luna_doc::MessageRole::User)
-            .and_then(|entry| {
-                entry.parts.iter().find_map(|part| match part {
-                    luna_doc::MessagePart::Text { text, .. } => Some(transcript::single_line(text)),
-                    _ => None,
-                })
-            })
-            .filter(|title| !title.trim().is_empty());
-        if let Some(asked) = asked {
-            return asked.into();
-        }
-    }
-    state
+    let titled = state
         .chats
         .iter()
         .find(|chat| chat.id == tab.chat_id)
         .and_then(|chat| chat.title.as_deref())
         .map(transcript::single_line)
-        .filter(|title| !title.trim().is_empty())
+        .filter(|title| !title.trim().is_empty());
+    if let Some(title) = titled {
+        return title.into();
+    }
+    let asked = (role == TabRole::Side)
+        .then(|| {
+            crate::chat_binding::ChatBinding::Chat(tab.chat_id.clone())
+                .transcript(state)
+                .iter()
+                .find(|entry| entry.role == luna_doc::MessageRole::User)
+                .and_then(|entry| {
+                    entry.parts.iter().find_map(|part| match part {
+                        luna_doc::MessagePart::Text { text, .. } => {
+                            Some(transcript::single_line(text))
+                        }
+                        _ => None,
+                    })
+                })
+        })
+        .flatten()
+        .filter(|title| !title.trim().is_empty());
+    asked
         .unwrap_or_else(|| match role {
             TabRole::Child => "New child chat".to_string(),
             TabRole::Side => "Side chat".to_string(),
@@ -1118,20 +1118,9 @@ impl Shell {
         self.workbench.tab_scroll.retain(|id, _| panes.contains(id));
         self.workbench.tab_caps.retain(|id, _| panes.contains(id));
         self.workbench.tab_reveal.retain(|id, _| panes.contains(id));
-        let app: &App = cx;
-        let histories: HashSet<String> = model::open_chat_ids(&layout)
-            .into_iter()
-            .filter(|id| {
-                model::tab(&layout, id)
-                    .is_some_and(|tab| self.workbench_tab_shows_history(tab, app))
-            })
-            .collect();
-        self.workbench
-            .side_histories
-            .retain(|id, _| histories.contains(id));
-        // A tab that stopped rendering its composer (its Side chat ended, or
-        // the chat was archived) must not keep an invisible popover open
-        // that would own the keyboard.
+        // A tab that stopped rendering its composer (its chat was archived)
+        // must not keep an invisible popover open that would own the
+        // keyboard.
         let app: &App = cx;
         let hidden: Vec<Entity<Composer>> = self
             .workbench
@@ -1150,70 +1139,6 @@ impl Shell {
             && model::visible_chat_ids(&layout).contains(&chat)
         {
             self.workbench_focus_composer(chat, cx);
-        }
-    }
-
-    /// An ended Side tab's own read-only history panel, created on first
-    /// display under the tab's exact source parent.
-    pub(super) fn workbench_side_history(
-        &mut self,
-        tab: &TabRef,
-        cx: &mut Context<Self>,
-    ) -> Entity<super::side_chats::SideChatPanel> {
-        if let Some((panel, _)) = self.workbench.side_histories.get(&tab.chat_id) {
-            return panel.clone();
-        }
-        let parent = tab
-            .side_parent_id
-            .clone()
-            .unwrap_or_else(|| self.side_source_parent(&tab.chat_id, cx));
-        let links = Self::session_links(Some(tab.chat_id.clone()), cx);
-        let (state, composers, id) = (
-            self.state.clone(),
-            self.pane_composers.clone(),
-            tab.chat_id.clone(),
-        );
-        let panel = cx.new(|cx| {
-            super::side_chats::SideChatPanel::new_history(state, composers, links, parent, id, cx)
-        });
-        let events = cx.subscribe(&panel, |shell, _, event, cx| {
-            if let super::side_chats::SideChatEvent::RevealOrigin {
-                parent,
-                message_id,
-                engine_generation,
-            } = event
-                && shell.state.read(cx).engine_generation() == *engine_generation
-            {
-                shell.workbench_reveal_in_parent(parent.clone(), message_id.clone(), cx);
-            }
-        });
-        self.workbench
-            .side_histories
-            .insert(tab.chat_id.clone(), (panel.clone(), events));
-        panel
-    }
-
-    /// Show a side chat's quoted message in its parent: focus the parent's
-    /// tab (or open it) and scroll its transcript to the message.
-    fn workbench_reveal_in_parent(
-        &mut self,
-        parent: String,
-        message_id: String,
-        cx: &mut Context<Self>,
-    ) {
-        self.workbench_show_parent(parent.clone(), cx);
-        let transcript = if parent == self.workbench.main {
-            Some(self.transcript.clone())
-        } else {
-            self.workbench
-                .views
-                .get(&parent)
-                .map(|tab| tab.view.read(cx).transcript().clone())
-        };
-        if let Some(transcript) = transcript {
-            transcript.update(cx, |transcript, cx| {
-                transcript.navigate_to_message(parent, message_id, cx)
-            });
         }
     }
 
@@ -1248,14 +1173,10 @@ impl Shell {
                 cx,
             )
         });
-        let events = cx.subscribe(&view, |shell, view, event, cx| match event {
+        let events = cx.subscribe(&view, |shell, _view, event, cx| match event {
             PaneChatEvent::Back => {}
             PaneChatEvent::OpenAsMain(id) => shell.open_pane_chat_as_main(id.clone(), cx),
             PaneChatEvent::ShowParent(id) => shell.workbench_show_parent(id.clone(), cx),
-            PaneChatEvent::Unload => {
-                let id = view.read(cx).chat_id().to_string();
-                shell.end_workbench_side_chat(id, cx);
-            }
         });
         let transcript = view.read(cx).transcript().clone();
         let transcript_events = cx.subscribe(&transcript, Self::on_transcript_event);
@@ -1286,19 +1207,10 @@ impl Shell {
         self.pane_composers.read(cx).get(chat_id)
     }
 
-    /// Whether a tab shows read-only history instead of its live view: a
-    /// Side chat that ended (or is not first-class). Rendering and key
-    /// routing both ask this, so they cannot disagree.
-    pub(super) fn workbench_tab_shows_history(&self, tab: &TabRef, cx: &App) -> bool {
-        let state = self.state.read(cx);
-        let (role, _) = tab_role(state, &self.workbench.main, tab);
-        role == TabRole::Side && !super::side_chats::side_chat_first_class(state, &tab.chat_id)
-    }
-
     /// The composer `chat_id`'s tab actually renders, if any: Main's own, or
-    /// a tab's live view composer. An ended Side tab (read-only history), an
-    /// archived chat (read-only strip) or a tab without a mounted view has
-    /// none, so no key, picker or Stop may reach a hidden composer.
+    /// a tab's live view composer. An archived chat (read-only strip) or a
+    /// tab without a mounted view has none, so no key, picker or Stop may
+    /// reach a hidden composer.
     pub(super) fn workbench_tab_composer(
         &self,
         chat_id: &str,
@@ -1308,11 +1220,6 @@ impl Shell {
             return Some(self.composer.clone());
         }
         if !self.workbench.views.contains_key(chat_id) {
-            return None;
-        }
-        let layout = self.workbench.layout();
-        let tab = model::tab(&layout, chat_id)?;
-        if self.workbench_tab_shows_history(tab, cx) {
             return None;
         }
         let archived = self
@@ -1337,8 +1244,8 @@ impl Shell {
     ///   new-chat draft).
     /// - Focus inside the canvas: the composer holding focus, else the pane
     ///   holding focus, else the focused group's tab — and only if that tab
-    ///   renders a composer. A focused tab without one (ended Side history,
-    ///   archived, empty group) gives `None`: the keys do nothing there and
+    ///   renders a composer. A focused tab without one (archived, empty
+    ///   group) gives `None`: the keys do nothing there and
     ///   never fall back to Main.
     pub(super) fn keyboard_composer(
         &self,
@@ -1637,8 +1544,8 @@ impl Shell {
     }
 
     /// Keep keyboard focus in the canvas when the element holding it
-    /// disappears from under it: Ending a Side chat or archiving a chat
-    /// swaps the tab's composer (and the End button) for read-only content.
+    /// disappears from under it: archiving a chat swaps the tab's composer
+    /// for read-only content.
     /// Focus would otherwise land nowhere, and composer-scoped keys would
     /// fall back to Main's composer. It moves to that tab's own tab chip, so
     /// the group stays focused and those keys do nothing there. A real move
@@ -1740,8 +1647,8 @@ impl Shell {
             .workbench
             .geometry
             .borrow()
-            .root
-            .is_some_and(|root| root.contains(&position));
+            .canvas
+            .is_some_and(|canvas| canvas.contains(&position));
         if !inside {
             self.workbench.keyboard_home = None;
             self.workbench.vanish_watch = None;
@@ -2061,38 +1968,6 @@ impl Shell {
         }
     }
 
-    /// A side tab's explicit End: stop it for good, keep its history
-    /// readable. The tab stays open (read-only); closing it is separate.
-    fn end_workbench_side_chat(&mut self, id: String, cx: &mut Context<Self>) {
-        let Some(engine) = self.state.read(cx).engine().cloned() else {
-            return;
-        };
-        let generation = self.state.read(cx).engine_generation();
-        cx.spawn(async move |this, cx| {
-            let result = engine
-                .client()
-                .call(
-                    methods::UNLOAD_SIDE_CHAT,
-                    json!({ "id": id, "lease": serde_json::Value::Null }),
-                )
-                .await;
-            this.update(cx, |shell, cx| {
-                if shell.state.read(cx).engine_generation() != generation {
-                    return;
-                }
-                if let Err(error) = result {
-                    shell.sidebar_notice = Some(SidebarNotice::transient_error(format!(
-                        "Couldn't end the side chat: {error}"
-                    )));
-                }
-                shell.refresh_side_chats(cx);
-                cx.notify();
-            })
-            .ok();
-        })
-        .detach();
-    }
-
     // ---- New child chat (`+`) ----
 
     /// `+`: one blank child of the immutable Main, opened in the given (or
@@ -2250,8 +2125,8 @@ impl Shell {
     }
 
     /// A side chat's actual source chat: the layout's own record of it (open
-    /// or recently closed), then its published row, then the side panel
-    /// that lists it. Main only when the listing itself is Main's.
+    /// or recently closed), then its published row; the selected chat only
+    /// when neither knows it.
     pub(super) fn side_source_parent(&self, id: &str, cx: &App) -> String {
         let layout = self.workbench.layout();
         let recorded = model::tab(&layout, id)
@@ -2271,14 +2146,19 @@ impl Shell {
                     .get(id)
                     .map(|row| row.parent_id.clone())
             })
-            .or_else(|| {
-                self.side_chat_panel
-                    .as_ref()
-                    .map(|panel| panel.read(cx))
-                    .filter(|panel| panel.lists(id))
-                    .map(|panel| panel.parent_id().to_string())
-            })
             .unwrap_or_else(|| self.active_chat.clone())
+    }
+
+    /// Every chat in the workbench: open tabs, then recently closed ones.
+    pub(super) fn workbench_chat_ids(&self) -> Vec<String> {
+        let layout = self.workbench.layout();
+        let mut ids = model::open_chat_ids(&layout);
+        for closed in &layout.closed_tabs {
+            if !ids.contains(&closed.tab.chat_id) {
+                ids.push(closed.tab.chat_id.clone());
+            }
+        }
+        ids
     }
 
     /// Whether a Related row's chat has an open view here (`None` when the
@@ -2286,35 +2166,6 @@ impl Shell {
     pub(super) fn workbench_is_open(&self, chat_id: &str) -> Option<bool> {
         self.workbench_ready()
             .then(|| self.workbench.layout().contains_chat(chat_id))
-    }
-
-    /// The side panel finished creating (or opened) a writable side chat:
-    /// give it a center tab, and let the panel forget the page without
-    /// dropping the watches the tab's view now owns.
-    pub(super) fn adopt_side_page(
-        &mut self,
-        panel: Entity<super::side_chats::SideChatPanel>,
-        cx: &mut Context<Self>,
-    ) {
-        if !self.workbench_ready() {
-            return;
-        }
-        let Some((id, parent)) = panel.read(cx).first_class_page(cx) else {
-            return;
-        };
-        if !self.workbench.side_handoffs.insert(id.clone()) {
-            return;
-        }
-        let tab = TabRef {
-            chat_id: id.clone(),
-            side_parent_id: Some(parent),
-        };
-        // The tab's view takes the watch first (the newest owner).
-        self.workbench_view(&tab, cx);
-        panel.update(cx, |panel, cx| {
-            panel.hand_off_page(&id, cx);
-        });
-        self.workbench_open(tab, cx);
     }
 
     // ---- keyboard ----
@@ -3077,6 +2928,38 @@ impl Shell {
                     "preview": self.workbench.preview.as_ref().map(|preview| preview.label.to_string()),
                     "resize": self.workbench.resize.as_ref().map(|(id, ratio)| json!({"split": id, "ratio": ratio})),
                     "rootBounds": geometry.root.as_ref().map(bounds),
+                    // The rounded canvas (as measured inside it) and how far
+                    // the viewport's rectangular clip sits inside it on each
+                    // side: [left, right, top, bottom].
+                    "canvasBounds": geometry.canvas.as_ref().map(bounds),
+                    "viewportInsets": geometry.root.zip(geometry.canvas).map(|(root, canvas)| json!([
+                        f32::from(root.left() - canvas.left()),
+                        f32::from(canvas.right() - root.right()),
+                        f32::from(root.top() - canvas.top()),
+                        f32::from(canvas.bottom() - root.bottom()),
+                    ])),
+                    // Overflow fades shown: [left, right, top, bottom].
+                    "overflowFades": render::canvas_overflow(&self.workbench.canvas_scroll),
+                    // No group or tab has an outline or underline: each
+                    // group's active tab is marked by its own rounded fill
+                    // (the focused group's: the accent tint), color as HSLA.
+                    "paneOutline": false,
+                    "tabSelection": model::panes(&layout).iter().map(|pane| {
+                        let focused = model::has_split(&layout) && layout.focused_pane_id == pane.id;
+                        let theme = Theme::of(cx);
+                        let fill = render::tab_selected_fill(theme, focused);
+                        let title = theme.tab_title(true, focused);
+                        json!({
+                            "pane": pane.id,
+                            "active": pane.active_chat_id,
+                            "focused": focused,
+                            "fill": [fill.h, fill.s, fill.l, fill.a],
+                            "accentTint": fill == theme.tab_focused_fill(),
+                            "title": [title.h, title.s, title.l, title.a],
+                            "underline": false,
+                            "outline": false,
+                        })
+                    }).collect::<Vec<_>>(),
                     "paneBounds": geometry.panes.iter().map(|(id, pane)| json!({"id": id, "bounds": bounds(pane)})).collect::<Vec<_>>(),
                     "tabBounds": geometry.tabs.iter().map(|(pane, tabs)| {
                         let visible = geometry.visible_tabs(pane);
@@ -3238,20 +3121,64 @@ impl Shell {
         let destination = model::split_destination(layout.focused_pane_id.clone(), Edge::Right);
         self.workbench_mutate(command::open_tab(&tab, Some(destination)), cx)
     }
-    /// Whether a history-only panel shows `chat_id`'s saved page now.
-    pub fn fixture_workbench_history(&self, chat_id: &str, cx: &App) -> serde_json::Value {
-        match self.workbench.side_histories.get(chat_id) {
-            Some((panel, _)) => {
-                let panel = panel.read(cx);
-                json!({
-                    "page": panel.page_id(),
-                    "fixed": panel.fixed_id(),
-                    "parent": panel.parent_id(),
-                    "error": panel.error_text(),
-                })
-            }
-            None => serde_json::Value::Null,
+    /// A tab's view header, as `PaneChatView::fixture_strip` reads it.
+    pub fn fixture_workbench_strip(&self, chat_id: &str, cx: &App) -> serde_json::Value {
+        self.workbench
+            .views
+            .get(chat_id)
+            .map(|tab| tab.view.read(cx).fixture_strip(cx))
+            .unwrap_or(serde_json::Value::Null)
+    }
+    /// A Related/sidebar row's ordinary task action (`archive`, `unarchive`,
+    /// `pin`, `unpin`, `settle`, `unsettle`, `delete`), past any
+    /// confirmation dialog.
+    pub fn fixture_chat_action(&mut self, chat_id: &str, action: &str, cx: &mut Context<Self>) {
+        let id = chat_id.to_string();
+        match action {
+            "archive" => self.execute_task_action(id, TaskConfirmation::Archive, cx),
+            "unarchive" => self.set_chat_archived(id, false, cx),
+            "pin" => self.set_chat_pinned(id, true, cx),
+            "unpin" => self.set_chat_pinned(id, false, cx),
+            "settle" => self.execute_task_action(id, TaskConfirmation::Settle, cx),
+            "unsettle" => self.set_chat_settled(id, false, cx),
+            "delete" => self.execute_task_action(id, TaskConfirmation::Delete, cx),
+            _ => {}
         }
+    }
+    /// The tab menu's "Open as its own workspace" for `chat_id`.
+    pub fn fixture_workbench_open_as_main(&mut self, chat_id: &str, cx: &mut Context<Self>) {
+        self.open_pane_chat_as_main(chat_id.to_string(), cx);
+    }
+    /// A Related row of `kind` (`side`, `child`, `alongside`) dropped on
+    /// the left sidebar with no slot, as a real drag drops it.
+    pub fn fixture_place_in_sidebar(&mut self, chat_id: &str, kind: &str, cx: &mut Context<Self>) {
+        let kind = match kind {
+            "side" => super::related_chats::RelatedKind::Side,
+            "child" => super::related_chats::RelatedKind::Child,
+            _ => super::related_chats::RelatedKind::Alongside,
+        };
+        let drag = SidebarChatDrag {
+            chat_id: chat_id.to_string(),
+            origin: DragOrigin::Related(kind),
+            scope: SidebarDragScope::Unpinned(None),
+            title: SharedString::default(),
+            project: SharedString::default(),
+            harness: None,
+        };
+        self.place_in_sidebar(&drag, kind, None, cx);
+    }
+    /// Seed a legacy device-local side chat mark (as an older build saved
+    /// it), then let the migration run as on any state change.
+    pub fn fixture_seed_side_marks(
+        &mut self,
+        chat_id: &str,
+        marks: crate::settings::SideChatMarks,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings
+            .side_chat_marks
+            .insert(chat_id.to_string(), marks);
+        self.migrate_side_chat_marks(cx);
     }
     /// Whether `chat_id`'s tab renders a composer keys can reach.
     pub fn fixture_workbench_tab_has_composer(&self, chat_id: &str, cx: &App) -> bool {
@@ -3268,20 +3195,6 @@ impl Shell {
             .iter()
             .find(|(_, handle)| handle.is_focused(window))
             .map(|(chat, _)| chat.clone())
-    }
-    /// Where `chat_id`'s embedded End control last painted (Side tabs).
-    pub fn fixture_workbench_end_bounds(&self, chat_id: &str, cx: &App) -> Option<(f32, f32)> {
-        let bounds = self
-            .workbench
-            .views
-            .get(chat_id)?
-            .view
-            .read(cx)
-            .end_bounds()?;
-        Some((
-            f32::from(bounds.origin.x + bounds.size.width / 2.0),
-            f32::from(bounds.origin.y + bounds.size.height / 2.0),
-        ))
     }
     /// The routed chat of every shell Escape so far, with its outcome.
     pub fn fixture_workbench_escape_log(&self) -> Vec<(Option<String>, &'static str)> {
@@ -3397,20 +3310,6 @@ impl Shell {
     /// A group's own Close group control.
     pub fn fixture_workbench_close_pane(&mut self, pane_id: &str, cx: &mut Context<Self>) {
         self.workbench_close_pane(pane_id, cx);
-    }
-
-    /// End a side chat through the Side tab's own End path.
-    pub fn fixture_workbench_end_side(&mut self, chat_id: &str, cx: &mut Context<Self>) {
-        self.end_workbench_side_chat(chat_id.to_string(), cx);
-    }
-
-    /// A side chat's published lifecycle: `Some(true)` writable.
-    pub fn fixture_workbench_side_active(&self, chat_id: &str, cx: &App) -> Option<bool> {
-        self.state
-            .read(cx)
-            .side_chat_rows
-            .get(chat_id)
-            .map(|row| row.active())
     }
 
     /// Open a right-sidebar surface by name (`related`, `changes`, `files`)

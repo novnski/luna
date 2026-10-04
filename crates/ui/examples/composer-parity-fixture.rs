@@ -1,5 +1,6 @@
 //! Headless GPUI E2E for composer parity between the main chat and a side
-//! chat in the right pane, plus the side chat's single-row header.
+//! chat (a persistent fork) open beside it in a workbench split, plus the
+//! fork's ordinary tab header.
 //!
 //! Drives the production `Shell` against an in-process `EngineCore` (real
 //! `WatchChats`, sessions, transcripts and side chats). The scripted Mock
@@ -19,17 +20,23 @@
 //!    open lock, Approve for me = shield check).
 //! 5. Fast speed renders as "Fast" text instead of the bolt, or the bolt
 //!    shows at Standard.
-//! 6. Changing the main chat's reasoning or speed changes the side chat.
+//! 6. Changing the main chat's reasoning or speed changes the side chat (a
+//!    fork follows its own ordinary settings, not its source's).
 //! 7. Hovering a main chip lights the side chat's chip (shared hover keys).
 //! 8. The model menu still says "Service Tier" / "Fast Mode" or On/Off
 //!    instead of Speed: Standard / Fast.
-//! 9. The side chat header keeps the badge, parent link and status strip
-//!    (visual: one row with Back, title and Close).
+//! 9. The fork's tab header is not the ordinary one-line strip (fork
+//!    identity and a link to its source), or shows an End, lease, expiry or
+//!    read-only state.
+//! 10. Groups never shrink below their 320 px minimum, so the old forced
+//!    240 px right pane is replaced by a fork group at that minimum (the
+//!    canvas scrolls): its controls row must still fit, yielding whole.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example composer-parity-fixture
 //! Run:   target/debug/examples/composer-parity-fixture ABSOLUTE_EVIDENCE_DIR
-//! Writes c01..c11 PNG captures, readback.json and composer-parity.pass.
+//! Writes c01..c11 PNG captures (c11 is the group minimum), readback.json
+//! and composer-parity.pass.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -226,6 +233,45 @@ fn composers(
     window.update(cx, |shell, _, cx| {
         shell.fixture_composer_readbacks(side, cx)
     })
+}
+
+fn panes(node: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+    if node["kind"] == "pane" {
+        out.push(node.clone());
+    } else {
+        panes(&node["first"], out);
+        panes(&node["second"], out);
+    }
+}
+
+/// The first Side tab in a workbench readback.
+fn side_tab(workbench: &serde_json::Value) -> Option<String> {
+    let mut all = Vec::new();
+    panes(&workbench["root"], &mut all);
+    all.into_iter()
+        .flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default())
+        .find(|tab| tab["role"] == "Side")
+        .and_then(|tab| tab["chatId"].as_str().map(str::to_string))
+}
+
+/// `main` and `side` are each the active tab of their own group.
+fn active_in_own_groups(workbench: &serde_json::Value, main: &str, side: &str) -> bool {
+    let mut all = Vec::new();
+    panes(&workbench["root"], &mut all);
+    let group = |chat: &str| all.iter().position(|pane| pane["active"] == chat);
+    matches!((group(main), group(side)), (Some(a), Some(b)) if a != b)
+}
+
+/// The width of the group whose active tab is `chat`.
+fn pane_width(workbench: &serde_json::Value, chat: &str) -> Option<f64> {
+    let mut all = Vec::new();
+    panes(&workbench["root"], &mut all);
+    let id = all.iter().find(|pane| pane["active"] == chat)?["id"].clone();
+    workbench["paneBounds"]
+        .as_array()?
+        .iter()
+        .find(|entry| entry["id"] == id)?["bounds"]["w"]
+        .as_f64()
 }
 
 fn f(value: &serde_json::Value) -> f64 {
@@ -439,7 +485,9 @@ fn main() -> anyhow::Result<()> {
                         window_background: theme::Theme::of(cx).window_background_appearance(),
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             gpui::point(px(20.), px(20.)),
-                            size(px(1440.), px(900.)),
+                            // Leave room to create two 320px groups with the
+                            // rounded viewport inset; later steps shrink them.
+                            size(px(1480.), px(900.)),
                         ))),
                         show: false,
                         focus: false,
@@ -453,15 +501,18 @@ fn main() -> anyhow::Result<()> {
                     let mut record = serde_json::Map::new();
                     settle(cx, 900).await;
 
-                    // c01. A side chat beside its parent: one geometry.
+                    // c01. A fork beside its source in a workbench split: one
+                    // geometry. New side chat opens it as a Side tab; the
+                    // palette's Move tab to split right puts it in its own
+                    // group beside Main.
                     window.update(cx, |shell, _, cx| {
                         shell.fixture_open_right_pane(cx);
                         shell.fixture_open_side_chats(cx);
                     })?;
                     for _ in 0..60 {
                         settle(cx, 100).await;
-                        let list = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
-                        if list["historyCount"].is_number() {
+                        let workbench = window.update(cx, |shell, _, cx| shell.fixture_workbench_readback(cx))?;
+                        if workbench["loaded"] == true && workbench["main"] == PARENT {
                             break;
                         }
                     }
@@ -470,17 +521,33 @@ fn main() -> anyhow::Result<()> {
                     let mut last = serde_json::Value::Null;
                     for _ in 0..200 {
                         settle(cx, 100).await;
-                        let readback = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
-                        last = readback.clone();
-                        if readback["firstClass"] == true
-                            && readback["fullComposer"]["boundChat"] == readback["pageId"]
-                            && readback["busy"] == false
-                        {
-                            side = readback["pageId"].as_str().unwrap_or_default().to_string();
+                        let workbench = window.update(cx, |shell, _, cx| shell.fixture_workbench_readback(cx))?;
+                        if let Some(id) = side_tab(&workbench) {
+                            side = id;
+                            break;
+                        }
+                        last = workbench;
+                    }
+                    anyhow::ensure!(!side.is_empty(), "New side chat never opened as a Side tab: {last}");
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_action("Move tab to split right", cx))?;
+                    let mut split = serde_json::Value::Null;
+                    for _ in 0..100 {
+                        settle(cx, 100).await;
+                        split = window.update(cx, |shell, _, cx| shell.fixture_workbench_readback(cx))?;
+                        if active_in_own_groups(&split, PARENT, &side) {
                             break;
                         }
                     }
-                    anyhow::ensure!(!side.is_empty(), "the side chat never bound the full composer: {last}");
+                    anyhow::ensure!(active_in_own_groups(&split, PARENT, &side), "the fork and Main must be active in two groups: {split}");
+                    let header = window.update(cx, |shell, _, cx| shell.fixture_workbench_strip(&side, cx))?;
+                    let words = header["status"].as_str().unwrap_or_default().to_lowercase();
+                    anyhow::ensure!(
+                        header["identity"] == "Side chat"
+                            && header["parentLinked"] == true
+                            && !["ended", "read-only", "writable", "expire", "lease", "unload"].iter().any(|word| words.contains(word)),
+                        "the fork's header is the ordinary strip linking its source: {header}"
+                    );
+                    record.insert("header".into(), header);
                     // Two frames: the controls row fits against measured widths.
                     settle(cx, 600).await;
                     capture(window, cx, output.join("c01-main-side-dark.png"))?;
@@ -541,7 +608,9 @@ fn main() -> anyhow::Result<()> {
                     row_fits("main", &main)?;
                     record.insert("c04".into(), serde_json::json!({"main": main["chips"], "pane": pane["chips"]}));
 
-                    // c05-c07. Narrower panes; then a wide pane squeezing main.
+                    // c05-c07. A wider right sidebar narrows both groups; at
+                    // 760 px they sit at their 320 px minimum (the canvas
+                    // scrolls).
                     let mut widths = serde_json::Map::new();
                     for (label, width) in [("c05-pane-360", 360.0), ("c06-pane-300", 300.0), ("c07-pane-760", 760.0)] {
                         window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(width, cx))?;
@@ -554,17 +623,20 @@ fn main() -> anyhow::Result<()> {
                         row_fits("pane", &pane)?;
                         widths.insert(label.into(), serde_json::json!({"main": main["controlsRow"], "pane": pane["controlsRow"], "mainSurface": main["surface"], "paneSurface": pane["surface"]}));
                     }
-                    // c11. Below the pane minimum (forced): the effort, then
+                    // c11. Failure case 10: the fork's group at its 320 px
+                    // minimum (a very wide right sidebar): the effort, then
                     // the name, yield whole — never an ellipsis.
-                    window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(240.0, cx))?;
+                    window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(900.0, cx))?;
                     settle(cx, 700).await;
-                    capture(window, cx, output.join("c11-pane-240-forced.png"))?;
+                    capture(window, cx, output.join("c11-group-minimum.png"))?;
                     settle(cx, 200).await;
                     let (main, pane) = composers(window, cx, &side)?;
                     aligned(&main, &pane)?;
                     row_fits("pane", &pane)?;
-                    anyhow::ensure!(pane["controlsRow"]["modelFit"] != "Full", "a 240 px pane cannot fit the full chip: {pane}");
-                    widths.insert("c11-pane-240-forced".into(), serde_json::json!({"pane": pane["controlsRow"], "paneSurface": pane["surface"], "chips": pane["chips"]}));
+                    let minimum = window.update(cx, |shell, _, cx| shell.fixture_workbench_readback(cx))?;
+                    let group = pane_width(&minimum, &side);
+                    anyhow::ensure!(group.is_some_and(|width| (319.5..=330.0).contains(&width)), "the fork's group sits at its 320 px minimum: {group:?} in {minimum}");
+                    widths.insert("c11-group-minimum".into(), serde_json::json!({"pane": pane["controlsRow"], "paneSurface": pane["surface"], "chips": pane["chips"], "groupWidth": group}));
                     record.insert("widths".into(), serde_json::Value::Object(widths));
 
                     // c08. Light mode at a typical pane width.
@@ -603,7 +675,7 @@ fn main() -> anyhow::Result<()> {
                     settle(cx, 500).await;
 
                     // c10. Typed draft: both pills still share one height.
-                    window.update(cx, |shell, _, cx| shell.fixture_side_chat("type_full", "Compare with the settings rename", cx))?;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&side, "Compare with the settings rename", false, cx))?;
                     settle(cx, 600).await;
                     capture(window, cx, output.join("c10-side-draft.png"))?;
                     let (main, pane) = composers(window, cx, &side)?;
@@ -621,7 +693,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("composer-parity.pass"),
-                                "PASS: headless production Shell on the production engine boundary; main and side chat composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px panes in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; main reasoning/speed changes leave the side chat unchanged; hovering a main chip leaves the side chat's chip at rest; the model menu offers Speed: Standard / Fast\n",
+                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group at its 320 px minimum, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast\n",
                             )
                         });
                         if let Err(error) = written {

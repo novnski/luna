@@ -2446,6 +2446,24 @@ impl DocsStore {
         )?)
     }
 
+    /// Recovery source for a legacy/imported fork whose document snapshot is
+    /// absent. This indexed transcript contains data only, never commands or
+    /// provider-binding authority. Callers must preserve it until persisted.
+    pub fn saved_side_chat_entries(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<luna_doc::SessionMessageEntry>, StoreError> {
+        let conn = self.conn();
+        let mut query =
+            conn.prepare("SELECT entry FROM side_chat_entries WHERE chat_id=?1 ORDER BY seq")?;
+        let rows = query
+            .query_map([task_id], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|entry| serde_json::from_str(&entry).map_err(StoreError::from))
+            .collect()
+    }
+
     pub fn retire_task_local_records(
         &self,
         device_id: &str,

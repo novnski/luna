@@ -7,8 +7,11 @@
 //! located black-box: a pointer sweep reads which row reports hover. Task
 //! commands reach the real engine; the fixture copies the engine's
 //! authoritative row fields back into the UI (no workspace watch, so seeded
-//! lineage and statuses stay put). Side chats are created, answered and
-//! unloaded through the real side-chat RPCs.
+//! lineage and statuses stay put). Side chats (persistent forks) are created
+//! through the production creator and the real CreateSideChat RPC; their
+//! published rows (real project, source link) are copied in the same way,
+//! and they are titled through the engine's ordinary rename. Fork answers
+//! are covered by `side-chat-pane-fixture`, not here.
 //!
 //! Failure cases this run must catch (written before the implementation):
 //! 1. A pinned task dragged below an unpinned task becomes unpinned or lands
@@ -21,8 +24,10 @@
 //!    drop line; a click without travel starts a drag instead of opening.
 //! 5. Child/side chat rows do not use the sidebar row (project line, harness,
 //!    title, time), or their pin/settle/archive actions do nothing, act on the
-//!    wrong record, or put the row in the wrong section.
-//! 6. Side chats all show their parent's title instead of their question.
+//!    wrong record, or put the row in the wrong section; a fork's actions
+//!    write device-local marks instead of its own synced flags.
+//! 6. A fork shows its source's title instead of its own chat title, or does
+//!    not open as a Side tab under its source.
 //! 7. Back from Side/Child chats closes their tabs or cannot reach the
 //!    surface menu; Side chats and Child chats are not adjacent in it.
 //!
@@ -464,53 +469,81 @@ async fn sync_from_engine(
     anyhow::bail!("engine never applied the expected change to {id}")
 }
 
-async fn wait_side(
+/// New side chat through the production creator. The engine's fork row is
+/// copied into the UI as the chats watch would publish it (the fixture runs
+/// without one), titled `title` through the engine's ordinary rename; the
+/// creator then opens it as a Side tab under its source.
+async fn fork(
     window: WindowHandle<shell::Shell>,
     cx: &mut AsyncApp,
-    what: &str,
-    done: impl Fn(&serde_json::Value) -> bool,
-) -> anyhow::Result<serde_json::Value> {
+    state: &Entity<state::AppState>,
+    workspace: &luna_engine::WorkspaceHost,
+    title: &str,
+) -> anyhow::Result<String> {
+    window.update(cx, |shell, _, cx| shell.fixture_side_chat("new", "", cx))?;
+    let mut created = None;
+    let mut last = serde_json::Value::Null;
     for _ in 0..150 {
-        let value = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
-        if done(&value) {
-            return Ok(value);
+        last = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
+        anyhow::ensure!(
+            last["error"].is_null(),
+            "the side chat creator failed: {last}"
+        );
+        if let Some(id) = last["created"].as_str() {
+            created = Some(id.to_string());
+            break;
         }
         settle(cx, 100).await;
     }
-    let value = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
-    anyhow::bail!("side chat never reached {what}: {value}")
+    let id =
+        created.ok_or_else(|| anyhow::anyhow!("New side chat never created a fork: {last}"))?;
+    workspace.rename_chat(&id, title)?;
+    let row = workspace
+        .chat(&id)?
+        .ok_or_else(|| anyhow::anyhow!("the engine has no row for fork {id}"))?;
+    anyhow::ensure!(
+        row.space_id.is_some(),
+        "the fork is published with its real project: {row:?}"
+    );
+    state.update(cx, |state, cx| {
+        state.side_chat_rows.insert(
+            id.clone(),
+            state::SideChatRow {
+                parent_id: PARENT.into(),
+                state: Some("active".into()),
+            },
+        );
+        state.chats.push(row);
+        cx.notify();
+    });
+    for _ in 0..100 {
+        let workbench = window.update(cx, |shell, _, cx| shell.fixture_workbench_readback(cx))?;
+        if let Some(tab) = workbench_tab(&workbench, &id) {
+            anyhow::ensure!(
+                tab["role"] == "Side" && tab["parent"] == PARENT && tab["title"] == title,
+                "the fork opens as a Side tab under its source, with its own title: {tab}"
+            );
+            return Ok(id);
+        }
+        settle(cx, 100).await;
+    }
+    anyhow::bail!("fork {id} never opened as a Side tab")
 }
 
-/// Create a side chat, ask `question`, wait for the Mock answer, then go Back
-/// (the leased, non-first-class panel unloads it into saved history).
-async fn side_chat(
-    window: WindowHandle<shell::Shell>,
-    cx: &mut AsyncApp,
-    question: &str,
-) -> anyhow::Result<String> {
-    window.update(cx, |shell, _, cx| shell.fixture_side_chat("new", "", cx))?;
-    let created = wait_side(window, cx, "a writable page", |value| {
-        value["writable"] == true && value["busy"] == false
-    })
-    .await?;
-    let id = created["pageId"].as_str().unwrap_or_default().to_string();
-    window.update(cx, |shell, _, cx| {
-        shell.fixture_side_chat("send", question, cx)
-    })?;
-    wait_side(window, cx, "an answer", |value| {
-        value["busy"] == false
-            && value["working"] == false
-            && value["texts"].to_string().contains(MOCK_ANSWER)
-    })
-    .await?;
-    window.update(cx, |shell, _, cx| shell.fixture_side_chat("back", "", cx))?;
-    wait_side(window, cx, "the saved list", |value| {
-        value["pageId"].is_null()
-            && value["busy"] == false
-            && ids(&value["historyIds"]).contains(&id)
-    })
-    .await?;
-    Ok(id)
+fn workbench_tab(workbench: &serde_json::Value, chat: &str) -> Option<serde_json::Value> {
+    fn panes(node: &serde_json::Value, out: &mut Vec<serde_json::Value>) {
+        if node["kind"] == "pane" {
+            out.push(node.clone());
+        } else {
+            panes(&node["first"], out);
+            panes(&node["second"], out);
+        }
+    }
+    let mut all = Vec::new();
+    panes(&workbench["root"], &mut all);
+    all.into_iter()
+        .flat_map(|pane| pane["tabs"].as_array().cloned().unwrap_or_default())
+        .find(|tab| tab["chatId"] == chat)
 }
 
 fn main() -> anyhow::Result<()> {
@@ -881,17 +914,19 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(returned["rightActive"] == "RelatedChats" && returned["pickerOpen"] == false, "choosing the surface again returns: {returned}");
                 record.insert("back".into(), back);
 
-                // r11-r14. Side chats: two real side chats titled by their
-                // questions, then pin, settle and archive by real clicks.
+                // r11-r14. Side chats: two real forks, each a Side tab with
+                // its own title, listed with the children; then pin, settle
+                // and archive by real clicks on their ordinary rows, applied
+                // by the engine (no device-local marks).
                 window.update(cx, |shell, _, cx| shell.fixture_open_side_chats(cx))?;
                 settle(cx, 400).await;
-                let first = side_chat(window, cx, SIDE_Q1).await?;
-                let second = side_chat(window, cx, SIDE_Q2).await?;
+                let first = fork(window, cx, &state, &workspace, SIDE_Q1).await?;
+                let second = fork(window, cx, &state, &workspace, SIDE_Q2).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
                 settle(cx, 300).await;
+                draw(window, cx)?;
                 capture(window, cx, output.join("r11-mixed-related-list.png"))?;
                 let side = window.update(cx, |shell, _, cx| shell.fixture_side_chat_readback(cx))?;
-                let previews = side["historyPreviews"].to_string();
-                anyhow::ensure!(previews.contains(SIDE_Q1) && previews.contains(SIDE_Q2), "side chats must be titled by their questions: {side}");
                 let list = readback(window, cx)?;
                 anyhow::ensure!(
                     section_of(&list, "related", &first).as_deref() == Some("Active")
@@ -904,27 +939,31 @@ fn main() -> anyhow::Result<()> {
                 record.insert("mixedList".into(), list.clone());
                 record.insert("sideList".into(), side);
 
-                // Side rows have a note line: the corner sits 14 px down.
-                let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "side-pane-chat-")?;
+                // Fork rows are ordinary related rows (two lines, no branch):
+                // the corner sits 22 px down, as on a child's.
+                let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "child-pane-chat-")?;
                 let (_, first_top, _) = span(&spans, &first)?.clone();
-                click_at(window, cx, right - 54.0, first_top + 14.0).await?;
+                click_at(window, cx, right - 54.0, first_top + 22.0).await?;
+                sync_from_engine(cx, &state, &workspace, &first, |row| row.pinned_order.is_some()).await?;
                 settle(cx, 200).await;
-                let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "side-pane-chat-")?;
+                let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "child-pane-chat-")?;
                 let (_, second_top, _) = span(&spans, &second)?.clone();
-                click_at(window, cx, right - 32.0, second_top + 14.0).await?;
+                click_at(window, cx, right - 32.0, second_top + 22.0).await?;
+                sync_from_engine(cx, &state, &workspace, &second, |row| row.settlement_override.is_some()).await?;
                 settle(cx, 200).await;
                 capture(window, cx, output.join("r12-side-pinned-settled.png"))?;
                 let marked = readback(window, cx)?;
                 anyhow::ensure!(section_of(&marked, "related", &first).as_deref() == Some("Pinned"), "side pin: {marked}");
                 anyhow::ensure!(section_of(&marked, "related", &second).as_deref() == Some("Settled"), "side settle: {marked}");
 
-                let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "side-pane-chat-")?;
+                let spans = row_spans(window, cx, pane_x, 80.0, HEIGHT - 40.0, "child-pane-chat-")?;
                 let (_, first_top, _) = span(&spans, &first)?.clone();
-                click_at(window, cx, right - 10.0, first_top + 14.0).await?;
+                click_at(window, cx, right - 10.0, first_top + 22.0).await?;
+                sync_from_engine(cx, &state, &workspace, &first, |row| row.archived).await?;
                 settle(cx, 200).await;
                 let archived_side = readback(window, cx)?;
                 anyhow::ensure!(section_of(&archived_side, "related", &first).as_deref() == Some("Archived"), "side archive: {archived_side}");
-                anyhow::ensure!(archived_side["sideMarks"][&first]["archived"] == true, "side marks: {archived_side}");
+                anyhow::ensure!(archived_side["sideMarks"].as_object().is_none_or(|marks| marks.is_empty()), "fork actions write the engine's flags, never device-local marks: {archived_side}");
                 capture(window, cx, output.join("r13-side-archived.png"))?;
                 record.insert("sideMarks".into(), archived_side);
 
@@ -942,7 +981,9 @@ fn main() -> anyhow::Result<()> {
                 // chat together, and the sidebar's combined count on the parent.
                 window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
                 settle(cx, 300).await;
-                let third = side_chat(window, cx, SIDE_Q3).await?;
+                let third = fork(window, cx, &state, &workspace, SIDE_Q3).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
+                settle(cx, 300).await;
                 hover_at(window, cx, WIDTH / 2.0, HEIGHT - 4.0, None)?;
                 settle(cx, 400).await;
                 capture(window, cx, output.join("r15-final-mixed-list.png"))?;
@@ -965,7 +1006,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("related-chats.pass"),
-                                "PASS: headless production Shell with real pointer input; one Related chats list shows active child and side chats together with the combined count; click opens without dragging; pin drag reorders pins (optimistic + engine-applied bounds); a pin dragged over unpinned rows clamps to the end of the pins; an unpinned drag into the pins clamps below them, switches to Manual sort and keeps every unpinned task; manual order survives new activity; an outside drop is a no-op; Child chats and Side chats render sidebar task rows in Pinned/Active/Settled/Archived sections; hover Pin/Settle/Archive applied by the engine (child) and the device-local marks (side); side chats are titled by their first question; Back shows the surface menu and keeps the tabs\n",
+                                "PASS: headless production Shell with real pointer input; one Related chats list shows active child and side chats together with the combined count; click opens without dragging; pin drag reorders pins (optimistic + engine-applied bounds); a pin dragged over unpinned rows clamps to the end of the pins; an unpinned drag into the pins clamps below them, switches to Manual sort and keeps every unpinned task; manual order survives new activity; an outside drop is a no-op; Child chats and Side chats render sidebar task rows in Pinned/Active/Settled/Archived sections; hover Pin/Settle/Archive applied by the engine for children and forks alike (no device-local marks); forks from New side chat open as Side tabs under their source with their own chat titles; Back shows the surface menu and keeps the tabs\n",
                             )
                         });
                     if let Err(error) = written {

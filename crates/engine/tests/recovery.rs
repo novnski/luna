@@ -572,6 +572,143 @@ fn persist_accepted_receipt(core: &EngineCore, command_id: &str, message_id: &st
     );
 }
 
+async fn fork_command(
+    client: &RpcClient,
+    task: &str,
+    command_id: &str,
+    intent: serde_json::Value,
+) -> CommandReceipt {
+    let read: TaskCommandRead = client
+        .call_as(
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            serde_json::json!({"taskId":task}),
+        )
+        .await
+        .unwrap();
+    client.call_as(methods::EXECUTE_TASK_COMMAND, serde_json::json!({
+        "taskId":task,"commandId":command_id,"actorId":"fork-e2e","clientId":"fork-e2e","clientSessionId":"fork-e2e",
+        "expectedTaskRevision":read.snapshot.task_revision,"expectedBindingGeneration":read.snapshot.binding_generation,
+        "intent":intent,
+    })).await.unwrap()
+}
+
+async fn wait_for_fork_recovery(
+    core: &EngineCore,
+    task: &str,
+    expected: RecoveryStatus,
+) -> luna_proto::TaskRecovery {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Some(recovery) = core
+                .sessions
+                .session_status(task)
+                .and_then(|session| session.recovery)
+                && recovery.status == expected
+            {
+                break recovery;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "fork recovery expected {expected:?}: {:?}",
+            core.sessions.session_status(task)
+        )
+    })
+}
+
+#[tokio::test]
+async fn ordinary_fork_recovery_preserves_frozen_run_and_binding_across_restart() {
+    // Persistent-fork failure cases were recorded before implementation. The
+    // public creation and task-command paths distinguish these from direct sends.
+    let mut evidence = Vec::new();
+    for outcome in [
+        FirstOutcome::RejectedOverload,
+        FirstOutcome::AcceptedOverload,
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let runs = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let core = assemble(root.path(), outcome, runs.clone(), requests.clone());
+        let client = luna_rpc::memory_client(core.rpc_service());
+        core.workspace
+            .create_space("fork-space", &core.device_id, "/tmp", None, false)
+            .unwrap();
+        client.call("Mutate", serde_json::json!({"op":"createChat","chatId":"fork-source","spaceId":"fork-space",
+            "config":{"harness":"mock","model":"mock-1","sandbox":"workspace-write","permissionMode":"ask","effectivePermissionMode":"ask"}})).await.unwrap();
+        let created = client.call("CreateSideChat", serde_json::json!({"parentId":"fork-source","requestId":uuid::Uuid::new_v4().to_string(),"forceSnapshot":true})).await.unwrap();
+        let id = created["meta"]["id"].as_str().unwrap().to_owned();
+        let mut original = request("");
+        original.attachments.clear();
+        original.parent_permission_ceiling = None;
+        fork_command(&client, &id, "fork-original-run", serde_json::json!({"kind":"session","command":{"kind":"run","messageId":"fork-original","request":original}})).await;
+        let pending = wait_for_fork_recovery(&core, &id, RecoveryStatus::Scheduled).await;
+        core.sessions
+            .hold_recovery(&id, "held for restart E2E")
+            .unwrap();
+        let before = core.task_identity.view(&id).unwrap().current_binding;
+        drop(client);
+        core.shutdown().await;
+        drop(core);
+        let core = assemble(root.path(), outcome, runs.clone(), requests.clone());
+        let client = luna_rpc::memory_client(core.rpc_service());
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            1,
+            "restart does not dispatch held work"
+        );
+        let receipt = fork_command(
+            &client,
+            &id,
+            "fork-retry",
+            serde_json::json!({"kind":"retryRecovery","chainId":pending.chain_id}),
+        )
+        .await;
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied, "{receipt:?}");
+        let complete = wait_for_fork_recovery(&core, &id, RecoveryStatus::Completed).await;
+        assert_eq!(complete.chain_id, pending.chain_id);
+        assert_eq!(complete.attempt_count, 1);
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+        let after = core
+            .task_identity
+            .view(&id)
+            .unwrap()
+            .current_binding
+            .unwrap();
+        if let Some(before) = before {
+            assert_eq!(after.binding_id, before.binding_id);
+            assert_eq!(after.generation, before.generation);
+            assert_eq!(after.provider_task_id, before.provider_task_id);
+        }
+        let logged = requests.lock().unwrap().clone();
+        if matches!(outcome, FirstOutcome::RejectedOverload) {
+            assert_eq!(logged[0].prompt, logged[1].prompt);
+        } else {
+            assert_ne!(
+                logged[0].prompt, logged[1].prompt,
+                "accepted input is continued, never replayed"
+            );
+            assert_eq!(
+                logged[1].resume.as_deref(),
+                Some(after.provider_task_id.as_str())
+            );
+        }
+        evidence.push(serde_json::json!({"taskId":id,"pending":pending,"complete":complete,"binding":after,"requests":logged}));
+        drop(client);
+        core.shutdown().await;
+    }
+    if let Ok(dir) = std::env::var("FORK_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("ordinary-fork-recovery.json"),
+            serde_json::to_vec_pretty(&evidence).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 #[tokio::test]
 async fn confirmed_rejection_resends_the_frozen_request_once() {
     let root = tempfile::tempdir().unwrap();

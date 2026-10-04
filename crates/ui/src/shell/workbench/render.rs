@@ -20,6 +20,14 @@ const FOOTER_COMPACT_WIDTH: f32 = 360.0;
 /// The canvas sits this far inside the frame (left/right/bottom).
 const CANVAS_INSET: f32 = 8.0;
 const CANVAS_RADIUS: f32 = 14.0;
+/// The scroll viewport's rectangular clip sits this far inside the canvas's
+/// outer edge on every side (border included). Clips are rectangles only, so
+/// it must be at least `CANVAS_RADIUS * (1 - 1/sqrt 2)` (~4.1 px) for the
+/// clip's corners to stay inside the rounded corners: content can then
+/// never cut across the arc or paint over the hairline.
+pub(in crate::shell) const VIEWPORT_INSET: f32 = 6.0;
+/// The directional overflow fade at a viewport edge with more content.
+const OVERFLOW_FADE: f32 = 28.0;
 /// The frame's bottom row (checkout/branch, Git entry point).
 const FRAME_FOOTER_HEIGHT: f32 = 32.0;
 /// Divider hit target, centred on the 1px seam.
@@ -29,6 +37,97 @@ const SPLIT_SEAM: f32 = 1.0;
 /// Hover/preview fade and insertion timing (reduced motion: none).
 const PREVIEW_FADE_MS: u64 = 120;
 const INSERT_MS: u64 = 160;
+
+/// The selected tab's own rounded fill, its only selection mark (no
+/// underline, no outline): the focused group's active tab takes a quiet
+/// accent tint, the other groups' active tabs the neutral selected fill.
+/// Its title (full text, medium weight) and, when focused, its accent role
+/// glyph go with it; keyboard focus keeps its own focus-visible ring.
+pub(in crate::shell) fn tab_selected_fill(theme: &Theme, focused: bool) -> gpui::Hsla {
+    if focused {
+        theme.tab_focused_fill()
+    } else {
+        theme.tab_chip_washes()[2]
+    }
+}
+
+/// Which viewport edges have content beyond them: `[left, right, top,
+/// bottom]`, from the canvas scroll position of the last layout.
+pub(in crate::shell) fn canvas_overflow(scroll: &gpui::ScrollHandle) -> [bool; 4] {
+    let offset = scroll.offset();
+    let max = scroll.max_offset();
+    let (x, y) = (-f32::from(offset.x), -f32::from(offset.y));
+    let (max_x, max_y) = (f32::from(max.x), f32::from(max.y));
+    [x > 0.5, max_x - x > 0.5, y > 0.5, max_y - y > 0.5]
+}
+
+/// A soft fade at each viewport edge with more content beyond it: content
+/// dissolves toward the window surface instead of being sliced by a hard
+/// line. Translucent (no opaque patch over the frosted canvas), and drawn
+/// as plain shapes with no hitbox, so presses, wheel scrolling and drops
+/// pass straight through to the panes underneath.
+fn overflow_fades(scroll: &gpui::ScrollHandle, theme: &Theme) -> Vec<AnyElement> {
+    let [left, right, top, bottom] = canvas_overflow(scroll);
+    let shade = theme.overflow_fade();
+    let clear = shade.opacity(0.0);
+    let fade = |angle: f32, from: gpui::Hsla, to: gpui::Hsla| {
+        gpui::linear_gradient(
+            angle,
+            gpui::linear_color_stop(from, 0.0),
+            gpui::linear_color_stop(to, 1.0),
+        )
+    };
+    let mut fades = Vec::new();
+    if left {
+        fades.push(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(OVERFLOW_FADE))
+                .bg(fade(90.0, shade, clear))
+                .into_any_element(),
+        );
+    }
+    if right {
+        fades.push(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(OVERFLOW_FADE))
+                .bg(fade(90.0, clear, shade))
+                .into_any_element(),
+        );
+    }
+    if top {
+        fades.push(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top_0()
+                .h(px(OVERFLOW_FADE))
+                .bg(fade(180.0, shade, clear))
+                .into_any_element(),
+        );
+    }
+    if bottom {
+        fades.push(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .h(px(OVERFLOW_FADE))
+                .bg(fade(180.0, clear, shade))
+                .into_any_element(),
+        );
+    }
+    fades
+}
 
 /// The smallest size the saved tree can take with every group at its
 /// minimum (320 x 240), keeping each split's saved ratio and axis: a
@@ -231,6 +330,7 @@ impl Shell {
         let tree = self.render_workbench_node(&layout.root, &frame, window, cx);
         let canvas_fill = theme.canvas_fill();
         let geometry = self.workbench.geometry.clone();
+        let canvas_geometry = self.workbench.geometry.clone();
         let preview = self.render_workbench_preview(&theme);
         let collapsing = self.render_workbench_collapse(canvas_fill, &theme);
         let notice = self.render_workbench_notice(&theme, cx);
@@ -251,6 +351,7 @@ impl Shell {
             .border_color(theme.hairline(0.08))
             .bg(canvas_fill)
             .overflow_hidden()
+            .p(px(VIEWPORT_INSET - 1.0))
             .on_drag_move(cx.listener(Self::on_workbench_tab_drag))
             .on_drag_move(cx.listener(Self::on_related_row_drag))
             .on_drag_move(cx.listener(Self::on_workbench_divider_drag))
@@ -262,31 +363,50 @@ impl Shell {
             }))
             .child(
                 gpui::canvas(
-                    move |bounds, _, _| geometry.borrow_mut().root = Some(bounds),
+                    move |bounds, _, _| canvas_geometry.borrow_mut().canvas = Some(bounds),
                     |_, _, _, _| {},
                 )
                 .absolute()
                 .inset_0(),
             )
             .child(
-                // The scroll viewport stays inside the frame (footer and
-                // sidebars are outside it); the content is the saved layout
-                // at no less than every group's minimum size.
+                // The scroll viewport: inset inside the rounded hairline so
+                // its rectangular clip never crosses a corner. Measured as
+                // the canvas root, so drops, previews, reveal and tab
+                // hit-testing all use the area content is actually shown in.
                 div()
-                    .id("workbench-canvas-scroll")
+                    .id("workbench-viewport")
+                    .relative()
                     .size_full()
-                    .overflow_scroll()
-                    .track_scroll(&canvas_scroll)
                     .child(
+                        gpui::canvas(
+                            move |bounds, _, _| geometry.borrow_mut().root = Some(bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
+                    .child(
+                        // The content is the saved layout at no less than
+                        // every group's minimum size (footer and sidebars
+                        // are outside the viewport).
                         div()
+                            .id("workbench-canvas-scroll")
                             .size_full()
-                            .min_w(px(min_width))
-                            .min_h(px(min_height))
-                            .child(tree),
-                    ),
+                            .overflow_scroll()
+                            .track_scroll(&canvas_scroll)
+                            .child(
+                                div()
+                                    .size_full()
+                                    .min_w(px(min_width))
+                                    .min_h(px(min_height))
+                                    .child(tree),
+                            ),
+                    )
+                    .children(overflow_fades(&canvas_scroll, &theme))
+                    .children(collapsing)
+                    .children(preview),
             )
-            .children(collapsing)
-            .children(preview)
             .children(notice);
         let footer = self.render_workbench_footer(&layout, &theme, cx);
         // Any press anywhere starts a new pointer gesture, so an earlier
@@ -547,7 +667,6 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = &frame.theme;
         let main = frame.layout.main_chat_id.clone();
         let focused = frame.multi && frame.layout.focused_pane_id == pane.id;
         let strip = self.render_workbench_strip(pane, frame, focused, cx);
@@ -570,7 +689,7 @@ impl Shell {
                     .into_any_element()
             }
             Some(chat) => match pane.tabs.iter().find(|tab| tab.chat_id == chat).cloned() {
-                Some(tab) => self.render_workbench_tab_body(&tab, theme, cx),
+                Some(tab) => self.render_workbench_tab_body(&tab, cx),
                 None => self.render_workbench_empty(pane, frame, cx),
             },
             None => self.render_workbench_empty(pane, frame, cx),
@@ -580,7 +699,6 @@ impl Shell {
         let holds_main = pane.active_chat_id == Some(main.as_str());
         let focus_pane = pane.id.to_string();
         let pane_focused = frame.layout.focused_pane_id == pane.id;
-        let ring = theme.readable_icon(theme.accent.opacity(0.45));
         let pane_focus = self.workbench_pane_focus(pane.id, window, cx);
         let element = div()
             .id(SharedString::from(format!("wb-pane-{}", pane.id)))
@@ -621,11 +739,7 @@ impl Shell {
                     .min_h_0()
                     .relative()
                     .child(body),
-            )
-            // Focus is shown by an outline, not only by color in the tab.
-            .when(focused, |el| {
-                el.child(div().absolute().inset_0().border_1().border_color(ring))
-            });
+            );
         if self.reduced_motion {
             element.into_any_element()
         } else {
@@ -838,8 +952,9 @@ impl Shell {
             .gap(px(4.0))
             .pl(px(6.0))
             .pr(px(6.0))
-            .border_b_1()
-            .border_color(theme.hairline(0.06))
+            // No rule under the strip: the tabs, the selected tab's fill
+            // and the chat's own context line read as one header of the
+            // conversation below (only the split seam separates chats).
             .child(
                 // The visible tab viewport (measured outside the scrolled
                 // content): tabs scrolled past it are clipped for hits.
@@ -1009,11 +1124,8 @@ impl Shell {
         let key_chat = tab.chat_id.clone();
         let tab_focus = self.workbench_tab_focus(&tab.chat_id, cx);
         let focus_ring = theme.focus_ring();
-        let underline = if strip_focused {
-            theme.focus_ring()
-        } else {
-            theme.readable_icon(theme.text_muted.opacity(0.45))
-        };
+        let focused_active = active && strip_focused;
+        let selected_fill = tab_selected_fill(theme, strip_focused);
         let main_badge = is_main.then(|| {
             div()
                 .flex_none()
@@ -1097,8 +1209,10 @@ impl Shell {
             .focus_visible(move |style| style.border_color(focus_ring))
             .cursor_pointer()
             .text_size(crate::typography::ui_rems(12.5))
-            .text_color(if active { theme.text } else { theme.text_muted })
-            .when(active, |el| el.bg(crate::theme::wash(0.09)))
+            .text_color(theme.tab_title(active, strip_focused))
+            .when(active, |el| {
+                el.bg(selected_fill).font_weight(gpui::FontWeight::MEDIUM)
+            })
             .when(!active, |el| {
                 el.hover(|style| style.bg(crate::theme::wash(0.05)))
             })
@@ -1182,24 +1296,12 @@ impl Shell {
                     icon(role.icon())
                         .size(px(11.0))
                         .flex_none()
-                        .text_color(theme.readable_muted(0.6)),
+                        .text_color(theme.tab_role_icon(focused_active)),
                 )
             })
             .child(div().min_w_0().truncate().child(title))
             .children(status_mark)
             .children(close_slot)
-            .when(active, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .left(px(8.0))
-                        .right(px(8.0))
-                        .bottom(px(-4.0))
-                        .h(px(2.0))
-                        .rounded_full()
-                        .bg(underline),
-                )
-            })
             .child(
                 gpui::canvas(
                     move |bounds, _, _| {
@@ -1229,80 +1331,15 @@ impl Shell {
         }
     }
 
-    /// A non-main tab's body: its live view, or (ended side chats) the
-    /// read-only history the side panel shows.
-    fn render_workbench_tab_body(
-        &mut self,
-        tab: &TabRef,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        if self.workbench_tab_shows_history(tab, cx) {
-            return self.render_workbench_side_history(tab, theme, cx);
-        }
+    /// A non-main tab's body: its live view (forks included: a side thread
+    /// is an ordinary thread with its own composer).
+    fn render_workbench_tab_body(&mut self, tab: &TabRef, cx: &mut Context<Self>) -> AnyElement {
         let view = self.workbench_view(tab, cx);
         self.workbench_take_focus_request(&tab.chat_id, cx);
         div()
             .id(SharedString::from(format!("wb-view-{}", tab.chat_id)))
             .size_full()
             .child(view)
-            .into_any_element()
-    }
-
-    /// An ended (or not first-class) side chat: its saved history,
-    /// read-only, in this tab's own history panel (never the shared side
-    /// panel, so two ended histories can show side by side). Reopening never
-    /// starts another process.
-    fn render_workbench_side_history(
-        &mut self,
-        tab: &TabRef,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let panel = self.workbench_side_history(tab, cx);
-        let id = SharedString::from(format!("wb-side-history-{}", tab.chat_id));
-        if panel.read(cx).has_page() {
-            return div().id(id).size_full().child(panel).into_any_element();
-        }
-        // Loading (or a failed read, with its retry): the panel mounts
-        // nothing until its page arrives.
-        let error = panel.read(cx).error_text().map(str::to_string);
-        div()
-            .id(id)
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(10.0))
-            .text_color(theme.readable_muted(0.7))
-            .child(
-                icon(icons::GIT_FORK)
-                    .size(px(20.0))
-                    .text_color(theme.decorative_muted(0.4)),
-            )
-            .child(
-                div()
-                    .text_size(crate::typography::ui_rems(13.0))
-                    .child(match &error {
-                        Some(error) => {
-                            format!("This side chat's history could not be read: {error}")
-                        }
-                        None => "Loading this side chat's saved history…".to_string(),
-                    }),
-            )
-            .when(error.is_some(), |el| {
-                el.child(
-                    popover::btn_ghost(theme, "Try again", "wb-btn-history-retry")
-                        .id(SharedString::from(format!(
-                            "wb-side-history-retry-{}",
-                            tab.chat_id
-                        )))
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            panel.update(cx, |panel, cx| panel.retry_history(cx));
-                        })),
-                )
-            })
             .into_any_element()
     }
 
@@ -1985,7 +2022,8 @@ impl Shell {
                 )),
             );
         }
-        if matches!(role, TabRole::Child | TabRole::Alongside) {
+        // Any thread but Main (a fork too) can become its own workbench Main.
+        if role != TabRole::Main {
             let chat = menu.chat_id.clone();
             card = card.child(popover::menu_separator()).child(
                 row(

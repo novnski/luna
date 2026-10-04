@@ -402,7 +402,6 @@ impl EngineRpc {
         if parent.archived
             || parent.device_id != self.engine_info.device_id
             || parent.space_id.is_none()
-            || self.is_side_chat(parent_id)
         {
             return Err(crate::EngineError::Other(
                 "Child creation requires a live ordinary parent on this project host".into(),
@@ -422,7 +421,13 @@ impl EngineRpc {
                     "Child parent identity was deleted".into(),
                 ));
             }
-            cursor = view.task.lineage.parent_task_id;
+            // Legacy snapshot forks recorded the source in parentTaskId. It
+            // is provenance, not another level in the child hierarchy.
+            cursor = if self.workspace.is_side_chat(&id) {
+                None
+            } else {
+                view.task.lineage.parent_task_id
+            };
         }
         Ok(parent)
     }

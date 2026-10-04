@@ -1,48 +1,22 @@
-use super::pane_chat::{
-    PaneChatChrome, PaneChatEvent, PaneChatView, PaneComposers, PaneHeaderActions, PaneIdentity,
-};
+//! Starting a side thread: a persistent fork of a conversation.
+//!
+//! A side thread begins as a fork (or a frozen context snapshot) of its
+//! source and is then an ordinary thread: the engine publishes it with its
+//! real project and its source (`sideChatParentId`), and the UI manages it
+//! like any chat (workbench tab or Main, close/reopen, drafts, send, stop,
+//! model, approvals, recovery, archive, pin, settle, delete). The source is
+//! a link, never a lifetime: there is no End, expiry, lease, unload or
+//! read-only "ended" state. `sideChatState` is legacy metadata only.
+//!
+//! This module only creates forks. A create is idempotent by request id: an
+//! outcome the engine may have completed (a lost connection, an unresolved
+//! receipt) keeps its id, so Retry repeats the same request and never makes
+//! a second fork. A created fork opens as a workbench tab under its source
+//! (or, without the workbench, as the selected chat).
+
 use super::*;
-use crate::state::EngineHandle;
-use luna_engine::side_chats::{SideChatCreated, SideChatList, SideChatPage};
+use luna_engine::side_chats::SideChatCreated;
 use serde_json::{Value, json};
-use std::rc::Rc;
-
-fn state_label(state: &str) -> &str {
-    match state {
-        "active" => "Writable",
-        "ended" => "Ended",
-        "preparing" => "Preparing",
-        "creationFailed" => "Creation incomplete",
-        "closing" => "Saving",
-        "closeFailed" => "Unload incomplete",
-        "unloaded" => "Unloaded",
-        "expired" => "Expired",
-        "recovered" => "Recovered after restart",
-        "deleted" => "Deleted",
-        _ => "Unavailable",
-    }
-}
-
-#[derive(Clone)]
-enum PanelAction {
-    New,
-    NewSnapshot,
-    Open(String),
-    Older,
-    Latest,
-    MoreHistory,
-    Send,
-    Unload,
-    Refresh,
-    Answer(String),
-    Approve(luna_proto::ApprovalDecision),
-    RevealOrigin,
-    /// Leave the open side chat: unload a writable one (it becomes read-only
-    /// history), or just return to the list from a read-only page.
-    Back,
-    /// Stop only the side chat's current turn; the lease stays writable.
-    Stop,
-}
 
 /// A create the engine may have completed: the connection or the task was
 /// lost, or the engine reports the creation unresolved (it will not replay
@@ -67,668 +41,134 @@ fn create_outcome_unknown<E>(result: &Result<Result<Value, luna_rpc::RpcError>, 
     }
 }
 
-/// The page's entries as saved history. A chat that is no longer active
-/// cannot answer: its open questions and approvals read as asked, not as
-/// awaiting an answer (display only; the record is unchanged).
-fn read_only_history(page: &SideChatPage) -> Vec<luna_doc::SessionMessageEntry> {
-    let mut entries = page.entries.clone();
-    if page.meta.state != "active" {
-        for part in entries.iter_mut().flat_map(|entry| entry.parts.iter_mut()) {
-            match part {
-                luna_doc::MessagePart::Input { resolved, .. }
-                | luna_doc::MessagePart::AsyncQuestion { resolved, .. } => *resolved = true,
-                _ => {}
-            }
-        }
-    }
-    entries
+/// `id`'s fork source (the chat it was forked from), when `id` is a fork.
+/// The source may since have been deleted: the fork stays a thread.
+pub(super) fn fork_source<'a>(state: &'a AppState, id: &str) -> Option<&'a str> {
+    state
+        .side_chat_rows
+        .get(id)
+        .map(|row| row.parent_id.as_str())
+        .filter(|source| *source != id)
 }
 
-/// The side half of the Related chats list ([`SideChatPanel::list_snapshot`]).
-pub(super) struct SideListSnapshot {
-    pub(super) items: Vec<luna_engine::side_chats::SideChatMeta>,
-    /// The first page arrived (`false` while loading).
-    pub(super) loaded: bool,
-    /// Older pages are still loading.
-    pub(super) more: bool,
-    pub(super) busy: bool,
-    pub(super) error: Option<String>,
-    pub(super) operation: Option<&'static str>,
-    pub(super) snapshot_alternative: bool,
-    /// A create whose outcome is unknown (`Some(force_snapshot)`): retry
-    /// repeats it; only an explicit choice starts a different side chat.
-    pub(super) pending_create: Option<bool>,
-    pub(super) persistent: bool,
-    /// Older engines: side chats left with Back that still hold a lease.
-    pub(super) parked: std::collections::HashSet<String>,
+/// Whether `id` is a fork (a side thread) at all.
+pub(super) fn is_fork(state: &AppState, id: &str) -> bool {
+    fork_source(state, id).is_some()
 }
 
-pub(super) fn side_state_label(state: &str) -> &str {
-    state_label(state)
-}
-
-/// A list action on one side chat ([`Shell::set_side_chat_flag`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum SideChatFlag {
-    Pinned(bool),
-    Settled(bool),
-    Archived(bool),
-}
-
-pub(super) enum SideChatEvent {
-    RevealOrigin {
-        parent: String,
-        message_id: String,
-        engine_generation: u64,
-    },
-    ResultToParent {
-        parent: String,
-        engine_generation: u64,
-        text: String,
-    },
-    Transcript {
-        side_chat_id: String,
-        engine_generation: u64,
-        transcript: Entity<Transcript>,
-        event: TranscriptEvent,
-    },
-}
-
-impl gpui::EventEmitter<SideChatEvent> for SideChatPanel {}
-
-/// Whether this side chat can use the full bound composer (contract §5.1):
-/// the engine advertises `side-chat-task-commands-v1` (side chats accept the
-/// ordinary task commands, watches, drafts and per-chat RPCs while leased)
-/// and `WatchChats` publishes the live side chat's row (without a project,
-/// so it stays out of the sidebar and can't become the main chat). Otherwise
-/// side chats use the leased side-chat RPCs and the input says what they
-/// support.
+/// A materialized side thread: the engine publishes its ordinary chat row,
+/// so it takes the ordinary views, composers and commands, whatever its
+/// legacy `sideChatState` says.
 pub(super) fn side_chat_first_class(state: &AppState, side_id: &str) -> bool {
-    state.engine().is_some_and(|engine| {
-        engine
-            .engine_info()
-            .supports(luna_proto::capabilities::SIDE_CHAT_TASK_COMMANDS_V1)
-    }) && state
-        .chats
-        .iter()
-        .any(|chat| chat.id == side_id && chat.space_id.is_none())
-        // Ended histories are published too; they never bind a composer.
-        && state
-            .side_chat_rows
-            .get(side_id)
-            .is_none_or(|row| row.active())
+    state.chats.iter().any(|chat| chat.id == side_id)
 }
 
-/// The lease lapses after 30 s without a renewal; renew well inside that.
-const LEASE_HEARTBEAT: Duration = Duration::from_secs(10);
+/// What the Related chats header shows about starting a side thread.
+#[derive(Debug, Clone, Default)]
+pub(super) struct SideCreateSnapshot {
+    pub busy: bool,
+    pub operation: Option<&'static str>,
+    pub error: Option<String>,
+    /// An unresolved create (its snapshot flag): Retry repeats that request.
+    pub pending_create: Option<bool>,
+    /// A plain fork failed: offer starting from recent context instead.
+    pub snapshot_alternative: bool,
+}
 
 pub(super) struct SideChatPanel {
     state: Entity<AppState>,
-    /// The engine persists side chats (`side-chat-persistence-v1`): no lease,
-    /// heartbeat or expiry. An active side chat stays writable across closed
-    /// views and restarts; only the user's End (`UnloadSideChat`) ends it.
-    persistent: bool,
-    /// A create whose outcome is unknown (transport loss) keeps its request
-    /// id so a retry is the same idempotent request: `(id, force_snapshot)`.
-    pending_create: Option<(String, bool)>,
-    /// The side-chat RPC this panel is waiting on, while `busy`.
-    in_flight: Option<&'static str>,
-    /// Shared per-chat composers (first-class side chats bind one).
-    composers: Entity<PaneComposers>,
-    /// The shared full chat view, when this side chat is first-class.
-    full_view: Option<(Entity<PaneChatView>, Subscription)>,
-    /// First-class side chats left with Back: still writable, their leases
-    /// kept alive by the heartbeat so the draft or a send in flight can
-    /// finish and the chat can be reopened. Unloaded on panel release.
-    parked: std::collections::HashMap<String, String>,
-    last_renew: std::time::Instant,
-    renew_task: Option<Task<()>>,
-    links: crate::markdown::render::LinkUi,
-    engine: Option<EngineHandle>,
-    parent: String,
-    /// The selected root owns this panel even when its actual parent is a child.
-    owner_chat: Option<String>,
+    engine: Option<crate::state::EngineHandle>,
     engine_generation: u64,
-    parent_title: String,
-    page: Option<SideChatPage>,
-    history: Option<SideChatList>,
-    lease: Option<String>,
-    transcript: Option<Entity<Transcript>>,
-    transcript_events: Option<Subscription>,
+    /// The selected chat this panel belongs to (the source may be a tab).
+    owner_chat: Option<String>,
+    parent: String,
+    /// The quoted message a fork starts from, when it came from one:
+    /// `(message id, anchor text)`.
     origin: Option<(String, String)>,
-    input: Entity<ComposerInput>,
-    before: Option<i64>,
-    answers: std::collections::HashMap<String, Vec<String>>,
+    /// A create whose outcome is unknown keeps its request id:
+    /// `(request id, snapshot)`.
+    pending_create: Option<(String, bool)>,
     busy: bool,
     operation_label: Option<&'static str>,
-    focus_pending: bool,
-    snapshot_alternative: bool,
     error: Option<String>,
-    /// A workbench tab's read-only history of one ended side chat: this id
-    /// only, never the list, Back, a composer or a write.
-    fixed: Option<String>,
-    _events: Subscription,
+    snapshot_alternative: bool,
+    /// A fork this panel created, not yet opened.
+    created: Option<String>,
     task: Option<Task<()>>,
-    _ticker: Task<()>,
 }
 
 impl SideChatPanel {
-    pub(super) fn owns_link_source(&self, source: &str, cx: &App) -> bool {
-        self.is_current(cx)
-            && (source == self.parent
-                || self
-                    .page
-                    .as_ref()
-                    .is_some_and(|page| page.meta.id == source))
-    }
     pub(super) fn new(
         state: Entity<AppState>,
-        composers: Entity<PaneComposers>,
-        links: crate::markdown::render::LinkUi,
-        parent: String,
-        origin: Option<(String, String)>,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut this = Self::construct(state, composers, links, parent, origin, cx);
-        this.action(
-            if this.origin.is_some() {
-                PanelAction::New
-            } else {
-                PanelAction::Refresh
-            },
-            cx,
-        );
-        this
-    }
-
-    /// A workbench tab's own read-only history of the side chat `id`, under
-    /// its exact source `parent`. It loads that page directly and once (no
-    /// list refresh first, so no busy guard can swallow the open), keeps
-    /// the engine-generation and owner-chat guards of every panel, and never
-    /// writes: no composer, lease, End or Back.
-    pub(super) fn new_history(
-        state: Entity<AppState>,
-        composers: Entity<PaneComposers>,
-        links: crate::markdown::render::LinkUi,
-        parent: String,
-        id: String,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let mut this = Self::construct(state, composers, links, parent, None, cx);
-        this.fixed = Some(id.clone());
-        this.action(PanelAction::Open(id), cx);
-        this
-    }
-
-    /// The side chat a history-only panel shows.
-    pub(super) fn fixed_id(&self) -> Option<&str> {
-        self.fixed.as_deref()
-    }
-
-    pub(super) fn error_text(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
-    /// A history tab's retry after a failed first read.
-    pub(super) fn retry_history(&mut self, cx: &mut Context<Self>) {
-        if self.fixed.is_some() {
-            self.action(PanelAction::Refresh, cx);
-        }
-    }
-
-    fn construct(
-        state: Entity<AppState>,
-        composers: Entity<PaneComposers>,
-        links: crate::markdown::render::LinkUi,
         parent: String,
         origin: Option<(String, String)>,
         cx: &mut Context<Self>,
     ) -> Self {
         let engine = state.read(cx).engine().cloned();
-        let persistent = engine.as_ref().is_some_and(|engine| {
-            engine
-                .engine_info()
-                .supports(luna_proto::capabilities::SIDE_CHAT_PERSISTENCE_V1)
-        });
         let engine_generation = state.read(cx).engine_generation();
         let owner_chat = state.read(cx).selected_chat.clone();
-        let parent_title = state
-            .read(cx)
-            .chats
-            .iter()
-            .find(|chat| chat.id == parent)
-            .and_then(|chat| chat.title.clone())
-            .unwrap_or_else(|| "Conversation".into());
-        let input = cx.new(|cx| ComposerInput::new("Ask in this side chat…", cx));
-        let events = cx.subscribe(&input, |this, _, event, cx| {
-            if matches!(
-                event,
-                ComposerInputEvent::Submitted | ComposerInputEvent::ModifierSubmitted
-            ) {
-                this.action(PanelAction::Send, cx);
-            }
-        });
-        cx.on_release(|this, cx| {
-            if let Some(page) = &this.page {
-                this.state
-                    .update(cx, |state, _| state.unwatch_subagent_doc(&page.meta.id));
-            }
-        })
-        .detach();
-        let ticker = cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-                if this
-                    .update(cx, |panel, cx| {
-                        // A saved history has nothing to renew or poll.
-                        if panel.fixed.is_some() {
-                            return;
-                        }
-                        // Persistent side chats have no lease to renew. A
-                        // writable page without a first-class row reads its
-                        // saved page until the row (and its watch) arrives.
-                        if panel.persistent {
-                            if !panel.busy
-                                && !panel.full_mode(cx)
-                                && panel
-                                    .page
-                                    .as_ref()
-                                    .is_some_and(|page| page.meta.state == "active")
-                            {
-                                panel.action(PanelAction::Refresh, cx);
-                            }
-                            return;
-                        }
-                        // A first-class side chat streams through its live
-                        // doc watch; reading pages would replace (and stop)
-                        // that watch. Its lease only needs the heartbeat.
-                        if panel.full_mode(cx) || !panel.parked.is_empty() {
-                            if panel.last_renew.elapsed() >= LEASE_HEARTBEAT {
-                                panel.renew_leases(cx);
-                            }
-                        } else if panel.lease.is_some() && !panel.busy {
-                            panel.action(PanelAction::Refresh, cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        });
-        Self {
+        let quoted = origin.is_some();
+        let mut this = Self {
             state,
-            persistent,
-            pending_create: None,
-            in_flight: None,
-            composers,
-            full_view: None,
-            parked: Default::default(),
-            last_renew: std::time::Instant::now(),
-            renew_task: None,
-            links,
             engine,
-            parent,
-            owner_chat,
             engine_generation,
-            parent_title,
-            page: None,
-            history: None,
-            lease: None,
-            transcript: None,
-            transcript_events: None,
+            owner_chat,
+            parent,
             origin,
-            input,
-            before: None,
-            answers: Default::default(),
+            pending_create: None,
             busy: false,
             operation_label: None,
-            focus_pending: false,
-            snapshot_alternative: false,
             error: None,
-            fixed: None,
-            _events: events,
+            snapshot_alternative: false,
+            created: None,
             task: None,
-            _ticker: ticker,
+        };
+        // "Fork from here" on a message starts at once.
+        if quoted {
+            this.create(false, cx);
         }
+        this
     }
 
-    /// Shell owns the asynchronous readback, so a failed unload stays visible
-    /// even after the side view and its subscriptions have been released.
+    /// The selected chat and engine this panel was made for are current.
     pub(super) fn is_current(&self, cx: &App) -> bool {
         let state = self.state.read(cx);
         state.engine_generation() == self.engine_generation
             && state.selected_chat == self.owner_chat
     }
 
-    /// Writes reach the engine: an active side chat on a persistent engine,
-    /// or one whose view still holds its lease on an older engine.
-    fn can_write(&self) -> bool {
-        self.persistent || self.lease.is_some()
-    }
-
-    pub(super) fn has_page(&self) -> bool {
-        self.page.is_some()
-    }
-
-    pub(super) fn page_id(&self) -> Option<&str> {
-        self.page.as_ref().map(|page| page.meta.id.as_str())
-    }
-
-    /// The chat this panel lists side chats for (their source parent).
+    /// The chat this panel starts side threads from (their source).
     pub(super) fn parent_id(&self) -> &str {
         &self.parent
     }
 
-    /// Whether this panel's list (or open page) includes `id`.
-    pub(super) fn lists(&self, id: &str) -> bool {
-        self.page_id() == Some(id)
-            || self
-                .history
-                .as_ref()
-                .is_some_and(|history| history.items.iter().any(|meta| meta.id == id))
+    pub(super) fn is_busy(&self) -> bool {
+        self.busy
     }
 
-    /// The open page when it is a writable first-class side chat that a
-    /// workbench tab can take over: `(side chat id, its source parent)`.
-    pub(super) fn first_class_page(&self, cx: &App) -> Option<(String, String)> {
-        if self.busy || !self.full_mode(cx) {
-            return None;
-        }
-        self.page
-            .as_ref()
-            .map(|page| (page.meta.id.clone(), self.parent.clone()))
-    }
-
-    /// A workbench tab took this side chat: forget the page without the
-    /// unwatch `Back` would do (the tab's view owns those watches now; doc
-    /// watches are not reference counted). A leased side chat stays parked
-    /// so the heartbeat keeps it writable. The panel returns to its list.
-    pub(super) fn hand_off_page(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
-        if self.busy || self.page_id() != Some(id) {
-            return false;
-        }
-        if let Some(lease) = self.lease.take() {
-            self.parked.insert(id.to_string(), lease);
-        }
-        self.page = None;
-        self.full_view = None;
-        self.transcript = None;
-        self.transcript_events = None;
-        self.before = None;
-        self.answers.clear();
-        self.task = None;
-        self.operation_label = None;
-        self.action(PanelAction::Refresh, cx);
-        true
-    }
-
-    /// Leave the open page for the list (its chat was deleted).
-    pub(super) fn close_page(&mut self, cx: &mut Context<Self>) {
-        self.action(PanelAction::Back, cx);
-    }
-
-    /// What the Related chats list shows for this panel's side chats.
-    pub(super) fn list_snapshot(&self) -> SideListSnapshot {
-        SideListSnapshot {
-            items: self
-                .history
-                .as_ref()
-                .map(|history| history.items.clone())
-                .unwrap_or_default(),
-            loaded: self.history.is_some(),
-            more: self
-                .history
-                .as_ref()
-                .is_some_and(|history| history.before.is_some()),
+    pub(super) fn snapshot(&self) -> SideCreateSnapshot {
+        SideCreateSnapshot {
             busy: self.busy,
-            error: self.error.clone(),
             operation: self.operation_label,
-            snapshot_alternative: self.snapshot_alternative,
+            error: self.error.clone(),
             pending_create: self.pending_create.as_ref().map(|(_, snapshot)| *snapshot),
-            persistent: self.persistent,
-            parked: self.parked.keys().cloned().collect(),
+            snapshot_alternative: self.snapshot_alternative,
         }
     }
 
-    /// The `WatchChats` row is fresher than the page: End publishes `ended`
-    /// before its response, and the composer locks the moment it does.
-    fn writable(&self, page: &SideChatPage, cx: &App) -> bool {
-        self.fixed.is_none()
-            && page.meta.state == "active"
-            && self.can_write()
-            && self
-                .state
-                .read(cx)
-                .side_chat_rows
-                .get(&page.meta.id)
-                .is_none_or(|row| row.active())
+    /// The fork this panel created and has not handed over yet.
+    pub(super) fn created(&self) -> Option<&str> {
+        self.created.as_deref()
     }
 
-    /// The open page is a writable, first-class side chat.
-    fn full_mode(&self, cx: &App) -> bool {
-        self.page.as_ref().is_some_and(|page| {
-            self.writable(page, cx) && side_chat_first_class(self.state.read(cx), &page.meta.id)
-        })
+    /// Hand the created fork over for opening, once.
+    pub(super) fn take_created(&mut self) -> Option<String> {
+        self.created.take()
     }
 
-    /// Heartbeat: `RenewSideChat` for the open and every parked lease. Never
-    /// reads pages, so live doc watches are untouched.
-    fn renew_leases(&mut self, cx: &mut Context<Self>) {
-        let Some(engine) = self.engine.clone() else {
-            return;
-        };
-        if !self.is_current(cx) || self.renew_task.is_some() {
-            return;
-        }
-        let mut leases: Vec<(String, String)> = self
-            .parked
-            .iter()
-            .map(|(id, lease)| (id.clone(), lease.clone()))
-            .collect();
-        if let (Some(page), Some(lease)) = (&self.page, &self.lease) {
-            leases.push((page.meta.id.clone(), lease.clone()));
-        }
-        if leases.is_empty() {
-            return;
-        }
-        self.last_renew = std::time::Instant::now();
-        self.renew_task = Some(cx.spawn(async move |this, cx| {
-            let calls = leases.clone();
-            let results = Tokio::spawn(cx, async move {
-                let mut results = Vec::new();
-                for (id, lease) in calls {
-                    let result = tokio::time::timeout(
-                        Duration::from_secs(10),
-                        engine
-                            .client()
-                            .call(methods::RENEW_SIDE_CHAT, json!({"id": id, "lease": lease})),
-                    )
-                    .await
-                    .map_err(|_| luna_rpc::RpcError::Failed("Lease renewal timed out".into()))
-                    .and_then(|result| result);
-                    results.push((id, result));
-                }
-                results
-            })
-            .await
-            .unwrap_or_default();
-            this.update(cx, |panel, cx| {
-                panel.renew_task = None;
-                for (id, result) in results {
-                    let open = panel.page.as_ref().is_some_and(|page| page.meta.id == id);
-                    match result {
-                        Ok(value) => {
-                            if open
-                                && let Ok(meta) = serde_json::from_value::<
-                                    luna_engine::side_chats::SideChatMeta,
-                                >(value)
-                                && let Some(page) = panel.page.as_mut()
-                            {
-                                page.meta = meta;
-                            }
-                        }
-                        Err(error) => {
-                            if open {
-                                // The engine made it read-only; show the
-                                // saved history and why.
-                                panel.lease = None;
-                                panel.full_view = None;
-                                panel.error = Some(error.to_string());
-                                panel.action(PanelAction::Refresh, cx);
-                            } else {
-                                panel.parked.remove(&id);
-                            }
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-        }));
-    }
-
-    /// Parked side chats to unload when the panel goes away. A persistent
-    /// side chat outlives its view: only End ends it.
-    pub(super) fn parked_release_requests(&self) -> Vec<(EngineHandle, String, String)> {
-        let Some(engine) = self.engine.clone().filter(|_| !self.persistent) else {
-            return Vec::new();
-        };
-        self.parked
-            .iter()
-            .map(|(id, lease)| (engine.clone(), id.clone(), lease.clone()))
-            .collect()
-    }
-
-    pub(super) fn release_request(&self) -> Option<(EngineHandle, String, String)> {
-        if self.persistent {
-            return None;
-        }
-        Some((
-            self.engine.clone()?,
-            self.page.as_ref()?.meta.id.clone(),
-            self.lease.clone()?,
-        ))
-    }
-
-    fn pending_question(&self) -> Option<(String, Vec<luna_proto::UserInputQuestion>)> {
-        self.page
-            .as_ref()?
-            .entries
-            .iter()
-            .rev()
-            .flat_map(|entry| entry.parts.iter().rev())
-            .find_map(|part| match part {
-                luna_doc::MessagePart::Input {
-                    request_id,
-                    questions,
-                    resolved: false,
-                    ..
-                } => Some((request_id.clone(), questions.clone())),
-                _ => None,
-            })
-    }
-
-    fn action(&mut self, action: PanelAction, cx: &mut Context<Self>) {
-        // A history tab reads its one page; it has no list to go back to,
-        // and never creates, sends, answers, stops or ends anything.
-        if self.fixed.is_some()
-            && !matches!(
-                action,
-                PanelAction::Open(_)
-                    | PanelAction::Refresh
-                    | PanelAction::Older
-                    | PanelAction::Latest
-                    | PanelAction::RevealOrigin
-            )
-        {
-            return;
-        }
-        if matches!(action, PanelAction::Back) {
-            if !self.is_current(cx) {
-                return;
-            }
-            // Persistent: leave the page and nothing else. The chat stays
-            // active; its composer (draft, send in flight) is cached per chat.
-            // A request in flight keeps running detached; leaving drops only
-            // the wait for its answer (and its page update).
-            if self.persistent {
-                if self.busy {
-                    if self.in_flight == Some(methods::SEND_SIDE_CHAT) {
-                        // Submitted: the text must not be sent twice.
-                        self.input.update(cx, |input, cx| input.set_text("", cx));
-                    }
-                    self.task = None;
-                    self.busy = false;
-                    self.in_flight = None;
-                    self.operation_label = None;
-                }
-                if let Some(page) = self.page.take() {
-                    self.state
-                        .update(cx, |state, _| state.unwatch_subagent_doc(&page.meta.id));
-                }
-                self.full_view = None;
-                self.transcript = None;
-                self.transcript_events = None;
-                self.before = None;
-                self.answers.clear();
-                self.action(PanelAction::Refresh, cx);
-                return;
-            }
-            // A first-class side chat is parked, not unloaded: its composer
-            // (draft, send in flight, receipt check) is cached per chat and
-            // the heartbeat keeps the lease, so reopening continues it.
-            if self.full_mode(cx)
-                && let (Some(page), Some(lease)) = (self.page.take(), self.lease.take())
-            {
-                self.parked.insert(page.meta.id.clone(), lease);
-                self.full_view = None;
-                self.transcript = None;
-                self.transcript_events = None;
-                self.before = None;
-                self.answers.clear();
-                // A page read in flight must not reopen the parked chat.
-                self.task = None;
-                self.busy = false;
-                self.operation_label = None;
-                self.action(PanelAction::Refresh, cx);
-                return;
-            }
-            // A send or unload in flight finishes first: navigation never
-            // drops an in-flight side chat request or its readback.
-            if self.busy {
-                return;
-            }
-            if self.lease.is_some() {
-                self.action(PanelAction::Unload, cx);
-                return;
-            }
-            if let Some(page) = self.page.take() {
-                self.state
-                    .update(cx, |state, _| state.unwatch_subagent_doc(&page.meta.id));
-            }
-            self.transcript = None;
-            self.transcript_events = None;
-            self.before = None;
-            self.answers.clear();
-            self.action(PanelAction::Refresh, cx);
-            return;
-        }
-        if matches!(action, PanelAction::RevealOrigin) {
-            if self.is_current(cx)
-                && let Some(message_id) = self
-                    .page
-                    .as_ref()
-                    .and_then(|page| page.meta.origin_message_id.clone())
-            {
-                cx.emit(SideChatEvent::RevealOrigin {
-                    parent: self.parent.clone(),
-                    message_id,
-                    engine_generation: self.engine_generation,
-                });
-            }
-            return;
-        }
+    /// Start (or, while an earlier outcome is unknown, retry) a side thread:
+    /// a fork, or with `snapshot` a frozen context snapshot.
+    pub(super) fn create(&mut self, snapshot: bool, cx: &mut Context<Self>) {
         if self.busy || !self.is_current(cx) {
             return;
         }
@@ -737,352 +177,67 @@ impl SideChatPanel {
             cx.notify();
             return;
         };
-        let action = if matches!(action, PanelAction::Send) && self.pending_question().is_some() {
-            PanelAction::Answer(self.input.read(cx).text().to_string())
-        } else {
-            action
+        // A retry after an unknown outcome repeats the same request, so the
+        // engine returns the thread it already created.
+        let request_id = match &self.pending_create {
+            Some((id, pending)) if *pending == snapshot => id.clone(),
+            _ => uuid::Uuid::new_v4().to_string(),
         };
-        let offer_snapshot = matches!(&action, PanelAction::New);
-        let paging = matches!(&action, PanelAction::MoreHistory);
-        let (method, params) = match action.clone() {
-            PanelAction::RevealOrigin | PanelAction::Back => return,
-            PanelAction::Answer(_) | PanelAction::Approve(_) => {
-                let Some((request_id, questions)) = self.pending_question() else {
-                    return;
-                };
-                let Some(page) = &self.page else {
-                    return;
-                };
-                if !self.writable(page, cx) {
-                    return;
-                }
-                let decision = if let PanelAction::Approve(decision) = action {
-                    Some(decision)
-                } else {
-                    None
-                };
-                if decision.is_none() {
-                    if questions.iter().any(|question| question.approval.is_some()) {
-                        return;
-                    }
-                    let PanelAction::Answer(answer) = action else {
-                        return;
-                    };
-                    if answer.trim().is_empty() {
-                        return;
-                    }
-                    if let Some(question) = questions
-                        .iter()
-                        .find(|question| !self.answers.contains_key(&question.id))
-                    {
-                        self.answers.insert(question.id.clone(), vec![answer]);
-                    }
-                    self.input.update(cx, |input, cx| input.set_text("", cx));
-                    if self.answers.len() < questions.len() {
-                        cx.notify();
-                        return;
-                    }
-                }
-                (
-                    if questions.iter().any(|question| {
-                        question
-                            .approval
-                            .as_ref()
-                            .is_some_and(|approval| approval.is_luna_cross_task())
-                    }) {
-                        "LunaSideLocalApproval"
-                    } else {
-                        methods::ANSWER_SIDE_CHAT
-                    },
-                    json!({"id":page.meta.id,"lease":self.lease,"requestId":request_id,"decision":decision,
-                    "answers":questions.iter().filter_map(|question| self.answers.get(&question.id).map(|labels| luna_proto::UserInputAnswer { question_id:question.id.clone(), labels:labels.clone() })).collect::<Vec<_>>() }),
-                )
-            }
-            PanelAction::New | PanelAction::NewSnapshot => {
-                if self.page.is_some() {
-                    return;
-                }
-                let snapshot = matches!(action, PanelAction::NewSnapshot);
-                // A retry after an unknown outcome repeats the same request,
-                // so the engine returns the chat it already created.
-                let request_id = match &self.pending_create {
-                    Some((id, pending)) if *pending == snapshot => id.clone(),
-                    _ => uuid::Uuid::new_v4().to_string(),
-                };
-                self.pending_create = Some((request_id.clone(), snapshot));
-                (
-                    methods::CREATE_SIDE_CHAT,
-                    json!({"parentId":self.parent,"requestId":request_id,"originMessageId":self.origin.as_ref().map(|origin| &origin.0),"anchorText":self.origin.as_ref().map(|origin| &origin.1),"forceSnapshot":snapshot}),
-                )
-            }
-            PanelAction::Open(id) => {
-                self.before = None;
-                // Reopening a parked side chat resumes its lease.
-                self.lease = self.parked.remove(&id);
-                (methods::READ_SIDE_CHAT, json!({"id":id,"lease":self.lease}))
-            }
-            PanelAction::Send => {
-                let Some(page) = self.page.as_ref().filter(|page| !page.working) else {
-                    return;
-                };
-                if !self.writable(page, cx) || self.input.read(cx).is_empty() {
-                    return;
-                }
-                (
-                    methods::SEND_SIDE_CHAT,
-                    json!({"id":page.meta.id,"lease":self.lease,"messageId":uuid::Uuid::new_v4().to_string(),"text":self.input.read(cx).text()}),
-                )
-            }
-            PanelAction::Stop => {
-                let Some(page) = self.page.as_ref().filter(|page| page.working) else {
-                    return;
-                };
-                if !self.can_write() {
-                    return;
-                }
-                (
-                    methods::STOP_SIDE_CHAT,
-                    json!({"id":page.meta.id,"lease":self.lease}),
-                )
-            }
-            PanelAction::Unload => {
-                let Some(page) = &self.page else {
-                    return;
-                };
-                (
-                    methods::UNLOAD_SIDE_CHAT,
-                    json!({"id":page.meta.id,"lease":self.lease}),
-                )
-            }
-            PanelAction::MoreHistory => {
-                let Some(before) = self.history.as_ref().and_then(|history| history.before) else {
-                    return;
-                };
-                (
-                    methods::LIST_SIDE_CHATS,
-                    json!({"parentId":self.parent,"before":before}),
-                )
-            }
-            PanelAction::Older | PanelAction::Latest | PanelAction::Refresh => {
-                if let Some(page) = &self.page {
-                    match action {
-                        PanelAction::Older => self.before = page.before,
-                        PanelAction::Latest => self.before = None,
-                        _ => {}
-                    }
-                    (
-                        methods::READ_SIDE_CHAT,
-                        json!({"id":page.meta.id,"lease":self.lease,"before":self.before}),
-                    )
-                } else if let Some(id) = &self.fixed {
-                    // A history tab whose first read failed retries its page.
-                    (
-                        methods::READ_SIDE_CHAT,
-                        json!({"id":id,"lease":null,"before":self.before}),
-                    )
-                } else {
-                    (methods::LIST_SIDE_CHATS, json!({"parentId":self.parent}))
-                }
-            }
-        };
-        let submitted_text = matches!(
-            method,
-            methods::SEND_SIDE_CHAT | methods::ANSWER_SIDE_CHAT | "LunaSideLocalApproval"
-        )
-        .then(|| self.input.read(cx).text().to_string());
-        self.operation_label = match method {
-            methods::CREATE_SIDE_CHAT => Some("Creating side chat…"),
-            methods::SEND_SIDE_CHAT => Some("Sending…"),
-            methods::UNLOAD_SIDE_CHAT => Some("Stopping work and saving…"),
-            methods::STOP_SIDE_CHAT => Some("Stopping the side chat's turn…"),
-            methods::LIST_SIDE_CHATS if self.history.is_none() => Some("Loading saved side chats…"),
-            _ => None,
-        };
+        self.pending_create = Some((request_id.clone(), snapshot));
+        let params = json!({
+            "parentId": self.parent,
+            "requestId": request_id,
+            "originMessageId": self.origin.as_ref().map(|origin| &origin.0),
+            "anchorText": self.origin.as_ref().map(|origin| &origin.1),
+            "forceSnapshot": snapshot,
+        });
         self.busy = true;
-        self.in_flight = Some(method);
+        self.operation_label = Some("Creating side chat…");
         self.error = None;
         self.task = Some(cx.spawn(async move |this, cx| {
-            let request = async move {
-                let value = if method == "LunaSideLocalApproval" {
-                    let id = params["id"].as_str().unwrap_or_default();
-                    let page: SideChatPage = engine
-                        .client()
-                        .call_as(
-                            methods::READ_SIDE_CHAT,
-                            json!({"id":id,"lease":params["lease"]}),
-                        )
-                        .await?;
-                    if page.meta.state != "active" {
-                        return Err(luna_rpc::RpcError::Failed(
-                            "This side chat is read-only".into(),
-                        ));
-                    }
-                    let decision: luna_proto::ApprovalDecision =
-                        serde_json::from_value(params["decision"].clone())
-                            .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))?;
-                    let outcome = engine
-                        .respond_luna_local_ui_approval(
-                            id,
-                            params["requestId"].as_str().unwrap_or_default(),
-                            decision,
-                        )
-                        .await
-                        .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))?;
-                    if !matches!(
-                        outcome,
-                        luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
-                            | luna_engine::sessions::LunaApprovalOutcome::Denied
-                    ) {
-                        return Err(luna_rpc::RpcError::Failed(format!(
-                            "Approval was not applied: {outcome:?}"
-                        )));
-                    }
-                    json!({"resolved":true})
-                } else {
-                    engine.client().call(method, params).await?
-                };
-                if method == methods::CREATE_SIDE_CHAT {
-                    let created: SideChatCreated = serde_json::from_value(value)
-                        .map_err(|error| luna_rpc::RpcError::Failed(error.to_string()))?;
-                    let page = engine
-                        .client()
-                        .call(
-                            methods::READ_SIDE_CHAT,
-                            json!({"id":created.meta.id,"lease":created.lease}),
-                        )
-                        .await?;
-                    Ok(json!({"created":created,"page":page}))
-                } else {
-                    Ok::<Value, luna_rpc::RpcError>(value)
-                }
-            };
-            let mutation = !matches!(
-                method,
-                methods::READ_SIDE_CHAT | methods::LIST_SIDE_CHATS
-            );
-            let result = if mutation {
-                // Detached: Back, closing the pane or dropping this panel ends
-                // only this wait, never a request the engine accepted (a
-                // create, send, answer, stop or End). Creation waits unbounded
-                // (the engine bounds provider work); the rest wait 45 s.
-                let handle = cx.update(|cx| Tokio::handle(cx));
-                let join = handle.spawn(request);
-                let limit = (method != methods::CREATE_SIDE_CHAT).then_some(Duration::from_secs(45));
-                Tokio::spawn(cx, async move {
-                    let joined = match limit {
-                        Some(limit) => tokio::time::timeout(limit, join).await.map_err(|_| luna_rpc::RpcError::Failed("Side chat response timed out. The outcome is unknown; inspect saved history before trying another send.".into()))?,
-                        None => join.await,
-                    };
-                    // A lost task is an unknown outcome, like a lost connection.
-                    joined.map_err(|error| luna_rpc::RpcError::Transport(error.to_string()))?
-                })
-                .await
-            } else {
-                Tokio::spawn(cx, async move {
-                    tokio::time::timeout(Duration::from_secs(45), request).await.map_err(|_| luna_rpc::RpcError::Failed("Side chat response timed out. The outcome is unknown; inspect saved history before trying another send.".into()))?
-                })
-                .await
-            };
+            // Detached: dropping this panel ends only the wait, never a
+            // create the engine accepted. Creation waits unbounded (the
+            // engine bounds provider work).
+            let handle = cx.update(|cx| Tokio::handle(cx));
+            let join = handle.spawn(async move {
+                engine
+                    .client()
+                    .call(methods::CREATE_SIDE_CHAT, params)
+                    .await
+            });
+            let result = Tokio::spawn(cx, async move {
+                // A lost task is an unknown outcome, like a lost connection.
+                join.await
+                    .map_err(|error| luna_rpc::RpcError::Transport(error.to_string()))?
+            })
+            .await;
             this.update(cx, |panel, cx| {
                 if !panel.is_current(cx) {
                     return;
                 }
                 panel.busy = false;
-                panel.in_flight = None;
                 panel.operation_label = None;
                 // Keep the request id only while the outcome is unknown: a
                 // retry is then the same idempotent request, never a new fork.
-                if method == methods::CREATE_SIDE_CHAT && !create_outcome_unknown(&result) {
+                if !create_outcome_unknown(&result) {
                     panel.pending_create = None;
                 }
-                let value = match result {
-                    Ok(Ok(value)) => value,
-                    Ok(Err(error)) => {
-                        panel.error = Some(error.to_string());
-                        panel.snapshot_alternative = offer_snapshot;
-                        cx.notify();
-                        return;
+                let created = match result {
+                    Ok(Ok(value)) => serde_json::from_value::<SideChatCreated>(value)
+                        .map_err(|error| error.to_string()),
+                    Ok(Err(error)) => Err(error.to_string()),
+                    Err(error) => Err(error.to_string()),
+                };
+                match created {
+                    Ok(created) => {
+                        panel.snapshot_alternative = false;
+                        panel.origin = None;
+                        panel.created = Some(created.meta.id);
                     }
                     Err(error) => {
-                        panel.error = Some(error.to_string());
-                        panel.snapshot_alternative = offer_snapshot;
-                        cx.notify();
-                        return;
+                        panel.error = Some(error);
+                        panel.snapshot_alternative = !snapshot;
                     }
-                };
-                let applied: anyhow::Result<()> = (|| {
-                    match method {
-                        methods::CREATE_SIDE_CHAT => {
-                            let created: SideChatCreated =
-                                serde_json::from_value(value["created"].clone())?;
-                            panel.lease = created.lease;
-                            panel.snapshot_alternative = false;
-                            panel.focus_pending = panel.lease.is_some();
-                            panel.apply_page(serde_json::from_value(value["page"].clone())?, cx);
-                        }
-                        methods::READ_SIDE_CHAT => {
-                            panel.apply_page(serde_json::from_value(value)?, cx)
-                        }
-                        methods::LIST_SIDE_CHATS => {
-                            let page: SideChatList = serde_json::from_value(value)?;
-                            match (paging, panel.history.as_mut()) {
-                                (true, Some(history)) => {
-                                    for item in page.items {
-                                        if !history.items.iter().any(|known| known.id == item.id) {
-                                            history.items.push(item);
-                                        }
-                                    }
-                                    history.before = page.before;
-                                }
-                                _ => panel.history = Some(page),
-                            }
-                            // Every page, not the first 50: the list's
-                            // sections and the related count cover all.
-                            if panel.history.as_ref().is_some_and(|history| history.before.is_some()) {
-                                panel.action(PanelAction::MoreHistory, cx);
-                            }
-                        }
-                        methods::STOP_SIDE_CHAT => {
-                            panel.before = None;
-                            panel.action(PanelAction::Refresh, cx);
-                        }
-                        "LunaSideLocalApproval"
-                        | methods::ANSWER_SIDE_CHAT
-                        | methods::SEND_SIDE_CHAT => {
-                            panel.answers.clear();
-                            if submitted_text.as_deref().is_some_and(|text| panel.input.read(cx).text() == text) {
-                                panel.input.update(cx, |input, cx| input.set_text("", cx));
-                            }
-                            panel.before = None;
-                            panel.action(PanelAction::Refresh, cx);
-                        }
-                        methods::UNLOAD_SIDE_CHAT if panel.persistent => {
-                            // Ended: stay on its history, now read-only, and
-                            // re-read it for the final rows and state.
-                            panel.lease = None;
-                            panel.leave_full_view(cx);
-                            panel.action(PanelAction::Refresh, cx);
-                        }
-                        methods::UNLOAD_SIDE_CHAT => {
-                            if let Some(page) = panel.page.take() {
-                                panel.state.update(cx, |state, _| {
-                                    state.unwatch_subagent_doc(&page.meta.id)
-                                });
-                            }
-                            panel.transcript = None;
-                            panel.transcript_events = None;
-                            panel.full_view = None;
-                            panel.origin = None;
-                            panel.lease = None;
-                            panel.input.update(cx, |input, cx| input.set_text("", cx));
-                            panel.action(PanelAction::Refresh, cx);
-                        }
-                        _ => {}
-                    }
-                    Ok(())
-                })();
-                if let Err(error) = applied {
-                    panel.error = Some(error.to_string());
                 }
                 cx.notify();
             })
@@ -1091,876 +246,29 @@ impl SideChatPanel {
         cx.notify();
     }
 
-    fn apply_page(&mut self, page: SideChatPage, cx: &mut Context<Self>) {
-        let same_chat = self
-            .page
-            .as_ref()
-            .is_some_and(|old| old.meta.id == page.meta.id);
-        let changed = !same_chat
-            || self.page.as_ref().is_some_and(|old| {
-                old.entries != page.entries || old.meta.state != page.meta.state
-            });
-        if !same_chat {
-            if let Some(old) = &self.page {
-                self.state
-                    .update(cx, |state, _| state.unwatch_subagent_doc(&old.meta.id));
-            }
-            self.transcript = None;
-            self.transcript_events = None;
+    /// Give up an unresolved create: the user's explicit choice to start a
+    /// different side thread (the unresolved one may still appear).
+    pub(super) fn forget_pending(&mut self) {
+        if !self.busy {
+            self.pending_create = None;
         }
-        if !matches!(
-            page.meta.state.as_str(),
-            "active" | "closing" | "closeFailed"
-        ) {
-            self.lease = None;
-        }
-        self.page = Some(page);
-        self.install_history(changed, cx);
-    }
-
-    /// The saved history view: the page transcript over the page's entries.
-    /// Built whenever it is missing, not only for a new chat: leaving the
-    /// first-class view (End) keeps the chat id but drops that transcript. A
-    /// live pane watch owns the rows instead while one exists.
-    fn install_history(&mut self, refresh: bool, cx: &mut Context<Self>) {
-        let Some(page) = self.page.as_ref() else {
-            return;
-        };
-        if self.full_view.is_some() {
-            return;
-        }
-        let id = page.meta.id.clone();
-        let entries = read_only_history(page);
-        let built = self.transcript.is_none();
-        if built {
-            self.transcript_events = None;
-            self.transcript =
-                Some(cx.new(|cx| Transcript::for_doc(self.state.clone(), id.clone(), false, cx)));
-        }
-        if self.transcript_events.is_none()
-            && let Some(transcript) = &self.transcript
-        {
-            transcript.update(cx, |view, _| view.allow_side_chat_handoff());
-            self.transcript_events = Some(cx.subscribe(transcript, |panel, _, event, cx| {
-                if let TranscriptEvent::SideChatResult {
-                    side_chat_id,
-                    message_id,
-                    text,
-                } = event
-                    && panel.is_current(cx)
-                    && panel.page.as_ref().is_some_and(|page| {
-                        page.meta.id == *side_chat_id
-                            && page.entries.iter().any(|entry| entry.id == *message_id)
-                    })
-                {
-                    cx.emit(SideChatEvent::ResultToParent {
-                        parent: panel.parent.clone(),
-                        engine_generation: panel.engine_generation,
-                        text: text.clone(),
-                    });
-                }
-            }));
-        }
-        // A first-class side chat's live doc watch owns its rows; a page
-        // snapshot would replace (and stop) that watch.
-        let state = self.state.read(cx);
-        let live = state.pane_chat(&id).is_some();
-        let missing = state.sub_transcript(&id).is_empty() && !entries.is_empty();
-        if !live && (refresh || built || missing) {
-            self.state.update(cx, |state, cx| {
-                state.set_subagent_snapshot(id, entries);
-                cx.notify();
-            });
-        }
-    }
-
-    /// First-class view → saved history (End, or the `ended` row arriving
-    /// first). Release the pane watch here, synchronously, then install the
-    /// history under the same doc id: the dropped view's deferred release
-    /// then finds no watch of its own and leaves that history alone. The
-    /// page's entries date from its last read; the caller re-reads it.
-    fn leave_full_view(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.full_view.take().is_none() {
-            return false;
-        }
-        self.transcript = None;
-        self.transcript_events = None;
-        if let Some(id) = self.page.as_ref().map(|page| page.meta.id.clone()) {
-            self.state
-                .update(cx, |state, _| state.unwatch_pane_chat(&id));
-        }
-        self.install_history(true, cx);
-        true
-    }
-
-    /// The open side chat in the shared pane chat layout: identity header,
-    /// the main transcript, and a composer-styled input. Side chats run on
-    /// the engine's leased side-chat RPCs, so the composer offers exactly
-    /// what they support (text and approvals) and says so.
-    fn render_page(
-        &mut self,
-        page: SideChatPage,
-        window: &mut Window,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let writable = self.writable(&page, cx);
-        if writable && side_chat_first_class(self.state.read(cx), &page.meta.id) {
-            return self.render_full_view(&page, theme, cx);
-        }
-        // Ended while open (the row says so first): read the final history
-        // unless End's own response will (it re-reads when it lands).
-        if self.leave_full_view(cx) && !self.busy {
-            self.action(PanelAction::Refresh, cx);
-        }
-        if writable && self.focus_pending {
-            window.focus(&self.input.focus_handle(cx), cx);
-            self.focus_pending = false;
-        }
-        let context = if page.meta.context_mode == "nativeFork" {
-            "Native fork"
-        } else {
-            "Context snapshot"
-        };
-        let provider = super::child_chats::provider_label(page.meta.config.harness);
-        let model = page
-            .meta
-            .config
-            .model
-            .clone()
-            .filter(|model| !model.is_empty())
-            .unwrap_or_else(|| "Provider default".into());
-        let status = if writable {
-            (self.live_label(&page.meta), theme.success, false)
-        } else {
-            (
-                SharedString::from(format!("Read-only · {}", state_label(&page.meta.state))),
-                theme.readable_muted(0.6),
-                false,
-            )
-        };
-        // Like a main chat, a side chat is named by its first question; the
-        // engine's stored title only repeats "Side chat · <parent>", which
-        // the identity badge and parent link already show.
-        let title = page
-            .entries
-            .iter()
-            .find(|entry| entry.role == luna_doc::MessageRole::User)
-            .and_then(|entry| {
-                entry.parts.iter().find_map(|part| match part {
-                    luna_doc::MessagePart::Text { text, .. } => Some(transcript::single_line(text)),
-                    _ => None,
-                })
-            })
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| "New side chat".into());
-        let chrome = PaneChatChrome {
-            identity: PaneIdentity::Side,
-            title: title.into(),
-            parent_title: transcript::single_line(&self.parent_title).into(),
-            status: Some(status),
-            meta: Some(format!("{provider} · {model} · {context}").into()),
-        };
-        let has_origin = page.meta.origin_message_id.is_some();
-        let header = if self.fixed.is_some() {
-            self.render_history_strip(&chrome, has_origin, theme, cx)
-        } else {
-            super::pane_chat::render_pane_header(
-                &chrome,
-                PaneHeaderActions {
-                    back_label: "Related chats",
-                    back: Rc::new(|panel: &mut Self, cx| panel.action(PanelAction::Back, cx)),
-                    open_main: None,
-                    show_parent: has_origin.then(|| {
-                        Rc::new(|panel: &mut Self, cx: &mut Context<Self>| {
-                            panel.action(PanelAction::RevealOrigin, cx)
-                        }) as Rc<dyn Fn(&mut Self, &mut Context<Self>)>
-                    }),
-                    extra: (writable && self.persistent)
-                        .then(|| self.end_control(theme, cx))
-                        .into_iter()
-                        .collect(),
-                },
-                theme,
-                cx,
-            )
-            .into_any_element()
-        };
-
-        let mut notices: Vec<AnyElement> = Vec::new();
-        if let Some(label) = self.operation_label {
-            notices.push(
-                div()
-                    .px(px(16.0))
-                    .pt(px(8.0))
-                    .text_size(crate::typography::ui_rems(11.5))
-                    .text_color(theme.text_muted)
-                    .child(label)
-                    .into_any_element(),
-            );
-        }
-        if let Some(error) = self.error.clone() {
-            notices.push(
-                div()
-                    .px(px(12.0))
-                    .pt(px(8.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(6.0))
-                    .child(crate::settings::widgets::error_strip(theme, error))
-                    .child(self.button(
-                        "side-refresh",
-                        "Refresh saved state",
-                        PanelAction::Refresh,
-                        cx,
-                    ))
-                    .into_any_element(),
-            );
-        }
-        if let Some(quote) = page.meta.anchor_text.clone() {
-            notices.push(
-                div()
-                    .mx(px(16.0))
-                    .mt(px(10.0))
-                    .max_h(px(72.0))
-                    .overflow_hidden()
-                    .border_l_2()
-                    .border_color(theme.border_strong)
-                    .pl(px(10.0))
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.text_muted)
-                    .child(quote)
-                    .into_any_element(),
-            );
-        }
-        if let Some(detail) = page.meta.detail.clone() {
-            notices.push(
-                div()
-                    .px(px(16.0))
-                    .pt(px(8.0))
-                    .text_size(crate::typography::ui_rems(11.5))
-                    .text_color(theme.text_muted)
-                    .child(detail)
-                    .into_any_element(),
-            );
-        }
-        if page.before.is_some() || self.before.is_some() {
-            notices.push(
-                div()
-                    .px(px(12.0))
-                    .pt(px(8.0))
-                    .flex()
-                    .gap(px(6.0))
-                    .when(page.before.is_some(), |el| {
-                        el.child(self.button(
-                            "side-older",
-                            "Older messages",
-                            PanelAction::Older,
-                            cx,
-                        ))
-                    })
-                    .when(self.before.is_some(), |el| {
-                        el.child(self.button(
-                            "side-latest",
-                            "Latest messages",
-                            PanelAction::Latest,
-                            cx,
-                        ))
-                    })
-                    .into_any_element(),
-            );
-        }
-
-        let transcript: AnyElement = match &self.transcript {
-            Some(transcript) if !page.entries.is_empty() => transcript.clone().into_any_element(),
-            _ => div()
-                .p(px(16.0))
-                .text_color(theme.text_muted)
-                .child(if writable {
-                    "Ask a question here. Your parent conversation stays unchanged."
-                } else {
-                    "This side chat has no saved messages."
-                })
-                .into_any_element(),
-        };
-
-        let composer = if writable {
-            self.render_side_composer(&page, &model, provider, theme, cx)
-        } else {
-            div()
-                .id("side-read-only")
-                .w_full()
-                .flex_none()
-                .px(px(16.0))
-                .py(px(12.0))
-                .border_t_1()
-                .border_color(theme.border)
-                .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.text_muted)
-                .child(if page.meta.state == "ended" {
-                    "Ended · saved history. Start a new side chat to continue.".to_string()
-                } else {
-                    format!(
-                        "Read-only · {} · saved transcript. Start a new side chat to continue.",
-                        state_label(&page.meta.state)
-                    )
-                })
-                .into_any_element()
-        };
-        div()
-            .id("side-chat-page")
-            .size_full()
-            .flex()
-            .flex_col()
-            .text_size(crate::typography::ui_rems(12.0))
-            .text_color(theme.text)
-            .child(header)
-            .child(super::pane_chat::render_pane_body(
-                notices, transcript, false, composer, theme,
-            ))
-            .into_any_element()
-    }
-
-    /// A history tab's one quiet row (the tab already names the chat): its
-    /// read-only status, its exact source parent, and Show in parent when
-    /// the side chat quoted a message there.
-    fn render_history_strip(
-        &self,
-        chrome: &PaneChatChrome,
-        has_origin: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let muted = theme.readable_muted(0.7);
-        div()
-            .id("side-history-strip")
-            .w_full()
-            .flex_none()
-            .h(px(32.0))
-            .px(px(14.0))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .text_size(crate::typography::ui_rems(11.5))
-            .text_color(muted)
-            .when_some(chrome.status.clone(), |row, (label, _, _)| {
-                row.child(div().flex_none().child(label))
-            })
-            .child(
-                div()
-                    .flex_none()
-                    .text_color(theme.decorative_muted(0.4))
-                    .child("·"),
-            )
-            .child(div().min_w_0().truncate().child(SharedString::from(format!(
-                "Side chat from {}",
-                chrome.parent_title
-            ))))
-            .child(div().flex_1())
-            .when(has_origin, |row| {
-                row.child(
-                    popover::btn_ghost(theme, "Show in parent", "side-history-origin")
-                        .id("side-history-origin")
-                        .on_click(cx.listener(|panel, _, _, cx| {
-                            panel.action(PanelAction::RevealOrigin, cx)
-                        })),
-                )
-            })
-            .into_any_element()
-    }
-
-    /// A first-class side chat: the same full view as a child chat (main
-    /// transcript + main composer bound to the side chat), with the side
-    /// chat's lifetime as its status and Back unloading it.
-    fn render_full_view(
-        &mut self,
-        page: &SideChatPage,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let stale = self.full_view.as_ref().is_none_or(|(view, _)| {
-            view.read(cx).composer().read(cx).readback(cx)["boundChat"] != page.meta.id.as_str()
-        });
-        if stale {
-            let composer = self
-                .composers
-                .update(cx, |composers, cx| composers.composer(&page.meta.id, cx));
-            let state = self.state.clone();
-            let side = page.meta.id.clone();
-            let parent = self.parent.clone();
-            let mut links = self.links.clone();
-            links.source_session = Some(side.clone());
-            let view = cx.new(|cx| {
-                PaneChatView::new(
-                    state,
-                    side,
-                    PaneIdentity::Side,
-                    parent,
-                    "Related chats",
-                    composer,
-                    links,
-                    cx,
-                )
-            });
-            let events = cx.subscribe(&view, |panel, _, event, cx| match event {
-                PaneChatEvent::Back => panel.action(PanelAction::Back, cx),
-                PaneChatEvent::Unload => panel.action(PanelAction::Unload, cx),
-                PaneChatEvent::ShowParent(_) => panel.action(PanelAction::RevealOrigin, cx),
-                PaneChatEvent::OpenAsMain(_) => {}
-            });
-            // "Use in parent" on a side chat answer, as in the leased view.
-            let transcript = view.read(cx).transcript().clone();
-            transcript.update(cx, |view, _| view.allow_side_chat_handoff());
-            self.transcript_events =
-                Some(cx.subscribe(&transcript, |panel, transcript, event, cx| {
-                    if !panel.is_current(cx) {
-                        return;
-                    }
-                    if let TranscriptEvent::SideChatResult {
-                        side_chat_id,
-                        message_id,
-                        text,
-                    } = event
-                        && panel.is_current(cx)
-                        && panel
-                            .page
-                            .as_ref()
-                            .is_some_and(|page| page.meta.id == *side_chat_id)
-                        && panel
-                            .state
-                            .read(cx)
-                            .sub_transcript(side_chat_id)
-                            .iter()
-                            .any(|entry| entry.id == *message_id)
-                    {
-                        cx.emit(SideChatEvent::ResultToParent {
-                            parent: panel.parent.clone(),
-                            engine_generation: panel.engine_generation,
-                            text: text.clone(),
-                        });
-                    } else if !matches!(event, TranscriptEvent::SideChatResult { .. })
-                        && let Some(page) = &panel.page
-                    {
-                        cx.emit(SideChatEvent::Transcript {
-                            side_chat_id: page.meta.id.clone(),
-                            engine_generation: panel.engine_generation,
-                            transcript,
-                            event: event.clone(),
-                        });
-                    }
-                }));
-            self.transcript = None;
-            self.full_view = Some((view, events));
-        }
-        let status = (
-            match self.operation_label {
-                Some(label) => SharedString::from(label),
-                None => self.live_label(&page.meta),
-            },
-            theme.success,
-        );
-        let (view, _) = self.full_view.as_ref().expect("full view just created");
-        let view = view.clone();
-        view.update(cx, |view, cx| view.set_status(Some(status), cx));
-        view.into_any_element()
-    }
-
-    /// The side chat's input in the main composer's pill chrome. Text and
-    /// approvals only: the leased side-chat RPCs carry no attachments,
-    /// queue/steer, model change or goals, and the composer says so.
-    fn render_side_composer(
-        &mut self,
-        page: &SideChatPage,
-        model: &str,
-        provider: &str,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let working = page.working;
-        let status: &'static str = match page.status {
-            Some(luna_proto::SessionStatus::AwaitingInput) => "Waiting for input",
-            Some(luna_proto::SessionStatus::AwaitingApproval) => "Approval needed",
-            Some(luna_proto::SessionStatus::Errored) => "Provider error",
-            // Only user-visible operations; the 2 s history poll stays quiet.
-            _ if self.operation_label.is_some() => self.operation_label.unwrap_or_default(),
-            _ if working => "Working…",
-            _ => "",
-        };
-        let blocked = self.busy || working || self.input.read(cx).is_empty();
-        let question_card = self.render_side_question(theme, cx);
-        let muted = theme.text_muted;
-        let (brand, brand_color) = crate::pickers::harness_brand_icon(page.meta.config.harness);
-        let chip = |icon_path: &'static str, tint: Option<gpui::Hsla>, label: String| {
-            div()
-                .h(px(28.0))
-                .min_w_0()
-                .px(px(6.0))
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .rounded(px(8.0))
-                .text_size(crate::typography::ui_rems(12.5))
-                .text_color(muted)
-                .child(
-                    icon(icon_path)
-                        .size(px(14.0))
-                        .flex_none()
-                        .text_color(tint.unwrap_or(muted)),
-                )
-                .child(div().min_w_0().truncate().child(label))
-        };
-        let stop = working.then(|| {
-            div()
-                .id("side-stop")
-                .role(gpui::Role::Button)
-                .aria_label("Stop the side chat's current turn")
-                .tab_index(0)
-                .size(px(28.0))
-                .flex_none()
-                .rounded_full()
-                .bg(theme.text)
-                .flex()
-                .items_center()
-                .justify_center()
-                .when(self.busy, |el| el.opacity(0.35))
-                .when(!self.busy, |el| {
-                    el.cursor_pointer()
-                        .hover(|style| style.opacity(0.85))
-                        .on_click(
-                            cx.listener(|panel, _, _, cx| panel.action(PanelAction::Stop, cx)),
-                        )
-                })
-                .child(div().size(px(11.0)).rounded(px(3.0)).bg(theme.bg))
-        });
-        let send = div()
-            .id("side-send")
-            .role(gpui::Role::Button)
-            .aria_label("Send to side chat")
-            .tab_index(0)
-            .size(px(28.0))
-            .flex_none()
-            .rounded_full()
-            .bg(theme.text)
-            .flex()
-            .items_center()
-            .justify_center()
-            .when(blocked, |el| el.opacity(0.35))
-            .when(!blocked, |el| {
-                el.cursor_pointer()
-                    .hover(|style| style.opacity(0.85))
-                    .on_click(cx.listener(|panel, _, _, cx| panel.action(PanelAction::Send, cx)))
-            })
-            .child(icon(icons::ARROW_UP).size(px(14.0)).text_color(theme.bg));
-        let pill = crate::composer::pane_composer_surface(theme)
-            .id("side-composer-surface")
-            .w_full()
-            .flex()
-            .flex_col()
-            .child(
-                div()
-                    .min_h(px(44.0))
-                    .max_h(px(160.0))
-                    .px(px(16.0))
-                    .pt(px(12.0))
-                    .pb(px(4.0))
-                    .overflow_hidden()
-                    .child(self.input.clone()),
-            )
-            .child(
-                div()
-                    .h(px(46.0))
-                    .px(px(12.0))
-                    .pb(px(10.0))
-                    .pt(px(2.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .child(chip(brand, brand_color, format!("{provider} · {model}")))
-                            .child(chip(
-                                icons::KEY_MINIMALISTIC,
-                                None,
-                                "Parent's access".into(),
-                            )),
-                    )
-                    .when(!status.is_empty(), |el| {
-                        el.child(
-                            div()
-                                .flex_none()
-                                .text_size(crate::typography::ui_rems(11.5))
-                                .text_color(theme.readable_muted(0.6))
-                                .child(status),
-                        )
-                    })
-                    .map(|el| match stop {
-                        Some(stop) => el.child(stop),
-                        None => el.child(send),
-                    }),
-            );
-        div()
-            .id("side-composer")
-            .w_full()
-            .flex_none()
-            .px(px(12.0))
-            .pt(px(4.0))
-            .pb(px(10.0))
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .children(question_card)
-            .child(pill)
-            .child(
-                div()
-                    .px(px(4.0))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.readable_muted(0.55))
-                    .child("Side chat · text and approvals. It inherits the parent's checkout, model and access; attachments, queue and goals belong to full chats."),
-            )
-            .into_any_element()
-    }
-
-    /// A pending question or approval in the composer's card chrome.
-    fn render_side_question(
-        &mut self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        let (_, questions) = self.pending_question()?;
-        let question = questions
-            .iter()
-            .find(|question| !self.answers.contains_key(&question.id))?
-            .clone();
-        let mut card = crate::composer::pane_composer_surface(theme)
-            .id("side-question-card")
-            .w_full()
-            .px(px(16.0))
-            .py(px(12.0))
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .child(
-                div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.readable_muted(0.65))
-                    .child(question.header.to_uppercase()),
-            )
-            .child(
-                div()
-                    .text_size(crate::typography::ui_rems(13.5))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text)
-                    .child(question.question.clone()),
-            );
-        if let Some(approval) = &question.approval {
-            let (label, value) = crate::composer::approval_expiry_row(approval);
-            card = card.child(
-                div()
-                    .text_size(crate::typography::ui_rems(11.5))
-                    .text_color(theme.text_muted)
-                    .child(format!("{label}: {value}")),
-            );
-        }
-        let mut buttons = div().flex().flex_wrap().gap(px(6.0)).pt(px(4.0));
-        if let Some(details) = question
-            .approval
-            .as_ref()
-            .and_then(|approval| approval.details.as_ref())
-        {
-            for (label, value) in details.display_rows() {
-                card = card.child(
-                    div()
-                        .text_size(crate::typography::ui_rems(11.5))
-                        .text_color(theme.text_muted)
-                        .child(format!("{label}: {value}")),
-                );
-            }
-            for (index, choice) in details.choices.iter().enumerate() {
-                buttons = buttons.child(self.button(
-                    format!("side-approval-{index}"),
-                    choice.label.clone(),
-                    PanelAction::Approve(luna_proto::ApprovalDecision::ProviderChoice {
-                        index: index as u32,
-                    }),
-                    cx,
-                ));
-            }
-        } else if question.approval.is_some() {
-            buttons = buttons
-                .child(self.button(
-                    "side-allow",
-                    "Allow once",
-                    PanelAction::Approve(luna_proto::ApprovalDecision::AllowOnce),
-                    cx,
-                ))
-                .child(self.button(
-                    "side-deny",
-                    "Deny",
-                    PanelAction::Approve(luna_proto::ApprovalDecision::Deny),
-                    cx,
-                ));
-        } else {
-            for (index, option) in question.options.iter().enumerate() {
-                buttons = buttons.child(self.button(
-                    format!("side-answer-{index}"),
-                    option.clone(),
-                    PanelAction::Answer(option.clone()),
-                    cx,
-                ));
-            }
-        }
-        Some(card.child(buttons).into_any_element())
-    }
-
-    /// A writable side chat's status. Persistent ones have no lifetime to
-    /// count down; older engines still expire their lease.
-    fn live_label(&self, meta: &luna_engine::side_chats::SideChatMeta) -> SharedString {
-        if self.persistent || meta.expires_at_ms == 0 {
-            return "Active".into();
-        }
-        let minutes =
-            ((meta.expires_at_ms - Utc::now().timestamp_millis()).max(0) + 59_999) / 60_000;
-        format!("Writable · {minutes} min left").into()
-    }
-
-    /// The explicit End: the only action that stops a persistent side chat.
-    fn end_control(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let border_strong = theme.border_strong;
-        let hover = crate::theme::ink(0.06);
-        div()
-            .id("side-chat-end")
-            .role(gpui::Role::Button)
-            .aria_label("End side chat: stop it and keep its history read-only")
-            .tab_index(0)
-            .size(px(crate::surface_chrome::CONTROL_SIZE))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
-            .border_1()
-            .border_color(gpui::transparent_black())
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover))
-            .focus_visible(move |style| style.border_color(border_strong))
-            .when(self.busy, |el| el.opacity(0.5))
-            .tooltip(|_, cx| {
-                crate::pickers::ControlTooltip::view(
-                    "End side chat",
-                    Some("Stops it for good; the history stays readable.".into()),
-                    cx,
-                )
-            })
-            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
-            .on_click(cx.listener(|panel, _, _, cx| panel.action(PanelAction::Unload, cx)))
-            .on_key_down(crate::swallow_activation_key)
-            .child(
-                icon(icons::STOP)
-                    .size(px(crate::surface_chrome::ICON_SIZE))
-                    .text_color(theme.text_muted),
-            )
-            .into_any_element()
-    }
-
-    fn button(
-        &self,
-        id: impl Into<SharedString>,
-        title: impl Into<SharedString>,
-        action: PanelAction,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let theme = Theme::of(cx).clone();
-        let title = title.into();
-        div()
-            .id(id.into())
-            .role(gpui::Role::Button)
-            .aria_label(title.clone())
-            .tab_index(0)
-            .px(px(10.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border)
-            .cursor_pointer()
-            .text_color(theme.text)
-            .text_size(crate::typography::ui_rems(12.0))
-            .hover(move |style| style.bg(theme.surface_raised))
-            .focus_visible(move |style| style.border_color(theme.border_strong))
-            .when(self.busy, |style| style.opacity(0.5))
-            .child(title)
-            .on_click(cx.listener(move |panel, _, _, cx| panel.action(action.clone(), cx)))
-            .on_key_down(crate::swallow_activation_key)
-            .into_any_element()
     }
 }
 
 impl Render for SideChatPanel {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
-        match self.page.clone() {
-            Some(page) => self.render_page(page, window, &theme, cx),
-            // The list is the shell's ([`Shell::render_side_chat_list`]): it
-            // shares the sidebar's task rows.
-            None => Empty.into_any_element(),
-        }
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        // Side threads are listed by Related chats and open as ordinary
+        // views; the creator itself draws nothing.
+        Empty
     }
 }
 
 impl Shell {
-    pub(super) fn release_side_chat(&mut self, cx: &mut Context<Self>) {
-        let Some(panel) = self.side_chat_panel.take() else {
-            return;
-        };
-        self.side_chat_events = None;
+    /// Drop the creator. A create already sent completes in the engine, and
+    /// its fork appears in the lists; nothing here ends a thread.
+    pub(super) fn release_side_chat(&mut self, _cx: &mut Context<Self>) {
+        self.side_chat_panel = None;
         self.side_chat_observation = None;
-        self.side_chat_listing = false;
-        let request = panel.read(cx).release_request();
-        // Parked first-class side chats end with the panel, quietly: their
-        // leases would lapse within 30 s anyway, this just saves promptly.
-        for (engine, id, lease) in panel.read(cx).parked_release_requests() {
-            cx.spawn(async move |_, cx| {
-                let _ = Tokio::spawn(cx, async move {
-                    tokio::time::timeout(
-                        Duration::from_secs(20),
-                        engine
-                            .client()
-                            .call(methods::UNLOAD_SIDE_CHAT, json!({"id": id, "lease": lease})),
-                    )
-                    .await
-                })
-                .await;
-            })
-            .detach();
-        }
-        drop(panel);
-        if let Some((engine, id, lease)) = request {
-            let progress = SidebarNotice::status("Stopping side chat and saving its transcript…");
-            let notice_id = progress.id;
-            self.sidebar_notice = Some(progress);
-            cx.spawn(async move |this, cx| {
-                let result = Tokio::spawn(cx, async move {
-                    tokio::time::timeout(Duration::from_secs(20), engine.client().call(methods::UNLOAD_SIDE_CHAT, json!({"id":id,"lease":lease}))).await
-                        .map_err(|_| luna_rpc::RpcError::Failed("Unload response timed out; the view lease remains the cancellation backstop.".into()))?
-                }).await;
-                this.update(cx, |shell, cx| {
-                    if shell.sidebar_notice.as_ref().is_none_or(|notice| notice.id != notice_id) {
-                        return;
-                    }
-                    shell.sidebar_notice = match result {
-                        Ok(Ok(_)) => None,
-                        Ok(Err(error)) => Some(format!("Side chat unload incomplete: {error}. Inspect Previous side chats.").into()),
-                        Err(error) => Some(format!("Side chat unload readback unavailable: {error}. The view lease will stop abandoned work.").into()),
-                    };
-                    cx.notify();
-                }).ok();
-            }).detach();
-        }
     }
 
     pub(super) fn create_side_chat_panel(
@@ -1977,153 +285,45 @@ impl Shell {
         origin: Option<(String, String)>,
         cx: &mut Context<Self>,
     ) {
-        let links = Self::session_links(Some(parent.clone()), cx);
-        let panel = cx.new(|cx| {
-            SideChatPanel::new(
-                self.state.clone(),
-                self.pane_composers.clone(),
-                links,
-                parent,
-                origin,
-                cx,
-            )
-        });
-        self.side_chat_events = Some(cx.subscribe(&panel, |shell, panel, event, cx| {
-            if !panel.read(cx).is_current(cx)
-                || shell
-                    .side_chat_panel
-                    .as_ref()
-                    .is_none_or(|current| current.entity_id() != panel.entity_id())
-            {
-                return;
-            }
-            let (parent, engine_generation, text) = match event {
-                SideChatEvent::Transcript {
-                    side_chat_id,
-                    engine_generation,
-                    transcript,
-                    event,
-                } => {
-                    let current = panel.read(cx);
-                    let owns_transcript = current.full_view.as_ref().is_some_and(|(view, _)| {
-                        view.read(cx).transcript().entity_id() == transcript.entity_id()
-                    });
-                    if current.engine_generation == *engine_generation
-                        && current
-                            .page
-                            .as_ref()
-                            .is_some_and(|page| page.meta.id == *side_chat_id)
-                        && owns_transcript
-                    {
-                        shell.on_transcript_event(transcript.clone(), event, cx);
-                    }
-                    return;
-                }
-                SideChatEvent::RevealOrigin {
-                    parent,
-                    message_id,
-                    engine_generation,
-                } => {
-                    if shell.state.read(cx).engine_generation() == *engine_generation {
-                        if shell.right_pane_expanded {
-                            shell.toggle_right_pane_expand(cx);
-                        }
-                        if shell.active_chat == *parent {
-                            shell.transcript.update(cx, |transcript, cx| {
-                                transcript.navigate_to_message(
-                                    parent.clone(),
-                                    message_id.clone(),
-                                    cx,
-                                )
-                            });
-                        } else {
-                            shell.related_focus = super::related_chats::RelatedKind::Child;
-                            shell.add_work_surface(RightSurface::RelatedChats, cx);
-                            let child_panel = shell.ensure_child_chat_panel(cx);
-                            child_panel.update(cx, |panel, cx| {
-                                panel.reveal_message(parent.clone(), message_id.clone(), cx);
-                            });
-                        }
-                    }
-                    return;
-                }
-                SideChatEvent::ResultToParent {
-                    parent,
-                    engine_generation,
-                    text,
-                } => (parent, engine_generation, text),
-            };
-            if shell.state.read(cx).engine_generation() != *engine_generation {
-                return;
-            }
-            let parent_composer = if shell.active_chat == *parent {
-                Some(shell.composer.clone())
-            } else {
-                shell.pane_composers.read(cx).get(parent)
-            };
-            let inserted = parent_composer.is_some_and(|composer| {
-                composer.update(cx, |composer, cx| {
-                    composer.insert_side_chat_result(parent, text, *engine_generation, cx)
-                })
-            });
-            shell.sidebar_notice = Some(SidebarNotice::status(if inserted {
-                "Added to the parent draft. Review it and press Send."
-            } else {
-                "Parent draft is loading or being submitted. Try again when it is ready."
-            }));
+        let state = self.state.clone();
+        let panel = cx.new(|cx| SideChatPanel::new(state, parent, origin, cx));
+        self.side_chat_observation = Some(cx.observe(&panel, |shell, _, cx| {
+            shell.open_created_side_chat(cx);
             cx.notify();
         }));
-        // The Related chats list renders here, from the panel's history:
-        // repaint the shell while it lists, and once when a page opens or
-        // closes. Loaded ids also feed the related-chat counts.
-        self.side_chat_listing = false;
-        self.side_chat_observation = Some(cx.observe(&panel, |shell, panel_entity, cx| {
-            // A writable side chat the panel just created or opened belongs
-            // in a center tab when the workbench is available.
-            if shell.workbench_available() && panel_entity.read(cx).first_class_page(cx).is_some() {
-                shell.adopt_side_page(panel_entity.clone(), cx);
-            }
-            let panel = panel_entity.read(cx);
-            let listing = panel.page.is_none();
-            let mut indexed = false;
-            if let Some(history) = &panel.history {
-                let ids = history.items.iter().map(|meta| meta.id.clone());
-                let entry = shell
-                    .side_chat_index
-                    .entry(panel.parent.clone())
-                    .or_default();
-                let before = entry.len();
-                if history.before.is_none() {
-                    let complete: std::collections::HashSet<String> = ids.collect();
-                    indexed = *entry != complete;
-                    *entry = complete;
-                } else {
-                    entry.extend(ids);
-                    indexed = entry.len() != before;
-                }
-            }
-            if listing || indexed || shell.side_chat_listing != listing {
-                shell.side_chat_listing = listing;
-                cx.notify();
-            }
-        }));
         self.side_chat_panel = Some(panel);
+        self.open_created_side_chat(cx);
     }
 
-    /// The side panel for the selected chat, created on first use. A panel
-    /// left on another parent (a side chat started from an open child) is
-    /// replaced once nothing is open in it: persistent side chats outlive
-    /// their view, so replacing it ends nothing.
+    /// A fork the creator made opens once its ordinary row is published: as
+    /// a tab under its source in the workbench, or (no workbench) as the
+    /// selected chat. Checked on creator and state changes.
+    pub(super) fn open_created_side_chat(&mut self, cx: &mut Context<Self>) {
+        let Some(panel) = self.side_chat_panel.clone() else {
+            return;
+        };
+        let Some(id) = panel.read(cx).created().map(str::to_string) else {
+            return;
+        };
+        if !side_chat_first_class(self.state.read(cx), &id) {
+            return;
+        }
+        panel.update(cx, |panel, _| panel.take_created());
+        self.open_side_chat_in_pane(id, cx);
+    }
+
+    /// The creator for the selected chat, made on first use. One left on
+    /// another source is replaced once nothing is in flight in it.
     pub(super) fn ensure_side_chat_panel(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Entity<SideChatPanel> {
         let stale = self.side_chat_panel.as_ref().is_some_and(|panel| {
             let panel = panel.read(cx);
-            panel.parent != self.active_chat
-                && panel.persistent
-                && panel.page.is_none()
-                && !panel.busy
+            panel.parent_id() != self.active_chat
+                && !panel.is_busy()
+                && panel.snapshot().pending_create.is_none()
+                && panel.created().is_none()
         });
         if stale {
             self.release_side_chat(cx);
@@ -2134,77 +334,214 @@ impl Shell {
         self.side_chat_panel.clone().expect("created above")
     }
 
-    /// Open a side chat from the Related chats list.
+    /// Open a side thread: a workbench tab under its source, or the
+    /// selected chat without the workbench. It is an ordinary thread.
     pub(super) fn open_side_chat_in_pane(&mut self, id: String, cx: &mut Context<Self>) {
-        self.related_focus = super::related_chats::RelatedKind::Side;
-        let panel = self.ensure_side_chat_panel(cx);
-        panel.update(cx, |panel, cx| panel.action(PanelAction::Open(id), cx));
+        if !self.open_related_in_workbench(id.clone(), true, cx) {
+            self.open_chat(id, cx);
+        }
     }
 
     /// The user's New side chat (agents never start side chats).
     pub(super) fn start_side_chat(&mut self, snapshot: bool, cx: &mut Context<Self>) {
         self.related_focus = super::related_chats::RelatedKind::Side;
         let panel = self.ensure_side_chat_panel(cx);
-        panel.update(cx, |panel, cx| {
-            panel.action(
-                if snapshot {
-                    PanelAction::NewSnapshot
-                } else {
-                    PanelAction::New
-                },
-                cx,
-            )
-        });
+        panel.update(cx, |panel, cx| panel.create(snapshot, cx));
     }
 
     /// The user's explicit choice to start a different side chat while an
     /// earlier request is unresolved: its request id is dropped, so this is a
-    /// new fork (the unresolved one may still exist; Refresh shows it).
+    /// new fork (the unresolved one may still appear in the list).
     pub(super) fn start_new_side_chat_instead(&mut self, cx: &mut Context<Self>) {
         self.related_focus = super::related_chats::RelatedKind::Side;
         let panel = self.ensure_side_chat_panel(cx);
         panel.update(cx, |panel, cx| {
-            if panel.busy {
-                return;
-            }
-            panel.pending_create = None;
-            panel.action(PanelAction::New, cx);
+            panel.forget_pending();
+            panel.create(false, cx);
         });
     }
 
-    pub(super) fn refresh_side_chats(&mut self, cx: &mut Context<Self>) {
-        let panel = self.ensure_side_chat_panel(cx);
-        panel.update(cx, |panel, cx| panel.action(PanelAction::Refresh, cx));
-    }
-
-    /// File a side chat under Pinned, Settled or Archived in this device's
-    /// list. Only the list placement changes; the record and its lease don't.
-    pub(super) fn set_side_chat_flag(
+    /// "Use in parent": a side thread's answer goes into its source's own
+    /// draft, wherever the source is open, for the user to review and send.
+    pub(super) fn hand_side_result_to_source(
         &mut self,
-        id: String,
-        flag: SideChatFlag,
+        side_chat_id: &str,
+        text: &str,
         cx: &mut Context<Self>,
     ) {
-        let marks = self.settings.side_chat_marks.entry(id.clone()).or_default();
-        match flag {
-            SideChatFlag::Pinned(pinned) => {
-                marks.pinned_at_ms = pinned.then(|| Utc::now().timestamp_millis());
-                if pinned {
-                    marks.settled = false;
-                }
-            }
-            SideChatFlag::Settled(settled) => marks.settled = settled,
-            SideChatFlag::Archived(archived) => marks.archived = archived,
-        }
-        if marks.is_empty() {
-            self.settings.side_chat_marks.remove(&id);
-        }
-        self.schedule_save(cx);
+        let Some(source) = fork_source(self.state.read(cx), side_chat_id).map(str::to_string)
+        else {
+            return;
+        };
+        let generation = self.state.read(cx).engine_generation();
+        let composer = if self.active_chat == source {
+            Some(self.composer.clone())
+        } else {
+            self.pane_composers.read(cx).get(&source)
+        };
+        let inserted = composer.is_some_and(|composer| {
+            composer.update(cx, |composer, cx| {
+                composer.insert_side_chat_result(&source, text, generation, cx)
+            })
+        });
+        self.sidebar_notice = Some(SidebarNotice::status(if inserted {
+            "Added to the parent draft. Review it and press Send."
+        } else {
+            "Parent draft is loading or being submitted. Try again when it is ready."
+        }));
         cx.notify();
     }
 }
 
-/// Headless QA drives the production side chat panel through these hooks.
+/// The ordinary command a legacy device-local mark becomes. Archive intent
+/// wins (a pin or settle on an archived chat is moot); then a pin, then a
+/// settle.
+fn legacy_mark_intent(marks: &crate::settings::SideChatMarks) -> Option<Value> {
+    if marks.archived {
+        Some(json!({ "kind": "setArchived", "archived": true }))
+    } else if marks.pinned_at_ms.is_some() {
+        Some(json!({ "kind": "setPinned", "pinned": true }))
+    } else if marks.settled {
+        Some(json!({ "kind": "setSettled", "settled": true }))
+    } else {
+        None
+    }
+}
+
+/// Whether the fork's own row already shows what its legacy mark meant: the
+/// readback that acknowledges the migration.
+fn legacy_mark_applied(chat: &luna_proto::Chat, marks: &crate::settings::SideChatMarks) -> bool {
+    if marks.archived {
+        chat.archived
+    } else if marks.pinned_at_ms.is_some() {
+        chat.pinned_order.is_some()
+    } else if marks.settled {
+        chat.archived
+            || chat.settlement_override.as_ref().is_some_and(|settlement| {
+                settlement.disposition == luna_proto::SettlementDisposition::Settled
+            })
+    } else {
+        true
+    }
+}
+
+/// Run one task command and wait for its receipt to apply.
+async fn apply_task_command(
+    engine: &crate::state::EngineHandle,
+    task_id: &str,
+    device: &str,
+    intent: Value,
+) -> Result<(), String> {
+    let receipt = crate::task_commands::execute(engine, task_id, intent)
+        .await
+        .map_err(|error| error.to_string())?;
+    if receipt.status == luna_proto::CommandReceiptStatus::Applied {
+        return Ok(());
+    }
+    if receipt.status.is_terminal() {
+        return Err(crate::task_commands::failure_message(
+            &receipt,
+            "Could not update this side chat.",
+        ));
+    }
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let params = json!({ "commandId": receipt.command_id, "targetDeviceId": device });
+        match engine
+            .client()
+            .call_as::<Option<luna_proto::CommandReceipt>>(
+                methods::GET_TASK_COMMAND_RECEIPT,
+                params,
+            )
+            .await
+        {
+            Ok(Some(receipt)) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
+                return Ok(());
+            }
+            Ok(Some(receipt)) if receipt.status.is_terminal() => {
+                return Err(crate::task_commands::failure_message(
+                    &receipt,
+                    "Could not update this side chat.",
+                ));
+            }
+            Ok(_) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Err("LUNA could not confirm this side chat's flags yet.".into())
+}
+
+impl Shell {
+    /// Side chats used to keep pin/settle/archive as device-local marks.
+    /// A materialized fork takes the ordinary synced commands instead: each
+    /// mark is sent as its command, and cleared only once the fork's own row
+    /// reads back the same intent. A mark whose fork is not published yet,
+    /// or whose command failed (retried on the next connection), is kept.
+    pub(super) fn migrate_side_chat_marks(&mut self, cx: &mut Context<Self>) {
+        if self.side_marks_migration.is_some() || self.settings.side_chat_marks.is_empty() {
+            return;
+        }
+        let Some(engine) = self.state.read(cx).engine().cloned() else {
+            return;
+        };
+        let generation = self.state.read(cx).engine_generation();
+        if self.side_marks_attempted.0 != generation {
+            self.side_marks_attempted = (generation, Default::default());
+        }
+        let mut acknowledged = Vec::new();
+        let mut pending = Vec::new();
+        {
+            let state = self.state.read(cx);
+            for (id, marks) in &self.settings.side_chat_marks {
+                let Some(chat) = state.chats.iter().find(|chat| chat.id == *id) else {
+                    continue;
+                };
+                if legacy_mark_applied(chat, marks) {
+                    acknowledged.push(id.clone());
+                } else if !self.side_marks_attempted.1.contains(id)
+                    && let Some(intent) = legacy_mark_intent(marks)
+                {
+                    pending.push((id.clone(), chat.device_id.clone(), intent));
+                }
+            }
+        }
+        if !acknowledged.is_empty() {
+            for id in &acknowledged {
+                self.settings.side_chat_marks.remove(id);
+            }
+            self.schedule_save(cx);
+        }
+        if pending.is_empty() {
+            return;
+        }
+        for (id, _, _) in &pending {
+            self.side_marks_attempted.1.insert(id.clone());
+        }
+        self.side_marks_migration = Some(cx.spawn(async move |this, cx| {
+            let mut failed = 0usize;
+            for (id, device, intent) in pending {
+                if let Err(error) = apply_task_command(&engine, &id, &device, intent).await {
+                    tracing::warn!(side_chat = %id, %error, "side chat mark migration failed");
+                    failed += 1;
+                }
+            }
+            this.update(cx, |shell, cx| {
+                shell.side_marks_migration = None;
+                if failed > 0 {
+                    shell.sidebar_notice = Some(SidebarNotice::transient_error(
+                        "Some side chats could not take their pin, settle or archive yet. LUNA keeps them and tries again when it reconnects.",
+                    ));
+                }
+                // Acknowledge whatever already reads back.
+                shell.migrate_side_chat_marks(cx);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+}
+
+/// Headless QA drives the production side thread creator through these hooks.
 #[cfg(feature = "appshots-fixture")]
 impl Shell {
     pub fn fixture_open_side_chats(&mut self, cx: &mut Context<Self>) {
@@ -2214,150 +551,43 @@ impl Shell {
         }
     }
 
-    /// `snapshot` (start with recent context), `new`, `type`, `send`, `back`,
-    /// `stop`, `refresh`, or `open` (the first saved side chat).
-    pub fn fixture_side_chat(&mut self, action: &str, text: &str, cx: &mut Context<Self>) {
-        let Some(panel) = self.side_chat_panel.clone() else {
-            return;
-        };
-        panel.update(cx, |panel, cx| {
-            let action = match action {
-                "snapshot" => PanelAction::NewSnapshot,
-                "new" => PanelAction::New,
-                "back" => PanelAction::Back,
-                "stop" => PanelAction::Stop,
-                "refresh" => PanelAction::Refresh,
-                "open" => match panel
-                    .history
-                    .as_ref()
-                    .and_then(|history| history.items.first())
-                {
-                    Some(meta) => PanelAction::Open(meta.id.clone()),
-                    None => return,
-                },
-                "type_full" | "send_full" => {
-                    let Some(composer) = panel
-                        .full_view
-                        .as_ref()
-                        .map(|(view, _)| view.read(cx).composer().clone())
-                    else {
-                        return;
-                    };
-                    let input = composer.read(cx).input.clone();
-                    input.update(cx, |input, cx| {
-                        input.set_text(text, cx);
-                        if action == "send_full" {
-                            cx.emit(crate::composer::ComposerInputEvent::Submitted);
-                        }
-                    });
-                    return;
-                }
-                "pick_other_provider" => {
-                    let Some(composer) = panel
-                        .full_view
-                        .as_ref()
-                        .map(|(view, _)| view.read(cx).composer().clone())
-                    else {
-                        return;
-                    };
-                    let pickers = composer.read(cx).pickers().clone();
-                    pickers.update(cx, |pickers, cx| {
-                        pickers.fixture_pick_harness(HarnessId::Codex, cx)
-                    });
-                    return;
-                }
-                "unload" => PanelAction::Unload,
-                "type" | "send" => {
-                    let input = panel.input.clone();
-                    input.update(cx, |input, cx| input.set_text(text, cx));
-                    if action == "type" {
-                        return;
-                    }
-                    PanelAction::Send
-                }
-                _ => return,
-            };
-            panel.action(action, cx);
-        });
+    /// `new` (a fork), `snapshot` (from recent context) or `instead` (a new
+    /// fork while an earlier create is unresolved).
+    pub fn fixture_side_chat(&mut self, action: &str, _text: &str, cx: &mut Context<Self>) {
+        match action {
+            "new" => self.start_side_chat(false, cx),
+            "snapshot" => self.start_side_chat(true, cx),
+            "instead" => self.start_new_side_chat_instead(cx),
+            _ => {}
+        }
     }
 
     pub fn fixture_side_chat_readback(&self, cx: &Context<Self>) -> serde_json::Value {
-        let Some(panel) = self.side_chat_panel.as_ref().map(|panel| panel.read(cx)) else {
-            return serde_json::Value::Null;
-        };
-        let page = panel.page.as_ref();
-        serde_json::json!({
-            "pageId": page.map(|page| page.meta.id.clone()),
-            "state": page.map(|page| page.meta.state.clone()),
-            "contextMode": page.map(|page| page.meta.context_mode.clone()),
-            "writable": page.is_some_and(|page| panel.writable(page, cx)),
-            "inFlight": panel.in_flight,
-            "persistent": panel.persistent,
-            "lease": panel.lease.is_some(),
-            "expiresAtMs": page.map(|page| page.meta.expires_at_ms),
-            "sideRowState": page.and_then(|page| {
-                self.state
-                    .read(cx)
-                    .side_chat_rows
-                    .get(&page.meta.id)
-                    .map(|row| row.state.clone())
-            }),
-            "pendingCreate": panel.pending_create.as_ref().map(|(id, _)| id.clone()),
-            "working": page.map(|page| page.working),
-            "busy": panel.busy,
-            "error": panel.error,
-            "input": panel.input.read(cx).text().to_string(),
-            "question": panel.pending_question().map(|(id, _)| id),
-            "historyCount": panel.history.as_ref().map(|history| history.items.len()),
-            "historyStates": panel.history.as_ref().map(|history| history.items.iter().map(|meta| meta.state.clone()).collect::<Vec<_>>()),
-            "historyIds": panel.history.as_ref().map(|history| history.items.iter().map(|meta| meta.id.clone()).collect::<Vec<_>>()),
-            "historyPreviews": panel.history.as_ref().map(|history| history.items.iter().map(|meta| meta.preview.clone()).collect::<Vec<_>>()),
-            "texts": page.map(|page| page.entries.iter().flat_map(|entry| entry.parts.iter()).filter_map(|part| match part {
-                luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
-                _ => None,
-            }).collect::<Vec<_>>()),
-            "parentTranscriptRows": self.state.read(cx).transcript.len(),
-            "mainComposer": self.composer.read(cx).readback(cx),
-            "firstClass": page.is_some_and(|page| side_chat_first_class(self.state.read(cx), &page.meta.id)),
-            "parked": panel.parked.keys().cloned().collect::<Vec<_>>(),
-            "lastRenewAgoMs": panel.last_renew.elapsed().as_millis() as u64,
-            "pickerRefusal": panel.full_view.as_ref().and_then(|(view, _)| view.read(cx).composer().read(cx).pickers().read(cx).fixture_refusals()),
-            "liveTexts": page.map(|page| self.state.read(cx).sub_transcript(&page.meta.id).iter().flat_map(|entry| entry.parts.iter()).filter_map(|part| match part {
-                luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
-                _ => None,
-            }).collect::<Vec<_>>()),
-            "paneChats": self.state.read(cx).pane_chat_ids(),
-            "watchedDocs": self.state.read(cx).fixture_sub_watch_ids(),
-            "fullComposer": panel.full_view.as_ref().map(|(view, _)| view.read(cx).composer().read(cx).readback(cx)),
-            "paneTranscript": panel.full_view.as_ref().map(|(view, _)| view.read(cx).transcript().read(cx).scroll_readback()),
-            // The saved-history view (no full view): what it draws, and
-            // whether any question still reads as awaiting an answer.
-            "historyTranscript": panel
-                .transcript
-                .as_ref()
-                .filter(|_| panel.full_view.is_none())
-                .map(|transcript| transcript.read(cx).scroll_readback()),
-            "historyTexts": page.filter(|_| panel.full_view.is_none()).map(|page| {
-                self.state
-                    .read(cx)
-                    .sub_transcript(&page.meta.id)
-                    .iter()
-                    .flat_map(|entry| entry.parts.iter())
-                    .filter_map(|part| match part {
-                        luna_doc::MessagePart::Text { text, .. } => Some(text.clone()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-            }),
-            "historyAwaiting": page.filter(|_| panel.full_view.is_none()).map(|page| {
-                self.state
-                    .read(cx)
-                    .sub_transcript(&page.meta.id)
-                    .iter()
-                    .flat_map(|entry| entry.parts.iter())
-                    .filter(|part| matches!(part, luna_doc::MessagePart::Input { resolved: false, .. }))
-                    .count()
-            }),
-        })
+        match &self.side_chat_panel {
+            Some(panel) => {
+                let panel = panel.read(cx);
+                let snapshot = panel.snapshot();
+                json!({
+                    "parent": panel.parent_id(),
+                    "busy": snapshot.busy,
+                    "operation": snapshot.operation,
+                    "error": snapshot.error,
+                    "pendingCreate": snapshot.pending_create,
+                    "snapshotAlternative": snapshot.snapshot_alternative,
+                    "created": panel.created(),
+                })
+            }
+            None => Value::Null,
+        }
+    }
+
+    /// Use in parent, as the side thread's own transcript action emits it.
+    pub fn fixture_side_result_to_source(
+        &mut self,
+        side_chat_id: &str,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        self.hand_side_result_to_source(side_chat_id, text, cx);
     }
 }
