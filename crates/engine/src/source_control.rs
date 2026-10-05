@@ -3,6 +3,7 @@
 //! Process execution and provider calls intentionally live outside this layer so
 //! remote parsing and head selector construction remain deterministic and testable.
 
+pub mod pr_watch;
 pub mod pull_requests;
 
 use std::collections::HashSet;

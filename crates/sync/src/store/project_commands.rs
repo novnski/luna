@@ -3,7 +3,7 @@ use super::*;
 use luna_proto::{ProjectAction, ProjectCommandRun};
 
 impl DocsStore {
-    fn command_writer(
+    pub(super) fn command_writer(
         &self,
         permit: Option<&WritePermit>,
     ) -> Result<MutexGuard<'_, Connection>, StoreError> {

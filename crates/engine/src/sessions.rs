@@ -192,6 +192,7 @@ enum PendingInputKind {
 
 #[derive(Debug)]
 struct LunaSendProposal {
+    automation_plan: Option<crate::cross_task_tools::PreparedAutomation>,
     child_request: Option<luna_proto::CreateChildThreadRequest>,
     /// Engine-resolved defaults and policy for a child card. Derived from the
     /// caller's own chat row when the card is raised, never from tool input.
@@ -307,6 +308,57 @@ impl ChildCardPlan {
 
 impl LunaSendProposal {
     fn question(&self) -> UserInputQuestion {
+        if let Some(plan) = &self.automation_plan {
+            let times = plan
+                .preview
+                .next_occurrences_ms
+                .iter()
+                .map(|at| {
+                    let zone = match &plan.request.operation {
+                        luna_proto::AutomationOperation::Save { definition } => {
+                            definition.timezone.as_str()
+                        }
+                        _ => "UTC",
+                    };
+                    crate::automation::format_in_zone(*at, zone)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            return UserInputQuestion {
+                id: format!("question-{}", self.request_id),
+                header: "LUNA approval".into(),
+                question: format!(
+                    "Automation {} at revision {} on host {} in project {}.\nPermission ceiling: {}. Next occurrences: {}.\n{}\n\nExact change:\n{}",
+                    plan.request.automation_id,
+                    plan.request.expected_revision,
+                    self.environment_id,
+                    self.project_id,
+                    access_label(plan.preview.permission_ceiling),
+                    if times.is_empty() { "none" } else { &times },
+                    plan.preview.description,
+                    serde_json::to_string_pretty(&plan.request.operation).unwrap_or_default()
+                ),
+                options: vec!["Deny".into(), "Allow once".into()],
+                multi_select: false,
+                mcp: None,
+                input: None,
+                approval: Some(luna_proto::ApprovalRequest {
+                    provider_request_id: self.claim.provider_call_id.clone(),
+                    provider: self.claim.source_provider,
+                    turn_id: Some(self.claim.provider_turn_id.clone()),
+                    machine_name: self.environment_id.clone(),
+                    action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
+                    summary: format!(
+                        "Change persistent automation {}",
+                        plan.request.automation_id
+                    ),
+                    requested_scope: luna_proto::PermissionScope::Workspace,
+                    expires_at_ms: plan.preview.expires_at_ms,
+                    supports_task_allowance: false,
+                    details: None,
+                }),
+            };
+        }
         if let (Some(request), Some(plan)) = (&self.child_request, &self.child_plan) {
             let label = access_label;
             let access = match plan.escalation {
@@ -1928,6 +1980,16 @@ impl SessionsEngine {
         {
             return Err(fail(CrossTaskError::Scope));
         }
+        let automation_request = if invocation.name == "automation_update" {
+            Some(
+                serde_json::from_value::<luna_proto::AutomationToolRequest>(
+                    invocation.arguments.clone(),
+                )
+                .map_err(|_| fail(CrossTaskError::Input))?,
+            )
+        } else {
+            None
+        };
         let child_request = if invocation.name == "create_thread" {
             let request: luna_proto::CreateChildThreadRequest =
                 serde_json::from_value(invocation.arguments.clone())
@@ -1937,7 +1999,15 @@ impl SessionsEngine {
         } else {
             None
         };
-        let request: CrossTaskSendRequest = if let Some(child) = &child_request {
+        let request: CrossTaskSendRequest = if let Some(automation) = &automation_request {
+            CrossTaskSendRequest {
+                task_id: chat_id.into(),
+                message: serde_json::to_string(automation)
+                    .map_err(|_| fail(CrossTaskError::Input))?,
+                mode: CrossTaskSendMode::Queue,
+                idempotency_key: automation.idempotency_key.clone(),
+            }
+        } else if let Some(child) = &child_request {
             CrossTaskSendRequest {
                 task_id: crate::cross_task_tools::child_task_id(chat_id, &child.idempotency_key),
                 message: child.prompt.clone(),
@@ -1950,7 +2020,9 @@ impl SessionsEngine {
         if request.mode != CrossTaskSendMode::Queue
             || request.message.trim().is_empty()
             || request.message.chars().count()
-                > if child_request.is_some() {
+                > if automation_request.is_some() {
+                    40_000
+                } else if child_request.is_some() {
                     crate::cross_task_tools::MAX_CHILD_PROMPT_CHARS
                 } else {
                     crate::cross_task_tools::MAX_APPROVED_MESSAGE_CHARS
@@ -1976,6 +2048,16 @@ impl SessionsEngine {
             )
             .await
             .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+        let automation_plan = if let Some(request) = automation_request {
+            Some(
+                backend
+                    .prepare_automation(request, &authority)
+                    .await
+                    .map_err(fail)?,
+            )
+        } else {
+            None
+        };
         let (
             claim,
             target_snapshot,
@@ -1983,7 +2065,20 @@ impl SessionsEngine {
             environment_id,
             child_execution,
             child_auth_instance,
-        ) = if let Some(child) = &child_request {
+        ) = if let Some(plan) = &automation_plan {
+            (
+                claim,
+                plan.snapshot.clone(),
+                contract
+                    .context
+                    .project_id
+                    .clone()
+                    .ok_or_else(|| fail(CrossTaskError::TargetScope))?,
+                contract.context.environment_id.clone(),
+                None,
+                None,
+            )
+        } else if let Some(child) = &child_request {
             let prepared = backend
                 .child_creation_snapshot(child, &authority)
                 .await
@@ -2018,7 +2113,9 @@ impl SessionsEngine {
         // an answer or Stop here, and the shared resolver watch retires it
         // when the adapter abandons the call (MCP cancel or disconnect, turn
         // or session end). The commit window is stamped at approval.
-        let expires_at_ms = luna_proto::APPROVAL_NO_EXPIRY;
+        let expires_at_ms = automation_plan
+            .as_ref()
+            .map_or(luna_proto::APPROVAL_NO_EXPIRY, |p| p.preview.expires_at_ms);
         let fence = ApprovedSendFence {
             source_task_id: claim.source_task_id.clone(),
             source_run_id: claim.source_run_id.clone(),
@@ -2038,6 +2135,7 @@ impl SessionsEngine {
             .as_ref()
             .map(|child| self.child_card_plan(chat_id, child, child_execution.as_ref()));
         let proposal = LunaSendProposal {
+            automation_plan: automation_plan.clone(),
             child_request: child_request.clone(),
             child_plan,
             request_id: new_id(),
@@ -2097,8 +2195,17 @@ impl SessionsEngine {
         expire_pending_approval(&pending, &engine_tx, &request_id);
         let mut fence = grant.map_err(fail)?;
         // Approval opens the bounded commit window checked at the durable write.
-        fence.expires_at_ms = now_ms().saturating_add(30_000);
+        fence.expires_at_ms = automation_plan.as_ref().map_or_else(
+            || now_ms().saturating_add(30_000),
+            |p| p.preview.expires_at_ms.min(now_ms().saturating_add(30_000)),
+        );
         self.with_live_approved_send(&fence, || Ok(()))?;
+        if let Some(plan) = automation_plan {
+            return backend
+                .apply_approved_automation(plan, &authority, &fence)
+                .await
+                .map_err(fail);
+        }
         if let Some(child) = child_request {
             let child_fence = crate::cross_task_tools::ApprovedChildFence {
                 access_granted: fence.child_access_grant,
@@ -4690,7 +4797,7 @@ impl SessionsEngine {
                         Box::pin(async move {
                             let result = if matches!(
                                 invocation.name.as_str(),
-                                "send_message_to_thread" | "create_thread"
+                                "send_message_to_thread" | "create_thread" | "automation_update"
                             ) {
                                 sessions
                                     .invoke_approved_luna_send(
@@ -9572,6 +9679,21 @@ async fn drive_run(
         }
 
         if let AgentEvent::Done { status, error, .. } = &event {
+            // Exact automation message identity, never the latest conversation
+            // message or a later turn. Completion survives a scheduler restart.
+            if !resume_state.control_only {
+                let message = resume_state.user_message_id.as_str();
+                let state = if saw_session_started && *status == DoneStatus::Completed {
+                    luna_proto::AutomationRunState::Completed
+                } else {
+                    luna_proto::AutomationRunState::Unknown
+                };
+                if let Err(error) = inner.recovery.finish_automation_message(&chat_id, message, state,
+                    if state == luna_proto::AutomationRunState::Completed { "Provider reported completion for this occurrence" } else { "Provider ended without proven successful completion; inspect the conversation before retrying" },
+                    run_permit.as_ref().map(|p|p.ticket())) {
+                    tracing::warn!(chat=%chat_id,%error,"automation outcome could not be saved");
+                }
+            }
             if let Some(checkpoints) = inner.git_checkpoints.get() {
                 let outcome = match status {
                     DoneStatus::Completed => "completed",
@@ -14276,6 +14398,7 @@ mod tests {
                 event_wait: false,
                 child_creation: false,
                 child_models: false,
+                automations: false,
             }
         }
 

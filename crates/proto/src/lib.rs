@@ -5,6 +5,7 @@
 
 pub mod activity;
 pub mod agent;
+pub mod automation;
 pub mod backup;
 pub mod chat_workbench;
 pub mod composer_catalog;
@@ -41,6 +42,7 @@ pub mod workspace;
 
 pub use activity::*;
 pub use agent::*;
+pub use automation::*;
 pub use backup::*;
 pub use chat_workbench::*;
 pub use composer_catalog::*;

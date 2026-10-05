@@ -323,6 +323,23 @@ pub(crate) struct RecoveryStore {
 }
 
 impl RecoveryStore {
+    pub(crate) fn finish_automation_message(
+        &self,
+        task: &str,
+        message: &str,
+        state: luna_proto::AutomationRunState,
+        detail: &str,
+        permit: Option<&luna_sync::write_epoch::WritePermit>,
+    ) -> Result<(), EngineError> {
+        Ok(self.store.finish_automation_message(
+            task,
+            message,
+            state,
+            detail,
+            crate::now_ms(),
+            permit,
+        )?)
+    }
     pub fn workspace_repair_revision(&self, task_id: &str) -> Result<u64, EngineError> {
         Ok(self.store.workspace_repair_revision(task_id)?)
     }

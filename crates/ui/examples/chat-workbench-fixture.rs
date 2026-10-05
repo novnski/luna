@@ -1009,11 +1009,14 @@ async fn reveal_tab(window: Window, cx: &mut AsyncApp, chat: &str) -> anyhow::Re
 
 /// w20l's queued prompt: the only request the w20l peer treats specially.
 const W20L_PROMPT: &str = "Run the release checklist again";
+/// w20m's automation prompt: delivered by the host's own worker, never typed.
+const W20M_PROMPT: &str = "Automation check: summarize what changed since yesterday";
 
 /// The fixture's Mock provider, unchanged for every request except w20l's
-/// exact queued prompt. That one run behaves like a real native peer: it
-/// reports `SessionStarted` (a unique native session in the request's own
-/// cwd) before its reply, so the engine can durably correlate acceptance.
+/// exact queued prompt and w20m's automation prompt. Those runs behave like a
+/// real native peer: each reports `SessionStarted` (a unique native session
+/// per chat, in the request's own cwd) before its reply, so the engine can
+/// durably correlate acceptance.
 struct FixtureMock {
     inner: MockHarness,
 }
@@ -1065,10 +1068,14 @@ impl luna_harness::Harness for FixtureMock {
         futures::stream::BoxStream<'static, Result<AgentEvent, luna_harness::HarnessError>>,
         luna_harness::HarnessError,
     > {
-        if !request.prompt.contains(W20L_PROMPT) {
+        let (session_id, assistant_message_id) = if request.prompt.contains(W20L_PROMPT) {
+            ("w20l-native-session", "w20l-assistant-message")
+        } else if request.prompt.contains(W20M_PROMPT) {
+            ("w20m-native-session", "w20m-assistant-message")
+        } else {
             return self.inner.run(request, controls).await;
-        }
-        let session_id = "w20l-native-session".to_string();
+        };
+        let session_id = session_id.to_string();
         let peer = MockHarness {
             script: vec![
                 AgentEvent::SessionStarted {
@@ -1077,7 +1084,7 @@ impl luna_harness::Harness for FixtureMock {
                     tools: Vec::new(),
                     cwd: request.cwd.clone(),
                     session_id: session_id.clone(),
-                    assistant_message_id: "w20l-assistant-message".into(),
+                    assistant_message_id: assistant_message_id.into(),
                 },
                 AgentEvent::TextDelta {
                     text: MOCK_ANSWER.into(),
@@ -1092,6 +1099,37 @@ impl luna_harness::Harness for FixtureMock {
         };
         peer.run(request, controls).await
     }
+}
+
+/// w20m: the mounted automations panel's readback (`settings`: app-wide).
+fn automations(window: Window, cx: &mut AsyncApp, settings: bool) -> anyhow::Result<Value> {
+    window.update(cx, |shell, _, cx| {
+        shell
+            .fixture_automations(settings)
+            .map(|panel| panel.read(cx).fixture_readback(cx))
+            .unwrap_or(Value::Null)
+    })
+}
+
+/// w20m: draw and re-read the panel until `done` (100 ms steps).
+async fn wait_automations(
+    window: Window,
+    cx: &mut AsyncApp,
+    settings: bool,
+    what: &str,
+    tries: usize,
+    done: impl Fn(&Value) -> bool,
+) -> anyhow::Result<Value> {
+    let mut last = Value::Null;
+    for _ in 0..tries {
+        draw(window, cx)?;
+        last = automations(window, cx, settings)?;
+        if done(&last) {
+            return Ok(last);
+        }
+        settle(cx, 100).await;
+    }
+    anyhow::bail!("timed out waiting for {what}: {last}")
 }
 
 /// A host-reported work row (slice 3) for the scripted work host.
@@ -1818,6 +1856,10 @@ fn main() -> anyhow::Result<()> {
     let queue_device = core.device_id.clone();
     // ...and proves Send now's disposition from the durable command ledger.
     let command_store = core.store.clone();
+    // w20m adds its own chats through the engine: a fresh local automation
+    // chat and a replicated row owned by another host.
+    let automation_workspace = core.workspace.clone();
+    let automation_cwd = project.clone();
     // The same engine reached under another profile id (accounts under one
     // device root), and an engine that names no profile.
     let profile_handle = |profile: Option<&str>, label: &str| {
@@ -4934,6 +4976,417 @@ fn main() -> anyhow::Result<()> {
                     "Send now acts for Child A only: no new send on Main, Main's draft/queue/transcript unchanged: {settled}"
                 );
                 progress(&output, &mut record, "providerUnavailableHold".into(), serde_json::json!({"held": row, "afterReconnect": after_reconnect, "sendNow": settled}));
+                click_tab(window, cx, MAIN).await?;
+
+                // w20m. Failure cases 62-72: host-owned automations (slice 5)
+                // through the real RPC and the production 2-second worker.
+                // The right pane's Automations surface follows Main, so each
+                // scope here is a real Main selection. Delivery goes to a
+                // fresh automation chat: earlier steps can leave Main with
+                // unresolved delivery work, which the host rightly protects.
+                // Main and Child A must receive nothing (command ledger).
+                // Every change is reviewed by the host and applied as that
+                // exact request; a lost answer resolves only through its
+                // receipt.
+                macro_rules! panel {
+                    ($settings:expr, |$p:ident, $c:ident| $body:expr) => {
+                        window.update(cx, |shell, _, cx| {
+                            shell
+                                .fixture_automations($settings)
+                                .map(|panel| panel.update(cx, |$p, $c| $body))
+                        })?
+                    };
+                }
+                const AUTO_CHAT: &str = "e2e2e2e2-0000-4000-8000-000000000001";
+                const REMOTE_CHAT: &str = "e3e3e3e3-0000-4000-8000-000000000001";
+                const REMOTE_HOST: &str = "w20m-remote-host";
+                let right_was_open = frame(window, cx)?["rightOpen"].as_bool() == Some(true);
+                let main_sequence = command_store.task_command_snapshot(MAIN)?.snapshot.task_sequence;
+                let child_sequence = command_store.task_command_snapshot(CHILD_A)?.snapshot.task_sequence;
+                reader
+                    .call(
+                        "Mutate",
+                        serde_json::json!({
+                            "op": "createChat",
+                            "chatId": AUTO_CHAT,
+                            "spaceId": PROJECT,
+                            "cwd": automation_cwd.to_string_lossy(),
+                            "config": serde_json::to_value(config())?,
+                        }),
+                    )
+                    .await?;
+                automation_workspace.rename_chat(AUTO_CHAT, "Automation checks")?;
+                // Another host's chat as this device sees it: a replicated
+                // row whose owner is that host.
+                let mut remote_row = automation_workspace.chat(MAIN)?.ok_or_else(|| anyhow::anyhow!("Main's engine row"))?;
+                remote_row.id = REMOTE_CHAT.into();
+                remote_row.device_id = REMOTE_HOST.into();
+                remote_row.title = Some("Office Mini notes".into());
+                automation_workspace.import_chat_row(&remote_row)?;
+                let auto_row = automation_workspace.chat(AUTO_CHAT)?.ok_or_else(|| anyhow::anyhow!("the automation chat's engine row"))?;
+                let remote_row = automation_workspace.chat(REMOTE_CHAT)?.ok_or_else(|| anyhow::anyhow!("the remote row"))?;
+                // The UI's chat list is fixture-managed (its chats watch is
+                // off): mirror exactly the engine's rows, and the paired host.
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.chats.push(auto_row);
+                        state.chats.push(remote_row);
+                        state.devices.push(
+                            serde_json::from_value(serde_json::json!({
+                                "id": REMOTE_HOST, "name": "Office Mini", "platform": "macos", "lastSeenAt": null
+                            }))
+                            .expect("device"),
+                        );
+                        cx.notify();
+                    })
+                });
+                // Case 62: a conversation owned by another host shows no local
+                // automations, names its host and offers no editor.
+                select(cx, Some(REMOTE_CHAT));
+                window.update(cx, |shell, _, cx| shell.fixture_open_automations(cx))?;
+                wait_automations(window, cx, false, "the remote conversation's view", 60, |rb| {
+                    rb["scope"]["conversation"] == REMOTE_CHAT && rb["loading"] == false
+                })
+                .await?;
+                panel!(false, |p, c| p.fixture_new(c));
+                draw(window, cx)?;
+                let remote = automations(window, cx, false)?;
+                anyhow::ensure!(
+                    remote["scope"]["conversation"] == REMOTE_CHAT
+                        && remote["foreignHost"] == "Office Mini"
+                        && remote["rows"].as_array().is_some_and(Vec::is_empty)
+                        && remote["editor"].is_null()
+                        && remote["error"].as_str().is_some_and(|error| error.contains("managed on Office Mini")),
+                    "another host's conversation names its host and offers no local editor: {remote}"
+                );
+                shot(window, cx, output.join("w20m-automations-remote-host.png")).await?;
+                select(cx, Some(AUTO_CHAT));
+                wait_for(window, cx, "the automation chat as Main", |rb| rb["loaded"] == true && rb["main"] == AUTO_CHAT).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_automations(cx))?;
+                let empty = wait_automations(window, cx, false, "the automation chat's view", 60, |rb| {
+                    rb["scope"]["conversation"] == AUTO_CHAT && rb["loading"] == false && rb["error"].is_null()
+                })
+                .await?;
+                anyhow::ensure!(
+                    empty["foreignHost"].is_null() && empty["rows"].as_array().is_some_and(Vec::is_empty),
+                    "a fresh local chat starts with no automations: {empty}"
+                );
+                // Cases 63-64: local limits name the problem (PR watch: an
+                // owner/repository, polls 1..1440 minutes, 1..100 wakes).
+                panel!(false, |p, c| p.fixture_new(c));
+                panel!(false, |p, c| p.fixture_set("name", "W20M nightly check", c));
+                panel!(false, |p, c| p.fixture_set("prompt", W20M_PROMPT, c));
+                panel!(false, |p, c| p.fixture_set("kind", "pr", c));
+                let mut refusals = Vec::new();
+                for (field, value, expected) in [
+                    ("repository", "not-a-repository", "Enter the repository as owner/repository."),
+                    ("repository", "novnski/luna", "Enter a whole number for the pull request number."),
+                    ("number", "12", "Allow 1 to 100 wakes."),
+                    ("budget", "101", "Allow 1 to 100 wakes."),
+                    // The check interval is validated before the budget.
+                    ("poll", "1441", "Check every 1 to 1440 minutes."),
+                    ("poll", "0", "Check every 1 to 1440 minutes."),
+                ] {
+                    panel!(false, |p, c| p.fixture_set(field, value, c));
+                    if field == "repository" && value == "novnski/luna" {
+                        // A fresh editor's PR number is empty; poll stays 15.
+                        panel!(false, |p, c| p.fixture_set("budget", "0", c));
+                    }
+                    let built = automations(window, cx, false)?["editor"]["built"].clone();
+                    anyhow::ensure!(built == expected, "{field}={value} is refused locally with its reason ({expected}): {built}");
+                    refusals.push(serde_json::json!({"field": field, "value": value, "refusal": built}));
+                }
+                panel!(false, |p, c| p.fixture_set("poll", "15", c));
+                panel!(false, |p, c| p.fixture_set("budget", "100", c));
+                let valid_watch = automations(window, cx, false)?["editor"]["built"].clone();
+                anyhow::ensure!(valid_watch.is_null(), "a bounded PR watch builds: {valid_watch}");
+                // Case 65: a one-shot entered as wall time in its IANA zone;
+                // the host's preview names exactly that instant.
+                let zone = "Europe/Bucharest";
+                let now_ms = Utc::now().timestamp_millis();
+                let due = (now_ms + 30_000).div_euclid(60_000) * 60_000 + 60_000;
+                let local = luna_engine::automation::format_in_zone(due, zone);
+                panel!(false, |p, c| p.fixture_set("kind", "once", c));
+                panel!(false, |p, c| p.fixture_set("timezone", zone, c));
+                panel!(false, |p, c| p.fixture_set("date", &local[..10], c));
+                panel!(false, |p, c| p.fixture_set("time", &local[11..16], c));
+                panel!(false, |p, c| p.fixture_review(c));
+                let reviewed = wait_automations(window, cx, false, "the host's review", 50, |rb| {
+                    let phase = rb["editor"]["phase"].as_str().unwrap_or("");
+                    phase == "reviewed" || phase.starts_with("error")
+                })
+                .await?;
+                anyhow::ensure!(
+                    reviewed["editor"]["phase"] == "reviewed"
+                        && reviewed["editor"]["previewCurrent"] == true
+                        && reviewed["editor"]["nextOccurrencesMs"] == serde_json::json!([due])
+                        && reviewed["editor"]["expectedRevision"] == 0,
+                    "the host previews exactly {local} for a new automation: {reviewed}"
+                );
+                let request_id = reviewed["editor"]["requestId"].as_str().unwrap_or_default().to_string();
+                let automation_id = reviewed["editor"]["automationId"].as_str().unwrap_or_default().to_string();
+                anyhow::ensure!(!request_id.is_empty() && !automation_id.is_empty(), "the editor holds its ids");
+                shot(window, cx, output.join("w20m-automation-reviewed.png")).await?;
+                // Case 66: an edit after review invalidates it; restoring the
+                // exact request makes the same review current again.
+                panel!(false, |p, c| p.fixture_set("name", "W20M nightly check (edited)", c));
+                let edited = automations(window, cx, false)?;
+                let refused = panel!(false, |p, c| p.fixture_apply(c)) == Some(true);
+                anyhow::ensure!(
+                    edited["editor"]["previewCurrent"] == false && !refused,
+                    "an edit after review disables Apply: {edited}"
+                );
+                panel!(false, |p, c| p.fixture_set("name", "W20M nightly check", c));
+                // Case 67: the answer is lost. The same request id stays
+                // unconfirmed (no new id, no silent resend) until its receipt
+                // is read.
+                panel!(false, |p, _c| p.fixture_lose_next_mutation());
+                let applied = panel!(false, |p, c| p.fixture_apply(c)) == Some(true);
+                anyhow::ensure!(applied, "Apply runs for the exact reviewed request");
+                let unknown = wait_automations(window, cx, false, "the lost answer", 50, |rb| {
+                    rb["editor"]["phase"].as_str().is_some_and(|phase| phase.starts_with("unknown") || phase.starts_with("error"))
+                })
+                .await?;
+                anyhow::ensure!(
+                    unknown["editor"]["phase"] == "unknown" && unknown["editor"]["requestId"] == request_id.as_str(),
+                    "a lost answer is unconfirmed under the same request id: {unknown}"
+                );
+                shot(window, cx, output.join("w20m-automation-unconfirmed.png")).await?;
+                panel!(false, |p, c| p.fixture_check(c));
+                let saved = wait_automations(window, cx, false, "Check status resolves the change", 80, |rb| {
+                    rb["editor"].is_null()
+                        && rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str()))
+                })
+                .await?;
+                let receipt: Option<luna_proto::AutomationMutationReceipt> = reader
+                    .call_as(
+                        luna_rpc::methods::GET_AUTOMATION_MUTATION_RECEIPT,
+                        serde_json::json!({ "requestId": request_id }),
+                    )
+                    .await?;
+                let receipt = receipt.ok_or_else(|| anyhow::anyhow!("the host holds the receipt for {request_id}"))?;
+                let row = saved["rows"].as_array().and_then(|rows| rows.iter().find(|row| row["id"] == automation_id.as_str()).cloned()).unwrap_or_default();
+                anyhow::ensure!(
+                    receipt.record.id == automation_id
+                        && receipt.record.revision == 1
+                        && row["revision"] == 1
+                        && row["nextDueMs"] == due
+                        && row["target"]["taskId"] == AUTO_CHAT
+                        && row["status"].as_str().is_some_and(|status| status.starts_with("Active · next") && status.contains(zone)),
+                    "the receipt for the same request id resolves the change, saved once at revision 1: {row}"
+                );
+                // Cases 68-69: the worker delivers the occurrence to its chat;
+                // the history shows its own scheduled/claimed times and ids,
+                // and only Completed means the turn finished.
+                panel!(false, |p, c| p.fixture_toggle_runs(&automation_id, c));
+                let auto_texts_before = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(AUTO_CHAT, cx))?;
+                let mut seen_states = std::collections::BTreeSet::new();
+                let mut completed = None;
+                let mut last_runs = Value::Null;
+                for _ in 0..1500 {
+                    draw(window, cx)?;
+                    last_runs = automations(window, cx, false)?["runs"][automation_id.as_str()].clone();
+                    for run in last_runs["items"].as_array().into_iter().flatten() {
+                        seen_states.insert(run["state"].as_str().unwrap_or_default().to_string());
+                        if run["state"] == "Completed" {
+                            completed = Some(run.clone());
+                        }
+                    }
+                    if completed.is_some() {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                let Some(run) = completed else {
+                    let _ = std::fs::write(
+                        output.join("w20m-timeout.json"),
+                        serde_json::to_vec_pretty(&serde_json::json!({"runs": last_runs, "seen": seen_states})).unwrap_or_default(),
+                    );
+                    anyhow::bail!("the one-shot never completed in the automation chat; last history saved to w20m-timeout.json: {last_runs}");
+                };
+                let auto_texts = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(AUTO_CHAT, cx))?;
+                let delivered = auto_texts.iter().filter(|text| text.contains(W20M_PROMPT)).count();
+                anyhow::ensure!(
+                    run["taskId"] == AUTO_CHAT
+                        && run["scheduledAtMs"] == due
+                        && run["claimedAtMs"].as_i64().is_some_and(|claimed| claimed >= due)
+                        && run["coalesced"] == 0
+                        && run["commandId"].as_str().is_some_and(|id| !id.is_empty())
+                        && run["messageId"].as_str().is_some_and(|id| !id.is_empty())
+                        && last_runs["items"].as_array().map(Vec::len) == Some(1)
+                        && delivered == 1
+                        && auto_texts_before.iter().all(|text| !text.contains(W20M_PROMPT)),
+                    "one occurrence delivered once to the automation chat, with its own times and ids: {run} (seen {seen_states:?})"
+                );
+                shot(window, cx, output.join("w20m-automation-completed.png")).await?;
+                // Case 70: Pause is reviewed and confirmed; a spent one-shot
+                // reads as needing a new future time, never a plain Resume.
+                panel!(false, |p, c| p.fixture_action(&automation_id, "pause", c));
+                wait_automations(window, cx, false, "the pause review", 50, |rb| rb["action"]["phase"] == "reviewed").await?;
+                panel!(false, |p, c| p.fixture_confirm(c));
+                let paused = wait_automations(window, cx, false, "the pause applies", 80, |rb| {
+                    rb["action"].is_null()
+                        && rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str() && row["enabled"] == false))
+                })
+                .await?;
+                let paused_row = paused["rows"].as_array().and_then(|rows| rows.iter().find(|row| row["id"] == automation_id.as_str()).cloned()).unwrap_or_default();
+                anyhow::ensure!(
+                    paused_row["revision"] == 2
+                        && paused_row["status"].as_str().is_some_and(|status| status.starts_with("Paused.")),
+                    "Pause applies at the next revision with an honest status: {paused_row}"
+                );
+                anyhow::ensure!(paused_row["toggle"] == "Edit time", "a spent paused one-shot offers Edit time: {paused_row}");
+                let offered = panel!(false, |p, c| p.fixture_toggle(&automation_id, c));
+                let editing = automations(window, cx, false)?;
+                anyhow::ensure!(
+                    offered == Some(Some("Edit time"))
+                        && editing["action"].is_null()
+                        && editing["editor"]["automationId"] == automation_id.as_str()
+                        && editing["editor"]["existing"] == true
+                        && editing["editor"]["resumes"] == true
+                        && editing["editor"]["expectedRevision"] == 2,
+                    "Edit time opens the exact row's editor without a Resume request: {editing}"
+                );
+                // Case 71: switching Main drops answers for the previous
+                // conversation (rapid real selections, each surface drawn),
+                // and a reconnect reloads saved state without new runs.
+                for chat in [MAIN2, AUTO_CHAT, MAIN2] {
+                    select(cx, Some(chat));
+                    window.update(cx, |shell, _, cx| shell.fixture_open_automations(cx))?;
+                    draw(window, cx)?;
+                }
+                let other_view = wait_automations(window, cx, false, "Main 2's (empty) automations", 50, |rb| {
+                    rb["scope"]["conversation"] == MAIN2 && rb["loading"] == false
+                })
+                .await?;
+                settle(cx, 300).await;
+                let other_view = automations(window, cx, false).unwrap_or(other_view);
+                anyhow::ensure!(
+                    other_view["scope"]["conversation"] == MAIN2 && other_view["rows"].as_array().is_some_and(Vec::is_empty),
+                    "the automation chat's rows never land in Main 2's view: {other_view}"
+                );
+                select(cx, Some(AUTO_CHAT));
+                wait_for(window, cx, "the automation chat as Main again", |rb| rb["loaded"] == true && rb["main"] == AUTO_CHAT).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_open_automations(cx))?;
+                wait_automations(window, cx, false, "the automation chat's rows again", 60, |rb| {
+                    rb["scope"]["conversation"] == AUTO_CHAT
+                        && rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str()))
+                })
+                .await?;
+                let runs_request = serde_json::json!({ "automationId": automation_id, "includeDeleted": false });
+                let runs_before: luna_proto::AutomationPage<luna_proto::AutomationRun> =
+                    reader.call_as(luna_rpc::methods::LIST_AUTOMATION_RUNS, runs_request.clone()).await?;
+                window.update(cx, |shell, _, cx| shell.fixture_reconnect_engine(cx))?;
+                settle(cx, 2000).await;
+                let reloaded = wait_automations(window, cx, false, "saved automations after a reconnect", 80, |rb| {
+                    rb["loading"] == false
+                        && rb["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == automation_id.as_str() && row["revision"] == 2))
+                })
+                .await?;
+                let runs_after: luna_proto::AutomationPage<luna_proto::AutomationRun> =
+                    reader.call_as(luna_rpc::methods::LIST_AUTOMATION_RUNS, runs_request).await?;
+                anyhow::ensure!(
+                    runs_after.items.len() == runs_before.items.len()
+                        && window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(AUTO_CHAT, cx))?.iter().filter(|text| text.contains(W20M_PROMPT)).count() == 1,
+                    "a reconnect reloads saved state and resends nothing: {reloaded}"
+                );
+                window.update(cx, |shell, window, cx| shell.fixture_close_automations(window, cx))?;
+                // Case 72: Settings pages app-wide (50 per page); Load more
+                // adds the rest once, without duplicates.
+                for index in 0..51i64 {
+                    let request = luna_proto::AutomationMutationRequest {
+                        request_id: format!("w20m-bulk-request-{index:02}"),
+                        automation_id: format!("w20m-bulk-{index:02}"),
+                        owner_host_id: queue_device.clone(),
+                        expected_revision: 0,
+                        operation: luna_proto::AutomationOperation::Save {
+                            definition: luna_proto::AutomationDefinition {
+                                name: format!("Paging row {index:02}"),
+                                prompt: "Paging row".into(),
+                                timezone: "UTC".into(),
+                                target: luna_proto::AutomationTarget::Existing { task_id: AUTO_CHAT.into() },
+                                trigger: luna_proto::AutomationTrigger::Once { at_ms: 4_102_444_800_000 + index * 60_000 },
+                                max_lateness_ms: 600_000,
+                            },
+                        },
+                        preview_id: String::new(),
+                    };
+                    let preview: luna_proto::AutomationPreview = reader
+                        .call_as(luna_rpc::methods::PREVIEW_AUTOMATION, serde_json::to_value(&request)?)
+                        .await?;
+                    let mut apply = request;
+                    apply.preview_id = preview.preview_id;
+                    reader.call(luna_rpc::methods::MUTATE_AUTOMATION, serde_json::to_value(&apply)?).await?;
+                }
+                window.update(cx, |shell, _, cx| shell.fixture_open_automation_settings(cx))?;
+                let first_page = wait_automations(window, cx, true, "the first app-wide page", 80, |rb| {
+                    rb["scope"] == "all" && rb["loading"] == false && rb["rows"].as_array().is_some_and(|rows| rows.len() == 50)
+                })
+                .await?;
+                anyhow::ensure!(first_page["next"].is_string(), "52 automations leave a next page after 50: {}", first_page["next"]);
+                shot(window, cx, output.join("w20m-automations-settings.png")).await?;
+                panel!(true, |p, c| p.fixture_more(c));
+                let all_pages = wait_automations(window, cx, true, "the second page", 80, |rb| {
+                    rb["rows"].as_array().is_some_and(|rows| rows.len() == 52) && rb["next"].is_null()
+                })
+                .await?;
+                let ids: std::collections::BTreeSet<String> = all_pages["rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|row| row["id"].as_str().map(str::to_string))
+                    .collect();
+                anyhow::ensure!(ids.len() == 52 && ids.contains(&automation_id), "Load more adds the rest once: {} ids", ids.len());
+                window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
+                // Isolation: no send reached Main or Child A since w20m began
+                // (the same send intents w20l counts; Main's earlier recovery
+                // may still settle on its own and is not a send).
+                let new_sends = |task: &str, after: u64| -> anyhow::Result<usize> {
+                    Ok(command_store
+                        .read_task_commands(task, after, 100)?
+                        .events
+                        .into_iter()
+                        .filter(|event| event.receipt.intent == "sendQueuedNow" || event.receipt.intent == "session")
+                        .count())
+                };
+                let main_after = new_sends(MAIN, main_sequence)?;
+                let child_after = new_sends(CHILD_A, child_sequence)?;
+                anyhow::ensure!(
+                    main_after == 0 && child_after == 0,
+                    "automations never send to Main or Child A: {main_after} new Main sends, {child_after} new Child A sends"
+                );
+                // Back to Main as later steps expect; the fixture-managed
+                // chat list returns to its seeded rows (the engine keeps both
+                // w20m chats).
+                select(cx, Some(MAIN));
+                wait_for(window, cx, "Main's layout after automations", |rb| rb["loaded"] == true && rb["main"] == MAIN).await?;
+                cx.update(|cx| {
+                    state.update(cx, |state, cx| {
+                        state.chats.retain(|chat| chat.id != AUTO_CHAT && chat.id != REMOTE_CHAT);
+                        state.devices.retain(|device| device.id != REMOTE_HOST);
+                        cx.notify();
+                    })
+                });
+                // Later frame steps start from the right sidebar as w20m found it.
+                set_right_sidebar(window, cx, right_was_open).await?;
+                progress(&output, &mut record, "automations".into(), serde_json::json!({
+                    "remote": remote,
+                    "refusals": refusals,
+                    "due": due,
+                    "dueLocal": local,
+                    "requestId": request_id,
+                    "automationId": automation_id,
+                    "receiptRevision": receipt.record.revision,
+                    "run": run,
+                    "seenStates": seen_states,
+                    "paused": paused_row,
+                    "pausedEditor": editing,
+                    "runsAfterReconnect": runs_after.items.len(),
+                    "pagedRows": ids.len(),
+                    "automationChat": AUTO_CHAT,
+                    "newMainCommands": main_after,
+                    "newChildACommands": child_after,
+                }));
                 click_tab(window, cx, MAIN).await?;
 
                 // w21-w30. The surrounding frame: one chrome surface around

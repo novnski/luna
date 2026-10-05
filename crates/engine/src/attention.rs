@@ -24,7 +24,37 @@ pub(crate) const MANAGED_KINDS: &[AttentionKind] = &[
     AttentionKind::TaskRecovered,
     AttentionKind::ProviderAuthenticationRequired,
     AttentionKind::ConnectivityUnavailable,
+    AttentionKind::AutomationFailed,
 ];
+
+pub(crate) fn project_automation(
+    environment_id: &str,
+    source: &luna_sync::AutomationAttentionSource,
+) -> Option<AttentionItem> {
+    let bad_run = source.run.as_ref().filter(|r| {
+        matches!(
+            r.state,
+            luna_proto::AutomationRunState::Unknown | luna_proto::AutomationRunState::Failed
+        )
+    });
+    if !source.watch_unknown && bad_run.is_none() {
+        return None;
+    }
+    let key = format!("automation:{}:{}", environment_id, source.automation_id);
+    let timestamp = bad_run.map_or(source.updated_at_ms, |r| r.updated_at_ms);
+    Some(AttentionItem {
+        contract_version: ATTENTION_CONTRACT_VERSION, id: stable_id(&key), dedup_key:key.clone(),
+        source_key:format!("{key}:{}:{}:{}",source.revision,source.watch_unknown,bad_run.map_or("",|r|r.id.as_str())),
+        kind: AttentionKind::AutomationFailed, severity: AttentionSeverity::Warning, lifecycle: AttentionLifecycle::Unresolved,
+        environment_id: environment_id.into(), device_id: environment_id.into(), task_id:Some(source.origin_task_id.clone()), turn_id:None, request_id:None,
+        title:"Automation needs attention".into(),
+        summary:if source.watch_unknown { "PR observation is unavailable. Inspect Automations before relying on its status." } else { "A scheduled occurrence failed or its delivery is unconfirmed. Inspect Automations and the conversation." }.into(),
+        created_at_ms:timestamp,updated_at_ms:timestamp,seen_at_ms:None,acknowledged_at_ms:None,resolved_at_ms:None,
+        target: AttentionTarget::Task { task_id: source.origin_task_id.clone() }, source: AttentionSourcePointer {
+            task_id:Some(source.origin_task_id.clone()),message_id:None,part_id:None,request_id:None,queue_id:None,recovery_id:None,activity_event_id:None,
+        },
+    })
+}
 
 /// The existing engine connectivity stream is the authority for local edge
 /// availability. It is not evidence of another host's presence. Disabled is

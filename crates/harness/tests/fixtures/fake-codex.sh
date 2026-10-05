@@ -525,6 +525,30 @@ case "$turnline" in
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-stale","status":"completed"}}}'
   ;;
 
+*scenario:l5-automation:*)
+  target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l5-automation:\([0-9a-f-]*\).*/\1/p')
+  listed=$(mcp '{"jsonrpc":"2.0","id":180,"method":"tools/list","params":{}}')
+  has "$listed" '"name":"automation_update"' || { fail_turn "$tid" "automation tool missing"; exit 0; }
+  emit "{\"id\":$tid,\"result\":{\"turn\":{\"id\":\"t-automation\"}}}"
+  emit '{"method":"turn/started","params":{"threadId":"th-1","turn":{"id":"t-automation"}}}'
+  args="{\"automationId\":\"agent-approved\",\"expectedRevision\":0,\"idempotencyKey\":\"agent-create\",\"operation\":{\"kind\":\"save\",\"definition\":{\"name\":\"Agent approved schedule\",\"prompt\":\"Inspect the release\",\"timezone\":\"UTC\",\"target\":{\"kind\":\"existing\",\"taskId\":\"$target\"},\"trigger\":{\"kind\":\"once\",\"atMs\":2051222400000},\"maxLatenessMs\":300000}}}"
+  response=$(mcp_tool 181 automation_update "$args" foreign-thread t-automation call-wrong-task)
+  has "$response" '"isError":true' || { fail_turn "$tid" "foreign automation source accepted"; exit 0; }
+  response=$(mcp_tool 182 automation_update "$args" th-1 t-automation call-automation-create)
+  has "$response" '"isError":false' && has "$response" 'agent-approved' || { fail_turn "$tid" "approved automation did not return receipt"; exit 0; }
+  response=$(mcp_tool 183 automation_update "$args" th-1 t-automation call-automation-create)
+  has "$response" '"isError":true' || { fail_turn "$tid" "replayed automation call accepted"; exit 0; }
+  changed=$(printf '%s' "$args" | sed 's/Inspect the release/Different instructions/')
+  response=$(mcp_tool 184 automation_update "$changed" th-1 t-automation call-automation-collision)
+  has "$response" '"isError":true' || { fail_turn "$tid" "changed automation payload accepted"; exit 0; }
+  denied=$(printf '%s' "$args" | sed 's/agent-approved/agent-denied/g; s/agent-create/agent-deny/g')
+  response=$(mcp_tool 185 automation_update "$denied" th-1 t-automation call-automation-denied)
+  has "$response" '"isError":true' || { fail_turn "$tid" "task-wide allowance created automation"; exit 0; }
+  response=$(mcp_tool 186 list_automations '{}' th-1 t-automation call-automation-list)
+  has "$response" '"isError":false' && has "$response" 'agent-approved' || { fail_turn "$tid" "automation list missing saved row"; exit 0; }
+  emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-automation","status":"completed"}}}'
+  ;;
+
 *scenario:l25-send:*)
   target=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send:\([0-9a-f-]*\).*/\1/p')
   foreign=$(printf '%s' "$turnline" | sed -n 's/.*scenario:l25-send:[0-9a-f-]*:\([0-9a-f-]*\).*/\1/p')

@@ -637,6 +637,8 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
     assert_eq!(
         attached_names,
         HashSet::from([
+            "automation_update",
+            "list_automations",
             "create_thread",
             "list_child_models",
             "list_threads",
@@ -1322,7 +1324,7 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
     for tool in tools {
         let read_only = !matches!(
             tool["name"].as_str(),
-            Some("send_message_to_thread" | "create_thread")
+            Some("send_message_to_thread" | "create_thread" | "automation_update")
         );
         assert_eq!(tool["annotations"]["readOnlyHint"], read_only, "{tool}");
     }

@@ -20,6 +20,8 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 
 use crate::write_epoch::{FlushPermit, WriteEpoch, WritePermit};
 
+mod automations;
+pub use automations::AutomationAttentionSource;
 mod project_commands;
 mod workspace_repair;
 pub use workspace_repair::{
@@ -53,6 +55,10 @@ pub enum StoreError {
     TaskCleanupPending(String),
     #[error("task recovery state changed before the requested transition")]
     RecoveryConflict,
+    #[error("automation changed, was deleted, or request id was reused with different content")]
+    AutomationConflict,
+    #[error("maximum of 1000 active automation definitions reached")]
+    AutomationLimit,
     #[error("attention projection revision changed before the requested mutation")]
     AttentionRevisionConflict,
     #[error("attention mutation command id was reused with different content")]
@@ -329,6 +335,8 @@ const MIGRATIONS: &[&str] = &[
     // v17 — compare retry configuration with the original task defaults,
     // rather than the resolved per-turn request. NULL preserves legacy guards.
     "ALTER TABLE task_execution_lineage ADD COLUMN configuration BLOB;",
+    // v18 — host-owned automation definitions and atomic occurrence claims.
+    include_str!("migrations/automations.sql"),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

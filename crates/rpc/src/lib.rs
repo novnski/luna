@@ -35,6 +35,11 @@ pub use server::{serve_connection, serve_ws_listener, serve_ws_listener_with_fac
 /// RPC method names — single source of truth for both ends.
 /// Full surface: docs/research/feature-inventory.md §2.
 pub mod methods {
+    pub const LIST_AUTOMATIONS: &str = "ListAutomations";
+    pub const LIST_AUTOMATION_RUNS: &str = "ListAutomationRuns";
+    pub const PREVIEW_AUTOMATION: &str = "PreviewAutomation";
+    pub const MUTATE_AUTOMATION: &str = "MutateAutomation";
+    pub const GET_AUTOMATION_MUTATION_RECEIPT: &str = "GetAutomationMutationReceipt";
     // L29: only the local IPC owner can administer pairings and sessions.
     // Redeem/authenticate are handled by the guarded remote dispatch itself.
     pub const CREATE_REMOTE_PAIRING: &str = "CreateRemotePairing";

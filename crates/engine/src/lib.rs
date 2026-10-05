@@ -116,6 +116,7 @@ mod activity_history;
 pub mod agent_accounts;
 mod attention;
 pub mod auth;
+pub mod automation;
 pub mod backup;
 pub mod backup_control;
 pub mod change_requests;
@@ -940,6 +941,7 @@ impl EngineCore {
                     project_after,
                 );
                 rpc.start_child_thread_maintenance(self.cleanup_cancel.clone());
+                rpc.start_automation_maintenance(self.cleanup_cancel.clone());
                 *worker = Some((rpc.clone(), handle));
             }
         }

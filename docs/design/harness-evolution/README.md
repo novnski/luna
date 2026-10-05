@@ -39,8 +39,9 @@ serialized. Unrelated pending-task research remains untouched.
 Delivered evidence: [execution diagnostics](verification.md) and
 [portable context and fork findings](slice-2-verification.md), and
 [shared background work](slice-3-verification.md), and
-[durable dispatch boundaries](slice-4-verification.md). Subsequent slices continue
-with Codex and Claude as the live acceptance targets.
+[durable dispatch boundaries](slice-4-verification.md), and
+[host-owned automations](slice-5-verification.md). The remaining performance
+slice continues with Codex and Claude as the live acceptance targets.
 
 ## Slice 1 failure cases, specified before implementation
 

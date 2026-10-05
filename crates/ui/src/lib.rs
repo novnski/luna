@@ -17,6 +17,7 @@ pub mod app_menus;
 pub mod appearance;
 pub mod appshots;
 pub mod attachments;
+pub mod automations;
 pub mod badges;
 pub mod browser;
 pub mod change_requests;

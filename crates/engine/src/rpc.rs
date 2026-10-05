@@ -1239,6 +1239,7 @@ enum MutateParams {
     },
 }
 
+mod automations;
 mod claude_goals;
 mod claude_history;
 mod context_transfer;
@@ -1283,6 +1284,7 @@ pub struct EngineRpc {
     local_import: Option<crate::local_import::LocalImporter>,
     engine_info: EngineInfo,
     cleanup_boot_id: String,
+    automation_reconcile_cursor: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     /// Child worktrees provisioned for an in-flight creation command.
     pending_child_worktrees: std::sync::Mutex<
         std::collections::HashMap<String, child_threads::ProvisionedChildWorktree>,
@@ -1624,6 +1626,7 @@ impl EngineRpc {
             local_import: None,
             engine_info,
             cleanup_boot_id,
+            automation_reconcile_cursor: std::sync::Arc::new(std::sync::Mutex::new(None)),
             pending_child_worktrees: Default::default(),
             activity_cancel: CancellationToken::new(),
         };
@@ -2343,6 +2346,17 @@ impl EngineRpc {
                 &queue,
             ));
         }
+        for source in self
+            .store
+            .automation_attention_sources(&self.engine_info.device_id)
+            .map_err(|e| RpcError::Failed(e.to_string()))?
+        {
+            if let Some(item) =
+                crate::attention::project_automation(&self.engine_info.device_id, &source)
+            {
+                desired.push(item);
+            }
+        }
         self.store
             .reconcile_attention_items(&desired, crate::attention::MANAGED_KINDS)
             .map_err(|error| RpcError::Failed(error.to_string()))?;
@@ -2360,7 +2374,7 @@ impl EngineRpc {
             producers: vec![
                 AttentionProducerAvailability { source: "local task requests, run/recovery state, queue, and edge connectivity".into(), available: true, reason: None },
                 AttentionProducerAvailability { source: "remote host and device grants".into(), available: false, reason: Some("Scoped remote authorization is not implemented.".into()) },
-                AttentionProducerAvailability { source: "automations".into(), available: false, reason: Some("Automations are a later roadmap feature.".into()) },
+                AttentionProducerAvailability { source: "automations".into(), available: true, reason: None },
                 AttentionProducerAvailability { source: "engine/CLI compatibility blockers".into(), available: false, reason: Some("A stable operation-blocking compatibility producer is not available.".into()) },
                 AttentionProducerAvailability { source: "provider account health".into(), available: false, reason: Some("Only a task's authoritative recovery sign-in state is available; no provider health probe is performed.".into()) },
             ],
@@ -3023,9 +3037,20 @@ impl EngineRpc {
 
     async fn execute_task_command_with_send_fence(
         &self,
+        command: TaskCommandParams,
+        legacy: bool,
+        send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
+    ) -> Result<CommandReceipt, RpcError> {
+        self.execute_task_command_with_fences(command, legacy, send_fence, None)
+            .await
+    }
+
+    async fn execute_task_command_with_fences(
+        &self,
         mut command: TaskCommandParams,
         legacy: bool,
         send_fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
+        automation_fence: Option<&luna_proto::AutomationRecord>,
     ) -> Result<CommandReceipt, RpcError> {
         if self.derived_fork_document(&command.task_id) {
             return Err(RpcError::Failed(
@@ -3050,6 +3075,9 @@ impl EngineRpc {
         }
         let _lane = self.doc_host.task_command_gate(&command.task_id).await;
         let current = self.current_task_command_snapshot(&command.task_id)?;
+        if let Some(automation) = automation_fence {
+            self.check_automation_dispatch_fence(automation, &command.task_id)?;
+        }
         if send_fence.is_some_and(|fence| {
             current.task_revision != fence.target_snapshot.task_revision
                 || current.binding_id != fence.target_snapshot.binding_id
@@ -8396,7 +8424,39 @@ impl CrossTaskBackend for EngineRpc {
             event_wait: true,
             child_creation: true,
             child_models: true,
+            automations: true,
         }
+    }
+
+    async fn prepare_automation(
+        &self,
+        request: luna_proto::AutomationToolRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<crate::cross_task_tools::PreparedAutomation, CrossTaskError> {
+        let _lane = self
+            .doc_host
+            .task_command_gate(&authority.caller_task_id)
+            .await;
+        self.prepare_agent_automation(request, authority)
+    }
+    async fn apply_approved_automation(
+        &self,
+        prepared: crate::cross_task_tools::PreparedAutomation,
+        authority: &CrossTaskAuthority,
+        fence: &crate::cross_task_tools::ApprovedSendFence,
+    ) -> Result<Value, CrossTaskError> {
+        let _lane = self
+            .doc_host
+            .task_command_gate(&authority.caller_task_id)
+            .await;
+        self.apply_agent_automation(prepared, authority, fence)
+    }
+    async fn list_automations(
+        &self,
+        request: crate::cross_task_tools::AutomationToolListRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<Value, CrossTaskError> {
+        self.list_agent_automations(request, authority)
     }
 
     async fn child_creation_snapshot(
@@ -9047,6 +9107,7 @@ impl RpcService for EngineRpc {
                 .await;
         }
         match method {
+            methods::LIST_AUTOMATIONS | methods::LIST_AUTOMATION_RUNS | methods::PREVIEW_AUTOMATION | methods::MUTATE_AUTOMATION | methods::GET_AUTOMATION_MUTATION_RECEIPT => self.handle_automations(method, params).await,
             methods::GET_TASK_WORK | methods::WATCH_TASK_WORK | methods::PREVIEW_STOP_TASK_WORK | methods::STOP_TASK_WORK => self.handle_task_work(method, params).await,
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),

@@ -73,6 +73,7 @@ use crate::workspace_links::resolve_workspace_file_link;
 
 mod activity_center;
 mod agents;
+mod automations_pane;
 mod child_chats;
 mod command_palette;
 mod findings;
@@ -515,13 +516,15 @@ pub enum SettingsSection {
     Notifications,
     Shortcuts,
     Appshots,
+    /// Host-owned automations and PR watches on this device (slice 5).
+    Automations,
     Archived,
     Usage,
     Updates,
 }
 
 impl SettingsSection {
-    pub const ALL: [SettingsSection; 13] = [
+    pub const ALL: [SettingsSection; 14] = [
         SettingsSection::General,
         SettingsSection::Projects,
         SettingsSection::Providers,
@@ -530,6 +533,7 @@ impl SettingsSection {
         SettingsSection::Shortcuts,
         SettingsSection::Files,
         SettingsSection::Appshots,
+        SettingsSection::Automations,
         SettingsSection::Usage,
         SettingsSection::Updates,
         SettingsSection::Devices,
@@ -552,6 +556,7 @@ impl SettingsSection {
             "settings/notifications" => Self::Notifications,
             "settings/shortcuts" => Self::Shortcuts,
             "settings/appshots" => Self::Appshots,
+            "settings/automations" => Self::Automations,
             "settings/archived" => Self::Archived,
             "settings/usage" => Self::Usage,
             "settings/updates" => Self::Updates,
@@ -573,6 +578,7 @@ impl SettingsSection {
             SettingsSection::Notifications => "Notifications",
             SettingsSection::Shortcuts => "Shortcuts",
             SettingsSection::Appshots => "Appshots",
+            SettingsSection::Automations => "Automations",
             SettingsSection::Archived => "Archived sessions",
             SettingsSection::Usage => "Usage",
             SettingsSection::Updates => "Updates",
@@ -622,6 +628,8 @@ pub enum RightSurface {
     /// the user from a copy of its context). A row drills into that chat's
     /// transcript and composer ([`related_chats`]).
     RelatedChats,
+    /// The focused conversation's host-owned automations (slice 5).
+    Automations,
 }
 
 fn push_unique_right_surface(tabs: &mut Vec<RightSurface>, surface: RightSurface) -> bool {
@@ -2211,6 +2219,10 @@ pub struct Shell {
     side_marks_attempted: (u64, std::collections::HashSet<String>),
     child_chat_panel: Option<Entity<child_chats::ChildChatPanel>>,
     child_chat_events: Option<Subscription>,
+    /// The right pane's Automations surface and Settings → Automations, each
+    /// with the subscription that routes "Open conversation".
+    automations_conversation: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
+    automations_settings: Option<(Entity<crate::automations::AutomationsPanel>, Subscription)>,
     /// Composers of chats shown in the right pane's shared chat view, cached
     /// per chat so drafts and sends in flight outlive the pane.
     pane_composers: Entity<pane_chat::PaneComposers>,
@@ -2748,6 +2760,8 @@ impl Shell {
             side_marks_attempted: (0, Default::default()),
             child_chat_panel: None,
             child_chat_events: None,
+            automations_conversation: None,
+            automations_settings: None,
             pane_composers,
             workbench: workbench::WorkbenchState::new(cx),
             _pane_composers_observe: pane_composers_observe,
@@ -3616,6 +3630,7 @@ impl Shell {
                 }),
                 RightSurface::Agents => Some((*surface, "Agents".into(), false, None)),
                 RightSurface::RelatedChats => Some((*surface, "Related chats".into(), false, None)),
+                RightSurface::Automations => Some((*surface, "Automations".into(), false, None)),
                 RightSurface::Picker => None,
             })
             .collect()
@@ -3637,6 +3652,7 @@ impl Shell {
             | RightSurface::Terminal(_)
             | RightSurface::Agents
             | RightSurface::RelatedChats
+            | RightSurface::Automations
             | RightSurface::Subagent(_)
             | RightSurface::Browser(_) => {
                 return None;
@@ -3756,7 +3772,8 @@ impl Shell {
             RightSurface::Subagent(_)
             | RightSurface::Browser(_)
             | RightSurface::Agents
-            | RightSurface::RelatedChats => {}
+            | RightSurface::RelatedChats
+            | RightSurface::Automations => {}
             RightSurface::Picker => {}
         }
         cx.notify();
@@ -4638,6 +4655,7 @@ impl Shell {
                 self.release_child_chat_panel(cx);
             }
             RightSurface::Agents | RightSurface::Picker => {}
+            RightSurface::Automations => self.automations_conversation = None,
         }
         self.panels.update(&key, |p| {
             if p.right_active == surface {
@@ -5513,6 +5531,15 @@ impl Shell {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
+            }
+            SettingsSection::Automations => {
+                let panel =
+                    self.automations_panel(crate::automations::AutomationScope::All, true, cx);
+                div()
+                    .size_full()
+                    .max_w(px(760.0))
+                    .child(panel)
+                    .into_any_element()
             }
             SettingsSection::Usage => self.render_usage_page(cx),
             SettingsSection::Updates => {
@@ -8409,6 +8436,7 @@ impl Shell {
             SettingsSection::Shortcuts => icons::KEYBOARD,
             // Appshots are captured window images; Devices keeps the monitor.
             SettingsSection::Appshots => icons::FILE_IMAGE,
+            SettingsSection::Automations => icons::CLOCK_CIRCLE,
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
             SettingsSection::Usage => icons::CHART,
             SettingsSection::Updates => icons::RESTART,
@@ -12978,6 +13006,11 @@ impl Shell {
         {
             match self.resolved_right_active(cx) {
                 RightSurface::Agents if self.right_pane_open(cx) => self.render_agents(cx),
+                RightSurface::Automations if self.right_pane_open(cx) => {
+                    let scope =
+                        crate::automations::AutomationScope::Conversation(self.active_chat.clone());
+                    self.automations_panel(scope, false, cx).into_any_element()
+                }
                 RightSurface::RelatedChats if self.right_pane_open(cx) => {
                     self.render_related_chats(cx)
                 }
@@ -13220,6 +13253,17 @@ impl Shell {
                                 }))
                                 .on_key_down(crate::swallow_activation_key),
                         )
+                        .child(
+                            row(
+                                "surface-card-automations",
+                                icons::CLOCK_CIRCLE,
+                                "Automations",
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.add_work_surface(RightSurface::Automations, cx)
+                            }))
+                            .on_key_down(crate::swallow_activation_key),
+                        )
                     })
                     .child(
                         row("surface-card-files", icons::FOLDER_WITH_FILES, "Files").on_click(
@@ -13455,6 +13499,7 @@ impl Shell {
                     .unwrap_or(icons::LIST),
                 RightSurface::Subagent(_) | RightSurface::Agents => icons::BOT,
                 RightSurface::RelatedChats => icons::DIALOG,
+                RightSurface::Automations => icons::CLOCK_CIRCLE,
                 RightSurface::Terminal(_) => icons::TERMINAL,
                 RightSurface::Browser(_) => icons::GLOBE,
                 RightSurface::Picker => icons::PLUS,
@@ -13805,6 +13850,24 @@ impl Shell {
                                             .text_color(theme.text_muted),
                                     )
                                     .child("Related chats"),
+                            )
+                            .child(
+                                popover::menu_row(&theme, false, "right-plus-automations")
+                                    .id("right-plus-automations-row")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Automations")
+                                    .tab_index(0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.add_work_surface(RightSurface::Automations, cx);
+                                        this.close_right_plus(cx);
+                                    }))
+                                    .on_key_down(crate::swallow_activation_key)
+                                    .child(
+                                        icon(icons::CLOCK_CIRCLE)
+                                            .size(px(13.0))
+                                            .text_color(theme.text_muted),
+                                    )
+                                    .child("Automations"),
                             )
                         })
                         .child(
