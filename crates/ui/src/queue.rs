@@ -184,6 +184,7 @@ fn queue_hold_reason_label(reason: QueueHoldReason) -> &'static str {
         QueueHoldReason::ProviderRejected => "Provider rejected steer",
         QueueHoldReason::ContextChanged => "Review after context change",
         QueueHoldReason::RemoteAuthorityRequired => "Remote message needs local review",
+        QueueHoldReason::ExecutionUnavailable => "Provider unavailable — review and send",
     }
 }
 

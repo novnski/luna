@@ -101,6 +101,49 @@ fn pending(chat: &Chat, run: &RunHandle) -> Vec<Field> {
 }
 
 impl SessionsEngine {
+    /// Resolve local admission without contacting a provider or interrupting a
+    /// turn. Dispatch repeats this under its account and task transition gates.
+    pub(crate) fn prepare_execution_request(
+        &self,
+        chat_id: &str,
+        harness_id: HarnessId,
+        request: &mut luna_proto::RunRequest,
+    ) -> Result<(), EngineError> {
+        let mut prepare = || -> Result<(), EngineError> {
+            crate::provider_inputs::admit(harness_id, &request.attachments, &request.input_items)?;
+            self.inner.registry.resolve(harness_id)?;
+            request.cwd = super::expand_home(&request.cwd);
+            if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex)
+                && let Some(accounts) = self.inner.agent_accounts.get()
+            {
+                let execution = accounts
+                    .resolve_execution(harness_id, request.provider_account_id.as_deref())?;
+                request.provider_account_id = Some(execution.account_id);
+                request.model_options.insert(
+                    luna_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
+                    execution.auth_instance_id.into(),
+                );
+                if let Some(home) = execution.codex_home {
+                    let home = home.to_str().ok_or_else(|| {
+                        EngineError::Other("Codex account home is not valid UTF-8".into())
+                    })?;
+                    request.model_options.insert(
+                        luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
+                        home.into(),
+                    );
+                }
+                if execution.codex_file_auth {
+                    request.model_options.insert(
+                        luna_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
+                        true.into(),
+                    );
+                }
+            }
+            self.apply_execution_policy(chat_id, harness_id, request)
+        };
+        prepare().map_err(|error| EngineError::DispatchPreflight(error.to_string()))
+    }
+
     /// The exact dispatch policy resolver, also used by read-only previews.
     pub(super) fn apply_execution_policy(
         &self,

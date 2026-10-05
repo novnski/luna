@@ -218,6 +218,10 @@ pub(crate) const LEGACY_UNKNOWN_DEVICE_NAME: &str = "unknown-device";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
+    /// A read-only local admission check failed before provider I/O. Only
+    /// explicitly classified checks may release a claimed message for review.
+    #[error("{0}")]
+    DispatchPreflight(String),
     #[error("credential: {0}")]
     Credential(#[from] credentials::CredentialError),
     #[error(transparent)]

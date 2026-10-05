@@ -4263,36 +4263,7 @@ impl SessionsEngine {
         } else {
             self.supersede_recovery(chat_id, "Superseded by newer user activity.")?;
         }
-        // Project-less chats store cwd `~` (the creating device can't know the
-        // host's home); expand it here, on the host, where the run spawns.
-        request.cwd = expand_home(&request.cwd);
-        if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex)
-            && let Some(accounts) = self.inner.agent_accounts.get()
-        {
-            let execution =
-                accounts.resolve_execution(harness_id, request.provider_account_id.as_deref())?;
-            request.provider_account_id = Some(execution.account_id);
-            request.model_options.insert(
-                luna_harness::LUNA_PROVIDER_AUTH_INSTANCE_OPTION.into(),
-                execution.auth_instance_id.into(),
-            );
-            if let Some(home) = execution.codex_home {
-                let home = home.to_str().ok_or_else(|| {
-                    EngineError::Other("Codex account home is not valid UTF-8".into())
-                })?;
-                request.model_options.insert(
-                    luna_harness::codex::LUNA_CODEX_HOME_OPTION.into(),
-                    home.into(),
-                );
-            }
-            if execution.codex_file_auth {
-                request.model_options.insert(
-                    luna_harness::codex::LUNA_CODEX_FILE_AUTH_OPTION.into(),
-                    true.into(),
-                );
-            }
-        }
-        self.apply_execution_policy(chat_id, harness_id, &mut request)?;
+        self.prepare_execution_request(chat_id, harness_id, &mut request)?;
         if let Some(explicit_resume) = request.resume.as_deref()
             && let Some(task_identity) = self.inner.task_identity.get()
         {

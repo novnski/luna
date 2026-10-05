@@ -111,6 +111,7 @@ pub enum QueueHoldReason {
     ProviderRejected,
     ContextChanged,
     RemoteAuthorityRequired,
+    ExecutionUnavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -413,6 +414,9 @@ impl SessionDoc {
         if replacement.is_some_and(|text| text.trim().is_empty()) {
             return self.remove_queued(id);
         }
+        let preserve_execution_hold = self.read_queue()?.iter().any(|item| {
+            item.id == id && item.hold_reason == Some(QueueHoldReason::ExecutionUnavailable)
+        });
         let queue = self.doc().get_movable_list("queue");
         let Some(index) = index_of(&queue, id) else {
             return Ok(false);
@@ -448,7 +452,9 @@ impl SessionDoc {
         }
         map.insert("revision", current_revision(&map).saturating_add(1) as i64)?;
         map.delete("deliveryGate")?;
-        map.delete("holdReason")?;
+        if !preserve_execution_hold {
+            map.delete("holdReason")?;
+        }
         self.doc().commit();
         Ok(true)
     }
@@ -686,6 +692,26 @@ impl SessionDoc {
         command_id: &str,
         reason: QueueHoldReason,
     ) -> Result<Option<QueuedMessage>, DocError> {
+        self.reject_queued_claim(id, command_id, reason, true)
+    }
+
+    /// A proven local preflight failure may release any matching claim; no
+    /// caller may use this for ambiguous provider acceptance.
+    pub fn reject_queued_preflight_claim(
+        &self,
+        id: &str,
+        command_id: &str,
+    ) -> Result<Option<QueuedMessage>, DocError> {
+        self.reject_queued_claim(id, command_id, QueueHoldReason::ExecutionUnavailable, false)
+    }
+
+    fn reject_queued_claim(
+        &self,
+        id: &str,
+        command_id: &str,
+        reason: QueueHoldReason,
+        steer_only: bool,
+    ) -> Result<Option<QueuedMessage>, DocError> {
         let queue = self.doc().get_movable_list("queue");
         let Some(index) = index_of(&queue, id) else {
             return Ok(None);
@@ -697,9 +723,9 @@ impl SessionDoc {
             &item.status,
             QueueMessageStatus::Claimed {
                 command_id: current,
-                mode: QueueClaimMode::SteerNow,
+                mode,
                 ..
-            } if current == command_id
+            } if current == command_id && (!steer_only || *mode == QueueClaimMode::SteerNow)
         ) {
             return Ok(None);
         }

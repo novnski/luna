@@ -196,6 +196,11 @@
 //! 59. A service offers Open chat instead of its project commands, or Show
 //!     commands acts on another chat's checkout.
 //! 60. Open from a list read on an earlier engine connection still navigates.
+//! 61. A row held as `executionUnavailable` (a known pre-provider rejection)
+//!     shows anything but "Provider unavailable — review and send", loses its
+//!     exact id/revision, appears in another chat's composer, or is resent
+//!     automatically after a reconnect; its explicit Send now runs from
+//!     another composer, or for another chat, or sends twice.
 //! 27. Balance panes counts tabs instead of groups, changes an axis, the
 //!     order, IDs, active chats or focus, leaves a mixed 2-over-1 or six-group
 //!     tree with unequal group areas, writes again on a repeat, is lost on a
@@ -1002,8 +1007,93 @@ async fn reveal_tab(window: Window, cx: &mut AsyncApp, chat: &str) -> anyhow::Re
     anyhow::bail!("tab {chat} could not be brought into view: {rb}")
 }
 
-/// A real click on `chat`'s tab, scrolled into view first if the canvas
-/// had it out of view.
+/// w20l's queued prompt: the only request the w20l peer treats specially.
+const W20L_PROMPT: &str = "Run the release checklist again";
+
+/// The fixture's Mock provider, unchanged for every request except w20l's
+/// exact queued prompt. That one run behaves like a real native peer: it
+/// reports `SessionStarted` (a unique native session in the request's own
+/// cwd) before its reply, so the engine can durably correlate acceptance.
+struct FixtureMock {
+    inner: MockHarness,
+}
+
+#[async_trait::async_trait]
+impl luna_harness::Harness for FixtureMock {
+    fn id(&self) -> HarnessId {
+        self.inner.id()
+    }
+    fn display_name(&self) -> &str {
+        self.inner.display_name()
+    }
+    fn supports_steering(&self) -> bool {
+        self.inner.supports_steering()
+    }
+    fn steering_mode(&self) -> luna_proto::SteeringMode {
+        self.inner.steering_mode()
+    }
+    fn reasoning_levels(&self) -> &[luna_proto::ReasoningLevel] {
+        self.inner.reasoning_levels()
+    }
+    fn supports_safe_recovery_continuation(&self) -> bool {
+        self.inner.supports_safe_recovery_continuation()
+    }
+    async fn models(&self) -> Result<Vec<luna_proto::Model>, luna_harness::HarnessError> {
+        self.inner.models().await
+    }
+    async fn compact_context(
+        &self,
+        request: luna_harness::ContextCompactRequest,
+    ) -> Result<(), luna_harness::HarnessError> {
+        self.inner.compact_context(request).await
+    }
+    async fn run_title(
+        &self,
+        request: luna_proto::RunRequest,
+        controls: luna_harness::RunControls,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<AgentEvent, luna_harness::HarnessError>>,
+        luna_harness::HarnessError,
+    > {
+        self.inner.run_title(request, controls).await
+    }
+    async fn run(
+        &self,
+        request: luna_proto::RunRequest,
+        controls: luna_harness::RunControls,
+    ) -> Result<
+        futures::stream::BoxStream<'static, Result<AgentEvent, luna_harness::HarnessError>>,
+        luna_harness::HarnessError,
+    > {
+        if !request.prompt.contains(W20L_PROMPT) {
+            return self.inner.run(request, controls).await;
+        }
+        let session_id = "w20l-native-session".to_string();
+        let peer = MockHarness {
+            script: vec![
+                AgentEvent::SessionStarted {
+                    harness: HarnessId::Mock,
+                    model: request.model.clone().unwrap_or_else(|| "mock-1".into()),
+                    tools: Vec::new(),
+                    cwd: request.cwd.clone(),
+                    session_id: session_id.clone(),
+                    assistant_message_id: "w20l-assistant-message".into(),
+                },
+                AgentEvent::TextDelta {
+                    text: MOCK_ANSWER.into(),
+                },
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    result: None,
+                    error: None,
+                    session_id: Some(session_id),
+                },
+            ],
+        };
+        peer.run(request, controls).await
+    }
+}
+
 /// A host-reported work row (slice 3) for the scripted work host.
 #[allow(clippy::too_many_arguments)]
 fn work_item(
@@ -1038,6 +1128,8 @@ fn work_item(
     }
 }
 
+/// A real click on `chat`'s tab, scrolled into view first if the canvas
+/// had it out of view.
 async fn click_tab(window: Window, cx: &mut AsyncApp, chat: &str) -> anyhow::Result<()> {
     let rb = reveal_tab(window, cx, chat).await?;
     click(window, cx, tab_center(&rb, chat)?, MouseButton::Left).await
@@ -1608,18 +1700,20 @@ fn main() -> anyhow::Result<()> {
     std::fs::create_dir_all(&project)?;
     let runtime = tokio::runtime::Runtime::new()?;
     let registry = HarnessRegistry::new();
-    registry.register(Arc::new(MockHarness {
-        script: vec![
-            AgentEvent::TextDelta {
-                text: MOCK_ANSWER.into(),
-            },
-            AgentEvent::Done {
-                status: DoneStatus::Completed,
-                result: None,
-                error: None,
-                session_id: None,
-            },
-        ],
+    registry.register(Arc::new(FixtureMock {
+        inner: MockHarness {
+            script: vec![
+                AgentEvent::TextDelta {
+                    text: MOCK_ANSWER.into(),
+                },
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                },
+            ],
+        },
     }));
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
@@ -1719,6 +1813,11 @@ fn main() -> anyhow::Result<()> {
         fixture_service,
     ))?;
     let handle_a = handle.clone();
+    // w20l seeds one held queue row through the real document host.
+    let queue_doc_host = core.doc_host.clone();
+    let queue_device = core.device_id.clone();
+    // ...and proves Send now's disposition from the durable command ledger.
+    let command_store = core.store.clone();
     // The same engine reached under another profile id (accounts under one
     // device root), and an engine that names no profile.
     let profile_handle = |profile: Option<&str>, label: &str| {
@@ -4683,6 +4782,159 @@ fn main() -> anyhow::Result<()> {
                 );
                 window.update(cx, |shell, _, cx| shell.fixture_task_work_fake(None, cx))?;
                 progress(&output, &mut record, "backgroundWork".into(), serde_json::json!({"real": real, "seeded": seeded, "paged": paged["loaded"], "receipt": receipt, "lost": lost["menu"], "refused": refused["menu"], "unknown": unknown["status"]}));
+
+                // w20l. Failure case 61: a queued message held because its
+                // provider was unavailable before any provider I/O. It keeps
+                // its exact row and revision, reads the specific label, stays
+                // held across a reconnect (no automatic resend), and only its
+                // own composer's explicit Send now acts on it.
+                let held_id = "w20l-held-provider-unavailable";
+                let held_text = W20L_PROMPT;
+                let held = luna_doc::QueuedMessage {
+                    input_items: Vec::new(),
+                    id: held_id.into(),
+                    text: held_text.into(),
+                    attachments: Vec::new(),
+                    hold_for_turn_end: false,
+                    follow_up_behavior: luna_proto::FollowUpBehavior::Queue,
+                    hold_reason: Some(luna_doc::QueueHoldReason::ExecutionUnavailable),
+                    issued_by: queue_device.clone(),
+                    issued_at: Utc::now().timestamp_millis(),
+                    edited_at: None,
+                    revision: 3,
+                    execution: None,
+                    status: luna_doc::QueueMessageStatus::Held,
+                    delivery_gate: None,
+                };
+                queue_doc_host.open(CHILD_A)?.doc().push_queued(&held)?;
+                let queue_rows = |cx: &mut AsyncApp, chat: &str| {
+                    let chat = chat.to_string();
+                    window.update(cx, move |shell, _, cx| {
+                        shell
+                            .fixture_workbench_composer(&chat, cx)
+                            .map(|composer| composer.read(cx).fixture_queue_rows(cx))
+                            .unwrap_or(serde_json::Value::Null)
+                    })
+                };
+                let held_row = |rows: &serde_json::Value| rows.as_array().and_then(|rows| rows.iter().find(|row| row["id"] == held_id).cloned());
+                click_tab(window, cx, CHILD_A).await?;
+                let mut child_rows = serde_json::Value::Null;
+                for _ in 0..60 {
+                    draw(window, cx)?;
+                    child_rows = queue_rows(cx, CHILD_A)?;
+                    if held_row(&child_rows).is_some() {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                let row = held_row(&child_rows).ok_or_else(|| anyhow::anyhow!("the held row reaches Child A's composer: {child_rows}"))?;
+                anyhow::ensure!(
+                    row["holdReason"] == "ExecutionUnavailable" && row["holdLabel"] == "Provider unavailable — review and send"
+                        && row["revision"] == 3 && row["text"] == held_text && row["primary"] == "Send now" && row["primaryEnabled"] == true,
+                    "the held row reads its specific label with its exact revision and an explicit Send now: {row}"
+                );
+                anyhow::ensure!(held_row(&queue_rows(cx, MAIN)?).is_none(), "the row is Child A's alone");
+                shot(window, cx, output.join("w20l-provider-unavailable-hold.png")).await?;
+                // A reconnect resends nothing: the exact row stays held.
+                let texts_before = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(CHILD_A, cx))?;
+                window.update(cx, |shell, _, cx| shell.fixture_reconnect_engine(cx))?;
+                settle(cx, 2000).await;
+                draw(window, cx)?;
+                let after_reconnect = held_row(&queue_rows(cx, CHILD_A)?).ok_or_else(|| anyhow::anyhow!("the held row survives the reconnect"))?;
+                anyhow::ensure!(
+                    after_reconnect["revision"] == 3 && after_reconnect["holdReason"] == "ExecutionUnavailable"
+                        && window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(CHILD_A, cx))? == texts_before,
+                    "no automatic resend after a reconnect: {after_reconnect}"
+                );
+                // Explicit Send now from Child A's own composer. The row was
+                // seeded without an executable grant. The explicit local
+                // command supplies one-use consent; issued_by alone never
+                // authorizes delivery. A host refusal must have a receipt.
+                // Proof comes from the
+                // durable command ledger: a NEW sendQueuedNow receipt for
+                // Child A correlated to this row, settled, and a matching
+                // disposition; nothing new for Main.
+                let main_texts = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(MAIN, cx))?;
+                let main_draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))?;
+                let child_sequence = command_store.task_command_snapshot(CHILD_A)?.snapshot.task_sequence;
+                let main_sequence = command_store.task_command_snapshot(MAIN)?.snapshot.task_sequence;
+                anyhow::ensure!(
+                    command_store.task_command_receipt_for_correlation(CHILD_A, held_id)?.is_none(),
+                    "the seeded row has no earlier delivery receipt"
+                );
+                let acted = window.update(cx, |shell, _, cx| {
+                    shell
+                        .fixture_workbench_composer(CHILD_A, cx)
+                        .is_some_and(|composer| composer.update(cx, |composer, cx| composer.fixture_queue_primary(held_id, cx)))
+                })?;
+                anyhow::ensure!(acted, "Child A's Send now acts on the held row");
+                let new_send = |task: &str, after: u64| -> anyhow::Result<Vec<luna_proto::CommandReceipt>> {
+                    Ok(command_store
+                        .read_task_commands(task, after, 100)?
+                        .events
+                        .into_iter()
+                        .map(|event| event.receipt)
+                        .filter(|receipt| receipt.intent == "sendQueuedNow" || receipt.intent == "session")
+                        .collect())
+                };
+                // The w20l peer reports SessionStarted, so acceptance becomes
+                // durable: only Applied, sent exactly once, row gone, proves
+                // it. Pending, a refusal or a timeout fails (with the last
+                // observation saved as evidence).
+                let mut settled = None;
+                let mut last_seen = serde_json::Value::Null;
+                for _ in 0..160 {
+                    settle(cx, 150).await;
+                    draw(window, cx)?;
+                    let receipts = new_send(CHILD_A, child_sequence)?;
+                    let receipt = receipts
+                        .iter()
+                        .filter(|receipt| receipt.correlation_id.as_deref() == Some(held_id))
+                        .next_back()
+                        .cloned();
+                    let rows = queue_rows(cx, CHILD_A)?;
+                    let texts = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(CHILD_A, cx))?;
+                    let sent = texts.iter().filter(|text| text.as_str() == held_text).count();
+                    let still = held_row(&rows);
+                    last_seen = serde_json::json!({
+                        "receipts": receipts,
+                        "rows": rows,
+                        "texts": texts,
+                        "sent": sent,
+                    });
+                    let Some(receipt) = receipt else {
+                        continue;
+                    };
+                    if receipt.status == luna_proto::CommandReceiptStatus::Applied && sent == 1 && still.is_none() {
+                        settled = Some(serde_json::json!({
+                            "status": receipt.status,
+                            "commandId": receipt.command_id,
+                            "sent": sent,
+                        }));
+                        break;
+                    }
+                    if receipt.status.is_terminal() && receipt.status != luna_proto::CommandReceiptStatus::Applied {
+                        break;
+                    }
+                }
+                let Some(settled) = settled else {
+                    let _ = std::fs::write(
+                        output.join("w20l-timeout.json"),
+                        serde_json::to_vec_pretty(&last_seen).unwrap_or_default(),
+                    );
+                    anyhow::bail!(
+                        "Send now never proved delivery (Applied sendQueuedNow for Child A with this row's correlation, sent once, row gone); last observation saved to w20l-timeout.json: {last_seen}"
+                    );
+                };
+                anyhow::ensure!(
+                    new_send(MAIN, main_sequence)?.is_empty()
+                        && window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(MAIN, cx))? == main_texts
+                        && window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(MAIN, cx))? == main_draft
+                        && held_row(&queue_rows(cx, MAIN)?).is_none(),
+                    "Send now acts for Child A only: no new send on Main, Main's draft/queue/transcript unchanged: {settled}"
+                );
+                progress(&output, &mut record, "providerUnavailableHold".into(), serde_json::json!({"held": row, "afterReconnect": after_reconnect, "sendNow": settled}));
+                click_tab(window, cx, MAIN).await?;
 
                 // w21-w30. The surrounding frame: one chrome surface around
                 // the inset canvas in every sidebar combination, while

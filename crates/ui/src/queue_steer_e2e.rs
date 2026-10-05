@@ -147,3 +147,82 @@ pub async fn run_queue_image_steer_e2e(
     }
     Ok(json!({"chat": CHAT, "rows": rows, "realProvider": false, "engine": false}))
 }
+
+/// Headless QA for the workbench fixture: this composer's queue rows as the
+/// panel resolves them (exact row id and revision, the production hold label,
+/// the primary action and its tooltip), and a row's primary action through
+/// the same resolver and fences as its button.
+impl Composer {
+    pub fn fixture_queue_rows(&self, cx: &gpui::App) -> Value {
+        let state = self.state.read(cx);
+        let Some(chat) = self.binding.chat_id(state).map(str::to_string) else {
+            return Value::Null;
+        };
+        let supported =
+            state.chat_host_supports(&chat, luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1);
+        let rows: Vec<QueuedMessage> = self.binding.queue(state).to_vec();
+        Value::Array(
+            rows.iter()
+                .map(|item| {
+                    let resolution = self.resolve_queued_primary(
+                        &chat,
+                        item,
+                        self.queue_removing.contains(&item.id),
+                        supported,
+                        cx,
+                    );
+                    json!({
+                        "chat": chat,
+                        "id": item.id,
+                        "revision": item.revision,
+                        "text": item.text,
+                        "status": format!("{:?}", item.status),
+                        "holdReason": item.hold_reason.map(|reason| format!("{reason:?}")),
+                        "holdLabel": item.hold_reason.map(queue_hold_reason_label),
+                        "primary": resolution.action.label(),
+                        "primaryEnabled": resolution.enabled(),
+                        "tooltip": resolution.tooltip(),
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// Row `id`'s primary action (Send now / Steer now), exactly as its
+    /// button runs it; `false` when the row is missing or blocked.
+    pub fn fixture_queue_primary(&mut self, id: &str, cx: &mut Context<Self>) -> bool {
+        let found = {
+            let state = self.state.read(cx);
+            self.binding
+                .chat_id(state)
+                .map(str::to_string)
+                .and_then(|chat| {
+                    let supported = state.chat_host_supports(
+                        &chat,
+                        luna_proto::capabilities::MESSAGE_QUEUE_ACTIONS_V1,
+                    );
+                    self.binding
+                        .queue(state)
+                        .iter()
+                        .find(|item| item.id == id)
+                        .cloned()
+                        .map(|item| (chat, item, supported))
+                })
+        };
+        let Some((chat, item, supported)) = found else {
+            return false;
+        };
+        let resolution = self.resolve_queued_primary(
+            &chat,
+            &item,
+            self.queue_removing.contains(&item.id),
+            supported,
+            cx,
+        );
+        if resolution.blocked.is_some() {
+            return false;
+        }
+        self.activate_queued_primary(item.id, resolution.action, cx);
+        true
+    }
+}

@@ -4462,11 +4462,16 @@ impl DocHost {
         message_id: &str,
         command_id: &str,
         hold_reason: QueueHoldReason,
+        detail: Option<&str>,
     ) -> Result<QueuedMessage, EngineError> {
         let _projection = lock(&handle.queue_projection_lock);
         let prepared = self.prepare_queue_projection(handle, command_id, |doc| {
-            doc.reject_queued_steer_claim(message_id, command_id, hold_reason)?
-                .ok_or_else(|| EngineError::Other("queued steer claim vanished".into()))
+            let row = if hold_reason == QueueHoldReason::ExecutionUnavailable {
+                doc.reject_queued_preflight_claim(message_id, command_id)?
+            } else {
+                doc.reject_queued_steer_claim(message_id, command_id, hold_reason)?
+            };
+            row.ok_or_else(|| EngineError::Other("queued rejection claim vanished".into()))
         })?;
         let pending = self
             .inner
@@ -4476,6 +4481,10 @@ impl DocHost {
         let snapshots = [(handle.chat_id.as_str(), prepared.snapshot.as_slice())];
         let updates = Self::queue_projection_updates(handle, &prepared);
         let (reason_message, recovery_action) = match hold_reason {
+            QueueHoldReason::ExecutionUnavailable => (
+                detail.unwrap_or("provider execution is unavailable before dispatch"),
+                "The message remains queued. Resolve the local configuration, then explicitly Send now; it will not retry automatically.",
+            ),
             QueueHoldReason::ProviderRejected => (
                 "the provider rejected native in-turn steering",
                 "The message remains queued; retry only after a new active turn is visible.",
@@ -5689,6 +5698,16 @@ impl DocHost {
                 if was_paused {
                     handle.queue_paused.store(true, Ordering::Release);
                 }
+                if let EngineError::DispatchPreflight(detail) = &error {
+                    let row = self.reject_queue_task(
+                        &handle,
+                        id,
+                        command_id,
+                        QueueHoldReason::ExecutionUnavailable,
+                        Some(detail),
+                    )?;
+                    return Ok(QueueDispatchOutcome::Rejected(row));
+                }
                 self.mark_queue_task_unknown(
                     &handle,
                     command_id,
@@ -5755,7 +5774,7 @@ impl DocHost {
                 }
             }
             QueueProviderOutcome::Rejected(reason) => {
-                let row = self.reject_queue_task(&handle, id, command_id, reason)?;
+                let row = self.reject_queue_task(&handle, id, command_id, reason, None)?;
                 Ok(QueueDispatchOutcome::Rejected(row))
             }
         }
@@ -5953,6 +5972,11 @@ impl DocHost {
             // replayed merely because the provider is currently idle.
             return;
         }
+        if head.hold_reason == Some(QueueHoldReason::ExecutionUnavailable) {
+            // Repairing accounts or restarting is not permission to resend a
+            // locally rejected occurrence. Only an explicit send rechecks it.
+            return;
+        }
         if head.follow_up_behavior != luna_proto::FollowUpBehavior::Queue {
             // Follow-up intent is immutable. A rejected or otherwise blocked
             // Steer remains the FIFO head until the user explicitly retries,
@@ -6079,6 +6103,20 @@ impl DocHost {
         };
         if let Err(err) = self.dispatch_queued(handle, &item, send).await {
             tracing::warn!(chat = %handle.chat_id, error = %err, "queued send failed");
+            if let EngineError::DispatchPreflight(detail) = &err {
+                match self.reject_queue_task(
+                    handle,
+                    &head.id,
+                    &command_id,
+                    QueueHoldReason::ExecutionUnavailable,
+                    Some(detail),
+                ) {
+                    Ok(_) => return,
+                    Err(error) => {
+                        tracing::warn!(chat = %handle.chat_id, %error, "local rejection commit failed; preserving unresolved delivery")
+                    }
+                }
+            }
             handle.queue_paused.store(true, Ordering::Release);
             let _ = self.mark_queue_task_unknown(
                 handle,
@@ -6188,11 +6226,6 @@ impl DocHost {
                 SteerOutcome::Unknown => return Ok(QueueProviderOutcome::Unknown),
             }
         }
-        // Same reading of "busy" as the drain: a turn parked on a question is
-        // still a turn, and it has to be stopped before this one starts.
-        if send == QueueSend::Interrupt && sessions.turn_in_flight(chat_id) {
-            sessions.interrupt(chat_id).await?;
-        }
         let previous = sessions.last_request(chat_id);
         let request = self
             .request_from_chat_row(chat_id, &prompt)
@@ -6225,6 +6258,12 @@ impl DocHost {
         request.attachments = attachments;
         request.input_items = item.input_items.clone();
         let harness = self.harness_for_request(chat_id, &request);
+        // Local admission must pass before Send now can disturb an existing
+        // turn. The actual dispatch resolves again under its transition gates.
+        sessions.prepare_execution_request(chat_id, harness, &mut request.clone())?;
+        if send == QueueSend::Interrupt && sessions.turn_in_flight(chat_id) {
+            sessions.interrupt(chat_id).await?;
+        }
         self.dispatch_with_source_context(
             &sessions,
             chat_id,
