@@ -3419,6 +3419,17 @@ impl SessionsEngine {
             .await
     }
 
+    /// Native compaction opens the same provider conversation in a maintenance
+    /// client. Retire its parked writer and exclude dispatch through readback,
+    /// preserving the binding so the next turn resumes the compacted history.
+    pub(crate) async fn prepare_native_compaction(
+        &self,
+        chat_id: &str,
+    ) -> Result<OwnedMutexGuard<()>, EngineError> {
+        self.release_idle_native_writer(chat_id, "compacting", "compaction")
+            .await
+    }
+
     async fn release_idle_native_writer(
         &self,
         chat_id: &str,

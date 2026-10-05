@@ -45,7 +45,11 @@ use crate::settings::{ComposerSendBehavior, platform_combo};
 use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
 
+pub(crate) mod chat_reference_search;
+pub(crate) mod chat_references;
 mod integrations;
+#[cfg(feature = "appshots-fixture")]
+pub use chat_references::run_chat_references_e2e;
 #[cfg(feature = "appshots-fixture")]
 pub use goals::run_goal_card_e2e;
 #[cfg(feature = "appshots-fixture")]
@@ -1383,6 +1387,7 @@ pub(crate) enum ComposerChipKind {
     Skill,
     Folder,
     File,
+    Chat,
 }
 
 impl ComposerChipKind {
@@ -1391,6 +1396,7 @@ impl ComposerChipKind {
             Self::Skill => crate::icons::MAGIC_WAND_3,
             Self::Folder => crate::icons::FOLDER,
             Self::File => crate::icons::FILE,
+            Self::Chat => crate::icons::CHAT_ROUND_LINE,
         }
     }
 }
@@ -1403,6 +1409,7 @@ pub(crate) fn composer_chip_palette(
         ComposerChipKind::Skill => (theme.warning, 0.14),
         ComposerChipKind::Folder => (theme.accent, 0.17),
         ComposerChipKind::File => (theme.success, 0.16),
+        ComposerChipKind::Chat => (theme.accent, 0.14),
     };
     let wash_alpha = if theme.appearance.is_dark() {
         dark_alpha
@@ -1591,6 +1598,14 @@ impl TextProjection {
             let (name, _) = integrations::identity(&link.item);
             (link.range, name.to_owned(), ComposerChipKind::Skill, None)
         }));
+        projected.extend(chat_references::chat_links(raw).into_iter().map(|link| {
+            (
+                link.range.clone(),
+                link.basename.clone(),
+                ComposerChipKind::Chat,
+                Some(link),
+            )
+        }));
         projected.sort_by_key(|(range, _, _, _)| range.start);
         for (range, label, kind, file) in projected {
             if range.start < raw_at {
@@ -1598,7 +1613,11 @@ impl TextProjection {
             }
             projection.display.push_str(&raw[raw_at..range.start]);
             let mut chip_label = String::with_capacity(label.len() + 1);
-            chip_label.push(MENTION_PREFIX);
+            chip_label.push(if kind == ComposerChipKind::Chat {
+                '#'
+            } else {
+                MENTION_PREFIX
+            });
             for ch in label.chars() {
                 chip_label.push(if ch == ' ' { '\u{00A0}' } else { ch });
             }
@@ -1739,7 +1758,7 @@ pub struct SentMentionSpan {
 /// substring probe keeps ordinary prompts on the zero-allocation path, so this
 /// is safe to call for every user row.
 pub fn sent_mention_display(raw: &str) -> Option<(String, Vec<SentMentionSpan>)> {
-    if !raw.contains(FILE_MENTION_SCHEME) {
+    if !raw.contains(FILE_MENTION_SCHEME) && !raw.contains("luna://open/chat/") {
         return None;
     }
     let projection = TextProjection::new(raw);
@@ -1770,6 +1789,7 @@ pub(crate) struct SentVisualChipSpan {
     pub(crate) range: Range<usize>,
     pub(crate) icon_slot: Range<usize>,
     pub(crate) kind: ComposerChipKind,
+    pub(crate) chat_link: Option<SharedString>,
 }
 
 fn push_sent_visual_chip(
@@ -1778,6 +1798,7 @@ fn push_sent_visual_chip(
     label: &str,
     kind: ComposerChipKind,
     append_right_pad: bool,
+    chat_link: Option<SharedString>,
 ) {
     let start = display.len();
     display.push_str(CHIP_ICON_SLOT);
@@ -1790,6 +1811,7 @@ fn push_sent_visual_chip(
         range: start..display.len(),
         icon_slot,
         kind,
+        chat_link,
     });
 }
 
@@ -1820,6 +1842,7 @@ pub(crate) fn sent_chip_visual(
             &text[..end],
             ComposerChipKind::Skill,
             true,
+            None,
         );
         at = end;
     }
@@ -1834,12 +1857,18 @@ pub(crate) fn sent_chip_visual(
             &mut display,
             &mut spans,
             label,
-            if mention.is_dir {
+            if mention.path.starts_with("luna://open/chat/") {
+                ComposerChipKind::Chat
+            } else if mention.is_dir {
                 ComposerChipKind::Folder
             } else {
                 ComposerChipKind::File
             },
             false,
+            mention
+                .path
+                .starts_with("luna://open/chat/")
+                .then(|| mention.path.clone()),
         );
         at = mention.range.end;
     }
@@ -2140,7 +2169,7 @@ struct InputLayoutKey {
     font_size: Pixels,
     color: gpui::Hsla,
     chip_family: SharedString,
-    chip_colors: [gpui::Hsla; 3],
+    chip_colors: [gpui::Hsla; 4],
     marked_range: Option<Range<usize>>,
     placeholder: SharedString,
     mentions_enabled: bool,
@@ -2638,8 +2667,20 @@ impl ComposerInput {
                     if let MentionTooltipPhase::Visible { target, generation } =
                         &input.mention_tooltip
                     {
+                        let chat_label = input
+                            .projection
+                            .mentions
+                            .iter()
+                            .find(|(mention, _)| {
+                                mention.range == target.range
+                                    && mention.path.starts_with("luna://open/chat/")
+                            })
+                            .map(|(mention, _)| {
+                                SharedString::from(format!("#{}", mention.basename))
+                            });
                         input.mention_tooltip_view = Some(cx.new(|_| MentionPathTooltip {
-                            path: target.path.clone(),
+                            chat: chat_label.is_some(),
+                            path: chat_label.unwrap_or_else(|| target.path.clone()),
                             activation: *generation,
                         }));
                     }
@@ -3596,6 +3637,7 @@ impl ComposerInput {
             ComposerChipKind::Skill,
             ComposerChipKind::Folder,
             ComposerChipKind::File,
+            ComposerChipKind::Chat,
         ]
         .map(|kind| composer_chip_palette(kind, theme).0);
         let key = InputLayoutKey {
@@ -3677,7 +3719,26 @@ impl ComposerInput {
                     if at < chip.display.start {
                         runs.push(run_for(chip.display.start - at, false, None));
                     }
-                    runs.push(run_for(chip.display.len(), false, Some(chip.kind)));
+                    if chip.kind == ComposerChipKind::Chat {
+                        // A chat reference is a conversation title, not a
+                        // path: its label shapes in the input's own face.
+                        // Only the icon slot keeps the mono metrics every
+                        // chip's 15px glyph is centered in, so the icon
+                        // geometry (and file/skill chips) are unchanged.
+                        let label = chip
+                            .icon_slot
+                            .as_ref()
+                            .map_or(chip.display.start, |slot| slot.end);
+                        if label > chip.display.start {
+                            runs.push(run_for(label - chip.display.start, false, Some(chip.kind)));
+                        }
+                        runs.push(TextRun {
+                            font: style.font(),
+                            ..run_for(chip.display.end - label, false, Some(chip.kind))
+                        });
+                    } else {
+                        runs.push(run_for(chip.display.len(), false, Some(chip.kind)));
+                    }
                     at = chip.display.end;
                 }
                 if at < display.len() {
@@ -3982,6 +4043,7 @@ struct ComposerTextElement {
 
 struct MentionPathTooltip {
     path: SharedString,
+    chat: bool,
     /// Stable for one `Waiting → Visible` promotion; a later activation gets
     /// a new key and therefore exactly one fresh fade-in.
     activation: u64,
@@ -4002,7 +4064,11 @@ impl Render for MentionPathTooltip {
                 .border_1()
                 .border_color(theme.border_strong)
                 .bg(theme.tooltip_surface())
-                .font_family(theme.font_mono.clone())
+                .font_family(if self.chat {
+                    theme.font_sans.clone()
+                } else {
+                    theme.font_mono.clone()
+                })
                 .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.text_muted)
                 .child(self.path.clone()),
@@ -4768,6 +4834,7 @@ pub struct Composer {
     slash_scroll: gpui::ScrollHandle,
     /// File-mention popup row scroll (same treatment).
     mention_scroll: gpui::ScrollHandle,
+    chat_reference: chat_references::ChatReferenceState,
     /// Shared scrollbar hover/drag state for both popups' floating rails —
     /// they never show at once (mutually exclusive by token shape).
     popup_bar: crate::popover::MenuScrollbarState,
@@ -5108,6 +5175,8 @@ impl Composer {
             ComposerInputEvent::MentionNavigate(delta) => {
                 if this.slash.token.is_some() {
                     this.move_slash(*delta, cx)
+                } else if this.chat_reference.token.is_some() {
+                    this.move_chat_reference(*delta, cx)
                 } else {
                     this.move_mention(*delta, cx)
                 }
@@ -5115,6 +5184,8 @@ impl Composer {
             ComposerInputEvent::MentionAccept => {
                 if this.slash.token.is_some() {
                     this.accept_slash(cx)
+                } else if this.chat_reference.token.is_some() {
+                    this.accept_chat_reference(cx)
                 } else {
                     this.accept_mention(cx)
                 }
@@ -5122,6 +5193,8 @@ impl Composer {
             ComposerInputEvent::MentionDismiss => {
                 if this.slash.token.is_some() {
                     this.dismiss_slash(cx)
+                } else if this.chat_reference.token.is_some() {
+                    this.dismiss_chat_references(cx)
                 } else {
                     this.dismiss_mention(cx)
                 }
@@ -5199,6 +5272,7 @@ impl Composer {
             slash_cache: HashMap::new(),
             slash_scroll: gpui::ScrollHandle::new(),
             mention_scroll: gpui::ScrollHandle::new(),
+            chat_reference: Default::default(),
             popup_bar: crate::popover::MenuScrollbarState::default(),
             current_key,
             sending: false,
@@ -8505,9 +8579,13 @@ impl Composer {
     }
 
     fn sync_mention_controls(&mut self, cx: &mut Context<Self>) {
-        let open = self.mention.token.is_some() || self.slash.token.is_some();
+        let open = self.mention.token.is_some()
+            || self.slash.token.is_some()
+            || self.chat_reference.token.is_some();
         let has_selection = if self.slash.token.is_some() {
             self.slash.active.is_some()
+        } else if self.chat_reference.token.is_some() {
+            !self.chat_reference.loading && self.chat_reference.active.is_some()
         } else {
             self.mention.active.is_some()
         };
@@ -8537,6 +8615,7 @@ impl Composer {
             (input.text().to_string(), input.cursor_offset())
         };
         self.update_slash(&text, cursor, cx);
+        self.update_chat_references(&text, cursor, cx);
         let token = mention_token(&text, cursor);
         let still_dismissed = token.as_ref().is_some_and(|token| {
             self.mention
@@ -9398,6 +9477,8 @@ impl Composer {
             Some(self.slash_scroll.clone())
         } else if self.mention.token.is_some() {
             Some(self.mention_scroll.clone())
+        } else if self.chat_reference.token.is_some() {
+            Some(self.chat_reference.scroll.clone())
         } else {
             None
         }
@@ -9427,6 +9508,7 @@ impl Composer {
     }
 
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        self.refresh_chat_reference_source(cx);
         // Opt-in baseline counters (slice 6): observe only.
         let _perf = crate::perf_counters::Timer::start("composer.observe", || self.perf_scope(cx));
         self.sync_draft_engine_generation(cx);
@@ -9573,6 +9655,7 @@ impl Composer {
             // the navigation); only the transient chrome resets.
             self.preview = None;
             self.reset_mention(None, cx);
+            self.reset_chat_references(None, cx);
             // Route changes snap (round 5/6): a height difference between
             // the old and new session's composer must not glide across
             // navigation. The swapped draft is re-measured one or two
@@ -12216,6 +12299,9 @@ impl Render for Composer {
         if self.slash.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
             self.reset_slash(None, cx);
         }
+        if self.chat_reference.token.is_some() && !self.input.focus_handle(cx).is_focused(window) {
+            self.reset_chat_references(None, cx);
+        }
         let mode = self.button_mode(cx);
         // Shape the current draft before sizing the pill. Waiting for the child
         // layout leaves the parent using the previous edit's height.
@@ -12995,6 +13081,7 @@ impl Render for Composer {
             // Both completion popups span the full pill width above it —
             // the file-mention and slash tokens are mutually exclusive.
             .children(self.render_file_mention_popup(&theme, window, cx))
+            .children(self.render_chat_reference_popup(&theme, cx))
             .children(self.render_slash_popup(&theme, cx));
         // Restore the original chip-only selector treatment: destination at
         // the top-right, no surrounding surface. Cancel the column gap as the

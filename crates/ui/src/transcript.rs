@@ -56,6 +56,7 @@ use crate::theme::Theme;
 use luna_syntax::LanguageId as Lang;
 
 mod agent_cards;
+mod child_notices;
 mod diagrams;
 
 // ---------------------------------------------------------------------------
@@ -2520,6 +2521,8 @@ impl HighlightStore {
 enum RowKey {
     Generation(u64),
     Fingerprint(u64),
+    NoticeGeneration(u64, u64),
+    NoticeFingerprint(u64, u64),
 }
 
 struct CachedRows {
@@ -3188,7 +3191,8 @@ pub struct Transcript {
     state: Entity<AppState>,
     list: ListState,
     rows: Vec<Row>,
-    last_source: Option<(Option<String>, TranscriptReplayState, u64, u64)>,
+    last_source: Option<(Option<String>, TranscriptReplayState, u64, u64, u64)>,
+    child_notice_catalog: Option<(u64, Option<String>, u64)>,
     /// The selected chat's goal transcript marks (`contextControl.goalMarks`).
     goal_marks: luna_proto::GoalMarks,
     chat_id: Option<String>,
@@ -3573,6 +3577,7 @@ impl Transcript {
             rows: Vec::new(),
             agent_cards: HashMap::new(),
             last_source: None,
+            child_notice_catalog: None,
             goal_marks: Default::default(),
             // Pre-set so `sync` never sees an attach edge — an override
             // instance must not reset (or re-pin) on selection changes.
@@ -4789,11 +4794,31 @@ impl Transcript {
                 None => state.main_transcript_revision(),
             }
         };
+        let child_notice_source = {
+            let state = self.state.read(cx);
+            if self
+                .child_notice_catalog
+                .as_ref()
+                .is_none_or(|(version, chat, _)| {
+                    *version != state.chat_reference_version || chat != &selected
+                })
+            {
+                self.child_notice_catalog = Some((
+                    state.chat_reference_version,
+                    selected.clone(),
+                    child_notices::catalog_fingerprint(selected.as_deref(), state),
+                ));
+            }
+            self.child_notice_catalog
+                .as_ref()
+                .map_or(0, |(_, _, hash)| *hash)
+        };
         let source = (
             selected.clone(),
             replay,
             revision,
             goal_marks_fingerprint(&goal_marks),
+            child_notice_source,
         );
         if self.last_source.as_ref() == Some(&source) {
             if let Some(perf) = &perf {
@@ -4973,7 +4998,7 @@ impl Transcript {
                     }
                 }
                 let generation = generations.and_then(|g| g.key(&entry.id));
-                let rows = self.rows_for(entry, false, generation);
+                let rows = self.rows_for(entry, false, generation, state);
                 new_rows.extend(apply_goal_marks(entry, &self.goal_marks, rows));
             }
             let echoes = match &self.doc_override {
@@ -4982,7 +5007,7 @@ impl Transcript {
                 Some(_) => &[],
             };
             for echo in echoes {
-                let rows = self.rows_for(echo, true, None);
+                let rows = self.rows_for(echo, true, None, state);
                 new_rows.extend(apply_goal_marks(echo, &self.goal_marks, rows));
             }
             // Bounded caches: rows and parsed trees of entries that left this
@@ -5417,6 +5442,7 @@ impl Transcript {
         entry: &SessionMessageEntry,
         pending: bool,
         generation: Option<u64>,
+        state: &AppState,
     ) -> Vec<Row> {
         let streaming = entry.status == Some(MessageStatus::Streaming);
         // Live entries always rebuild; don't compute a key that the
@@ -5426,6 +5452,20 @@ impl Transcript {
             (false, Some(generation)) if !pending => RowKey::Generation(generation),
             (false, _) => RowKey::Fingerprint(entry_fingerprint(entry, pending)),
         };
+        let key = if entry.id.starts_with("child-outcome:") || entry.id.starts_with("child-report:")
+        {
+            let catalog = self
+                .child_notice_catalog
+                .as_ref()
+                .map_or(0, |(_, _, hash)| *hash);
+            match key {
+                RowKey::Generation(value) => RowKey::NoticeGeneration(value, catalog),
+                RowKey::Fingerprint(value) => RowKey::NoticeFingerprint(value, catalog),
+                other => other,
+            }
+        } else {
+            key
+        };
         if !streaming
             && let Some(cached) = self.row_cache.get(&entry.id)
             && cached.key == key
@@ -5434,6 +5474,20 @@ impl Transcript {
             return cached.rows.clone();
         }
 
+        if child_notices::is_transport_report(entry, self.chat_id.as_deref(), state) {
+            self.row_cache.insert(
+                entry.id.clone(),
+                CachedRows {
+                    key,
+                    rows: Vec::new(),
+                },
+            );
+            return Vec::new();
+        }
+        // Presentation only, and only on cache miss: provider/history reads
+        // retain the exact envelope while the human row/copy uses a named result.
+        let child_display = child_notices::display_entry(entry, self.chat_id.as_deref(), state);
+        let entry = child_display.as_ref().unwrap_or(entry);
         let live_parsers = &mut self.live_parsers;
         let tree_cache = &mut self.tree_cache;
         let mut parse = |key: &str, text: &str| -> Arc<BlockTree> {
@@ -5964,6 +6018,7 @@ impl Transcript {
                 theme,
                 measured_h.clone(),
                 cx.entity_id(),
+                self.state.clone(),
             ));
         // Height motion uses the same ease-out curve as sidebars, tool folds,
         // and pane transitions, with duration scaled to travel distance. The
@@ -8263,12 +8318,13 @@ fn user_bubble_text(
     theme: &Theme,
     measured_h: Rc<Cell<f32>>,
     entity_id: gpui::EntityId,
+    state: Entity<AppState>,
 ) -> AnyElement {
     let (visible, chips) = crate::composer::sent_chip_visual(text.as_ref(), &mentions)
         .unwrap_or_else(|| (text.to_string(), Vec::new()));
     let text: SharedString = visible.into();
-    // Split runs at chip boundaries: body text keeps the sans font; chips
-    // keep the composer's mono labels and semantic colors.
+    // Match the composer: chat titles use sans; file/skill labels and each
+    // chip's icon slot retain mono metrics and their semantic colors.
     let body_run = |len: usize| TextRun {
         len,
         font: gpui::font(theme.font_sans.clone()),
@@ -8285,19 +8341,36 @@ fn user_bubble_text(
         underline: None,
         strikethrough: None,
     };
-    let mut runs = Vec::with_capacity(chips.len() * 2 + 1);
+    let mut runs = Vec::with_capacity(chips.len() * 3 + 1);
     let mut at = 0;
     for span in &chips {
         if at < span.range.start {
             runs.push(body_run(span.range.start - at));
         }
-        runs.push(chip_run(span.range.len(), span.kind));
+        if span.kind == crate::composer::ComposerChipKind::Chat {
+            let label = span.icon_slot.end;
+            runs.push(chip_run(label - span.range.start, span.kind));
+            runs.push(TextRun {
+                font: gpui::font(theme.font_sans.clone()),
+                ..chip_run(span.range.end - label, span.kind)
+            });
+        } else {
+            runs.push(chip_run(span.range.len(), span.kind));
+        }
         at = span.range.end;
     }
     if at < text.len() {
         runs.push(body_run(text.len() - at));
     }
     let styled = StyledText::new(text.clone()).with_runs(runs);
+    let chat_links: Vec<_> = chips
+        .iter()
+        .filter_map(|span| {
+            span.chat_link
+                .clone()
+                .map(|link| (span.range.clone(), link))
+        })
+        .collect();
     let layout = styled.layout().clone();
     let sel_key: std::sync::Arc<str> = format!("{row_id}:u").into();
     let sel_theme = theme.clone();
@@ -8365,10 +8438,26 @@ fn user_bubble_text(
     )
     .absolute()
     .size_full();
+    let body = if chat_links.is_empty() {
+        styled.into_any_element()
+    } else {
+        let ranges = chat_links.iter().map(|(range, _)| range.clone()).collect();
+        gpui::InteractiveText::new(SharedString::from(format!("{row_id}-chat-links")), styled)
+            .on_click(ranges, move |index, _, cx| {
+                if crate::markdown::selection::selected_text().is_some_and(|text| !text.is_empty())
+                {
+                    return;
+                }
+                if let Some((_, url)) = chat_links.get(index) {
+                    state.update(cx, |state, cx| state.open_deep_link(url, cx));
+                }
+            })
+            .into_any_element()
+    };
     div()
         .relative()
         .child(underlay)
-        .child(styled)
+        .child(body)
         .into_any_element()
 }
 

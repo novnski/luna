@@ -275,6 +275,17 @@ async fn claude_luna_tools_fence_matrix_over_shared_mcp_endpoint() {
     refused("afterResult", "does not match");
     ok("wake");
     assert_eq!(
+        steps["afterCompactCatalog"],
+        serde_json::json!(["luna_status"])
+    );
+    assert!(
+        events.iter().any(|event| matches!(event,
+            AgentEvent::ProviderEvidence { kind, payload, .. }
+                if kind == "system/compact_boundary" && payload["trigger"] == "auto"
+        )),
+        "the post-boundary tool call must follow an observed automatic compaction"
+    );
+    assert_eq!(
         *prompts.lock().unwrap(),
         0,
         "no human prompt for LUNA tools"

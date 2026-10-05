@@ -344,6 +344,7 @@ fn child_thread(spec: &Spec, at_ms: i64) -> Option<ChildThread> {
                 outcome: outcome.into(),
                 summary: summary.into(),
                 created_at_ms: at_ms,
+                completed_at_ms: None,
                 delivered: true,
             })
             .into_iter()

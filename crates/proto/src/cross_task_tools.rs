@@ -440,6 +440,11 @@ pub struct ChildThreadOutcome {
     pub outcome: String,
     pub summary: String,
     pub created_at_ms: i64,
+    /// First host observation of a terminal result. Kept separately from the
+    /// originating turn's start so elapsed time stays stable across reopen.
+    /// Legacy outcomes have no reliable completion time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at_ms: Option<i64>,
     #[serde(default)]
     pub delivered: bool,
 }

@@ -1090,6 +1090,13 @@ pub(crate) fn readback_args(args: &[String]) -> Vec<String> {
                     _ => out.push(value),
                 }
             }
+            // The readback only inspects commands/styles. The real launch's
+            // local LUNA bridge and saved external MCP servers are unnecessary
+            // here and can prompt for auth before any user message exists.
+            "--mcp-config" => {
+                iter.next();
+            }
+            "--strict-mcp-config" => {}
             _ => out.push(arg.clone()),
         }
     }
@@ -1097,6 +1104,11 @@ pub(crate) fn readback_args(args: &[String]) -> Vec<String> {
         out.push("--settings".into());
         out.push(r#"{"disableAllHooks":true}"#.into());
     }
+    out.extend([
+        "--strict-mcp-config".into(),
+        "--mcp-config".into(),
+        r#"{"mcpServers":{}}"#.into(),
+    ]);
     out
 }
 

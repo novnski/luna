@@ -258,6 +258,41 @@ async fn agent_catalog_exposes_bound_workspace_and_rejects_unrelated_targets() {
         .unwrap();
     assert_eq!(state["mainChatId"], main);
     assert_eq!(state["callerTaskId"], main);
+    assert_eq!(state["toolGuide"]["entryPoint"], "get_workspace");
+    assert!(
+        serde_json::to_string(&state["toolGuide"]).unwrap().len() < 800,
+        "routine discovery must not repeat the detailed usage manual"
+    );
+    let help = tools
+        .invoke(
+            &authority,
+            "get_workspace",
+            json!({"topic":"delegation"}),
+            &tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(help["guide"]["topic"], "delegation");
+    assert_eq!(help["guide"]["creationWaitsForResult"], false);
+    assert_eq!(
+        help["guide"]["completionFollowup"]["arguments"]["continueParent"],
+        true
+    );
+    assert_eq!(
+        help["guide"]["completionFollowup"]["delivery"],
+        "queueAfterParentTurn"
+    );
+    assert!(
+        tools
+            .invoke(
+                &authority,
+                "get_workspace",
+                json!({"topic":"not-a-topic"}),
+                &tokio_util::sync::CancellationToken::new()
+            )
+            .await
+            .is_err()
+    );
     assert!(
         state["relatedTaskIds"]
             .as_array()

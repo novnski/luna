@@ -32,6 +32,9 @@ const TASK_IDENTITY_LOG_ID: &str = "luna-task-identity-events-v1";
 const TASK_IDENTITY_LOG_VERSION: u32 = 2;
 const PREVIEW_TTL_MS: i64 = 10 * 60 * 1_000;
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(10);
+// Compaction performs model inference, unlike bounded metadata reads. Keep
+// a separate deadline and preserve the no-replay rule on an unknown outcome.
+const COMPACTION_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2231,7 +2234,7 @@ impl TaskIdentityService {
             .codex
             .for_execution_home(codex_home, force_file_auth);
         tokio::time::timeout(
-            PROVIDER_TIMEOUT,
+            COMPACTION_TIMEOUT,
             client.compact_thread(&binding.provider_task_id, cwd, model),
         )
         .await

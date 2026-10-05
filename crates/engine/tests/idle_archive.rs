@@ -39,6 +39,16 @@ for line in sys.stdin:
     path = root / (str(thread_id) + '.json')
     if method == 'thread/read':
         result = {'thread': json.loads(path.read_text())}
+    elif method == 'config/read':
+        result = {'config': {'mcp_servers': {}}}
+    elif method == 'thread/resume':
+        if (root / (thread_id + '.writer')).exists():
+            error = {'code': -32600, 'message': 'thread already has an active writer'}
+        else:
+            result = {'thread': json.loads(path.read_text())}
+    elif method == 'thread/compact/start':
+        with (root / 'compact-calls.jsonl').open('a') as log:
+            log.write(json.dumps({'threadId': thread_id}) + '\n')
     elif method == 'thread/list':
         result = {'data': [json.loads(p.read_text()) for p in root.glob('native-*.json')
                   if json.loads(p.read_text())['archived'] == params.get('archived', False)]}
@@ -66,6 +76,13 @@ for line in sys.stdin:
     frame = {'id': request['id']}
     frame['error' if error else 'result'] = error if error else result
     print(json.dumps(frame), flush=True)
+    if method == 'thread/compact/start':
+        for phase in ['started', 'completed']:
+            if phase == 'completed' and (root / 'compact-delay').exists():
+                time.sleep(float((root / 'compact-delay').read_text()))
+            print(json.dumps({'method': 'item/' + phase, 'params': {
+                'threadId': thread_id, 'turnId': 'compact-turn',
+                'item': {'id': 'compact-item', 'type': 'contextCompaction'}}}), flush=True)
 "#;
 
 struct WarmWriter {
@@ -313,6 +330,88 @@ fn calls(root: &Path) -> usize {
         .unwrap_or_default()
         .lines()
         .count()
+}
+
+/// Native compaction must release the exact parked writer, leave a different
+/// warm task alone, keep binding/history, and never replay a completed command.
+#[tokio::test]
+async fn idle_compaction_releases_only_its_writer_and_keeps_the_binding() {
+    let root = tempfile::tempdir().unwrap();
+    let core = assemble(root.path());
+    start(&core, root.path(), IDLE_A).await;
+    start(&core, root.path(), IDLE_B).await;
+    // Summarization can exceed the metadata RPC's ten-second deadline. A
+    // matching eventual completion must be awaited without replaying it.
+    std::fs::write(root.path().join("native/compact-delay"), "11").unwrap();
+    let before = core
+        .task_identity
+        .view(IDLE_A)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    let transcript = core
+        .doc_host
+        .open(IDLE_A)
+        .unwrap()
+        .doc()
+        .read_entries()
+        .unwrap();
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let read: TaskCommandRead = client
+        .call_as(
+            methods::GET_TASK_COMMAND_SNAPSHOT,
+            serde_json::json!({"taskId": IDLE_A}),
+        )
+        .await
+        .unwrap();
+    let command = serde_json::json!({"commandId":"compact-idle", "taskId":IDLE_A,
+        "actorId":"local-user", "clientId":"idle-compact-qa", "clientSessionId":"synthetic",
+        "expectedTaskRevision":read.snapshot.task_revision,
+        "expectedBindingGeneration":read.snapshot.binding_generation,
+        "intent":{"kind":"compactContext"}});
+    let receipt: CommandReceipt = client
+        .call_as(methods::EXECUTE_TASK_COMMAND, command.clone())
+        .await
+        .unwrap();
+    assert_eq!(receipt.status, CommandReceiptStatus::Applied, "{receipt:?}");
+    assert!(!writer(root.path(), IDLE_A).exists());
+    assert!(writer(root.path(), IDLE_B).exists());
+    assert_eq!(
+        core.doc_host
+            .open(IDLE_A)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap(),
+        transcript
+    );
+    let after = core
+        .task_identity
+        .view(IDLE_A)
+        .unwrap()
+        .current_binding
+        .unwrap();
+    assert_eq!(after.binding_id, before.binding_id);
+    assert_eq!(after.generation, before.generation);
+    let replay: CommandReceipt = client
+        .call_as(methods::EXECUTE_TASK_COMMAND, command)
+        .await
+        .unwrap();
+    assert_eq!(replay, receipt);
+    let calls = std::fs::read_to_string(root.path().join("native/compact-calls.jsonl")).unwrap();
+    assert_eq!(calls.lines().count(), 1);
+    if let Ok(output) = std::env::var("DELEGATION_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&output).unwrap();
+        std::fs::write(
+            Path::new(&output).join("idle-compaction.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+            "receipt":receipt,"bindingBefore":before,"bindingAfter":after,"nativeCalls":calls,
+            "unrelatedWriterPreserved":true,"transcriptPreserved":true}))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    core.shutdown().await;
 }
 
 #[tokio::test]

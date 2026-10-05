@@ -80,6 +80,12 @@ plist and LaunchServices invocation, so a synthetic New worktree does not land
 under the user's `~/.luna/worktrees`. An optional `LUNA_DEV_WORKTREES_DIR` can
 choose another non-symlink directory **inside that same QA data directory**;
 the wrapper rejects an empty, external, shared, or non-owned path before build.
+The same signed plist sets `LUNA_QA_MCP_ISOLATION=1`: provider processes in this
+QA app omit saved user MCP servers while retaining LUNA's per-session `luna`
+tools. The primary LUNA Dev bundle sets it to `0`, so even an inherited shell
+value cannot isolate ordinary user chats. Verify the signed plist and a QA
+provider launch before relying on this isolation; the QA data directory alone
+does not isolate `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or Executor.
 The primary LUNA Dev bundle does not set this QA-only worktree override, and
 production Repos keeps its user-facing default. A QA setup failure can retain
 its Git checkout for inspection; use the recorded checkout path and Git

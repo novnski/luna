@@ -210,6 +210,12 @@ plutil -replace LSEnvironment.LUNA_DATA_DIR -string "$DATA_DIR" "$staged_content
 plutil -replace LSEnvironment.LUNA_IPC_PORT -string "$IPC_PORT" "$staged_contents/Info.plist"
 if [[ -n "$WORKTREES_DIR" ]]; then
   plutil -replace LSEnvironment.LUNA_WORKTREES_DIR -string "$WORKTREES_DIR" "$staged_contents/Info.plist"
+  # QA provider processes keep LUNA's own per-session MCP endpoint but do not
+  # inherit the user's unrelated MCP connections during native acceptance.
+  plutil -replace LSEnvironment.LUNA_QA_MCP_ISOLATION -string 1 "$staged_contents/Info.plist"
+else
+  # An inherited shell value must never turn isolation on for primary LUNA Dev.
+  plutil -replace LSEnvironment.LUNA_QA_MCP_ISOLATION -string 0 "$staged_contents/Info.plist"
 fi
 plutil -replace CFBundleDisplayName -string "$APP_NAME" "$staged_contents/Info.plist"
 plutil -replace CFBundleName -string "$APP_NAME" "$staged_contents/Info.plist"

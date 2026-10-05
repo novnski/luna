@@ -458,6 +458,9 @@ impl AdminProcess {
             "--verbose",
         ]);
         cmd.args(policy_args);
+        if crate::mcp_isolation::qa_enabled() {
+            crate::mcp_isolation::claude_strict_empty(&mut cmd);
+        }
         cmd.current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

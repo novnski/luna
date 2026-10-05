@@ -929,19 +929,42 @@ impl CodexHarness {
         if force_file_auth {
             apply_file_auth_override(&mut cmd);
         }
-        cmd.arg("app-server");
-        if let Some(endpoint) = &luna_endpoint {
-            for arg in endpoint.codex_args() {
-                cmd.arg(arg);
-            }
-            cmd.env(luna_mcp::TOKEN_ENV, endpoint.token());
-        }
         let catalog_home = request
             .model_options
             .remove(LUNA_CODEX_HOME_OPTION)
             .and_then(|value| value.as_str().map(std::path::PathBuf::from))
             .or_else(|| std::env::var_os("CODEX_HOME").map(PathBuf::from))
             .or_else(|| crate::executable::home_dir().map(|home| home.join(".codex")));
+        // A QA bundle is explicitly isolated from saved user MCP connections.
+        // `config/read` is a metadata-only process; the validated Codex CLI
+        // does not start MCP before thread/start. The empty-table `-c` override
+        // merges, so disable each effective name, then attach LUNA's own
+        // process-local server last.
+        let qa_mcp_args = if crate::mcp_isolation::qa_enabled() {
+            let home = catalog_home.as_ref().ok_or_else(|| {
+                HarnessError::Protocol("QA MCP isolation needs a Codex home".into())
+            })?;
+            let client = native::CodexNativeClient::new(home.clone())
+                .with_executable(exe.clone())
+                .for_execution_home(home.clone(), force_file_auth);
+            let cwd = if request.cwd.is_empty() {
+                std::env::current_dir().map_err(HarnessError::Io)?
+            } else {
+                PathBuf::from(&request.cwd)
+            };
+            let servers = client.read_mcp_config(&cwd).await?;
+            crate::mcp_isolation::codex_disable_args(&servers)?
+        } else {
+            Vec::new()
+        };
+        cmd.arg("app-server");
+        cmd.args(qa_mcp_args);
+        if let Some(endpoint) = &luna_endpoint {
+            for arg in endpoint.codex_args() {
+                cmd.arg(arg);
+            }
+            cmd.env(luna_mcp::TOKEN_ENV, endpoint.token());
+        }
         if let Some(codex_home) = &catalog_home {
             cmd.env("CODEX_HOME", codex_home);
         }

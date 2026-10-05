@@ -6,6 +6,7 @@
 
 mod command_scope;
 mod composer_input;
+mod mcp_isolation;
 pub use command_scope::CommandScope;
 pub use composer_input::validate_composer_inputs;
 pub mod native_history;

@@ -638,7 +638,9 @@ impl CodexNativeClient {
         cwd: &str,
         model: Option<&str>,
     ) -> Result<(), HarnessError> {
-        let mut connection = self.connect(Some(cwd)).await?;
+        // Native compaction is maintenance, not a user tool turn. Reopening
+        // the thread must not start unrelated saved MCP servers.
+        let mut connection = self.connect_without_user_mcp(cwd).await?;
         let mut resume = serde_json::Map::new();
         resume.insert("threadId".into(), thread_id.into());
         // Metadata only: full-history hydration is deprecated
@@ -723,7 +725,28 @@ impl CodexNativeClient {
         outcome
     }
 
+    async fn connect_without_user_mcp(&self, cwd: &str) -> Result<NativeConnection, HarnessError> {
+        // An empty cwd makes app-server inherit this process's directory.
+        // Match that effective scope for the preceding config/read too.
+        let config_cwd = if cwd.is_empty() {
+            std::env::current_dir().map_err(HarnessError::Io)?
+        } else {
+            PathBuf::from(cwd)
+        };
+        let servers = self.read_mcp_config(&config_cwd).await?;
+        let args = crate::mcp_isolation::codex_disable_args(&servers)?;
+        self.connect_with_args(Some(cwd), &args).await
+    }
+
     async fn connect(&self, cwd: Option<&str>) -> Result<NativeConnection, HarnessError> {
+        self.connect_with_args(cwd, &[]).await
+    }
+
+    async fn connect_with_args(
+        &self,
+        cwd: Option<&str>,
+        extra_args: &[String],
+    ) -> Result<NativeConnection, HarnessError> {
         let executable = match &self.executable {
             Some(path) => path.clone(),
             None => resolve_codex_executable().ok_or_else(|| {
@@ -735,6 +758,7 @@ impl CodexNativeClient {
             super::apply_file_auth_override(&mut command);
         }
         command.arg("app-server");
+        command.args(extra_args);
         command.env("CODEX_HOME", &self.codex_home);
         if let Some(cwd) = cwd.filter(|cwd| !cwd.is_empty()) {
             command.current_dir(cwd);

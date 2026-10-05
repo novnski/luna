@@ -1351,6 +1351,7 @@ impl EngineRpc {
                     outcome: outcome.into(),
                     summary,
                     created_at_ms: entry.created_at,
+                    completed_at_ms: Some(chrono::Utc::now().timestamp_millis()),
                     delivered: false,
                 },
             )
@@ -1385,6 +1386,7 @@ impl EngineRpc {
                     created_at_ms: turn
                         .map(|entry| entry.created_at)
                         .unwrap_or(chat.created_at.timestamp_millis()),
+                    completed_at_ms: None,
                     delivered: false,
                 },
             )

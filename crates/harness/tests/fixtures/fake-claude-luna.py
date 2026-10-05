@@ -287,6 +287,14 @@ def fence_matrix():
     steps["afterResult"]["seconds"] = round(time.monotonic() - started, 2)
 
     init_frame()  # turn 2 (a native wake turn re-emits init)
+    # Compaction is a provider history boundary within this live process.
+    # Rediscover and invoke the actual attached endpoint after the boundary;
+    # neither endpoint lifetime nor root-turn attachment may be reset here.
+    emit({"type": "system", "subtype": "compact_boundary", "session_id": SESSION,
+          "uuid": "compact-discovery-boundary", "compact_metadata": {
+              "trigger": "auto", "pre_tokens": 100000, "post_tokens": 12000,
+              "duration_ms": 1000}})
+    steps["afterCompactCatalog"] = handshake()["tools"]
     tool_use("toolu_W", TOOL_PREFIX + "luna_status", {})
     steps["wake"] = call("luna_status", {}, "toolu_W")
     tool_result("toolu_W", steps["wake"])

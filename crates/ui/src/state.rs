@@ -968,6 +968,9 @@ pub struct AppState {
     pub spaces: Vec<Space>,
     /// Sorted (see [`sort_chats`]); includes archived rows — views filter.
     pub chats: Vec<Chat>,
+    pub(crate) chat_reference_version: u64,
+    pub(crate) chat_reference_cache:
+        Option<std::sync::Arc<crate::composer::chat_references::ChatReferenceCache>>,
     /// Side chats named by `WatchChats` (spaceless rows carrying
     /// `sideChatParentId`/`sideChatState`, which [`Chat`] doesn't model),
     /// keyed by side chat id. Captured from each raw frame.
@@ -1408,6 +1411,8 @@ impl AppState {
             connectivity_observed: false,
             spaces: Vec::new(),
             chats: Vec::new(),
+            chat_reference_version: 0,
+            chat_reference_cache: None,
             side_chat_rows: Default::default(),
             side_chat_gone: Default::default(),
             fork_source_rows: Default::default(),
@@ -1580,6 +1585,9 @@ impl AppState {
 
     /// Replace the side rows; a side chat whose row disappears was deleted.
     pub fn apply_side_chat_rows(&mut self, rows: std::collections::HashMap<String, SideChatRow>) {
+        if self.side_chat_rows != rows {
+            self.invalidate_chat_references();
+        }
         for id in self.side_chat_rows.keys() {
             if !rows.contains_key(id) {
                 self.side_chat_gone.insert(id.clone());
@@ -1596,6 +1604,24 @@ impl AppState {
                 .is_none_or(|config| !config.harness.is_retired())
         });
         sort_chats(&mut chats);
+        // Search ignores token/heartbeat-only changes. Normalize titles and
+        // build the shared index lazily once per actual catalog revision.
+        if chats.len() != self.chats.len()
+            || chats.iter().zip(&self.chats).any(|(new, old)| {
+                new.id != old.id
+                    || new.title != old.title
+                    || new.space_id != old.space_id
+                    || new.archived != old.archived
+                    || new.last_message_at != old.last_message_at
+                    || new.created_at != old.created_at
+                    || new.config.as_ref().map(|c| c.harness)
+                        != old.config.as_ref().map(|c| c.harness)
+                    || new.child_thread.as_ref().map(|c| &c.parent_task_id)
+                        != old.child_thread.as_ref().map(|c| &c.parent_task_id)
+            })
+        {
+            self.invalidate_chat_references();
+        }
         self.chats = chats;
         self.chats_synced = true;
         if let Some(selected) = &self.selected_chat
@@ -1656,6 +1682,14 @@ impl AppState {
 
     pub fn apply_spaces(&mut self, mut spaces: Vec<Space>) {
         sort_spaces(&mut spaces);
+        if spaces.len() != self.spaces.len()
+            || spaces
+                .iter()
+                .zip(&self.spaces)
+                .any(|(new, old)| new.id != old.id || new.name != old.name || new.path != old.path)
+        {
+            self.invalidate_chat_references();
+        }
         self.spaces = spaces;
         self.spaces_synced = true;
         // Heal a vanished selection (project deleted elsewhere): fall back to
@@ -3536,6 +3570,9 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                 };
                 let alive = this.update(cx, |state, cx| {
                     state.apply_side_chat_rows(side_rows);
+                    if state.fork_source_rows != fork_sources {
+                        state.invalidate_chat_references();
+                    }
                     state.fork_source_rows = fork_sources;
                     state.side_chat_context_modes = context_modes;
                     state.execution_rows = executions;

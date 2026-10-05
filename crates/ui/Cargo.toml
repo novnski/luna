@@ -38,6 +38,14 @@ name = "integrations-picker-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "chat-references-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
+name = "chat-reference-search-bench"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "codex-prompts-fixture"
 required-features = ["appshots-fixture"]
 

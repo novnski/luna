@@ -688,6 +688,14 @@ impl ClaudeHarness {
                 "",
             ]);
         } else {
+            if crate::mcp_isolation::qa_enabled() {
+                if luna_endpoint.is_some() {
+                    // Keep only the per-process LUNA tools attached above.
+                    crate::mcp_isolation::claude_strict_flag(&mut cmd);
+                } else {
+                    crate::mcp_isolation::claude_strict_empty(&mut cmd);
+                }
+            }
             cmd.args(native_tasks::RUN_ARGS);
             // SessionStart/Setup stream by default; every other hook event
             // needs this opt-in (`hooks.rs`).

@@ -4788,6 +4788,19 @@ impl EngineRpc {
                 "Do not retry blindly. Clear context to fence the old operation, or wait for provider readback.",
             );
         }
+        // A completed turn can retain an idle native writer. The maintenance
+        // client needs exclusive ownership, and the next dispatch must wait
+        // until compaction and its durable readback have finished.
+        let _compact_transition = if config.harness == HarnessId::Codex {
+            Some(
+                self.sessions
+                    .prepare_native_compaction(task_id)
+                    .await
+                    .map_err(TaskProjectionError::Mutation)?,
+            )
+        } else {
+            None
+        };
         context.binding_generation = Some(binding.generation);
         context.compact = CompactOperation {
             operation_id: Some(command_id.to_string()),

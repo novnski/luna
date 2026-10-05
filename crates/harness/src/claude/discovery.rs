@@ -173,6 +173,7 @@ pub(super) async fn initialize_probe(
         "--verbose",
     ]);
     configure(&mut cmd);
+    crate::mcp_isolation::claude_strict_empty(&mut cmd);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
