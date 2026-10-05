@@ -246,6 +246,23 @@ impl FilesSurface {
                             workspace_path_drag_ghost(payload, cx)
                         })
                     })
+                    // Opt-in measurement probe (slice 6): the row's painted
+                    // bounds, so a native fixture can start a real drag here.
+                    .when(crate::perf_counters::probes_enabled(), |element| {
+                        let probe = format!("file-row:{}", row.path);
+                        element.relative().child(
+                            gpui::canvas(
+                                move |bounds, _, _| {
+                                    crate::perf_counters::record_bounds(&probe, bounds)
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                        )
+                    })
                     .child(
                         div()
                             .size(px(14.0))

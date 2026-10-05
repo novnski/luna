@@ -624,15 +624,14 @@ impl DocsStore {
         task_id: &str,
         events: &[ActivityEnvelope],
     ) -> Result<(), StoreError> {
+        let prepared = prepare_activity_prefix(events)?;
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM activity_events WHERE task_id=?1",
             params![task_id],
         )?;
-        for event in events {
-            insert_activity_event(&tx, event)?;
-        }
+        insert_activity_batch(&tx, events, &prepared)?;
         tx.commit()?;
         Ok(())
     }
@@ -644,15 +643,14 @@ impl DocsStore {
         task_id: &str,
         events: &[ActivityEnvelope],
     ) -> Result<(), StoreError> {
+        let prepared = prepare_activity_prefix(events)?;
         let mut conn = self.conn();
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM activity_events WHERE task_id=?1 AND event_id GLOB 'appshot:*'",
             params![task_id],
         )?;
-        for event in events {
-            insert_activity_event(&tx, event)?;
-        }
+        insert_activity_batch(&tx, events, &prepared)?;
         tx.commit()?;
         Ok(())
     }
@@ -4530,47 +4528,120 @@ fn insert_appshot_activity_tx(
     Ok(())
 }
 
-fn insert_activity_event(
-    tx: &rusqlite::Transaction<'_>,
-    event: &ActivityEnvelope,
-) -> Result<(), StoreError> {
-    let search_text = [
-        Some(event.summary.as_str()),
-        event.tool.as_deref(),
-        event.app.as_deref(),
-        event.file.as_deref(),
-        event.command.as_deref(),
-        event.model.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join("\n")
-    .to_lowercase();
-    tx.execute(
-        "INSERT INTO activity_events(
+const ACTIVITY_INSERT_SQL: &str = "INSERT INTO activity_events(
            event_id,task_id,project_id,device_id,harness,model,outcome,tool,app,
            timestamp_ms,sequence,search_text,envelope_json
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
-        params![
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)";
+
+struct PreparedActivityEvent<'a> {
+    event: &'a ActivityEnvelope,
+    search_text: String,
+    harness: Option<String>,
+    outcome: String,
+    envelope: Vec<u8>,
+}
+
+impl<'a> PreparedActivityEvent<'a> {
+    fn new(event: &'a ActivityEnvelope) -> Result<Self, StoreError> {
+        let search_text = [
+            Some(event.summary.as_str()),
+            event.tool.as_deref(),
+            event.app.as_deref(),
+            event.file.as_deref(),
+            event.command.as_deref(),
+            event.model.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+        Ok(Self {
+            event,
+            search_text,
+            harness: event
+                .harness
+                .map(|value| serde_json::to_string(&value))
+                .transpose()?,
+            outcome: serde_json::to_string(&event.outcome)?,
+            envelope: serde_json::to_vec(event)?,
+        })
+    }
+
+    fn heap_bytes(&self) -> usize {
+        self.search_text
+            .capacity()
+            .saturating_add(self.harness.as_ref().map_or(0, String::capacity))
+            .saturating_add(self.outcome.capacity())
+            .saturating_add(self.envelope.capacity())
+    }
+
+    fn insert(&self, statement: &mut rusqlite::Statement<'_>) -> Result<(), StoreError> {
+        let event = self.event;
+        statement.execute(params![
             event.event_id,
             event.task_id,
             event.project_id,
             event.device_id,
-            event
-                .harness
-                .map(|value| serde_json::to_string(&value))
-                .transpose()?,
+            self.harness,
             event.model,
-            serde_json::to_string(&event.outcome)?,
+            self.outcome,
             event.tool,
             event.app,
             event.timestamp_ms,
             event.sequence as i64,
-            search_text,
-            serde_json::to_vec(event)?,
-        ],
-    )?;
+            self.search_text,
+            self.envelope,
+        ])?;
+        Ok(())
+    }
+}
+
+/// Keep JSON encoding and search normalization off the shared connection
+/// lock. This is transient preparation, bounded by both rows and actual
+/// buffer capacities. Callers retain their Activity privacy/policy guard.
+fn prepare_activity_prefix(
+    events: &[ActivityEnvelope],
+) -> Result<Vec<PreparedActivityEvent<'_>>, StoreError> {
+    const MAX_ROWS: usize = 8192;
+    const MAX_BYTES: usize = 32 * 1024 * 1024;
+    let count = events.len().min(MAX_ROWS);
+    let mut prepared = Vec::with_capacity(count);
+    let mut bytes = prepared.capacity() * std::mem::size_of::<PreparedActivityEvent<'_>>();
+    for event in events.iter().take(count) {
+        let row = PreparedActivityEvent::new(event)?;
+        let next = bytes.saturating_add(row.heap_bytes());
+        if next > MAX_BYTES {
+            break;
+        }
+        prepared.push(row);
+        bytes = next;
+    }
+    Ok(prepared)
+}
+
+fn insert_activity_batch(
+    tx: &rusqlite::Transaction<'_>,
+    events: &[ActivityEnvelope],
+    prepared: &[PreparedActivityEvent<'_>],
+) -> Result<(), StoreError> {
+    // One statement per atomic replacement, including the bounded-preparation
+    // remainder. No intermediate DELETE or partial insert becomes visible.
+    let mut statement = tx.prepare(ACTIVITY_INSERT_SQL)?;
+    for row in prepared {
+        row.insert(&mut statement)?;
+    }
+    for event in &events[prepared.len()..] {
+        PreparedActivityEvent::new(event)?.insert(&mut statement)?;
+    }
+    Ok(())
+}
+
+fn insert_activity_event(
+    tx: &rusqlite::Transaction<'_>,
+    event: &ActivityEnvelope,
+) -> Result<(), StoreError> {
+    PreparedActivityEvent::new(event)?.insert(&mut tx.prepare(ACTIVITY_INSERT_SQL)?)?;
     Ok(())
 }
 

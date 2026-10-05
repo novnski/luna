@@ -188,6 +188,49 @@ impl Composer {
         )
     }
 
+    /// The attachments staged in this composer's current draft (names), and
+    /// every draft key holding any (slice 6 drop ownership).
+    pub fn fixture_attachments(&self) -> Value {
+        json!({
+            "key": self.current_key,
+            "names": self
+                .attachments
+                .get(&self.current_key)
+                .map(|list| list.iter().map(|a| a.name.clone()).collect::<Vec<_>>())
+                .unwrap_or_default(),
+            "keysWithAttachments": self
+                .attachments
+                .iter()
+                .filter(|(_, list)| !list.is_empty())
+                .map(|(key, _)| key.clone())
+                .collect::<Vec<_>>(),
+            // What would refuse or hide a staged file.
+            "failure": self.failure.as_ref().map(|failure| failure.to_string()),
+            "queueEditFinishing": self.queue_edit_finishing,
+        })
+    }
+
+    /// Begin editing queued row `id` through the production
+    /// `begin_queue_edit` (as the row's Edit action does).
+    pub fn fixture_queue_edit(&mut self, id: &str, cx: &mut Context<Self>) {
+        self.begin_queue_edit(id.to_string(), cx);
+    }
+
+    /// Cancel this composer's queued-row edit, as Escape in it does.
+    pub fn fixture_queue_edit_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        self.cancel_queue_edit(cx)
+    }
+
+    /// Which queued row this composer is editing (or reserving), and the
+    /// text in its input.
+    pub fn fixture_queue_edit_state(&self, cx: &gpui::App) -> Value {
+        json!({
+            "editing": self.editing_queued,
+            "pending": self.queue_edit_pending_id,
+            "input": self.input.read(cx).text(),
+        })
+    }
+
     /// Row `id`'s primary action (Send now / Steer now), exactly as its
     /// button runs it; `false` when the row is missing or blocked.
     pub fn fixture_queue_primary(&mut self, id: &str, cx: &mut Context<Self>) -> bool {

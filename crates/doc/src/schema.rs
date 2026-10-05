@@ -523,6 +523,53 @@ impl SessionDoc {
             .collect())
     }
 
+    /// Read one raw message slot with the full reader's field salvage rules.
+    /// Callers must not confuse raw slots with continuation-joined row indices.
+    /// Missing or unsalvageable slots require a complete projection fallback.
+    pub fn read_entry_at(&self, index: usize) -> Result<Option<SessionMessageEntry>, DocError> {
+        let Some(value) = self.doc.get_list("messages").get(index) else {
+            return Ok(None);
+        };
+        let value = match value {
+            loro::ValueOrContainer::Container(loro::Container::Map(map)) => map.get_deep_value(),
+            loro::ValueOrContainer::Value(value) => value,
+            _ => return Ok(None),
+        };
+        entry_from_json(value.to_json_value()).map(Some)
+    }
+
+    /// Activity needs only the newest assistant, even when later user or
+    /// system rows follow it. Keep the full reader's salvage/skip policy
+    /// without materializing settled histories or their tool output.
+    pub fn read_latest_assistant_entry(&self) -> Result<Option<SessionMessageEntry>, DocError> {
+        let messages = self.doc.get_list("messages");
+        for index in (0..messages.len()).rev() {
+            let Some(value) = messages.get(index) else {
+                continue;
+            };
+            let value = match value {
+                loro::ValueOrContainer::Container(loro::Container::Map(map)) => {
+                    if matches!(map.get("role"), Some(loro::ValueOrContainer::Value(loro::LoroValue::String(role))) if matches!(role.as_str(), "user" | "system"))
+                    {
+                        continue;
+                    }
+                    map.get_deep_value()
+                }
+                loro::ValueOrContainer::Value(value) => value,
+                _ => continue,
+            };
+            match entry_from_json(value.to_json_value()) {
+                Ok(entry) if entry.role == MessageRole::Assistant => return Ok(Some(entry)),
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::warn!(chat = %self.chat_id().unwrap_or_default(), error = %err,
+                        "skipping unsalvageable transcript entry");
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Attach a provider-owned completed-turn checkpoint to one assistant
     /// transcript entry without exposing it as message content.
     pub fn set_provider_checkpoint(

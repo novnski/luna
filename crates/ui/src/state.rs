@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use gpui::{App, Context, Entity, Task};
+use gpui::{App, AsyncApp, Context, Entity, Task};
 use gpui_tokio::Tokio;
 use serde::de::DeserializeOwned;
 
@@ -1048,7 +1048,30 @@ pub struct AppState {
     transcript_baselines: HashMap<String, Arc<luna_doc::TranscriptBaseline>>,
     /// Changes only when transcript/optimistic content changes. Presence,
     /// catalogs and other app-state notifications need no row derivation.
+    /// Pane and subagent docs bump it too (see `sub_only_revisions`).
     pub(crate) transcript_revision: u64,
+    /// `transcript_revision` bumps made only for pane/subagent docs: the
+    /// main transcript's own revision excludes them, so another chat's frame
+    /// never makes the main view re-derive its rows.
+    sub_only_revisions: u64,
+    /// Each pane/subagent doc's own revision, from `generation_counter`
+    /// (strictly increasing, never reused across docs or re-watches).
+    sub_revisions: HashMap<String, u64>,
+    /// Per-entry content generations of the main transcript and of each
+    /// pane/subagent doc, recorded from the frames that changed them.
+    transcript_generations: EntryGenerations,
+    sub_generations: HashMap<String, EntryGenerations>,
+    generation_counter: u64,
+    /// The last chat left as Main (entries and generations, moved, bounded
+    /// by `recent_limits`), and the selected chat's own kept copy
+    /// awaiting its first reset frame.
+    recent_transcript: Option<RecentTranscript>,
+    reopen_seed: Option<RecentTranscript>,
+    recent_limits: RecentLimits,
+    /// The host's opaque token for the main transcript's current entries
+    /// (opt-in `transcriptResume` streams), stamped with what it describes;
+    /// see [`TranscriptToken`].
+    transcript_token: Option<TranscriptToken>,
     /// Optimistic user echoes per chat id, shown until the doc frame carrying
     /// the same message id arrives (client-minted ids make dedup exact).
     echoes: HashMap<String, Vec<SessionMessageEntry>>,
@@ -1115,6 +1138,253 @@ fn is_text_append(frame: &TranscriptFrame) -> bool {
         if upsert.is_empty() && remove.is_empty() && !append.is_empty())
 }
 
+/// Ceilings for the one kept recent transcript (slice 6). A chat over any
+/// of them is not kept.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct RecentLimits {
+    pub(crate) entries: usize,
+    pub(crate) parts: usize,
+    /// Conservative charged bytes (see [`charged_entry`]).
+    pub(crate) bytes: usize,
+}
+
+impl Default for RecentLimits {
+    fn default() -> Self {
+        Self {
+            entries: 20_000,
+            parts: 80_000,
+            bytes: 32 * 1024 * 1024,
+        }
+    }
+}
+
+/// Fixed charges per entry and per part: allocation headers, the entry's
+/// generation-map node and enum/vec overhead (deliberately generous).
+const ENTRY_CHARGE: usize = 256;
+const PART_CHARGE: usize = 128;
+
+/// A conservative size for one entry: its content (`byte_len`), every id,
+/// ref and subagent tail/activity it carries outside `byte_len`, plus fixed
+/// per-entry and per-part charges. Returns (parts, bytes).
+fn charged_entry(entry: &SessionMessageEntry) -> (usize, usize) {
+    let mut bytes = ENTRY_CHARGE
+        + entry.id.len()
+        + entry.device_id.len()
+        + entry.continuation_of.as_ref().map_or(0, String::len);
+    for part in &entry.parts {
+        bytes += PART_CHARGE + part.id().len() + part.byte_len();
+        bytes += match part {
+            luna_doc::MessagePart::Tool {
+                output_ref,
+                diff_ref,
+                subagent_ref,
+                subagent_tail,
+                subagent_activity,
+                ..
+            } => {
+                [output_ref, diff_ref, subagent_ref, subagent_tail]
+                    .into_iter()
+                    .map(|value| value.as_ref().map_or(0, String::len))
+                    .sum::<usize>()
+                    + subagent_activity.as_ref().map_or(0, |activity| {
+                        serde_json::to_vec(activity).map_or(64 * 1024, |bytes| bytes.len())
+                    })
+            }
+            luna_doc::MessagePart::Error { message, .. } => message.len(),
+            luna_doc::MessagePart::Input { request_id, .. } => request_id.len(),
+            _ => 0,
+        };
+    }
+    (entry.parts.len(), bytes)
+}
+
+/// The charge of a whole transcript, or which ceiling it exceeds (checked
+/// as it goes, so an oversize chat stops early).
+fn charged_transcript(
+    entries: &[SessionMessageEntry],
+    limits: RecentLimits,
+) -> Result<(usize, usize, usize), &'static str> {
+    if entries.len() > limits.entries {
+        return Err("entries");
+    }
+    let (mut parts, mut bytes) = (0usize, 0usize);
+    for entry in entries {
+        let (entry_parts, entry_bytes) = charged_entry(entry);
+        parts += entry_parts;
+        bytes += entry_bytes;
+        if parts > limits.parts {
+            return Err("parts");
+        }
+        if bytes > limits.bytes {
+            return Err("bytes");
+        }
+    }
+    Ok((entries.len(), parts, bytes))
+}
+
+/// One chat's entries and generations, kept after leaving it as Main.
+pub(crate) struct RecentTranscript {
+    chat_id: String,
+    entries: Vec<SessionMessageEntry>,
+    generations: EntryGenerations,
+    /// Its admitted charge: (entries, parts, bytes).
+    charge: (usize, usize, usize),
+    /// The host token these exact entries were confirmed under, when one was
+    /// valid at admission: offered once on reopen (`knownTranscriptToken`).
+    token: Option<String>,
+}
+
+/// A host transcript token and the exact local state it describes: the main
+/// revision it arrived at and the transcript buffer (data pointer, length)
+/// that frame left. Any later revision bump (frame, echo, local clear,
+/// selection), any reassignment, push, removal or reallocation of
+/// `transcript` makes it invalid, so content changed outside the wire path
+/// can never be offered to the host as confirmed.
+struct TranscriptToken {
+    token: String,
+    at: u64,
+    buffer: (usize, usize),
+}
+
+/// The first frame of a resume subscription: applied (or failed as a
+/// desync), or not a confirmation (the kept copy is discarded and the watch
+/// resubscribes for an ordinary reset).
+pub(crate) enum ResumeOutcome {
+    Applied(Result<(), TranscriptDesync>),
+    Rejected,
+}
+
+fn next_generation(counter: &mut u64) -> u64 {
+    *counter += 1;
+    *counter
+}
+
+/// Per-entry content generations of one transcript copy (slice 6). A frame
+/// that upserts or appends to an entry gives it a new generation; a reset
+/// keeps the generation of every entry whose content is unchanged. Row
+/// caches key on the generation, so a same-id, same-length rewrite always
+/// rebuilds, and an unrelated frame never re-hashes settled history.
+#[derive(Default, Debug)]
+pub(crate) struct EntryGenerations {
+    /// The doc revision these generations describe; `None` until a frame
+    /// recorded them (or after a desync).
+    at: Option<u64>,
+    by_id: HashMap<String, u64>,
+}
+
+/// What a frame will change, captured before it is applied.
+pub(crate) enum GenerationPlan {
+    Reset(HashMap<String, u64>),
+    Delta {
+        touched: Vec<String>,
+        removed: Vec<String>,
+    },
+}
+
+impl EntryGenerations {
+    pub(crate) fn key(&self, entry_id: &str) -> Option<u64> {
+        self.by_id.get(entry_id).copied()
+    }
+
+    fn valid_at(&self, revision: u64) -> bool {
+        self.at == Some(revision)
+    }
+
+    fn invalidate(&mut self) {
+        self.at = None;
+    }
+
+    fn restamp(&mut self, revision: u64) {
+        self.at = Some(revision);
+    }
+
+    /// Plan `frame` against `current` (before it is applied).
+    fn plan(
+        &self,
+        valid: bool,
+        current: &[SessionMessageEntry],
+        frame: &TranscriptFrame,
+        counter: &mut u64,
+    ) -> GenerationPlan {
+        match frame {
+            TranscriptFrame::Reset { reset } => self.plan_reset(valid, current, reset, counter),
+            TranscriptFrame::Delta {
+                upsert,
+                append,
+                remove,
+                ..
+            } => GenerationPlan::Delta {
+                touched: upsert
+                    .iter()
+                    .map(|u| u.entry.id.clone())
+                    .chain(append.iter().map(|a| a.entry.clone()))
+                    .collect(),
+                removed: remove.clone(),
+            },
+        }
+    }
+
+    /// A whole replacement: entries equal to their previous content keep
+    /// their generation (only while the previous generations were valid).
+    fn plan_reset(
+        &self,
+        valid: bool,
+        current: &[SessionMessageEntry],
+        next: &[SessionMessageEntry],
+        counter: &mut u64,
+    ) -> GenerationPlan {
+        let previous: HashMap<&str, &SessionMessageEntry> = if valid {
+            current.iter().map(|e| (e.id.as_str(), e)).collect()
+        } else {
+            HashMap::new()
+        };
+        let by_id = next
+            .iter()
+            .map(|entry| {
+                let kept = previous
+                    .get(entry.id.as_str())
+                    .copied()
+                    .filter(|old| *old == entry)
+                    .and_then(|_| self.key(&entry.id));
+                (
+                    entry.id.clone(),
+                    kept.unwrap_or_else(|| next_generation(counter)),
+                )
+            })
+            .collect();
+        GenerationPlan::Reset(by_id)
+    }
+
+    /// Record the applied frame; `entries` is the transcript after it.
+    fn finish(
+        &mut self,
+        plan: GenerationPlan,
+        valid: bool,
+        entries: &[SessionMessageEntry],
+        counter: &mut u64,
+        revision: u64,
+    ) {
+        match plan {
+            GenerationPlan::Reset(by_id) => self.by_id = by_id,
+            GenerationPlan::Delta { touched, removed } if valid => {
+                for id in removed {
+                    self.by_id.remove(&id);
+                }
+                for id in touched {
+                    self.by_id.insert(id, next_generation(counter));
+                }
+            }
+            GenerationPlan::Delta { .. } => {
+                self.by_id = entries
+                    .iter()
+                    .map(|entry| (entry.id.clone(), next_generation(counter)))
+                    .collect();
+            }
+        }
+        self.at = Some(revision);
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
@@ -1161,6 +1431,15 @@ impl AppState {
             transcript_replayed: false,
             transcript_baselines: HashMap::new(),
             transcript_revision: 0,
+            sub_only_revisions: 0,
+            sub_revisions: HashMap::new(),
+            transcript_generations: EntryGenerations::default(),
+            sub_generations: HashMap::new(),
+            generation_counter: 0,
+            recent_transcript: None,
+            reopen_seed: None,
+            transcript_token: None,
+            recent_limits: RecentLimits::default(),
             echoes: HashMap::new(),
             pending_sends: HashMap::new(),
             upload_progress: None,
@@ -1322,6 +1601,7 @@ impl AppState {
             self.transcript_baselines.remove(selected);
             self.selected_chat = None;
             self.transcript.clear();
+            self.transcript_token = None;
             self.context_usage = None;
             self.context_control = Default::default();
             self.provider_notice = None;
@@ -1593,7 +1873,19 @@ impl AppState {
     }
 
     pub fn apply_transcript(&mut self, entries: Vec<SessionMessageEntry>) {
+        let valid = self
+            .transcript_generations
+            .valid_at(self.main_transcript_revision());
+        let plan = self.transcript_generations.plan_reset(
+            valid,
+            &self.transcript,
+            &entries,
+            &mut self.generation_counter,
+        );
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        let at = self.main_transcript_revision();
+        self.transcript_generations
+            .finish(plan, valid, &entries, &mut self.generation_counter, at);
         // Doc frames supersede optimistic echoes carrying the same id.
         if let Some(chat_id) = self.selected_chat.as_deref()
             && let Some(echoes) = self.echoes.get_mut(chat_id)
@@ -1602,6 +1894,8 @@ impl AppState {
         }
         self.transcript = entries;
         self.transcript_replayed = true;
+        // Content set outside the wire path: no host token describes it.
+        self.transcript_token = None;
         self.ack_pending_send_from_transcript();
     }
 
@@ -1611,9 +1905,37 @@ impl AppState {
         &mut self,
         frame: TranscriptFrame,
     ) -> Result<(), TranscriptDesync> {
+        let valid = self
+            .transcript_generations
+            .valid_at(self.main_transcript_revision());
+        let seed = self.reopen_seed.take();
+        let plan = match (&frame, seed) {
+            // First reset after reopening the kept chat: entries equal to
+            // the kept copy keep their generation (content comparison).
+            (TranscriptFrame::Reset { reset }, Some(seed)) if !valid => seed
+                .generations
+                .plan_reset(true, &seed.entries, reset, &mut self.generation_counter),
+            _ => self.transcript_generations.plan(
+                valid,
+                &self.transcript,
+                &frame,
+                &mut self.generation_counter,
+            ),
+        };
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         let is_reset = matches!(&frame, TranscriptFrame::Reset { .. });
-        luna_doc::apply_transcript_frame(&mut self.transcript, frame)?;
+        if let Err(error) = luna_doc::apply_transcript_frame(&mut self.transcript, frame) {
+            self.transcript_generations.invalidate();
+            return Err(error);
+        }
+        let at = self.main_transcript_revision();
+        self.transcript_generations.finish(
+            plan,
+            valid,
+            &self.transcript,
+            &mut self.generation_counter,
+            at,
+        );
         if is_reset {
             self.transcript_replayed = true;
         }
@@ -1642,7 +1964,16 @@ impl AppState {
                     && self.pending_echoes().is_empty()
             })
             .cloned();
+        let perf = crate::perf_counters::Timer::start("state.frame", || {
+            format!("main:{}", self.selected_chat.as_deref().unwrap_or("-"))
+        });
         let result = self.apply_transcript_frame(frame);
+        if let Some(perf) = &perf
+            && text_doc.is_some()
+        {
+            crate::perf_counters::count("state.frame_text_only", perf.scope(), 1, 0);
+        }
+        drop(perf);
         if let Some(doc_id) = text_doc.filter(|_| result.is_ok()) {
             cx.emit(TranscriptTextChanged { doc_id });
         } else {
@@ -1663,7 +1994,13 @@ impl AppState {
         update: luna_doc::TranscriptUpdate,
         cx: &mut Context<Self>,
     ) -> Result<(), TranscriptDesync> {
-        self.receive_transcript_frame(update.frame, cx)?;
+        if let Err(error) = self.receive_transcript_frame(update.frame, cx) {
+            self.transcript_token = None;
+            return Err(error);
+        }
+        // The token describes the entries this frame left (metadata-only
+        // commits keep it; an older host or ordinary stream sends none).
+        self.stamp_transcript_token(update.transcript_token);
         if let (Some(doc_id), Some(baseline)) = (&self.selected_chat, update.replay_baseline) {
             self.transcript_baselines
                 .insert(doc_id.clone(), Arc::new(baseline));
@@ -1681,6 +2018,148 @@ impl AppState {
             cx.notify();
         }
         Ok(())
+    }
+
+    /// A resume that failed before any frame applied (malformed first
+    /// frame): drop the kept copy for `chat_id` and any token.
+    pub(crate) fn discard_transcript_resume(&mut self, chat_id: &str) {
+        if self.selected_chat.as_deref() == Some(chat_id) {
+            self.reopen_seed = None;
+            self.transcript_token = None;
+        }
+    }
+
+    fn transcript_buffer(&self) -> (usize, usize) {
+        (self.transcript.as_ptr() as usize, self.transcript.len())
+    }
+
+    fn stamp_transcript_token(&mut self, token: Option<String>) {
+        let at = self.main_transcript_revision();
+        let buffer = self.transcript_buffer();
+        self.transcript_token = token.map(|token| TranscriptToken { token, at, buffer });
+    }
+
+    /// The host token for the main transcript, only while it still describes
+    /// exactly these entries: stamped at the current revision, the same
+    /// buffer, and generations valid there.
+    fn valid_transcript_token(&self) -> Option<&str> {
+        self.transcript_token
+            .as_ref()
+            .filter(|token| {
+                token.at == self.main_transcript_revision()
+                    && token.buffer == self.transcript_buffer()
+                    && self.transcript_generations.valid_at(token.at)
+            })
+            .map(|token| token.token.as_str())
+    }
+
+    /// The first frame of a subscription that offered `known` (warm reopen,
+    /// slice 6). Only an exact host confirmation shows the kept copy: an
+    /// empty delta whose token is `known`, for the kept copy of the selected
+    /// chat with the same token and entry count, onto an empty transcript.
+    /// Its entries and generations then become the main transcript (restamped
+    /// at a new revision, history marked replayed) and the delta applies
+    /// normally, with the host's fresh baseline and metadata. A reset takes
+    /// the ordinary path (content comparison against the kept copy). Anything
+    /// else discards the kept copy and its token: the caller resubscribes
+    /// without a token for an ordinary reset.
+    pub(crate) fn receive_resumed_transcript_update(
+        &mut self,
+        update: luna_doc::TranscriptUpdate,
+        known: &str,
+        cx: &mut Context<Self>,
+    ) -> ResumeOutcome {
+        if matches!(update.frame, TranscriptFrame::Reset { .. }) {
+            return ResumeOutcome::Applied(self.receive_transcript_update(update, cx));
+        }
+        let confirmed = update.transcript_token.as_deref() == Some(known)
+            && self.transcript.is_empty()
+            && match &update.frame {
+                TranscriptFrame::Delta {
+                    upsert,
+                    append,
+                    remove,
+                    count,
+                } => {
+                    upsert.is_empty()
+                        && append.is_empty()
+                        && remove.is_empty()
+                        && self.reopen_seed.as_ref().is_some_and(|seed| {
+                            self.selected_chat.as_deref() == Some(seed.chat_id.as_str())
+                                && seed.token.as_deref() == Some(known)
+                                && seed.entries.len() == *count
+                        })
+                }
+                TranscriptFrame::Reset { .. } => false,
+            };
+        let Some(seed) = confirmed.then(|| self.reopen_seed.take()).flatten() else {
+            self.reopen_seed = None;
+            self.transcript_token = None;
+            if let Some(chat_id) = self.selected_chat.as_deref() {
+                crate::perf_counters::count("state.resume_rejected", chat_id, 1, 0);
+            }
+            return ResumeOutcome::Rejected;
+        };
+        self.transcript = seed.entries;
+        self.transcript_generations = seed.generations;
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        let at = self.main_transcript_revision();
+        self.transcript_generations.restamp(at);
+        self.transcript_replayed = true;
+        if let Some(chat_id) = self.selected_chat.as_deref() {
+            crate::perf_counters::count("state.resume_confirmed", chat_id, 1, 0);
+        }
+        ResumeOutcome::Applied(self.receive_transcript_update(update, cx))
+    }
+
+    /// The main transcript's own revision: `transcript_revision` without the
+    /// bumps made only for pane/subagent docs.
+    pub(crate) fn main_transcript_revision(&self) -> u64 {
+        self.transcript_revision
+            .wrapping_sub(self.sub_only_revisions)
+    }
+
+    /// A pane/subagent doc's own revision (0 before it is watched).
+    pub(crate) fn sub_revision(&self, doc_id: &str) -> u64 {
+        self.sub_revisions.get(doc_id).copied().unwrap_or(0)
+    }
+
+    /// Content generations for `doc` (`None`: the main transcript), only
+    /// while they describe that doc's current revision. A transcript changed
+    /// any other way (tests, local clears) reports `None` and callers fall
+    /// back to deriving content from the entries themselves.
+    pub(crate) fn entry_generations(&self, doc: Option<&str>) -> Option<&EntryGenerations> {
+        match doc {
+            None => Some(&self.transcript_generations)
+                .filter(|g| g.valid_at(self.main_transcript_revision())),
+            Some(doc) => self
+                .sub_generations
+                .get(doc)
+                .filter(|g| g.valid_at(self.sub_revision(doc))),
+        }
+    }
+
+    /// An optimistic echo changed for `chat_id`: views showing it re-derive,
+    /// while recorded entry generations stay valid (echoes are not entries).
+    fn bump_for_echo(&mut self, chat_id: &str) {
+        let main_valid = self
+            .transcript_generations
+            .valid_at(self.main_transcript_revision());
+        self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        if main_valid {
+            let at = self.main_transcript_revision();
+            self.transcript_generations.restamp(at);
+        }
+        if self.sub_transcripts.contains_key(chat_id) {
+            let before = self.sub_revision(chat_id);
+            let revision = next_generation(&mut self.generation_counter);
+            self.sub_revisions.insert(chat_id.to_string(), revision);
+            if let Some(generations) = self.sub_generations.get_mut(chat_id)
+                && generations.valid_at(before)
+            {
+                generations.restamp(revision);
+            }
+        }
     }
 
     /// A subagent doc's current transcript copy (empty until its watch's
@@ -1703,6 +2182,8 @@ impl AppState {
             return;
         };
         self.sub_transcripts.entry(doc_id.clone()).or_default();
+        let revision = next_generation(&mut self.generation_counter);
+        self.sub_revisions.insert(doc_id.clone(), revision);
         let task = spawn_subagent_watch(cx, handle, doc_id.clone());
         self.sub_watch_tasks.insert(doc_id, task);
     }
@@ -1711,8 +2192,11 @@ impl AppState {
     /// unpins the doc from the engine LRU) and the rows.
     pub fn unwatch_subagent_doc(&mut self, doc_id: &str) {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        self.sub_only_revisions = self.sub_only_revisions.wrapping_add(1);
         self.sub_watch_tasks.remove(doc_id);
         self.sub_transcripts.remove(doc_id);
+        self.sub_revisions.remove(doc_id);
+        self.sub_generations.remove(doc_id);
         // A right-pane child chat is watched by its chat id, which is also
         // the main transcript's baseline key once that child is selected.
         if self.selected_chat.as_deref() != Some(doc_id) {
@@ -1856,6 +2340,18 @@ impl AppState {
     /// watch needed (and any in-flight watch is superseded).
     pub fn set_subagent_snapshot(&mut self, doc_id: String, entries: Vec<SessionMessageEntry>) {
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
+        self.sub_only_revisions = self.sub_only_revisions.wrapping_add(1);
+        let revision = next_generation(&mut self.generation_counter);
+        self.sub_revisions.insert(doc_id.clone(), revision);
+        let generations = self.sub_generations.entry(doc_id.clone()).or_default();
+        let plan = generations.plan_reset(false, &[], &entries, &mut self.generation_counter);
+        generations.finish(
+            plan,
+            false,
+            &entries,
+            &mut self.generation_counter,
+            revision,
+        );
         self.sub_watch_tasks.remove(&doc_id);
         self.transcript_baselines.insert(
             doc_id.clone(),
@@ -1869,7 +2365,7 @@ impl AppState {
         let echoes = self.echoes.entry(chat_id.to_string()).or_default();
         if !echoes.iter().any(|e| e.id == entry.id) {
             echoes.push(entry);
-            self.transcript_revision = self.transcript_revision.wrapping_add(1);
+            self.bump_for_echo(chat_id);
         }
     }
 
@@ -1879,7 +2375,7 @@ impl AppState {
             let previous_len = echoes.len();
             echoes.retain(|e| e.id != message_id);
             if echoes.len() != previous_len {
-                self.transcript_revision = self.transcript_revision.wrapping_add(1);
+                self.bump_for_echo(chat_id);
             }
         }
     }
@@ -2291,6 +2787,9 @@ impl AppState {
         self.spaces_synced = false;
         self.transcript.clear();
         self.transcript_baselines.clear();
+        self.recent_transcript = None;
+        self.reopen_seed = None;
+        self.transcript_token = None;
         self.context_usage = None;
         self.context_control = Default::default();
         self.provider_notice = None;
@@ -2302,6 +2801,8 @@ impl AppState {
         for (chat_id, _) in self.pane_chats.drain() {
             self.sub_watch_tasks.remove(&chat_id);
             self.sub_transcripts.remove(&chat_id);
+            self.sub_revisions.remove(&chat_id);
+            self.sub_generations.remove(&chat_id);
         }
         self.echoes.clear();
         self.pending_sends.clear();
@@ -2461,8 +2962,14 @@ impl AppState {
         self.connection = ConnectionStatus::Ready;
         // Re-subscribe the transcript if a chat was already selected (reconnect path).
         if let Some(chat_id) = self.selected_chat.clone() {
-            self.transcript_task =
-                Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+            // A reconnect never offers a token: an ordinary reset (which
+            // still compares against a kept copy not yet consumed).
+            self.transcript_task = Some(spawn_transcript_watch(
+                cx,
+                handle.clone(),
+                chat_id.clone(),
+                None,
+            ));
             self.native_tasks_task = Some(spawn_native_tasks_watch(
                 cx,
                 handle.clone(),
@@ -2623,8 +3130,63 @@ impl AppState {
         if let Some(previous) = &self.selected_chat {
             self.transcript_baselines.remove(previous);
         }
+        // Bounded reopen reuse (slice 6): keep ONE outgoing chat's entries
+        // and generations; the incoming chat's own kept copy (if it is the
+        // one) only seeds the generations of its first reset, by content.
+        let incoming = self
+            .recent_transcript
+            .take()
+            .filter(|recent| Some(&recent.chat_id) == chat_id.as_ref());
+        let outgoing = self.selected_chat.clone().and_then(|chat_id| {
+            if !self
+                .transcript_generations
+                .valid_at(self.main_transcript_revision())
+            {
+                return None;
+            }
+            match charged_transcript(&self.transcript, self.recent_limits) {
+                Ok(charge) => {
+                    crate::perf_counters::count(
+                        "cache.recent_admitted",
+                        &chat_id,
+                        charge.0 as u64,
+                        charge.2 as u64,
+                    );
+                    Some((chat_id, charge))
+                }
+                Err(reason) => {
+                    if crate::perf_counters::enabled() {
+                        crate::perf_counters::count(
+                            "cache.recent_rejected",
+                            &format!("{chat_id}:{reason}"),
+                            self.transcript.len() as u64,
+                            0,
+                        );
+                    }
+                    None
+                }
+            }
+        });
+        // Kept with its host token only while that token still describes
+        // exactly these entries (generations are valid: checked above).
+        let outgoing_token = outgoing
+            .as_ref()
+            .and_then(|_| self.valid_transcript_token().map(str::to_owned));
+        self.transcript_token = None;
+        let entries = std::mem::take(&mut self.transcript);
+        let generations = std::mem::take(&mut self.transcript_generations);
+        self.recent_transcript = outgoing.map(|(chat_id, charge)| RecentTranscript {
+            chat_id,
+            entries,
+            generations,
+            charge,
+            token: outgoing_token,
+        });
+        // Offered once on the incoming chat's first subscribe; the copy
+        // itself is shown only after the host confirms it.
+        let known_token = incoming.as_ref().and_then(|seed| seed.token.clone());
+        self.reopen_seed = incoming;
         self.selected_chat = chat_id.clone();
-        self.transcript.clear();
         self.context_usage = None;
         self.context_control = Default::default();
         self.provider_notice = None;
@@ -2648,8 +3210,12 @@ impl AppState {
             }
         }
         if let (Some(chat_id), Some(handle)) = (chat_id, self.engine.clone()) {
-            self.transcript_task =
-                Some(spawn_transcript_watch(cx, handle.clone(), chat_id.clone()));
+            self.transcript_task = Some(spawn_transcript_watch(
+                cx,
+                handle.clone(),
+                chat_id.clone(),
+                known_token,
+            ));
             self.native_tasks_task = Some(spawn_native_tasks_watch(
                 cx,
                 handle.clone(),
@@ -3143,10 +3709,50 @@ fn spawn_local_device_probe(cx: &mut Context<AppState>, handle: EngineHandle) ->
     })
 }
 
+/// Decode one `WatchDocMessages` frame on the background executor and return
+/// it to the watch loop, which awaits it before taking the next frame (arrival
+/// order kept, at most one decode in flight). The caller's guards (selection,
+/// binding, entity alive, desync) all run after this returns, on the UI
+/// thread; a malformed frame comes back as the decoder's error message for
+/// the existing retry path. A dropped watch drops the awaiting task, and the
+/// finished decode is discarded. Opt-in counters are thread-local, so the
+/// decode's own time is measured there and recorded here on the UI thread:
+/// `state.frame_decode` is the UI-observed wait (spawn to result), and
+/// `state.frame_decode_work_us` counts the background decode in microseconds
+/// (items / calls = mean). Ordinary builds measure nothing.
+async fn decode_transcript_frame(
+    cx: &mut AsyncApp,
+    value: serde_json::Value,
+    scope: impl FnOnce() -> String,
+) -> Result<luna_doc::TranscriptUpdate, String> {
+    let measure = crate::perf_counters::enabled();
+    let wait = crate::perf_counters::Timer::start("state.frame_decode", scope);
+    let (decoded, elapsed) = cx
+        .background_executor()
+        .spawn(async move {
+            let started = measure.then(std::time::Instant::now);
+            // The decoder's message is all the retry path logs.
+            let decoded =
+                luna_doc::TranscriptUpdate::from_json_value(value).map_err(|err| err.to_string());
+            (decoded, started.map(|started| started.elapsed()))
+        })
+        .await;
+    if let (Some(wait), Some(elapsed)) = (wait, elapsed) {
+        crate::perf_counters::count(
+            "state.frame_decode_work_us",
+            wait.scope(),
+            elapsed.as_micros().min(u64::MAX as u128) as u64,
+            0,
+        );
+    }
+    decoded
+}
+
 fn spawn_transcript_watch(
     cx: &mut Context<AppState>,
     handle: EngineHandle,
     chat_id: String,
+    known_token: Option<String>,
 ) -> Task<()> {
     cx.spawn(async move |this, cx| {
         // Outer loop: a delta desync (missed frame) resubscribes immediately
@@ -3158,8 +3764,19 @@ fn spawn_transcript_watch(
         // task itself is dropped by select_chat/apply_chats when the chat is
         // deselected or deleted, so retrying can't outlive relevance.
         const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+        // Warm reopen (slice 6): the kept copy's host token is offered on
+        // the FIRST subscribe only. Every retry, desync, reconnect or failed
+        // resume subscribes without it, for an ordinary reset, so a resume
+        // can never loop. Main always opts in to receive tokens
+        // (`transcriptResume`); an older host ignores both fields and sends
+        // its ordinary reset.
+        let mut known_token = known_token;
         'resubscribe: loop {
-            let params = serde_json::json!({ "chatId": chat_id });
+            let mut resuming = known_token.take();
+            let mut params = serde_json::json!({ "chatId": chat_id, "transcriptResume": true });
+            if let Some(token) = &resuming {
+                params["knownTranscriptToken"] = serde_json::Value::String(token.clone());
+            }
             let mut rx = match handle
                 .client()
                 .subscribe(methods::WATCH_DOC_MESSAGES, params)
@@ -3176,23 +3793,51 @@ fn spawn_transcript_watch(
                 }
             };
             while let Some(value) = rx.recv().await {
-                let update: luna_doc::TranscriptUpdate = match serde_json::from_value(value) {
+                // One frame at a time, decoded off the UI thread and awaited
+                // here before the next `recv`, so frames apply in arrival
+                // order; every guard below runs after the await.
+                let decoded =
+                    decode_transcript_frame(cx, value, || format!("main:{chat_id}")).await;
+                // Only this subscription's first frame can confirm a resume.
+                let resume = resuming.take();
+                let update: luna_doc::TranscriptUpdate = match decoded {
                     Ok(frame) => frame,
                     Err(err) => {
                         // Schema skew (a newer peer's entry shape arriving
                         // through sync): a skipped frame is a silently stale
                         // copy, so resubscribe for a fresh reset — delayed,
-                        // in case the reset itself is what can't parse.
+                        // in case the reset itself is what can't parse. A
+                        // failed resume also drops the kept copy and token.
                         tracing::warn!(error = %err, "malformed transcript frame; resubscribing");
+                        if resume.is_some()
+                            && this
+                                .update(cx, |state, _| state.discard_transcript_resume(&chat_id))
+                                .is_err()
+                        {
+                            return;
+                        }
                         cx.background_executor().timer(RETRY_DELAY).await;
                         continue 'resubscribe;
                     }
                 };
                 let mut desync = false;
+                let mut rejected = false;
                 let alive = this.update(cx, |state, cx| {
                     // Guard against a stale pump racing a newer selection.
                     if state.selected_chat.as_deref() == Some(chat_id.as_str()) {
-                        if let Err(err) = state.receive_transcript_update(update, cx) {
+                        let result = match &resume {
+                            Some(known) => {
+                                match state.receive_resumed_transcript_update(update, known, cx) {
+                                    ResumeOutcome::Applied(result) => result,
+                                    ResumeOutcome::Rejected => {
+                                        rejected = true;
+                                        Ok(())
+                                    }
+                                }
+                            }
+                            None => state.receive_transcript_update(update, cx),
+                        };
+                        if let Err(err) = result {
                             tracing::warn!(%chat_id, error = %err, "resubscribing transcript");
                             desync = true;
                         }
@@ -3200,6 +3845,11 @@ fn spawn_transcript_watch(
                 });
                 if alive.is_err() {
                     return;
+                }
+                if rejected {
+                    // Not a confirmation: an ordinary reset, right away.
+                    tracing::debug!(%chat_id, "transcript resume not confirmed; resubscribing");
+                    continue 'resubscribe;
                 }
                 if desync {
                     continue 'resubscribe;
@@ -3393,7 +4043,10 @@ fn spawn_subagent_watch(
                 }
             };
             while let Some(value) = rx.recv().await {
-                let update: luna_doc::TranscriptUpdate = match serde_json::from_value(value) {
+                // As the Main watch: decoded off the UI thread, one frame at
+                // a time, applied (or dropped) by the guards below.
+                let decoded = decode_transcript_frame(cx, value, || format!("pane:{doc_id}")).await;
+                let update: luna_doc::TranscriptUpdate = match decoded {
                     Ok(frame) => frame,
                     Err(err) => {
                         tracing::warn!(error = %err, "malformed subagent frame; resubscribing");
@@ -3407,10 +4060,41 @@ fn spawn_subagent_watch(
                     if let Some(rows) = state.sub_transcripts.get_mut(&doc_id) {
                         let frame = update.frame;
                         let text_only = is_text_append(&frame);
+                        // This doc's own revision and content generations
+                        // (slice 6): other views keep their rows.
+                        let before = state.sub_revisions.get(&doc_id).copied().unwrap_or(0);
+                        let generations = state.sub_generations.entry(doc_id.clone()).or_default();
+                        let valid = generations.valid_at(before);
+                        let plan =
+                            generations.plan(valid, rows, &frame, &mut state.generation_counter);
+                        let revision = next_generation(&mut state.generation_counter);
+                        state.sub_revisions.insert(doc_id.clone(), revision);
+                        state.sub_only_revisions = state.sub_only_revisions.wrapping_add(1);
+                        // Opt-in baseline counters (slice 6): observe only.
+                        if crate::perf_counters::enabled() {
+                            let scope = format!("pane:{doc_id}");
+                            crate::perf_counters::count("state.frame", &scope, 1, 0);
+                            if text_only {
+                                crate::perf_counters::count("state.frame_text_only", &scope, 1, 0);
+                            }
+                        }
                         state.transcript_revision = state.transcript_revision.wrapping_add(1);
                         if let Err(err) = luna_doc::apply_transcript_frame(rows, frame) {
                             tracing::warn!(%doc_id, error = %err, "resubscribing subagent watch");
                             desync = true;
+                        }
+                        if let Some(generations) = state.sub_generations.get_mut(&doc_id) {
+                            if desync {
+                                generations.invalidate();
+                            } else {
+                                generations.finish(
+                                    plan,
+                                    valid,
+                                    rows,
+                                    &mut state.generation_counter,
+                                    revision,
+                                );
+                            }
                         }
                         if !desync && let Some(baseline) = update.replay_baseline {
                             state
@@ -5427,6 +6111,35 @@ impl AppState {
             ),
             self.sessions_synced(),
         )
+    }
+
+    /// The kept recent transcript (slice 6): chat and admitted charge.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_recent_transcript(&self) -> serde_json::Value {
+        match &self.recent_transcript {
+            Some(recent) => serde_json::json!({
+                "chat": recent.chat_id,
+                "entries": recent.charge.0,
+                "parts": recent.charge.1,
+                "bytes": recent.charge.2,
+                "token": recent.token.is_some(),
+            }),
+            None => serde_json::Value::Null,
+        }
+    }
+
+    /// Lower (or restore, with `None`) the recent-transcript ceilings for a
+    /// post-measurement admission check: (entries, parts, bytes).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_set_recent_limits(&mut self, limits: Option<(usize, usize, usize)>) {
+        self.recent_limits = match limits {
+            Some((entries, parts, bytes)) => RecentLimits {
+                entries,
+                parts,
+                bytes,
+            },
+            None => RecentLimits::default(),
+        };
     }
 
     /// Exercise the production attachment/reconnect boundary after the

@@ -8391,6 +8391,20 @@ impl Render for Pickers {
                 closing,
             )
         };
+        // Opt-in layout probes (slice 6): named after the owning composer.
+        let probe_scope = crate::perf_counters::probes_enabled().then(|| match &self.binding {
+            crate::chat_binding::ChatBinding::Chat(chat) => format!("composer:pane:{chat}"),
+            crate::chat_binding::ChatBinding::Selected => format!(
+                "composer:main:{}",
+                self.state.read(cx).selected_chat.as_deref().unwrap_or("-")
+            ),
+        });
+        let model_chip = match &probe_scope {
+            Some(scope) => model_chip
+                .relative()
+                .child(crate::perf_counters::probe(format!("{scope}:model"))),
+            None => model_chip,
+        };
         let access = self.access_chip_content(&theme, cx);
         let permission_chip = self.trigger_chip(
             PickerKind::Permission,
@@ -8431,6 +8445,12 @@ impl Render for Pickers {
                 "permission-popover",
                 closing,
             )
+        };
+        let permission_chip = match &probe_scope {
+            Some(scope) => permission_chip
+                .relative()
+                .child(crate::perf_counters::probe(format!("{scope}:access"))),
+            None => permission_chip,
         };
         div()
             .flex()

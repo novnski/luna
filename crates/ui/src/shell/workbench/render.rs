@@ -14,6 +14,11 @@ use crate::motion::AnimationExt as _;
 pub(in crate::shell) const STRIP_HEIGHT: f32 = crate::surface_chrome::HEADER_HEIGHT;
 const TAB_HEIGHT: f32 = 28.0;
 const TAB_MIN_WIDTH: f32 = 72.0;
+/// A group narrower than this shows a compact strip (slice 6): one Group
+/// actions button instead of `+`, split and close, a smaller tab minimum and
+/// tighter padding, so the active tab keeps a usable hit target.
+const STRIP_COMPACT_WIDTH: f32 = 220.0;
+const TAB_MIN_WIDTH_COMPACT: f32 = 40.0;
 const TAB_MAX_WIDTH: f32 = 220.0;
 /// Below this frame-row width the Git actions show as icon buttons.
 const FOOTER_COMPACT_WIDTH: f32 = 360.0;
@@ -176,6 +181,46 @@ pub(in crate::shell) fn contained_plane(
         )
 }
 
+/// The width share of `pane_id` within the tree: the product of the saved
+/// ratios along its horizontal splits (vertical splits keep the width).
+pub(in crate::shell) fn pane_width_share(node: &model::Node, pane_id: &str) -> Option<f32> {
+    match node {
+        model::Node::Pane { id, .. } => (id == pane_id).then_some(1.0),
+        model::Node::Split {
+            axis,
+            ratio,
+            first,
+            second,
+            ..
+        } => {
+            let ratio = (*ratio as f32).clamp(model::RATIO_MIN, model::RATIO_MAX);
+            let horizontal = *axis == model::Axis::Horizontal;
+            pane_width_share(first, pane_id)
+                .map(|share| if horizontal { share * ratio } else { share })
+                .or_else(|| {
+                    pane_width_share(second, pane_id).map(|share| {
+                        if horizontal {
+                            share * (1.0 - ratio)
+                        } else {
+                            share
+                        }
+                    })
+                })
+        }
+    }
+}
+
+/// The workbench viewport's width inside a center column `column` wide:
+/// the frame's side insets plus the canvas hairline and padding.
+pub(in crate::shell) fn viewport_width_in(column: f32) -> f32 {
+    (column - 2.0 * CANVAS_INSET - 2.0 * VIEWPORT_INSET).max(0.0)
+}
+
+/// ADVISORY since the fit-to-window design (slice 6): the size the saved
+/// tree would need with every group at its minimum. Rendering no longer
+/// enforces it (groups share the viewport); divider drags, split creation
+/// and the `canvasMinimum` readback still use these minimums.
+///
 /// The smallest size the saved tree can take with every group at its
 /// minimum (320 x 240), keeping each split's saved ratio and axis: a
 /// horizontal split needs its first side's width at the ratio and its second
@@ -355,6 +400,7 @@ impl Shell {
         self.settle_workbench_drag(cx);
         self.workbench_keep_keyboard_home(window, cx);
         if self.prune_workbench_exits() {
+            crate::perf_counters::count("frame.request", "workbench_render#1", 1, 0);
             window.request_animation_frame();
         }
         let theme = Theme::of(cx).clone();
@@ -370,9 +416,9 @@ impl Shell {
             transcript_width,
             theme: theme.clone(),
         };
-        // The saved layout never squeezes a group below its minimum: the
-        // tree is laid out at least this large and the canvas scrolls.
-        let (min_width, min_height) = min_tree_size(&layout.root);
+        // The saved layout always fits the viewport: groups share the
+        // available width and height in their saved proportions (a resize
+        // never scrolls the workbench or rewrites the layout).
         let canvas_scroll = self.workbench_canvas_scroll(&layout, cx);
         let tree = self.render_workbench_node(&layout.root, &frame, window, cx);
         let canvas_fill = theme.canvas_fill();
@@ -434,21 +480,17 @@ impl Shell {
                         .inset_0(),
                     )
                     .child(
-                        // The content is the saved layout at no less than
-                        // every group's minimum size (footer and sidebars
-                        // are outside the viewport).
+                        // The content is the saved layout at exactly the
+                        // viewport's size (footer and sidebars are outside
+                        // it). The scroll container stays only so its handle
+                        // reads a zero range; inner scrolling (tab strips,
+                        // transcripts, code blocks) is the panes' own.
                         div()
                             .id("workbench-canvas-scroll")
                             .size_full()
                             .overflow_scroll()
                             .track_scroll(&canvas_scroll)
-                            .child(
-                                div()
-                                    .size_full()
-                                    .min_w(px(min_width))
-                                    .min_h(px(min_height))
-                                    .child(tree),
-                            ),
+                            .child(div().size_full().child(tree)),
                     )
                     .children(overflow_fades(&canvas_scroll, &theme))
                     .children(collapsing)
@@ -540,29 +582,11 @@ impl Shell {
             .as_ref()
             .filter(|(id, _)| id == split.id)
             .map(|(_, ratio)| *ratio);
-        // Keep both sides readable at the measured size without rewriting the
-        // saved ratio: a narrow window must not overwrite the wide layout.
-        let measured = self
-            .workbench
-            .geometry
-            .borrow()
-            .splits
-            .get(split.id)
-            .copied();
-        let ratio = {
-            let ratio = live.unwrap_or(split.ratio as f32);
-            match measured {
-                Some(bounds) => {
-                    let (extent, minimum) = if horizontal {
-                        (f32::from(bounds.size.width), MIN_PANE_WIDTH)
-                    } else {
-                        (f32::from(bounds.size.height), MIN_PANE_HEIGHT)
-                    };
-                    clamp_ratio(ratio, extent, minimum)
-                }
-                None => ratio.clamp(model::RATIO_MIN, model::RATIO_MAX),
-            }
-        };
+        // The saved (or live-dragged) ratio as is: groups scale with the
+        // window in their saved proportions, and nothing is written.
+        let ratio = live
+            .unwrap_or(split.ratio as f32)
+            .clamp(model::RATIO_MIN, model::RATIO_MAX);
         let first = self.render_workbench_node(split.first, frame, window, cx);
         let second = self.render_workbench_node(split.second, frame, window, cx);
         let theme = &frame.theme;
@@ -720,12 +744,10 @@ impl Shell {
         let body: AnyElement = match pane.active_chat_id {
             Some(chat) if chat == main => {
                 // Main: the shell's own transcript and composer at this
-                // pane's width (measured last frame).
+                // pane's CURRENT width (the last measurement only while the
+                // column width it was taken at still holds).
                 let width = self
-                    .workbench
-                    .geometry
-                    .borrow()
-                    .main_width
+                    .workbench_main_width_now(frame.main_content_width)
                     .unwrap_or(frame.main_content_width);
                 let transcript_width = frame.transcript_width.min(width);
                 div()
@@ -744,6 +766,10 @@ impl Shell {
         let geometry = self.workbench.geometry.clone();
         let measure_id = pane.id.to_string();
         let holds_main = pane.active_chat_id == Some(main.as_str());
+        let column_width = frame.main_content_width;
+        let used_main_width = holds_main
+            .then(|| self.workbench_main_width_now(column_width))
+            .flatten();
         let focus_pane = pane.id.to_string();
         let pane_focused = frame.layout.focused_pane_id == pane.id;
         let pane_focus = self.workbench_pane_focus(pane.id, window, cx);
@@ -769,11 +795,25 @@ impl Shell {
             }))
             .child(
                 gpui::canvas(
-                    move |bounds, _, _| {
+                    move |bounds, window, _| {
                         let mut geometry = geometry.borrow_mut();
                         geometry.panes.insert(measure_id.clone(), bounds);
                         if holds_main {
-                            geometry.main_width = Some(f32::from(bounds.size.width));
+                            let measured = f32::from(bounds.size.width);
+                            geometry.main_width = Some(measured);
+                            geometry.main_width_for = Some(column_width);
+                            // Laid out at another width than this frame used
+                            // (a resize, a divider move): one more frame
+                            // lays Main out at the measured width.
+                            if used_main_width.is_none_or(|used| (used - measured).abs() > 0.5) {
+                                crate::perf_counters::count(
+                                    "frame.request",
+                                    "workbench_render#main_width",
+                                    1,
+                                    0,
+                                );
+                                window.request_animation_frame();
+                            }
                         }
                     },
                     |_, _, _, _| {},
@@ -817,8 +857,17 @@ impl Shell {
             let tabs = geometry.tabs.entry(pane.id.to_string()).or_default();
             tabs.resize(pane.tabs.len(), (String::new(), Bounds::default()));
         }
+        // This frame's group width (saved share of the current viewport).
+        let compact = pane_width_share(&frame.layout.root, pane.id)
+            .map(|share| viewport_width_in(frame.main_content_width) * share)
+            .is_some_and(|width| width < STRIP_COMPACT_WIDTH);
         let tab_scroll = self.workbench_tab_scroll(pane, cx);
-        let tab_cap = self.workbench_tab_cap(pane.id, TAB_MIN_WIDTH, TAB_MAX_WIDTH, cx);
+        let tab_min = if compact {
+            TAB_MIN_WIDTH_COMPACT
+        } else {
+            TAB_MIN_WIDTH
+        };
+        let tab_cap = self.workbench_tab_cap(pane.id, tab_min, TAB_MAX_WIDTH, cx);
         let mut tabs: Vec<AnyElement> = Vec::with_capacity(pane.tabs.len());
         for (index, tab) in pane.tabs.iter().enumerate() {
             let active = pane.active_chat_id == Some(tab.chat_id.as_str());
@@ -986,6 +1035,15 @@ impl Shell {
             cx.stop_propagation();
             this.workbench_new_child_in_split(split_pane.clone(), cx);
         }));
+        // Opt-in layout probes (slice 6): the strip's controls per group.
+        let split = if crate::perf_counters::probes_enabled() {
+            split.relative().child(crate::perf_counters::probe(format!(
+                "strip:{}:split",
+                pane.id
+            )))
+        } else {
+            split
+        };
         let close = can_close_pane.then(|| {
             strip_button(
                 SharedString::from(format!("wb-close-pane-{}", pane.id)),
@@ -998,7 +1056,63 @@ impl Shell {
                 cx.stop_propagation();
                 this.workbench_close_pane(&close_pane, cx);
             }))
+            .when(crate::perf_counters::probes_enabled(), |close| {
+                close.relative().child(crate::perf_counters::probe(format!(
+                    "strip:{}:close",
+                    pane.id
+                )))
+            })
         });
+        // Compact: one Group actions button opens the tab menu with the
+        // group's actions (`+`, split, close) first; nothing is lost.
+        let more_pane = pane.id.to_string();
+        let more_chat = pane.active_chat_id.map(str::to_string).unwrap_or_default();
+        let more = strip_button(
+            SharedString::from(format!("wb-group-more-{}", pane.id)),
+            "Group actions",
+            Some("New thread or side chat, New thread in a split, Close group, and this tab's actions"),
+            icons::MORE_HORIZONTAL,
+            &theme,
+        )
+        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+            cx.stop_propagation();
+            this.open_workbench_group_menu(
+                more_chat.clone(),
+                more_pane.clone(),
+                event.position(),
+                cx,
+            );
+        }))
+        .when(crate::perf_counters::probes_enabled(), |more| {
+            more.relative()
+                .child(crate::perf_counters::probe(format!("strip:{}:more", pane.id)))
+        });
+        let more_geometry = self.workbench.geometry.clone();
+        let more_measure = pane.id.to_string();
+        let more = more.relative().child(
+            gpui::canvas(
+                move |bounds, _, _| {
+                    more_geometry
+                        .borrow_mut()
+                        .group_actions
+                        .insert(more_measure.clone(), bounds);
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .inset_0(),
+        );
+        {
+            // Only the painted control keeps readback bounds: `+` while
+            // wide, Group actions while compact.
+            let mut geometry = self.workbench.geometry.borrow_mut();
+            if compact {
+                geometry.plus.remove(pane.id);
+            } else {
+                geometry.group_actions.remove(pane.id);
+            }
+        }
+        let available = self.workbench_available();
         let accent = theme.accent;
         let view_geometry = self.workbench.geometry.clone();
         let view_pane = pane_id.clone();
@@ -1011,9 +1125,9 @@ impl Shell {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
-            .pl(px(6.0))
-            .pr(px(6.0))
+            .gap(px(if compact { 2.0 } else { 4.0 }))
+            .pl(px(if compact { 2.0 } else { 6.0 }))
+            .pr(px(if compact { 2.0 } else { 6.0 }))
             // No rule under the strip: the tabs, the selected tab's fill
             // and the chat's own context line read as one header of the
             // conversation below (only the split seam separates chats).
@@ -1053,9 +1167,12 @@ impl Shell {
                             .children(tabs),
                     ),
             )
-            .child(plus)
-            .when(self.workbench_available(), |el| el.child(split))
-            .children(close)
+            .when(!compact, |el| {
+                el.child(plus)
+                    .when(available, |el| el.child(split))
+                    .children(close)
+            })
+            .when(compact, |el| el.child(more))
             .when_some(marker, |el, x| {
                 el.child(
                     div()
@@ -2029,6 +2146,8 @@ impl Shell {
         &self,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        // Rows re-record their bounds as this render paints them.
+        self.workbench.geometry.borrow_mut().menu_rows.clear();
         let menu = self.workbench.menu.get()?.clone();
         let theme = Theme::of(cx).clone();
         let layout = self.workbench.layout();
@@ -2063,13 +2182,81 @@ impl Shell {
                 .aria_label(text)
                 .child(icon(glyph).size(px(16.0)).text_color(theme.text_muted))
                 .child(SharedString::from(text))
+                // Opt-in probe (slice 6): which rows the menu painted.
+                .when(crate::perf_counters::probes_enabled(), |row| {
+                    row.relative()
+                        .child(crate::perf_counters::probe(format!("wb-menu:{id}")))
+                })
+                // QA readback (`menuRows`): each painted row's bounds.
+                .relative()
+                .child({
+                    let geometry = self.workbench.geometry.clone();
+                    gpui::canvas(
+                        move |bounds, _, _| geometry.borrow_mut().menu_rows.push((id, bounds)),
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .inset_0()
+                })
         };
         let mut card = popover::popover_card(&theme)
             .w(px(232.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_workbench_menu(cx)))
             .flex()
             .flex_col();
-        if !is_main {
+        // A compact strip's Group actions: the strip's own `+`, split and
+        // close lead the menu (same actions, same availability).
+        if menu.group {
+            if model::pane(&layout, &menu.pane_id).is_some() {
+                let pane = menu.pane_id.clone();
+                card = card.child(
+                    row("wb-menu-new-child", icons::PLUS, "New thread or side chat…").on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.close_workbench_menu(cx);
+                            this.workbench_open_chooser(
+                                Some(pane.clone()),
+                                super::CreationKind::NewThread,
+                                cx,
+                            );
+                        }),
+                    ),
+                );
+                if self.workbench_available() {
+                    let pane = menu.pane_id.clone();
+                    card = card.child(
+                        row(
+                            "wb-menu-new-split",
+                            icons::SPLIT_COLUMNS,
+                            "New thread in a split",
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_workbench_menu(cx);
+                            this.workbench_new_child_in_split(pane.clone(), cx);
+                        })),
+                    );
+                }
+                let closable = model::has_split(&layout)
+                    && model::pane(&layout, &menu.pane_id)
+                        .is_some_and(|pane| !pane.holds(&layout.main_chat_id));
+                if closable {
+                    let pane = menu.pane_id.clone();
+                    card = card.child(
+                        row("wb-menu-close-group", icons::CLOSE, "Close group").on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.close_workbench_menu(cx);
+                                this.workbench_close_pane(&pane, cx);
+                            }),
+                        ),
+                    );
+                }
+            }
+            if !menu.chat_id.is_empty() {
+                card = card.child(popover::menu_separator());
+            }
+        }
+        // An empty group's Group actions has no tab to act on.
+        let tab = !menu.chat_id.is_empty();
+        if tab && !is_main {
             let chat = menu.chat_id.clone();
             card = card.child(row("wb-menu-close", icons::CLOSE, "Close tab").on_click(
                 cx.listener(move |this, _, _, cx| {
@@ -2093,13 +2280,18 @@ impl Shell {
                 })),
             );
         }
-        card = card.child(popover::menu_separator());
+        if tab {
+            card = card.child(popover::menu_separator());
+        }
         for (id, edge, text) in [
             ("wb-menu-split-right", Edge::Right, "Move to split right"),
             ("wb-menu-split-left", Edge::Left, "Move to split left"),
             ("wb-menu-split-down", Edge::Bottom, "Move to split below"),
             ("wb-menu-split-up", Edge::Top, "Move to split above"),
-        ] {
+        ]
+        .into_iter()
+        .filter(|_| tab)
+        {
             let chat = menu.chat_id.clone();
             card = card.child(row(id, icons::SPLIT_COLUMNS, text).on_click(cx.listener(
                 move |this, _, _, cx| {
@@ -2118,7 +2310,7 @@ impl Shell {
                 )),
             );
         }
-        if let Some(parent) = parent {
+        if let Some(parent) = parent.filter(|_| tab) {
             let text = if role == TabRole::Side {
                 "Go to source chat"
             } else {
@@ -2134,7 +2326,7 @@ impl Shell {
             );
         }
         // A fork (by lineage) can send its findings back to its source.
-        if self.findings_destination(&menu.chat_id, cx).is_some() {
+        if tab && self.findings_destination(&menu.chat_id, cx).is_some() {
             let fork = menu.chat_id.clone();
             card = card.child(
                 row(
@@ -2149,7 +2341,7 @@ impl Shell {
             );
         }
         // Any thread but Main (a fork too) can become its own workbench Main.
-        if role != TabRole::Main {
+        if tab && role != TabRole::Main {
             let chat = menu.chat_id.clone();
             card = card.child(popover::menu_separator()).child(
                 row(

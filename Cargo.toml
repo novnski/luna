@@ -69,6 +69,8 @@ loro-protocol = "0.3"
 # Linux — the Metal path's snapshot/blur/composite, ported).
 # Paint-time rounded image masks (#9), bounded Windows backdrop blur and
 # translucent compositing, plus blur-aware scene batching (#10).
+# LUNA treats native file-drag events as pointer input so ExternalPaths
+# drop targets remain hittable after keyboard input.
 gpui = { path = "vendor/zui/crates/gpui" }
 gpui_platform = { path = "vendor/zui/crates/gpui_platform", features = [
     "wayland",

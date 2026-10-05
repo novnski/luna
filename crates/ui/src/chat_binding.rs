@@ -116,6 +116,21 @@ impl ChatBinding {
         }
     }
 
+    /// A token that changes whenever the bound transcript's content does
+    /// (slice 6). `None` when its content is not tracked by recorded frames
+    /// (then callers must inspect the entries themselves).
+    pub fn transcript_token(&self, state: &AppState) -> Option<u64> {
+        match self {
+            _ if self.reads_selected(state) => state
+                .entry_generations(None)
+                .map(|_| state.main_transcript_revision()),
+            Self::Chat(id) => state
+                .entry_generations(Some(id))
+                .map(|_| state.sub_revision(id)),
+            Self::Selected => None,
+        }
+    }
+
     pub fn transcript<'a>(&self, state: &'a AppState) -> &'a [SessionMessageEntry] {
         match self {
             _ if self.reads_selected(state) => &state.transcript,

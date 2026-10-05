@@ -16,7 +16,7 @@
 //! another device POSTs a durable nudge to that device's room (§7 cold-chat delivery);
 //! the host's relay receives it and warm-opens the doc, which drains the queue.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -672,6 +672,45 @@ fn finish_queue_edit_projection(
 pub struct TranscriptSnapshot {
     pub entries: Arc<Vec<SessionMessageEntry>>,
     pub replay_baseline: Arc<luna_doc::TranscriptBaseline>,
+    /// Fresh per materialized content snapshot; never persisted or reused by
+    /// another host/chat. Metadata-only publications retain the same token.
+    pub content_token: Arc<str>,
+}
+
+/// Only slot numbers are retained between commits, never a second history.
+/// Structural edits and large batches take the complete reader's safe path.
+#[derive(Default)]
+enum TranscriptChanges {
+    #[default]
+    Unchanged,
+    Slots(BTreeSet<usize>),
+    All,
+}
+
+impl TranscriptChanges {
+    fn observe(&mut self, event: &loro::event::DiffEvent<'_>) {
+        for change in &event.events {
+            let path = change.path;
+            if !matches!(path.first(), Some((_, loro::Index::Key(key))) if key.as_str() == "messages")
+            {
+                continue;
+            }
+            let Some((_, loro::Index::Seq(index))) = path.get(1) else {
+                *self = Self::All;
+                return;
+            };
+            if matches!(self, Self::Unchanged) {
+                *self = Self::Slots(BTreeSet::new());
+            }
+            if let Self::Slots(slots) = self {
+                slots.insert(*index);
+                if slots.len() > 128 {
+                    *self = Self::All;
+                    return;
+                }
+            }
+        }
+    }
 }
 
 /// One open chat doc: the `SessionDoc`, its change plumbing, and the room client.
@@ -684,6 +723,10 @@ pub struct ChatDocHandle {
     /// task cannot publish recovered content before its presentation cutoff.
     transcript_import: Mutex<()>,
     transcript_history: Arc<Mutex<crate::transcript_history::TranscriptHistory>>,
+    transcript_changes: Arc<Mutex<TranscriptChanges>>,
+    /// The current mirror has exactly one row per raw slot, with no joins or
+    /// skipped malformed entries. Only that shape permits slot replacement.
+    mirror_slots_aligned: AtomicBool,
     /// Pending-message queue watch (WatchQueue). Cheap to rebuild — a handful
     /// of short rows — so unlike the transcript mirror it publishes on every
     /// change without a dirty flag.
@@ -788,9 +831,11 @@ impl ChatDocHandle {
             }
             self.messages_tx.subscribe()
         };
-        if self.mirror_dirty.load(Ordering::Acquire) {
-            self.publish_messages();
-        }
+        // Reconcile pending raw changes synchronously as well as dirty mirrors.
+        // A resumed viewer must never confirm an old token merely because the
+        // asynchronous change publisher has not run yet. Unchanged content
+        // retains its Arc and token without materializing the history.
+        self.publish_messages();
         rx
     }
 
@@ -883,20 +928,64 @@ impl ChatDocHandle {
 
     fn publish_messages(&self) {
         let _import = lock(&self.transcript_import);
-        self.mirror_dirty.store(false, Ordering::Release);
-        match self.doc.read_entries() {
+        let changes = std::mem::take(&mut *lock(&self.transcript_changes));
+        let dirty = self.mirror_dirty.swap(false, Ordering::AcqRel);
+        let previous = self.messages_tx.borrow().clone();
+        if !dirty && matches!(changes, TranscriptChanges::Unchanged) {
+            // Context, queue, notice and command commits still wake the RPC
+            // subscriber, which reads their fresh metadata independently.
+            self.messages_tx.send_replace(previous);
+            return;
+        }
+        let changed_entries = match &changes {
+            TranscriptChanges::Slots(slots)
+                if !dirty
+                    && self.mirror_slots_aligned.load(Ordering::Relaxed)
+                    && self.doc.doc().get_list("messages").len() == previous.entries.len() =>
+            {
+                let mut entries = (*previous.entries).clone();
+                let valid = slots.iter().all(|&index| {
+                    let Some(old) = entries.get_mut(index) else {
+                        return false;
+                    };
+                    match self.doc.read_entry_at(index) {
+                        Ok(Some(entry))
+                            if entry.id == old.id && entry.continuation_of.is_none() =>
+                        {
+                            *old = entry;
+                            true
+                        }
+                        _ => false,
+                    }
+                });
+                valid.then_some(entries)
+            }
+            _ => None,
+        };
+        let partial = changed_entries.is_some();
+        match changed_entries.map_or_else(|| self.doc.read_entries(), Ok) {
             Ok(entries) => {
                 let replay_baseline =
                     lock(&self.transcript_history).snapshot(self.doc.doc(), &entries);
-                let joined = join_continuation_entries(entries);
+                let aligned = partial
+                    || (self.doc.doc().get_list("messages").len() == entries.len()
+                        && entries.iter().all(|entry| entry.continuation_of.is_none()));
+                self.mirror_slots_aligned.store(aligned, Ordering::Relaxed);
+                let joined = if aligned {
+                    entries
+                } else {
+                    join_continuation_entries(entries)
+                };
                 // send_replace: update the watch even with no subscribers yet, so a
                 // late subscriber's first borrow sees the current transcript.
                 self.messages_tx.send_replace(TranscriptSnapshot {
                     entries: Arc::new(joined),
                     replay_baseline: replay_baseline.clone(),
+                    content_token: uuid::Uuid::new_v4().to_string().into(),
                 });
             }
             Err(err) => {
+                self.mirror_dirty.store(true, Ordering::Release);
                 tracing::warn!(chat = %self.chat_id, error = %err, "transcript read failed");
             }
         }
@@ -920,7 +1009,17 @@ impl ChatDocHandle {
     /// open doc (and kept a second transcript copy hot).
     fn publish_messages_if_watched(&self) {
         if self.messages_tx.receiver_count() == 0 {
+            let _import = lock(&self.transcript_import);
+            // An attach may have subscribed while this worker waited for an
+            // import. Do not erase its just-materialized mirror.
+            if self.messages_tx.receiver_count() > 0 {
+                drop(_import);
+                self.publish_messages();
+                return;
+            }
             self.mirror_dirty.store(true, Ordering::Release);
+            self.mirror_slots_aligned.store(false, Ordering::Relaxed);
+            *lock(&self.transcript_changes) = TranscriptChanges::All;
             // Shrink the stale mirror: watch_messages rebuilds on attach.
             self.messages_tx.send_replace(TranscriptSnapshot::default());
             *lock(&self.transcript_history) = Default::default();
@@ -2401,9 +2500,12 @@ impl DocHost {
             crate::transcript_history::TranscriptHistory::default(),
         ));
         let history = transcript_history.clone();
+        let transcript_changes = Arc::new(Mutex::new(TranscriptChanges::All));
+        let changes = transcript_changes.clone();
         let watched = messages_tx.clone();
         let weak_doc = Arc::downgrade(&doc);
         let sub = doc.doc().subscribe_root(Arc::new(move |diff| {
+            lock(&changes).observe(&diff);
             // This callback runs before the change worker can publish. The
             // import origin belongs to the event, so concurrent local commits
             // cannot inherit a remote replay's presentation classification.
@@ -2434,6 +2536,8 @@ impl DocHost {
             messages_tx,
             transcript_import: Mutex::default(),
             transcript_history,
+            transcript_changes,
+            mirror_slots_aligned: AtomicBool::new(false),
             queue_tx,
             drain_lock: self.queue_drain_gate(chat_id),
             queue_projection_lock: Mutex::new(()),

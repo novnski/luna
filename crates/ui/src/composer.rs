@@ -397,6 +397,40 @@ pub const CHIP_GAP: f32 = 4.0;
 /// Attach and Send are 28px circles.
 const ROW_BUTTON: f32 = 28.0;
 
+/// Narrow composers (slice 6): below this available width the pill's outer
+/// gutter and the input's side padding shrink with the width.
+const NARROW_COMPOSER_WIDTH: f32 = 360.0;
+/// The compact controls row: a tray button and Send at this size, with this
+/// inset (the pill's other controls move into the tray).
+const COMPACT_BUTTON: f32 = 24.0;
+const COMPACT_INSET: f32 = 4.0;
+/// Room the tray gives the picker chips (labels shown as on a wide row).
+const TRAY_CHIP_BUDGET: f32 = 320.0;
+
+/// The composer column's side gutter for an available width.
+pub fn composer_gutter(available: f32) -> f32 {
+    if available >= NARROW_COMPOSER_WIDTH {
+        Theme::SPACE_LG
+    } else {
+        (available * 0.04).clamp(2.0, Theme::SPACE_LG)
+    }
+}
+
+/// The text input's side padding inside the pill for an available width.
+pub fn input_side_padding(available: f32) -> f32 {
+    if available >= NARROW_COMPOSER_WIDTH {
+        16.0
+    } else {
+        (available * 0.06).clamp(6.0, 16.0)
+    }
+}
+
+/// Whether the full controls row (Attach, an icon-only model chip, access
+/// and Send at their normal sizes) fits a pill `surface_width` wide.
+pub fn controls_row_fits(surface_width: f32) -> bool {
+    controls_row_budget(surface_width) >= 2.0 * crate::pickers::ACCESS_CHIP_SIZE + CHIP_GAP
+}
+
 /// Width left for the model, access and Goal chips in a pill `surface_width`
 /// wide (border-box).
 pub fn controls_row_budget(surface_width: f32) -> f32 {
@@ -4758,6 +4792,18 @@ pub struct Composer {
     /// The recovery control already explains this saved-copy state.
     recovery_notice: Option<(String, SharedString)>,
     wizard: Option<Wizard>,
+    /// The last pending-question scan, keyed by binding key and the bound
+    /// transcript's content token: unchanged history is not rescanned.
+    pending_scan_cache: Option<((String, u64), Option<Wizard>)>,
+    /// The compact controls tray (narrow composers) is open.
+    controls_tray_open: bool,
+    /// The press on More found the tray open (its outside-press already
+    /// closed it), so that click must not reopen it.
+    controls_tray_press_was_open: bool,
+    /// A pane composer not painted recently skips the rescan; its next render
+    /// catches up (a hidden tab's composer cannot be answered meanwhile).
+    last_painted: Option<Instant>,
+    pending_scan_deferred: bool,
     wizard_focus: FocusHandle,
     /// Requests already answered locally (suppresses the panel until the doc
     /// frame marks them resolved).
@@ -5159,6 +5205,11 @@ impl Composer {
             launching_new_chat: false,
             failure: None,
             wizard: None,
+            pending_scan_cache: None,
+            controls_tray_open: false,
+            controls_tray_press_was_open: false,
+            last_painted: None,
+            pending_scan_deferred: false,
             wizard_focus: cx.focus_handle(),
             answered_requests: HashSet::new(),
             async_submissions: HashMap::new(),
@@ -7951,6 +8002,13 @@ impl Composer {
     /// skipped silently (matching the original's `image/*` filter); read
     /// failures and oversize files surface in the failure notice.
     pub(crate) fn add_paths(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        // Opt-in evidence (slice 6): which composer received the paths, how
+        // many have a known format, and how many staged.
+        let perf_scope = crate::perf_counters::enabled().then(|| self.perf_scope(cx));
+        let known = paths
+            .iter()
+            .filter(|path| attachments::format_by_extension(path).is_some())
+            .count();
         let mut staged = Vec::new();
         for path in &paths {
             if attachments::format_by_extension(path).is_none() {
@@ -7963,6 +8021,17 @@ impl Composer {
                     self.failure_key = Some(self.current_key.clone());
                     cx.notify();
                 }
+            }
+        }
+        if let Some(scope) = perf_scope {
+            crate::perf_counters::count(
+                "composer.add_paths",
+                &scope,
+                known as u64,
+                staged.len() as u64,
+            );
+            if self.queue_edit_finishing && !staged.is_empty() {
+                crate::perf_counters::count("composer.add_staged_blocked", &scope, 1, 0);
             }
         }
         self.add_staged(staged, cx);
@@ -8403,6 +8472,7 @@ impl Composer {
                     let progress =
                         motion::MotionSpec::new(240, motion::EASE_OUT_EXPO).progress(raw);
                     card = card.opacity(progress).top(px(8.0 * (1.0 - progress)));
+                    crate::perf_counters::count("frame.request", "composer#1", 1, 0);
                     window.request_animation_frame();
                 }
             }
@@ -9344,7 +9414,21 @@ impl Composer {
         }
     }
 
+    /// Counter scope (slice 6): `main:<chat>` for Main's composer,
+    /// `pane:<chat>` for a tab's.
+    fn perf_scope(&self, cx: &gpui::App) -> String {
+        match &self.binding {
+            crate::chat_binding::ChatBinding::Chat(chat) => format!("pane:{chat}"),
+            crate::chat_binding::ChatBinding::Selected => format!(
+                "main:{}",
+                self.state.read(cx).selected_chat.as_deref().unwrap_or("-")
+            ),
+        }
+    }
+
     fn on_state_changed(&mut self, cx: &mut Context<Self>) {
+        // Opt-in baseline counters (slice 6): observe only.
+        let _perf = crate::perf_counters::Timer::start("composer.observe", || self.perf_scope(cx));
         self.sync_draft_engine_generation(cx);
         self.sync_review_comment_draft(cx);
         {
@@ -9364,23 +9448,59 @@ impl Composer {
             .retain(|chat_id, _| self.interrupting.contains(chat_id));
 
         let editing_id = self.editing_queued.clone();
-        let (key, pending, edited_row_exists) = {
+        let (key, pending, edited_row_exists, scan_key) = {
             let s = self.state.read(cx);
             let transcript = self.binding.transcript(s);
             let queue = self.binding.queue(s);
-            (
-                self.binding.key(s),
+            let key = self.binding.key(s);
+            // Rescan the history only when this binding's content changed.
+            let scan_key = self
+                .binding
+                .transcript_token(s)
+                .map(|token| (key.clone(), token));
+            let hidden = matches!(self.binding, crate::chat_binding::ChatBinding::Chat(_))
+                && !self
+                    .last_painted
+                    .is_some_and(|at| at.elapsed() < Duration::from_millis(500));
+            let cached = self
+                .pending_scan_cache
+                .as_ref()
+                .filter(|(cached, _)| {
+                    Some(cached) == scan_key.as_ref()
+                        // Hidden: keep the last result for this same binding
+                        // until the next render rescans.
+                        || (hidden && scan_key.as_ref().is_some_and(|k| k.0 == cached.0))
+                })
+                .map(|(_, pending)| pending.clone());
+            if hidden && cached.is_some() {
+                self.pending_scan_deferred = true;
+            }
+            let pending = cached.unwrap_or_else(|| {
+                let mut scan = crate::perf_counters::Timer::start("composer.pending_scan", || {
+                    self.perf_scope(cx)
+                });
+                if let Some(scan) = scan.as_mut() {
+                    scan.items(transcript.len() as u64);
+                }
                 pending_input_request(transcript)
                     .map(|(id, questions)| Wizard::new(id, questions))
                     .or_else(|| {
                         pending_async_question(transcript)
                             .map(|(id, questions)| Wizard::new_async(id, questions))
-                    }),
+                    })
+            });
+            (
+                key,
+                pending,
                 editing_id
                     .as_ref()
                     .is_none_or(|id| queue.iter().any(|item| item.id == *id)),
+                scan_key,
             )
         };
+        if !self.pending_scan_deferred {
+            self.pending_scan_cache = scan_key.map(|scan_key| (scan_key, pending.clone()));
+        }
         self.observe_pending_draft_owner(&key, cx);
 
         // A queue edit belongs to exactly one visible row. Navigation or a
@@ -11896,9 +12016,104 @@ impl Composer {
         Some(rows)
     }
 
+    /// Whether the compact controls tray (a narrow composer's More) is open.
+    pub fn controls_tray_open(&self) -> bool {
+        self.controls_tray_open
+    }
+
+    /// Escape (the shell's capture chain, after an open picker): close the
+    /// tray without reaching the stop path or the draft.
+    pub fn close_controls_tray(&mut self, cx: &mut Context<Self>) {
+        self.controls_tray_open = false;
+        self.controls_tray_press_was_open = false;
+        cx.notify();
+    }
+
+    /// The compact controls row's leading slot: a tray button that opens
+    /// Attach and the picker group (model, access, Goal, usage, work) above
+    /// the pill. Picker popovers open from inside the tray; it stays open
+    /// while one of them is.
+    fn render_controls_tray(
+        &mut self,
+        attach: gpui::Stateful<gpui::Div>,
+        pickers: gpui::Div,
+        probe_scope: Option<String>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let open = self.controls_tray_open;
+        let hover: SharedString = format!("composer-tray-{}", cx.entity_id()).into();
+        let button = div()
+            .id("composer-controls-tray")
+            .role(gpui::Role::Button)
+            .aria_label("Composer controls")
+            .aria_expanded(open)
+            .tab_index(0)
+            .size(px(COMPACT_BUTTON))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_full()
+            .cursor_pointer()
+            .bg(if open {
+                crate::theme::ink(0.10)
+            } else {
+                motion::hover_blend(&hover, gpui::transparent_black(), crate::theme::ink(0.10))
+            })
+            .on_hover(motion::hover_listener(hover))
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                this.controls_tray_press_was_open = this.controls_tray_open;
+            }))
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                let pressed_open = std::mem::take(&mut this.controls_tray_press_was_open);
+                this.controls_tray_open = !pressed_open && !this.controls_tray_open;
+                cx.notify();
+            }))
+            .tooltip(|_, cx| crate::pickers::ControlTooltip::view("Composer controls", None, cx))
+            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+            .relative()
+            .child(
+                crate::icons::icon(crate::icons::MORE_HORIZONTAL)
+                    .size(px(16.0))
+                    .text_color(theme.text_muted),
+            )
+            .when_some(probe_scope, |el, scope| {
+                el.child(crate::perf_counters::probe(format!("{scope}:more")))
+            });
+        let button = if open {
+            let tray = crate::popover::popover_card(theme)
+                .id("composer-controls-tray-card")
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    // A picker opened from the tray keeps it open.
+                    if !this.pickers.read(cx).is_open() {
+                        this.controls_tray_open = false;
+                        cx.notify();
+                    }
+                }))
+                .p(px(6.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(ACTION_UTILITY_GAP))
+                .child(attach)
+                .child(pickers);
+            button.child(crate::popover::anchored_menu_above(
+                "composer-controls-tray-menu",
+                tray.into_any_element(),
+                None,
+            ))
+        } else {
+            button
+        };
+        button.into_any_element()
+    }
+
     fn render_send_button(
         &mut self,
         mode: SendButtonMode,
+        size: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::of(cx);
@@ -11907,7 +12122,7 @@ impl Composer {
         match mode {
             SendButtonMode::Stop => div()
                 .id("composer-stop")
-                .size(px(28.0))
+                .size(px(size))
                 .flex_none()
                 .rounded_full()
                 .bg(theme.text)
@@ -11925,7 +12140,7 @@ impl Composer {
                 let blocked = self.send_blocked(cx);
                 div()
                     .id("composer-send")
-                    .size(px(28.0))
+                    .size(px(size))
                     .flex_none()
                     .rounded_full()
                     .bg(theme.text)
@@ -11972,6 +12187,13 @@ impl Focusable for Composer {
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.last_painted = Some(Instant::now());
+        if std::mem::take(&mut self.pending_scan_deferred) {
+            // Shown again: catch up on the history changes skipped while
+            // hidden, right after this render (the same path as an
+            // app-state change).
+            cx.defer_in(window, |this, _, cx| this.on_state_changed(cx));
+        }
         if self.focus_pending {
             self.focus_pending = false;
             let focus = self.input.focus_handle(cx);
@@ -12105,6 +12327,14 @@ impl Render for Composer {
                 (text, offline)
             })
         };
+        // Narrow composers (slice 6) tighten from the CURRENT available
+        // width: the column gutter, the input padding and the controls row.
+        let available = self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH);
+        let gutter = composer_gutter(available);
+        let compact = !controls_row_fits(available - 2.0 * gutter);
+        if !compact && self.controls_tray_open {
+            self.controls_tray_open = false;
+        }
         // Centered composer column (luna `mx-auto w-full max-w-3xl`).
         let container =
             div()
@@ -12114,7 +12344,7 @@ impl Render for Composer {
                 .flex()
                 .flex_col()
                 .gap(px(Theme::SPACE_SM))
-                .px(px(Theme::SPACE_LG))
+                .px(px(gutter))
                 .pb(px(Theme::SPACE_LG))
                 .when_some(failure, |el, message| {
                     let offline = message.as_ref() == "Engine not connected";
@@ -12394,12 +12624,14 @@ impl Render for Composer {
             .height_morph
             .map_or(target_height, |m| m.height(target_height, now_ms));
         if self.height_morph.is_some() {
+            crate::perf_counters::count("frame.request", "composer#2", 1, 0);
             window.request_animation_frame();
         }
         if self.flip_morph.is_some_and(|m| m.done(now_ms)) {
             self.flip_morph = None;
         } else if self.flip_morph.is_some() {
             // Manual tween drive: keep frames coming (shell.rs motion_active).
+            crate::perf_counters::count("frame.request", "composer#3", 1, 0);
             window.request_animation_frame();
         }
         self.last_rendered_height = pill_height;
@@ -12436,7 +12668,22 @@ impl Render for Composer {
             }
         });
 
-        let send_button = self.render_send_button(mode, cx);
+        // Opt-in layout probes (slice 6 narrow-pane checks): painted bounds
+        // of each control; layout-neutral and absent unless layout probes
+        // are on (never while measuring).
+        let probe_scope = crate::perf_counters::probes_enabled()
+            .then(|| format!("composer:{}", self.perf_scope(cx)));
+        let send_button =
+            self.render_send_button(mode, if compact { COMPACT_BUTTON } else { ROW_BUTTON }, cx);
+        let send_button = match &probe_scope {
+            Some(scope) => div()
+                .flex_none()
+                .relative()
+                .child(send_button)
+                .child(crate::perf_counters::probe(format!("{scope}:send")))
+                .into_any_element(),
+            None => send_button,
+        };
         // Attach button — opens the native image picker (the original's hidden
         // `<input type=file accept="image/*" multiple>`); paste/drop also feed
         // the same strip. The leading utility group owns the spacing between
@@ -12472,6 +12719,12 @@ impl Render for Composer {
                     .left(px(1.0))
                     .text_color(theme.text_muted),
             );
+        let attach = match &probe_scope {
+            Some(scope) => attach
+                .relative()
+                .child(crate::perf_counters::probe(format!("{scope}:attach"))),
+            None => attach,
+        };
         // Staged-thumbnail strip (attachment-ui.tsx AttachmentStrip), above
         // the input inside the pill.
         let strip = self.render_attachment_strip(&theme, cx);
@@ -12539,12 +12792,16 @@ impl Render for Composer {
         let (model_full, model_name_only) = self.pickers.read(cx).model_chip_widths(window, cx);
         // The Work chip (focused chat only) takes a fixed slot first.
         let work_width = self.work_chip_width(cx);
-        let row_budget = controls_row_budget(surface_width)
-            - if work_width > 0.0 {
-                work_width + CHIP_GAP
-            } else {
-                0.0
-            };
+        // Compact: the chips live in the tray, with room for their labels.
+        let row_budget = if compact {
+            TRAY_CHIP_BUDGET
+        } else {
+            controls_row_budget(surface_width)
+        } - if work_width > 0.0 {
+            work_width + CHIP_GAP
+        } else {
+            0.0
+        };
         let fit = controls_row_fit(
             row_budget,
             model_full,
@@ -12583,7 +12840,11 @@ impl Render for Composer {
             .child(div().min_w_0().child(self.pickers.clone()))
             .children(goal_mode_chip)
             .children(usage_chip)
-            .children(work_chip);
+            .children(work_chip)
+            .when_some(probe_scope.clone(), |el, scope| {
+                el.relative()
+                    .child(crate::perf_counters::probe(format!("{scope}:pickers")))
+            });
         // Textarea on top (`px-4 pb-1 pt-4`), actions row (12px bottom + 2px
         // top, 32px chips → 46px) ABSOLUTE at the pill's stationary bottom —
         // the pill sits at the bottom of its column and grows upward, so the
@@ -12603,10 +12864,18 @@ impl Render for Composer {
                     .h(px(textarea_height))
                     .flex_none()
                     .overflow_hidden()
-                    .px(px(16.0))
+                    .px(px(input_side_padding(available)))
                     .pt(px(TEXTAREA_PAD_TOP))
                     .pb(px(TEXTAREA_PAD_V - TEXTAREA_PAD_TOP))
-                    .child(self.render_input_with_completion()),
+                    .child(match probe_scope.clone() {
+                        // Probe the input itself (its usable text width),
+                        // not the padded container.
+                        Some(scope) => self
+                            .render_input_with_completion()
+                            .child(crate::perf_counters::probe(format!("{scope}:input")))
+                            .into_any_element(),
+                        None => self.render_input_with_completion().into_any_element(),
+                    }),
             )
             .child(
                 div()
@@ -12620,12 +12889,30 @@ impl Render for Composer {
                     .items_center()
                     // The attachment belongs to the utility pickers, while
                     // Send has a larger structural separation.
-                    .gap(px(ACTION_PRIMARY_GAP))
-                    .pl(px(ACTIONS_ROW_INSET))
-                    .pr(px(ACTIONS_ROW_INSET))
+                    .gap(px(if compact { 2.0 } else { ACTION_PRIMARY_GAP }))
+                    .pl(px(if compact {
+                        COMPACT_INSET
+                    } else {
+                        ACTIONS_ROW_INSET
+                    }))
+                    .pr(px(if compact {
+                        COMPACT_INSET
+                    } else {
+                        ACTIONS_ROW_INSET
+                    }))
                     .pt(px(2.0))
-                    .pb(px(12.0))
-                    .child(
+                    .pb(px(if compact { 8.0 } else { 12.0 }))
+                    .child(if compact {
+                        // Narrow: one tray button holds Attach and the
+                        // pickers (all their popovers and options intact).
+                        self.render_controls_tray(
+                            attach,
+                            model_picker,
+                            probe_scope.clone(),
+                            &theme,
+                            cx,
+                        )
+                    } else {
                         div()
                             .flex_1()
                             .min_w_0()
@@ -12634,8 +12921,9 @@ impl Render for Composer {
                             .items_center()
                             .gap(px(ACTION_UTILITY_GAP))
                             .child(attach)
-                            .child(model_picker),
-                    )
+                            .child(model_picker)
+                            .into_any_element()
+                    })
                     .child(send_button),
             );
         // With new-thread artwork behind the composer, the selector labels
@@ -12689,6 +12977,9 @@ impl Render for Composer {
         let pill_surface = div()
             .relative()
             .id("composer-surface")
+            .when_some(probe_scope.clone(), |el, scope| {
+                el.child(crate::perf_counters::probe(format!("{scope}:pill")))
+            })
             .child(crate::frost::frosted(surface_radius, 16.0, body))
             .child({
                 let measured = self.surface_bounds.clone();

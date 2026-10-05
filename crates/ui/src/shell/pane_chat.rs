@@ -738,6 +738,9 @@ impl PaneChatView {
 
 impl Render for PaneChatView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Opt-in baseline counters (slice 6): observe only.
+        let _perf =
+            crate::perf_counters::Timer::start("pane.render", || format!("pane:{}", self.chat_id));
         let theme = Theme::of(cx).clone();
         let (chrome, archived, loading) = self.chrome(cx);
         let open_id = self.chat_id.clone();
@@ -866,6 +869,7 @@ impl PaneChatView {
                             {
                                 measured.set(next);
                                 measured_height.set(height);
+                                crate::perf_counters::count("frame.request", "pane_chat#1", 1, 0);
                                 window.request_animation_frame();
                             }
                         },
@@ -920,6 +924,51 @@ impl PaneChatView {
             .flex()
             .flex_col()
             .text_color(theme.text)
+            // Drops are owned by the pointer: whatever lands on this pane is
+            // staged in THIS pane's composer (never Main's, never by keyboard
+            // focus), with Main's dropzone semantics. Archived panes have no
+            // composer and accept nothing.
+            .when(!archived, |pane| {
+                pane.on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
+                    let paths = paths.paths().to_vec();
+                    // Opt-in evidence (slice 6): this pane's handler fired.
+                    crate::perf_counters::count("drop.external", "pane", paths.len() as u64, 0);
+                    this.composer
+                        .update(cx, |composer, cx| composer.add_paths(paths, cx));
+                    cx.stop_propagation();
+                    cx.notify();
+                }))
+                .on_drop::<crate::files::WorkspacePathDrag>(cx.listener(
+                    |this, payload: &crate::files::WorkspacePathDrag, window, cx| {
+                        this.composer.update(cx, |composer, cx| {
+                            composer.add_workspace_path(
+                                &payload.path,
+                                payload.is_directory,
+                                window,
+                                cx,
+                            )
+                        });
+                        cx.stop_propagation();
+                        cx.notify();
+                    },
+                ))
+                .on_drop::<super::RightTabDrag>(cx.listener(
+                    |this, payload: &super::RightTabDrag, window, cx| {
+                        if let Some(path) = &payload.workspace_path {
+                            this.composer.update(cx, |composer, cx| {
+                                composer.add_workspace_path(
+                                    &path.path,
+                                    path.is_directory,
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
+                        cx.stop_propagation();
+                        cx.notify();
+                    },
+                ))
+            })
             .child(header)
             .child(body)
     }

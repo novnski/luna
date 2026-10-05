@@ -5043,6 +5043,7 @@ dependencies = [
  "luna-rpc",
  "luna-sync",
  "luna-update",
+ "mimalloc",
  "notify",
  "nucleo-matcher",
  "portable-pty",

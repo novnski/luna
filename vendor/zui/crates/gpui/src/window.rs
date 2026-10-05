@@ -5058,6 +5058,17 @@ impl Window {
         self.last_input_modality = match &event {
             PlatformInput::KeyDown(_) => InputModality::Keyboard,
             PlatformInput::MouseMove(_) | PlatformInput::MouseDown(_) => InputModality::Mouse,
+            // LUNA: an OS file drag is pointer input. It is translated below
+            // into MouseMove/MouseUp, but modality is read from the raw
+            // event, so after a keystroke the whole drop stayed in keyboard
+            // modality: every `Hitbox::is_hovered` returned false and no
+            // `on_drop::<ExternalPaths>` could fire (macOS delivers no
+            // mouse-moved events during a drag session to reset it).
+            PlatformInput::FileDrop(
+                FileDropEvent::Entered { .. }
+                | FileDropEvent::Pending { .. }
+                | FileDropEvent::Submit { .. },
+            ) => InputModality::Mouse,
             PlatformInput::Touch(_) => InputModality::Touch,
             _ => self.last_input_modality,
         };

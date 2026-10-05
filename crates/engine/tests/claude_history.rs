@@ -524,7 +524,9 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
         .await
         .unwrap();
     let side = created["meta"]["id"].as_str().unwrap();
-    let lease = created["lease"].as_str().unwrap();
+    // Side chats are persistent conversations; the compatibility RPC no
+    // longer issues an expiring view lease.
+    assert!(created["lease"].is_null());
     assert!(entries(&core, side).is_empty());
     let side_session = session(&core, side);
     let inherited = native_turns(&workspace, &side_session).await;
@@ -690,7 +692,7 @@ async fn claude_history_operations_use_native_identities_end_to_end() {
     client
         .call(
             methods::UNLOAD_SIDE_CHAT,
-            serde_json::json!({"id":side,"lease":lease}),
+            serde_json::json!({"id":side,"lease":""}),
         )
         .await
         .unwrap();

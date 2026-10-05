@@ -34,6 +34,69 @@ pub struct TranscriptUpdate {
     /// encoding. Omitted on ordinary live updates and by older engines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replay_baseline: Option<TranscriptBaseline>,
+    /// Optional, host-scoped identity of this exact immutable content snapshot.
+    /// Only opt-in readers receive it; older readers and hosts use full resets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_token: Option<String>,
+}
+
+impl TranscriptUpdate {
+    /// Decode the JSON RPC boundary without buffering the whole transcript
+    /// through both serde's flattened struct and untagged enum. Keep the
+    /// derived decoder for other formats and compatibility comparison.
+    pub fn from_json_value(value: serde_json::Value) -> serde_json::Result<Self> {
+        let serde_json::Value::Object(mut fields) = value else {
+            return serde_json::from_value(value);
+        };
+        fn take<T: serde::de::DeserializeOwned + Default>(
+            fields: &mut serde_json::Map<String, serde_json::Value>,
+            key: &str,
+        ) -> serde_json::Result<T> {
+            match fields.remove(key) {
+                Some(value) => serde_json::from_value(value),
+                None => Ok(T::default()),
+            }
+        }
+        let context_usage = take(&mut fields, "contextUsage")?;
+        let provider_notice = take(&mut fields, "providerNotice")?;
+        let context_control = take(&mut fields, "contextControl")?;
+        let replay_baseline = take(&mut fields, "replayBaseline")?;
+        let transcript_token = take(&mut fields, "transcriptToken")?;
+        // Match the untagged enum's Reset-first precedence, including its
+        // unusual but existing fallback from a malformed reset to a delta.
+        let reset = fields
+            .remove("reset")
+            .and_then(|value| serde_json::from_value::<Vec<SessionMessageEntry>>(value).ok());
+        let frame = if let Some(reset) = reset {
+            TranscriptFrame::Reset { reset }
+        } else {
+            #[derive(Deserialize)]
+            struct Delta {
+                #[serde(default)]
+                upsert: Vec<TranscriptUpsert>,
+                #[serde(default)]
+                append: Vec<TextAppend>,
+                #[serde(default)]
+                remove: Vec<String>,
+                count: usize,
+            }
+            let delta: Delta = serde_json::from_value(serde_json::Value::Object(fields))?;
+            TranscriptFrame::Delta {
+                upsert: delta.upsert,
+                append: delta.append,
+                remove: delta.remove,
+                count: delta.count,
+            }
+        };
+        Ok(Self {
+            frame,
+            context_usage,
+            provider_notice,
+            context_control,
+            replay_baseline,
+            transcript_token,
+        })
+    }
 }
 
 /// Compact presentation watermark: stable part ids and text byte lengths.
@@ -528,6 +591,7 @@ mod context_update_tests {
             }),
             context_control: luna_proto::ContextControlState::default(),
             provider_notice: None,
+            transcript_token: None,
         })
         .unwrap();
         assert_eq!(value["contextUsage"]["tokens"], 0);

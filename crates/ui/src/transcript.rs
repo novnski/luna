@@ -1269,8 +1269,12 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
                 acc.push(1);
                 acc.extend_from_slice(&(lines.len() as u32).to_le_bytes());
                 acc.extend_from_slice(&(*truncated_by as u32).to_le_bytes());
-                let bytes: usize = lines.iter().map(|l| l.len()).sum();
-                acc.extend_from_slice(&(bytes as u32).to_le_bytes());
+                // Content, not just length: a same-length rewrite of the
+                // output must re-splice (computed only when rows rebuild).
+                for line in lines.iter() {
+                    acc.extend_from_slice(line.as_bytes());
+                    acc.push(b'\n');
+                }
             }
             Some(ToolDetail::Thought {
                 lines,
@@ -1302,6 +1306,7 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
                 acc.extend_from_slice(&file.additions.to_le_bytes());
                 acc.extend_from_slice(&file.deletions.to_le_bytes());
                 acc.extend_from_slice(&(file.hunks.len() as u32).to_le_bytes());
+                acc.extend_from_slice(&fnv1a(format!("{:?}", file.hunks).as_bytes()).to_le_bytes());
             }
             Some(ToolDetail::Stats { stats }) => {
                 acc.push(3);
@@ -1432,8 +1437,9 @@ pub fn rows_for_entry(
         // transport); split them back out for the thumbnail strip.
         let parsed = crate::attachments::parse_user_message_images(&raw);
         // File mentions render as chips here too, not just in the composer.
-        // The projection is pure over the text, so the raw-length row version
-        // below stays a valid cache/diff key.
+        // The projection is pure over the text, so the raw-content row
+        // version below stays a valid cache/diff key (a same-length edit
+        // still re-splices).
         // Lifted before the mention projection, so a comment body's own
         // Markdown never lands in the bubble.
         let (body, badges) = crate::badges::split(&parsed.text);
@@ -1444,7 +1450,7 @@ pub fn rows_for_entry(
         let copy_text = (!text.trim().is_empty()).then(|| SharedString::from(text.clone()));
         return vec![Row {
             id: entry.id.clone().into(),
-            version: (raw.len() as u64) << 1 | pending as u64,
+            version: fnv1a(raw.as_bytes()) << 1 | pending as u64,
             turn_start: true,
             kind: RowKind::User {
                 text: text.into(),
@@ -1709,7 +1715,7 @@ pub fn rows_for_entry(
                     } => {
                         rows.push(Row {
                             id: format!("{}#{}", entry.id, part_id).into(),
-                            version: message.len() as u64,
+                            version: fnv1a(message.as_bytes()),
                             turn_start: false,
                             kind: RowKind::ErrorChip {
                                 // Harness-generated; the chip is one line.
@@ -1853,7 +1859,7 @@ pub fn parse_for_row(
     key: &str,
     text: &str,
     live_parsers: &mut HashMap<String, IncrementalParser>,
-    tree_cache: &mut HashMap<String, (usize, Arc<BlockTree>)>,
+    tree_cache: &mut HashMap<String, (usize, u64, Arc<BlockTree>)>,
 ) -> (Arc<BlockTree>, ParseOutcome) {
     if streaming {
         let parser = live_parsers.entry(key.to_string()).or_default();
@@ -1869,8 +1875,12 @@ pub fn parse_for_row(
             },
         )
     } else {
-        if let Some((len, tree)) = tree_cache.get(key)
+        // Keyed by content (length and hash): a same-length rewrite of a
+        // settled part must reparse, never reuse the old tree.
+        let hash = fnv1a(text.as_bytes());
+        if let Some((len, cached_hash, tree)) = tree_cache.get(key)
             && *len == text.len()
+            && *cached_hash == hash
         {
             return (tree.clone(), ParseOutcome::Cached);
         }
@@ -1883,7 +1893,7 @@ pub fn parse_for_row(
             }
             _ => (Arc::new(parse_full(text)), ParseOutcome::Full),
         };
-        tree_cache.insert(key.to_string(), (text.len(), tree.clone()));
+        tree_cache.insert(key.to_string(), (text.len(), hash, tree.clone()));
         (tree, outcome)
     }
 }
@@ -2502,10 +2512,229 @@ impl HighlightStore {
 // Transcript entity
 // ---------------------------------------------------------------------------
 
+/// What a cached row set was built from: the entry's recorded content
+/// generation (frames), or a fingerprint when no generation is known
+/// (optimistic echoes, transcripts written outside the frame path).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowKey {
+    Generation(u64),
+    Fingerprint(u64),
+}
+
 struct CachedRows {
-    fingerprint: u64,
+    key: RowKey,
     rows: Vec<Row>,
 }
+
+/// A row's side gutter for a transcript `width` wide (slice 6): the wide
+/// 48 px gutter from 480 px up; narrower groups keep their text column by
+/// shrinking it (10% of the width, at least 8 px). 0 = not measured yet.
+fn transcript_row_gutter(width: f32) -> f32 {
+    if width <= 0.0 || width >= 480.0 {
+        48.0
+    } else {
+        (width * 0.1).clamp(8.0, 48.0)
+    }
+}
+
+/// Ceilings for the one retained outgoing chat's row and tree caches
+/// (slice 6); caches over any of them are dropped, never retained.
+#[derive(Clone, Copy, Debug)]
+struct RetainedLimits {
+    entries: usize,
+    rows: usize,
+    /// Conservative charged bytes (see [`charged_caches`]).
+    bytes: usize,
+}
+
+impl Default for RetainedLimits {
+    fn default() -> Self {
+        Self {
+            entries: 10_000,
+            rows: 40_000,
+            bytes: 32 * 1024 * 1024,
+        }
+    }
+}
+
+/// Fixed charges (allocation headers, map nodes, enum payloads), generous.
+const ROW_CHARGE: usize = 256;
+const CACHE_ENTRY_CHARGE: usize = 128;
+
+fn charged_tree(tree: &BlockTree) -> usize {
+    // A parsed tree holds its source text in runs/code plus nested vectors:
+    // charge three times the source bytes plus a fixed charge per block.
+    tree.blocks
+        .iter()
+        .map(|block| block.range.end.saturating_sub(block.range.start) * 3 + 256)
+        .sum()
+}
+
+fn charged_detail(detail: &ToolDetail) -> usize {
+    match detail {
+        ToolDetail::Output {
+            lines, raw_text, ..
+        } => lines.iter().map(|line| line.len() + 32).sum::<usize>() + raw_text.len(),
+        ToolDetail::Thought { lines, .. } => {
+            lines.iter().flatten().map(|run| run.text.len() + 48).sum()
+        }
+        ToolDetail::Diff {
+            file,
+            old_text,
+            new_text,
+        } => {
+            file.path.len()
+                + file
+                    .hunks
+                    .iter()
+                    .map(|hunk| {
+                        hunk.header.len()
+                            + hunk
+                                .lines
+                                .iter()
+                                .map(|line| line.text.len() + 48)
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+                + old_text.as_ref().map_or(0, |t| t.len())
+                + new_text.as_ref().map_or(0, |t| t.len())
+        }
+        ToolDetail::Stats { stats } => stats.iter().map(|stat| stat.path.len() + 32).sum(),
+    }
+}
+
+/// One row's charge; trees and tool lists shared between rows (one `Arc`)
+/// are charged once through `seen`.
+fn charged_row(row: &Row, seen: &mut HashSet<usize>) -> usize {
+    let mut bytes = ROW_CHARGE
+        + row.id.len()
+        + row.entry_id.len()
+        + row.copy_text.as_ref().map_or(0, |t| t.len());
+    bytes += match &row.kind {
+        RowKind::User {
+            text,
+            mentions,
+            attachments,
+            badges,
+            ..
+        } => {
+            text.len() * 2
+                + mentions
+                    .iter()
+                    .map(|mention| 96 + mention.path.len())
+                    .sum::<usize>()
+                + attachments
+                    .iter()
+                    .map(|attachment| {
+                        512 + attachment.id.len()
+                            + attachment.path.len()
+                            + attachment.name.len()
+                            + attachment.appshot.as_ref().map_or(0, |appshot| {
+                                appshot.app_name.len()
+                                    + appshot.window_title.as_ref().map_or(0, String::len)
+                                    + appshot.bundle_identifier.as_ref().map_or(0, String::len)
+                            })
+                    })
+                    .sum::<usize>()
+                + badges
+                    .iter()
+                    .map(|badge| {
+                        256 + badge.label.len()
+                            + badge
+                                .details
+                                .iter()
+                                .map(|detail| {
+                                    64 + detail.location.len()
+                                        + detail.tag.as_ref().map_or(0, |tag| tag.len())
+                                        + detail.body.len()
+                                })
+                                .sum::<usize>()
+                    })
+                    .sum::<usize>()
+        }
+        RowKind::Markdown { tree, .. } | RowKind::LiveMarkdown { tree, .. } => {
+            if seen.insert(Arc::as_ptr(tree) as *const () as usize) {
+                charged_tree(tree)
+            } else {
+                0
+            }
+        }
+        RowKind::ToolGroup { tools, .. } => {
+            if seen.insert(Arc::as_ptr(tools) as *const () as usize) {
+                tools
+                    .iter()
+                    .map(|tool| {
+                        512 + tool.part_id.len()
+                            + serde_json::to_vec(&tool.call).map_or(64 * 1024, |b| b.len())
+                            + tool.detail.as_deref().map_or(0, charged_detail)
+                            + tool.invocation.as_deref().map_or(0, charged_detail)
+                            + tool.output_ref.as_ref().map_or(0, |r| r.len())
+                            + tool.diff_ref.as_ref().map_or(0, |r| r.len())
+                            + tool.subagent_ref.as_ref().map_or(0, |r| r.len())
+                            + tool.subagent_tail.as_ref().map_or(0, |t| t.len())
+                            + tool.subagent_activity.as_ref().map_or(0, |activity| {
+                                serde_json::to_vec(activity).map_or(64 * 1024, |b| b.len())
+                            })
+                    })
+                    .sum()
+            } else {
+                0
+            }
+        }
+        RowKind::InputChip { header, .. } => header.len(),
+        RowKind::ErrorChip { message } => message.len(),
+        RowKind::GoalAchieved { label } => label.len(),
+        RowKind::GeneratedImage {
+            owner,
+            path,
+            name,
+            mime_type,
+            ..
+        } => owner.len() + path.len() + name.len() + mime_type.len(),
+    };
+    bytes
+}
+
+/// The charge of a row cache plus its tree cache, or which ceiling it
+/// exceeds (checked as it goes). Returns (entries, rows, bytes).
+fn charged_caches(
+    rows: &HashMap<String, CachedRows>,
+    trees: &HashMap<String, (usize, u64, Arc<BlockTree>)>,
+    limits: RetainedLimits,
+) -> Result<(usize, usize, usize), &'static str> {
+    if rows.len() > limits.entries {
+        return Err("entries");
+    }
+    let mut seen = HashSet::new();
+    let (mut row_count, mut bytes) = (0usize, 0usize);
+    for (id, cached) in rows {
+        bytes += CACHE_ENTRY_CHARGE + id.len();
+        for row in &cached.rows {
+            row_count += 1;
+            bytes += charged_row(row, &mut seen);
+        }
+        if row_count > limits.rows {
+            return Err("rows");
+        }
+        if bytes > limits.bytes {
+            return Err("bytes");
+        }
+    }
+    for (key, (_, _, tree)) in trees {
+        bytes += CACHE_ENTRY_CHARGE + key.len();
+        if seen.insert(Arc::as_ptr(tree) as *const () as usize) {
+            bytes += charged_tree(tree);
+        }
+        if bytes > limits.bytes {
+            return Err("bytes");
+        }
+    }
+    Ok((rows.len(), row_count, bytes))
+}
+
+/// A pinned-doc view not painted within this long counts as hidden and
+/// defers its row derivation to its next render.
+const PAINTED_RECENTLY: Duration = Duration::from_millis(500);
 
 #[derive(Default, Clone, Copy)]
 struct FoldState {
@@ -3007,7 +3236,7 @@ pub struct Transcript {
     land_end_pending: bool,
     row_cache: HashMap<String, CachedRows>,
     live_parsers: HashMap<String, IncrementalParser>,
-    tree_cache: HashMap<String, (usize, Arc<BlockTree>)>,
+    tree_cache: HashMap<String, (usize, u64, Arc<BlockTree>)>,
     folds: HashMap<SharedString, FoldState>,
     /// Entrance state follows stable groups through completion so fast calls
     /// finish revealing. Replay rows have no entrance timestamps.
@@ -3060,6 +3289,21 @@ pub struct Transcript {
     render_cache: Rc<RefCell<RenderCache>>,
     workspace_link: Option<render::LinkUi>,
     rendered_rows: HashSet<SharedString>,
+    /// When this view was last painted (pinned-doc views defer their sync
+    /// while hidden), and whether a deferred sync awaits the next render.
+    last_painted: Cell<Option<Instant>>,
+    sync_deferred: bool,
+    /// The last chat this view left: its row and tree caches (one chat).
+    retained_caches: Option<(
+        String,
+        HashMap<String, CachedRows>,
+        HashMap<String, (usize, u64, Arc<BlockTree>)>,
+        (usize, usize, usize),
+    )>,
+    retained_limits: RetainedLimits,
+    /// This view's painted width, and the row gutter laid out for it.
+    measured_width: Rc<Cell<f32>>,
+    row_gutter: f32,
     /// Last UI typography generation reflected in `list` item measurements.
     /// Family and size changes can alter prose wrapping without changing row
     /// identity, so the virtual list must explicitly discard cached heights.
@@ -3293,7 +3537,7 @@ impl Transcript {
             .ok();
         });
         cx.on_release(|view, cx| view.diagrams.clear(cx)).detach();
-        let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
+        let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync_or_defer(cx));
         let text_changes = cx.subscribe(
             &state,
             |this: &mut Self, state, event: &crate::state::TranscriptTextChanged, cx| {
@@ -3302,7 +3546,7 @@ impl Transcript {
                     .as_deref()
                     .or_else(|| state.read(cx).selected_chat.as_deref());
                 if doc_id == Some(event.doc_id.as_str()) {
-                    this.sync(cx);
+                    this.sync_or_defer(cx);
                 }
             },
         );
@@ -3357,6 +3601,12 @@ impl Transcript {
             render_cache: Rc::new(RefCell::new(RenderCache::default())),
             workspace_link: None,
             rendered_rows: HashSet::new(),
+            last_painted: Cell::new(None),
+            sync_deferred: false,
+            retained_caches: None,
+            retained_limits: RetainedLimits::default(),
+            measured_width: Rc::new(Cell::new(0.0)),
+            row_gutter: 48.0,
             typography_generation: crate::typography::generation(cx),
             content_width: crate::settings::transcript_width(cx),
             code_fences_generation: crate::settings::code_fences_generation(cx),
@@ -4489,6 +4739,10 @@ impl Transcript {
             self.veil_attach_pending = true;
             return;
         }
+        // Opt-in baseline counters (slice 6): observe only.
+        let mut perf =
+            crate::perf_counters::Timer::start("transcript.sync", || self.perf_scope(cx))
+                .map(crate::perf_counters::Timer::with_pending);
         let (selected, replay) = {
             let s = self.state.read(cx);
             match &self.doc_override {
@@ -4519,13 +4773,24 @@ impl Transcript {
             Some(_) => luna_proto::GoalMarks::default(),
             None => self.state.read(cx).context_control.goal_marks.clone(),
         };
+        // This view's own doc revision: another chat's frame leaves it alone.
+        let revision = {
+            let state = self.state.read(cx);
+            match &self.doc_override {
+                Some(doc_id) => state.sub_revision(doc_id),
+                None => state.main_transcript_revision(),
+            }
+        };
         let source = (
             selected.clone(),
             replay,
-            self.state.read(cx).transcript_revision,
+            revision,
             goal_marks_fingerprint(&goal_marks),
         );
         if self.last_source.as_ref() == Some(&source) {
+            if let Some(perf) = &perf {
+                crate::perf_counters::count("transcript.sync_unchanged", perf.scope(), 0, 0);
+            }
             return;
         }
         self.last_source = Some(source);
@@ -4557,11 +4822,51 @@ impl Transcript {
                 self.own_turn_last_tick = None;
             }
             self.diagrams.clear(cx);
+            // Bounded reopen reuse (slice 6): keep ONE outgoing chat's row
+            // and tree caches; restore them only for that same chat. Rows are
+            // keyed by content generation (or a content fingerprint), so an
+            // entry that changed meanwhile simply rebuilds.
+            let incoming = self
+                .retained_caches
+                .take()
+                .filter(|(chat, ..)| Some(chat) == selected.as_ref());
+            // (A cache that was not admitted was dropped above; only the
+            // admitted one, under every ceiling, is ever restored.)
+            let outgoing_rows = std::mem::take(&mut self.row_cache);
+            let outgoing_trees = std::mem::take(&mut self.tree_cache);
+            if let Some(outgoing) = self.chat_id.clone()
+                && !outgoing_rows.is_empty()
+            {
+                match charged_caches(&outgoing_rows, &outgoing_trees, self.retained_limits) {
+                    Ok(charge) => {
+                        crate::perf_counters::count(
+                            "cache.rows_admitted",
+                            &outgoing,
+                            charge.1 as u64,
+                            charge.2 as u64,
+                        );
+                        self.retained_caches =
+                            Some((outgoing, outgoing_rows, outgoing_trees, charge));
+                    }
+                    Err(reason) => {
+                        if crate::perf_counters::enabled() {
+                            crate::perf_counters::count(
+                                "cache.rows_rejected",
+                                &format!("{outgoing}:{reason}"),
+                                outgoing_rows.len() as u64,
+                                0,
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some((_, rows, trees, _)) = incoming {
+                self.row_cache = rows;
+                self.tree_cache = trees;
+            }
             self.chat_id = selected;
             self.rows.clear();
-            self.row_cache.clear();
             self.live_parsers.clear();
-            self.tree_cache.clear();
             self.folds.clear();
             self.tool_group_reveals.clear();
             self.last_replay_baseline = None;
@@ -4633,6 +4938,16 @@ impl Transcript {
                 Some(doc_id) => state.sub_transcript(doc_id),
                 None => state.transcript.as_slice(),
             };
+            if let Some(perf) = perf.as_mut() {
+                crate::perf_counters::count(
+                    "transcript.entries_walked",
+                    perf.scope(),
+                    entries.len() as u64,
+                    0,
+                );
+                perf.items(entries.len() as u64);
+            }
+            let generations = state.entry_generations(self.doc_override.as_deref());
             for entry in entries {
                 for part in &entry.parts {
                     if run_live
@@ -4648,7 +4963,8 @@ impl Transcript {
                         }
                     }
                 }
-                let rows = self.rows_for(entry, false);
+                let generation = generations.and_then(|g| g.key(&entry.id));
+                let rows = self.rows_for(entry, false, generation);
                 new_rows.extend(apply_goal_marks(entry, &self.goal_marks, rows));
             }
             let echoes = match &self.doc_override {
@@ -4657,8 +4973,25 @@ impl Transcript {
                 Some(_) => &[],
             };
             for echo in echoes {
-                let rows = self.rows_for(echo, true);
+                let rows = self.rows_for(echo, true, None);
                 new_rows.extend(apply_goal_marks(echo, &self.goal_marks, rows));
+            }
+            // Bounded caches: rows and parsed trees of entries that left this
+            // transcript (rewind, compaction, removal) are dropped.
+            // Never before the opening replay: a just-restored cache waits
+            // for the reset that confirms which entries survive.
+            if replay != TranscriptReplayState::Pending
+                && self.row_cache.len() > entries.len() + echoes.len()
+            {
+                let live: HashSet<&str> = entries
+                    .iter()
+                    .chain(echoes.iter())
+                    .map(|entry| entry.id.as_str())
+                    .collect();
+                self.row_cache.retain(|id, _| live.contains(id.as_str()));
+                self.tree_cache.retain(|key, _| {
+                    live.contains(key.split_once('#').map_or(key.as_str(), |(entry, _)| entry))
+                });
             }
             (
                 entries.is_empty(),
@@ -4929,8 +5262,24 @@ impl Transcript {
                     // start — the end-of-turn up/down jump the spring then has
                     // to walk back. `remeasure_items` keeps old sizes as hints
                     // and holds the anchor across the remeasure.
+                    if let Some(perf) = &perf {
+                        crate::perf_counters::count(
+                            "transcript.remeasure",
+                            perf.scope(),
+                            old_range.len() as u64,
+                            0,
+                        );
+                    }
                     self.list.remeasure_items(old_range);
                 } else {
+                    if let Some(perf) = &perf {
+                        crate::perf_counters::count(
+                            "transcript.splice",
+                            perf.scope(),
+                            count as u64,
+                            old_range.len() as u64,
+                        );
+                    }
                     self.list.splice(old_range, count);
                 }
                 self.viewport_layout_revision = self.viewport_layout_revision.wrapping_add(1);
@@ -4999,6 +5348,44 @@ impl Transcript {
     /// Whether the displayed chat still has a live run. Unresolved tools are
     /// only in flight while it does; after an interrupted or errored run they
     /// never settle, but their received output remains on the owning host.
+    /// Derive rows now, or, for a pinned-doc view (a tab, right-pane chat or
+    /// subagent) that is not being painted, at its next render: a hidden
+    /// tab's history is not re-derived for every frame of its doc. The main
+    /// view always syncs immediately.
+    fn sync_or_defer(&mut self, cx: &mut Context<Self>) {
+        let hidden = self.doc_override.is_some()
+            && !self
+                .last_painted
+                .get()
+                .is_some_and(|at| at.elapsed() < PAINTED_RECENTLY);
+        if !hidden {
+            self.sync(cx);
+            return;
+        }
+        if crate::perf_counters::enabled() {
+            let scope = self.perf_scope(cx);
+            crate::perf_counters::count("transcript.sync_deferred", &scope, 1, 0);
+        }
+        if !self.sync_deferred {
+            self.sync_deferred = true;
+            // A visible but idle view repaints and syncs then; a hidden one
+            // is not painted and simply keeps the flag.
+            cx.notify();
+        }
+    }
+
+    /// Counter scope for this view: `pane:<doc>` for a pinned doc (a tab, a
+    /// right-pane chat or subagent), else `main:<selected chat>`.
+    fn perf_scope(&self, cx: &gpui::App) -> String {
+        match &self.doc_override {
+            Some(doc_id) => format!("pane:{doc_id}"),
+            None => format!(
+                "main:{}",
+                self.state.read(cx).selected_chat.as_deref().unwrap_or("-")
+            ),
+        }
+    }
+
     fn chat_run_live(&self, cx: &gpui::App) -> bool {
         use crate::state::Indicator;
         self.chat_id.as_deref().is_some_and(|chat_id| {
@@ -5012,19 +5399,27 @@ impl Transcript {
     }
 
     /// Cached row build for one entry (streaming entries bypass the cache).
-    fn rows_for(&mut self, entry: &SessionMessageEntry, pending: bool) -> Vec<Row> {
+    /// `generation` is the entry's recorded content generation, when known:
+    /// it keys the cache without inspecting the entry at all.
+    fn rows_for(
+        &mut self,
+        entry: &SessionMessageEntry,
+        pending: bool,
+        generation: Option<u64>,
+    ) -> Vec<Row> {
         let streaming = entry.status == Some(MessageStatus::Streaming);
-        // Live entries always rebuild; don't allocate a fingerprint that the
+        // Live entries always rebuild; don't compute a key that the
         // streaming path cannot use.
-        let fingerprint = if streaming {
-            0
-        } else {
-            entry_fingerprint(entry, pending)
+        let key = match (streaming, generation) {
+            (true, _) => RowKey::Fingerprint(0),
+            (false, Some(generation)) if !pending => RowKey::Generation(generation),
+            (false, _) => RowKey::Fingerprint(entry_fingerprint(entry, pending)),
         };
         if !streaming
             && let Some(cached) = self.row_cache.get(&entry.id)
-            && cached.fingerprint == fingerprint
+            && cached.key == key
         {
+            crate::perf_counters::note_rows(true, false, cached.rows.len());
             return cached.rows.clone();
         }
 
@@ -5036,12 +5431,13 @@ impl Transcript {
             parse_for_row(streaming, key, text, live_parsers, tree_cache).0
         };
         let rows = rows_for_entry(entry, pending, &mut parse);
+        crate::perf_counters::note_rows(false, streaming, rows.len());
 
         if !streaming {
             self.row_cache.insert(
                 entry.id.clone(),
                 CachedRows {
-                    fingerprint,
+                    key,
                     rows: rows.clone(),
                 },
             );
@@ -6443,6 +6839,16 @@ impl Transcript {
         let Some(row) = self.rows.get(ix).cloned() else {
             return gpui::Empty.into_any_element();
         };
+        let column_probe = if crate::perf_counters::enabled() {
+            let scope = self.perf_scope(cx);
+            let (kind, text) = perf_row_text(&row);
+            crate::perf_counters::count("transcript.render_row", &scope, 1, 0);
+            crate::perf_counters::record_row(&scope, &row.id, row.version, kind, text);
+            // The layout probe only while probes are on (not while measuring).
+            crate::perf_counters::probes_enabled().then(|| format!("transcript:{scope}:column"))
+        } else {
+            None
+        };
         self.rendered_rows.insert(row.id.clone());
         let theme = Theme::of(cx).clone();
         let workspace_root = {
@@ -7006,13 +7412,18 @@ impl Transcript {
             .justify_center()
             .pt(px(top_gap))
             .pb(px(bottom_pad))
-            // Keep side gutters as the configurable column shrinks to fit.
-            .px(px(48.0))
+            // Keep side gutters as the configurable column shrinks to fit;
+            // a narrow view narrows them (`transcript_row_gutter`).
+            .px(px(self.row_gutter))
             .child(
                 div()
                     .w_full()
                     .max_w(px(self.content_width))
                     .min_w_0()
+                    // Opt-in layout probe (slice 6): the row's text column.
+                    .when_some(column_probe, |el, name| {
+                        el.relative().child(crate::perf_counters::probe(name))
+                    })
                     .child(inner)
                     .children(strip)
                     .children(trailer),
@@ -9092,6 +9503,91 @@ fn subagent_chip(
         .into_any_element()
 }
 
+/// What a painted row shows, as text, for the opt-in rendered-row readback
+/// (slice 6): Markdown block text, a user prompt, or each tool's call, detail
+/// and subagent state. Capped at 4 KiB per row.
+fn perf_row_text(row: &Row) -> (&'static str, String) {
+    use crate::markdown::parser::{Block, InlineRun};
+    fn runs(runs: &[InlineRun], out: &mut String) {
+        for run in runs {
+            out.push_str(&run.text);
+        }
+    }
+    fn block(value: &Block, out: &mut String) {
+        match value {
+            Block::Paragraph { runs: r } | Block::Heading { runs: r, .. } => runs(r, out),
+            Block::CodeBlock { code, .. } => out.push_str(code),
+            Block::BlockQuote { children } => {
+                for child in children {
+                    block(child, out);
+                    out.push('\n');
+                }
+            }
+            Block::List { items, .. } => {
+                for item in items {
+                    for child in item {
+                        block(child, out);
+                    }
+                    out.push('\n');
+                }
+            }
+            Block::Table { header, rows, .. } => {
+                for cell in header.iter().chain(rows.iter().flatten()) {
+                    runs(cell, out);
+                    out.push('|');
+                }
+            }
+            Block::Rule => out.push_str("---"),
+        }
+    }
+    let (kind, mut text) = match &row.kind {
+        RowKind::User { text, .. } => ("user", text.to_string()),
+        RowKind::Markdown { tree, block_ix } | RowKind::LiveMarkdown { tree, block_ix } => {
+            let mut out = String::new();
+            if let Some(top) = tree.blocks.get(*block_ix) {
+                block(&top.block, &mut out);
+            }
+            let kind = if matches!(row.kind, RowKind::LiveMarkdown { .. }) {
+                "liveMarkdown"
+            } else {
+                "markdown"
+            };
+            (kind, out)
+        }
+        RowKind::ToolGroup { tools, .. } => (
+            "tools",
+            tools
+                .iter()
+                .map(|tool| {
+                    format!(
+                        "{} {:?} error={} resolved={} detail={:?} subagent={:?} activity={:?}",
+                        tool.part_id,
+                        tool.call,
+                        tool.is_error,
+                        tool.resolved,
+                        tool.detail,
+                        tool.subagent_status,
+                        tool.subagent_activity
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        RowKind::InputChip { header, .. } => ("input", header.to_string()),
+        RowKind::ErrorChip { message } => ("error", message.to_string()),
+        RowKind::GoalAchieved { label } => ("goal", label.to_string()),
+        RowKind::GeneratedImage { name, .. } => ("image", name.clone()),
+    };
+    if text.len() > 4096 {
+        let mut end = 4096;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+    }
+    (kind, text)
+}
+
 fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
     let mut acc: Vec<u8> = Vec::with_capacity(entry.parts.len() * 8 + 16);
     acc.extend_from_slice(entry.id.as_bytes());
@@ -9106,6 +9602,20 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
     for part in &entry.parts {
         acc.extend_from_slice(part.id().as_bytes());
         acc.extend_from_slice(&(part.byte_len() as u64).to_le_bytes());
+        // Content, not only length: this key is the fallback when no content
+        // generation is recorded, and a same-length rewrite must rebuild.
+        let content = match part {
+            MessagePart::Text { text, .. } | MessagePart::Reasoning { text, .. } => Some(text),
+            MessagePart::Tool {
+                output: Some(output),
+                ..
+            } => Some(output),
+            MessagePart::Error { message, .. } => Some(message),
+            _ => None,
+        };
+        if let Some(content) = content {
+            acc.extend_from_slice(&fnv1a(content.as_bytes()).to_le_bytes());
+        }
         if let MessagePart::Tool {
             is_error,
             resolved,
@@ -9162,6 +9672,7 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
             acc.push(0x20 | *resolved as u8);
         }
     }
+    crate::perf_counters::note_fingerprint(acc.len());
     fnv1a(&acc)
 }
 
@@ -9197,6 +9708,18 @@ fn trailer_action(
 
 impl Render for Transcript {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _perf = crate::perf_counters::Timer::start("transcript.render", || self.perf_scope(cx));
+        self.last_painted.set(Some(Instant::now()));
+        // A narrower view lays its rows out with a narrower gutter; row
+        // heights depend on it, so the list remeasures.
+        let gutter = transcript_row_gutter(self.measured_width.get());
+        if (gutter - self.row_gutter).abs() > 0.5 {
+            self.row_gutter = gutter;
+            self.list.remeasure();
+        }
+        if std::mem::take(&mut self.sync_deferred) {
+            self.sync(cx);
+        }
         self.refresh_diagram_style(window, cx);
         self.sync_recovery_tick(cx);
         if record_view_frame("transcript") {
@@ -9274,6 +9797,7 @@ impl Render for Transcript {
             window.on_next_frame(move |_, cx| {
                 entity
                     .update(cx, |this: &mut Transcript, cx| {
+                        crate::perf_counters::count("frame.driver", "transcript.own_turn", 1, 0);
                         this.own_turn_scheduled = false;
                         this.step_own_turn(cx);
                     })
@@ -9294,6 +9818,7 @@ impl Render for Transcript {
             window.on_next_frame(move |_, cx| {
                 entity
                     .update(cx, |this: &mut Transcript, cx| {
+                        crate::perf_counters::count("frame.driver", "transcript.spring", 1, 0);
                         this.spring_scheduled = false;
                         this.step_spring(cx);
                     })
@@ -9313,6 +9838,12 @@ impl Render for Transcript {
             window.on_next_frame(move |_, cx| {
                 entity
                     .update(cx, |this: &mut Transcript, cx| {
+                        crate::perf_counters::count(
+                            "frame.driver",
+                            "transcript.viewport_finalize",
+                            1,
+                            0,
+                        );
                         this.viewport_finalize_scheduled = false;
                         if !token.still_current(this.viewport_generation) {
                             if this.viewport_finalize_pending {
@@ -9343,6 +9874,12 @@ impl Render for Transcript {
             window.on_next_frame(move |_, cx| {
                 entity
                     .update(cx, |this: &mut Transcript, cx| {
+                        crate::perf_counters::count(
+                            "frame.driver",
+                            "transcript.collapse_scroll",
+                            1,
+                            0,
+                        );
                         this.user_collapse_scroll_scheduled = false;
                         this.step_user_collapse_scroll(cx);
                     })
@@ -9384,10 +9921,36 @@ impl Render for Transcript {
         } else {
             list_el.into_any_element()
         };
+        let measured_width = self.measured_width.clone();
         let root = div()
             .relative()
             .size_full()
             .min_h_0()
+            .child(
+                gpui::canvas(
+                    move |bounds, window, _| {
+                        let width = f32::from(bounds.size.width);
+                        let old = measured_width.get();
+                        if (old - width).abs() > 0.5 {
+                            measured_width.set(width);
+                            if (transcript_row_gutter(old) - transcript_row_gutter(width)).abs()
+                                > 0.5
+                            {
+                                crate::perf_counters::count(
+                                    "frame.request",
+                                    "transcript#gutter",
+                                    1,
+                                    0,
+                                );
+                                window.request_animation_frame();
+                            }
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(Self::on_selection_mouse_down),
@@ -9588,6 +10151,7 @@ mod tests {
                     state
                         .receive_transcript_update(
                             luna_doc::TranscriptUpdate {
+                                transcript_token: None,
                                 frame,
                                 replay_baseline,
                                 context_usage: None,
@@ -9699,6 +10263,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            transcript_token: None,
                             frame,
                             context_usage: None,
                             context_control: Default::default(),
@@ -9712,6 +10277,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            transcript_token: None,
                             frame: luna_doc::diff_transcript(&history, &live),
                             context_usage: None,
                             context_control: Default::default(),
@@ -9749,6 +10315,7 @@ mod tests {
                     state
                         .receive_transcript_update(
                             luna_doc::TranscriptUpdate {
+                                transcript_token: None,
                                 frame,
                                 replay_baseline: baseline,
                                 context_usage: None,
@@ -9808,6 +10375,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            transcript_token: None,
                             frame: luna_doc::TranscriptFrame::reset(&[]),
                             context_usage: None,
                             context_control: Default::default(),
@@ -9828,6 +10396,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            transcript_token: None,
                             frame: luna_doc::diff_transcript(&[], &live),
                             context_usage: None,
                             context_control: Default::default(),
@@ -9864,6 +10433,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            transcript_token: None,
                             frame,
                             context_usage: None,
                             context_control: Default::default(),
@@ -11578,6 +12148,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    transcript_token: None,
                                     frame: luna_doc::TranscriptFrame::reset(&history),
                                     context_usage: None,
                                     context_control: Default::default(),
@@ -11608,6 +12179,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    transcript_token: None,
                                     frame: luna_doc::diff_transcript(&history, &next),
                                     context_usage: None,
                                     context_control: Default::default(),
@@ -11665,6 +12237,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    transcript_token: None,
                                     frame: luna_doc::TranscriptFrame::reset(&history),
                                     context_usage: None,
                                     context_control: Default::default(),
@@ -11679,6 +12252,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    transcript_token: None,
                                     frame: luna_doc::diff_transcript(&history, &live),
                                     context_usage: None,
                                     context_control: Default::default(),
@@ -11731,6 +12305,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    transcript_token: None,
                                     frame: luna_doc::diff_transcript(&live, &next),
                                     context_usage: None,
                                     context_control: Default::default(),
@@ -11773,6 +12348,7 @@ mod tests {
                             state
                                 .receive_transcript_update(
                                     luna_doc::TranscriptUpdate {
+                                        transcript_token: None,
                                         frame,
                                         context_usage: None,
                                         context_control: Default::default(),
@@ -13187,7 +13763,7 @@ mod tests {
             let projected: &str = "\u{00A0}@composer.rs\u{00A0}";
             projected
         });
-        assert_eq!(rows[0].version, (raw.len() as u64) << 1);
+        assert_eq!(rows[0].version, fnv1a(raw.as_bytes()) << 1);
 
         entry.parts = vec![text_part("t0", "no mentions here")];
         let rows = rows_for_entry(&entry, false, &mut parse);
@@ -13883,6 +14459,82 @@ mod tests {
 
 #[cfg(feature = "appshots-fixture")]
 impl Transcript {
+    /// The current row PROJECTION (not paint): every row this view holds,
+    /// with the same text extraction as the rendered-row readback. Use it
+    /// for rows outside the viewport; visible rows are read from paint.
+    pub fn fixture_rows(&self) -> serde_json::Value {
+        serde_json::Value::Array(
+            self.rows
+                .iter()
+                .map(|row| {
+                    let (kind, text) = perf_row_text(row);
+                    serde_json::json!({
+                        "id": row.id.as_ref(),
+                        "entryId": row.entry_id.as_ref(),
+                        "version": row.version,
+                        "kind": kind,
+                        "text": text,
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    /// The retained outgoing chat's caches (slice 6): chat and admitted
+    /// charge (entries, rows, bytes).
+    pub fn fixture_retained(&self) -> serde_json::Value {
+        match &self.retained_caches {
+            Some((chat, _, _, charge)) => serde_json::json!({
+                "chat": chat,
+                "entries": charge.0,
+                "rows": charge.1,
+                "bytes": charge.2,
+            }),
+            None => serde_json::Value::Null,
+        }
+    }
+
+    /// Lower (or restore, with `None`) the retained-cache ceilings for a
+    /// post-measurement admission check: (entries, rows, bytes).
+    pub fn fixture_set_retained_limits(&mut self, limits: Option<(usize, usize, usize)>) {
+        self.retained_limits = match limits {
+            Some((entries, rows, bytes)) => RetainedLimits {
+                entries,
+                rows,
+                bytes,
+            },
+            None => RetainedLimits::default(),
+        };
+    }
+
+    /// SIMULATION for QA: mark this view as last painted `ms` ago, so the
+    /// hidden/idle classification can be exercised when the real window
+    /// never stays quiet that long. Callers must disclose its use.
+    pub fn fixture_age_paint(&self, ms: u64) {
+        let aged = Instant::now().checked_sub(Duration::from_millis(ms));
+        self.last_painted.set(aged.or(self.last_painted.get()));
+    }
+
+    /// How long ago this view was painted, in milliseconds.
+    pub fn fixture_painted_age_ms(&self) -> Option<f64> {
+        self.last_painted
+            .get()
+            .map(|at| at.elapsed().as_secs_f64() * 1000.0)
+    }
+
+    /// Show the first rows (unpinned, spring stopped) or return to the
+    /// tail through the production jump.
+    pub fn fixture_scroll_edge(&mut self, top: bool, cx: &mut Context<Self>) {
+        if top {
+            self.pinned = false;
+            self.spring.reset();
+            self.list.scroll_to(gpui::ListOffset::default());
+            cx.notify();
+        } else {
+            self.jump_to_bottom(cx);
+        }
+    }
+
     pub fn fixture_appshots_start(&mut self, cx: &mut Context<Self>) {
         self.list.scroll_to(gpui::ListOffset::default());
         cx.notify();

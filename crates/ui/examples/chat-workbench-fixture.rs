@@ -205,20 +205,21 @@
 //!     order, IDs, active chats or focus, leaves a mixed 2-over-1 or six-group
 //!     tree with unequal group areas, writes again on a repeat, is lost on a
 //!     new Shell, starts a provider, or is offered with a single group.
-//! 28. A sidebar opening (or a narrower window) over a fitting split scrolls
-//!     the canvas to the focused right group instead of staying anchored at
-//!     the left (the rightmost groups are the ones covered); or an explicit
-//!     focus no longer reveals its group.
-//! 26. A split layout in a canvas too small for it (window or sidebars
-//!     shrunk) squeezes groups below 320x240 (words wrap to letters, the
-//!     composer's controls overlap); or the fix rewrites the saved layout
-//!     (axis, ratio, groups, revision), swaps axes or hides groups; or the
-//!     overflow is not reachable by scrolling, the focused/opened/reopened
-//!     group is not scrolled into view, manual scrolling snaps back on the
-//!     next frame, the footer or sidebars scroll with the canvas, drops and
-//!     previews land on panes scrolled out of view (or over a sidebar), or
-//!     dividers and tab drags misread scrolled coordinates; or widening
-//!     does not restore the exact saved presentation.
+//! 28. A sidebar opening (or a narrower window) over a fitting split makes
+//!     the workbench overflow or scroll, moves focus, or rewrites the saved
+//!     layout; or an explicit focus no longer selects its group. (Before
+//!     slice 6 the canvas stayed anchored left and scrolled; the user's
+//!     fit-to-window requirement replaced that: groups shrink to fit.)
+//! 26. A split layout in a canvas smaller than its saved minimums (window or
+//!     sidebars shrunk) overflows the viewport or scrolls the workbench
+//!     horizontally or vertically, distributes width out of the saved
+//!     proportions, lets a composer spill out of its group, rewrites the
+//!     saved layout (axis, ratio, groups, revision), swaps axes or hides
+//!     groups; drops or previews land over a sidebar; or widening does not
+//!     restore the exact saved presentation. (Before slice 6 this case
+//!     required a 320x240 minimum per group and a scrolling canvas; native
+//!     RED `ui-resize-red-1200` showed that design overflowing by up to
+//!     1,014 px, so groups now share the viewport.)
 //! 25. With both sidebars open, a long focused title in the frame row
 //!     pushes Review changes / Commit & push past the row's right edge, under
 //!     the right sidebar; or a real click on Review changes does not open
@@ -728,8 +729,11 @@ fn fully_revealed(rb: &Value, chat: &str) -> bool {
         })
 }
 
-/// The group's trailing controls (New child, Split) sit outside the tab
-/// viewport, never under a tab.
+/// The group's trailing controls sit outside the tab viewport, never under a
+/// tab, and inside the group. Exactly one entry control is painted: New
+/// child (`+`) while the group is wide, or Group actions (the compact strip,
+/// whose menu holds `+`, split and close) while it is narrow; neither, or
+/// both at once, fails.
 fn controls_clear(rb: &Value, pane_id: &str) -> bool {
     let view = rb["tabBounds"]
         .as_array()
@@ -737,13 +741,24 @@ fn controls_clear(rb: &Value, pane_id: &str) -> bool {
         .flatten()
         .find(|pane| pane["pane"] == pane_id)
         .map(|pane| rect(&pane["view"]));
-    let plus = rb["plusBounds"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .find(|plus| plus["pane"] == pane_id)
-        .map(|plus| rect(&plus["bounds"]));
-    matches!((view, plus), (Some(view), Some(plus)) if plus.0 >= view.0 + view.2 - 0.5 && plus.2 > 0.0)
+    let control = |key: &str| {
+        rb[key]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["pane"] == pane_id)
+            .map(|entry| rect(&entry["bounds"]))
+    };
+    let control = match (control("plusBounds"), control("groupActionsBounds")) {
+        (Some(control), None) | (None, Some(control)) => control,
+        _ => return false,
+    };
+    let group = pane_rect(rb, pane_id).ok();
+    matches!((view, group), (Some(view), Some(group))
+        if control.0 >= view.0 + view.2 - 0.5
+            && control.2 > 0.0
+            && control.0 >= group.0 - 0.5
+            && control.0 + control.2 <= group.0 + group.2 + 0.5)
 }
 
 /// Every group's active tab fits wholly inside its strip viewport (label and
@@ -3051,39 +3066,73 @@ fn main() -> anyhow::Result<()> {
                 progress(&output, &mut record, "footerFit".into(), Value::Array(footer_checks));
 
                 // w15c. The saved split in this 980 px window with both
-                // sidebars open: the canvas keeps every group at its minimum
-                // and scrolls instead of squeezing, rewriting or hiding
-                // anything; the focused group is scrolled into view; a manual
-                // scroll stays put; a drag over the sidebar drops nothing;
-                // widening shows the exact saved layout again.
+                // sidebars open (failure case 26, fit-to-window): every group
+                // fits inside the viewport in the saved proportions with no
+                // outer scroll; composers stay inside their groups; nothing
+                // is rewritten; Tab still moves between groups; a drag over
+                // the sidebar drops nothing; widening shows the exact saved
+                // layout.
                 for _ in 0..6 {
                     draw(window, cx)?;
                     settle(cx, 60).await;
                 }
                 let squeezed_frame = frame(window, cx)?;
                 anyhow::ensure!(squeezed_frame["rightOpen"] == true && squeezed_frame["sidebarCollapsed"] == false, "both sidebars open: {squeezed_frame}");
+                // w15b just closed the alongside tab that sat first in the
+                // second group: once its ghost has narrowed out, every
+                // group's active tab is wholly inside its strip, before any
+                // click or Tab (candidates 3/4 left the neighbour revealed
+                // and the active tab a 2 px sliver: the reveal settled
+                // while the ghost still held its place).
+                let revealed = wait_for(window, cx, "every active tab revealed after the close", |rb| {
+                    all_panes(rb).iter().all(|pane| pane["active"].as_str().is_none_or(|chat| fully_revealed(rb, chat)))
+                })
+                .await?;
+                let focused_tab = window.update(cx, |shell, window, _| shell.fixture_workbench_focused_tab(window))?;
+                progress(&output, &mut record, "w15cBeforeTab".into(), serde_json::json!({"readback": revealed, "focusedTab": focused_tab}));
                 let narrow_base = wb(window, cx)?;
                 anyhow::ensure!(all_panes(&narrow_base).len() >= 2, "a split layout to fit: {narrow_base}");
                 let view = rect(&narrow_base["rootBounds"]);
-                let minimum = (
-                    narrow_base["canvasMinimum"]["w"].as_f64().unwrap_or(0.0) as f32,
-                    narrow_base["canvasMinimum"]["h"].as_f64().unwrap_or(0.0) as f32,
+                let scroll = &narrow_base["canvasScroll"];
+                anyhow::ensure!(
+                    scroll["maxX"].as_f64().unwrap_or(1.0) < 0.5
+                        && scroll["maxY"].as_f64().unwrap_or(1.0) < 0.5
+                        && scroll["x"].as_f64().unwrap_or(1.0).abs() < 0.5,
+                    "the workbench has no outer scroll range: {narrow_base}"
                 );
-                anyhow::ensure!(minimum.0 > view.2 && narrow_base["canvasScroll"]["maxX"].as_f64().unwrap_or(0.0) > 0.5, "the saved layout needs more than the canvas, and the canvas scrolls: {narrow_base}");
                 for entry in narrow_base["paneBounds"].as_array().into_iter().flatten() {
-                    let (_, _, w, h) = rect(&entry["bounds"]);
-                    anyhow::ensure!(w >= 320.0 - 0.5 && h >= 240.0 - 0.5, "every group keeps its 320x240 minimum: {entry} in {narrow_base}");
+                    let (x, y, w, h) = rect(&entry["bounds"]);
+                    anyhow::ensure!(
+                        x >= view.0 - 0.5 && x + w <= view.0 + view.2 + 0.5 && y >= view.1 - 0.5 && y + h <= view.1 + view.3 + 0.5 && w > 0.0,
+                        "every group fits inside the viewport: {entry} in {narrow_base}"
+                    );
+                }
+                if narrow_base["root"]["kind"] == "split" && narrow_base["root"]["axis"] == "horizontal" {
+                    let mut first = Vec::new();
+                    panes(&narrow_base["root"]["first"], &mut first);
+                    let first_right = first
+                        .iter()
+                        .filter_map(|pane| pane_rect(&narrow_base, pane["id"].as_str().unwrap_or_default()).ok())
+                        .map(|(x, _, w, _)| x + w)
+                        .fold(view.0, f32::max);
+                    let ratio = narrow_base["root"]["ratio"].as_f64().unwrap_or(0.5) as f32;
+                    anyhow::ensure!(
+                        ((first_right - view.0) / view.2 - ratio).abs() < 0.03,
+                        "groups share the width in the saved proportion {ratio}: first side ends at {first_right} in {view:?}"
+                    );
                 }
                 for (chat, width) in narrow_base["composerWidths"].as_object().into_iter().flatten() {
-                    let visible = all_panes(&narrow_base).iter().any(|pane| pane["active"] == chat.as_str());
-                    anyhow::ensure!(!visible || width.as_f64().unwrap_or(0.0) >= 280.0, "{chat}'s composer has room for its controls: {width} in {narrow_base}");
+                    let pane = all_panes(&narrow_base).into_iter().find(|pane| pane["active"] == chat.as_str());
+                    if let Some(pane) = pane {
+                        let (_, _, pw, _) = pane_rect(&narrow_base, pane["id"].as_str().unwrap_or_default())?;
+                        anyhow::ensure!(width.as_f64().unwrap_or(f64::MAX) as f32 <= pw + 0.5, "{chat}'s composer stays inside its group: {width} vs {pw} in {narrow_base}");
+                    }
                 }
-                assert_contained(&narrow_base, "scrolled canvas")?;
-                anyhow::ensure!(narrow_base["overflowFades"][1] == true, "more content to the right fades there: {narrow_base}");
-                shot(window, cx, output.join("w15c-scrolled-canvas.png")).await?;
-                // Focus into the canvas (a press on the visible group), then
-                // Tab into another group: it scrolls into view.
-                click(window, cx, (view.0 + view.2 / 2.0, view.1 + view.3 / 2.0), MouseButton::Left).await?;
+                assert_contained(&narrow_base, "fitted canvas")?;
+                shot(window, cx, output.join("w15c-fitted-canvas.png")).await?;
+                // Focus into the canvas (a press on a group), then Tab into
+                // another group: focus moves, everything still fits.
+                click(window, cx, (view.0 + view.2 / 4.0, view.1 + view.3 / 2.0), MouseButton::Left).await?;
                 let start = wb(window, cx)?;
                 let start_pane = start["focusedPane"].as_str().unwrap_or_default().to_string();
                 let mut moved_to = None;
@@ -3099,21 +3148,16 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
                 let target_pane = moved_to.ok_or_else(|| anyhow::anyhow!("Tab never reached another group"))?;
-                let revealed = {
-                    let target = target_pane.clone();
-                    wait_for(window, cx, "the focused group scrolled into view", move |rb| {
-                        let view = rect(&rb["rootBounds"]);
-                        pane_rect(rb, &target).is_ok_and(|pane| {
-                            pane.0 >= view.0 - 0.5 && pane.0 + pane.2.min(view.2) <= view.0 + view.2 + 0.5
-                                && pane.1 >= view.1 - 0.5
-                        })
-                    })
-                    .await?
-                };
-                shot(window, cx, output.join("w15c-revealed-focused-group.png")).await?;
+                let focused_rb = wb(window, cx)?;
+                // Evidence for the drag below: which tab chip (if any) holds
+                // keyboard focus against each group's active tab.
+                let focused_tab = window.update(cx, |shell, window, _| shell.fixture_workbench_focused_tab(window))?;
+                progress(&output, &mut record, "w15cAfterTab".into(), serde_json::json!({"readback": focused_rb, "focusedTab": focused_tab, "targetPane": target_pane}));
+                anyhow::ensure!(focused_rb["canvasScroll"]["x"].as_f64().unwrap_or(1.0).abs() < 0.5, "moving focus scrolls nothing: {focused_rb}");
+                shot(window, cx, output.join("w15c-focused-group.png")).await?;
                 // A tab dragged out over the left sidebar previews and drops
                 // nothing.
-                let dragged = all_panes(&revealed).into_iter().find(|pane| pane["id"] == target_pane.as_str()).and_then(|pane| pane["active"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the focused group's active tab"))?;
+                let dragged = all_panes(&focused_rb).into_iter().find(|pane| pane["id"] == target_pane.as_str()).and_then(|pane| pane["active"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the focused group's active tab"))?;
                 let before_drag = wb(window, cx)?;
                 let sidebar_point = (120.0, HEIGHT / 2.0);
                 drag_hold(window, cx, tab_center(&before_drag, &dragged)?, sidebar_point).await?;
@@ -3122,31 +3166,9 @@ fn main() -> anyhow::Result<()> {
                 release(window, cx, sidebar_point).await?;
                 let after_sidebar = wb(window, cx)?;
                 anyhow::ensure!(after_sidebar["root"] == before_drag["root"] && after_sidebar["revision"] == before_drag["revision"], "a release over the sidebar drops nothing: {after_sidebar}");
-                // A manual scroll stays where the user put it.
-                let before_scroll = revealed["canvasScroll"]["x"].as_f64().unwrap_or(0.0);
-                let wheel_at = (view.0 + view.2 / 2.0, view.1 + 50.0);
-                input(
-                    window,
-                    cx,
-                    PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
-                        position: point(px(wheel_at.0), px(wheel_at.1)),
-                        delta: gpui::ScrollDelta::Pixels(point(px(if before_scroll < -1.0 { 120.0 } else { -120.0 }), px(0.0))),
-                        modifiers: Default::default(),
-                        touch_phase: gpui::TouchPhase::Moved,
-                    }),
-                )?;
-                draw(window, cx)?;
-                let scrolled = wb(window, cx)?["canvasScroll"]["x"].as_f64().unwrap_or(0.0);
-                anyhow::ensure!((scrolled - before_scroll).abs() > 1.0, "a wheel scroll moves the canvas: {before_scroll} -> {scrolled}");
-                for _ in 0..6 {
-                    draw(window, cx)?;
-                    settle(cx, 60).await;
-                }
-                let held = wb(window, cx)?;
-                anyhow::ensure!((held["canvasScroll"]["x"].as_f64().unwrap_or(0.0) - scrolled).abs() < 0.5, "the manual scroll is not snapped back: {scrolled} -> {held}");
                 let before_widen = wb(window, cx)?;
                 // Widen: a fresh full-size window shows the exact saved
-                // layout, unscrolled, with no write from any of this.
+                // layout, with no write from any of this.
                 window.update(cx, |_, window, _| window.remove_window())?;
                 select(cx, None);
                 let wide_state = state.clone();
@@ -3162,7 +3184,7 @@ fn main() -> anyhow::Result<()> {
                     &output,
                     &mut record,
                     "narrowCanvas".into(),
-                    serde_json::json!({"narrow": narrow_base, "revealed": revealed, "manualScroll": held, "overSidebar": after_sidebar, "widened": widened}),
+                    serde_json::json!({"narrow": narrow_base, "focused": focused_rb, "overSidebar": after_sidebar, "widened": widened}),
                 );
                 window.update(cx, |_, window, _| window.remove_window())?;
                 select(cx, None);
@@ -3303,35 +3325,47 @@ fn main() -> anyhow::Result<()> {
                 let repeated = wb(window, cx)?;
                 anyhow::ensure!(repeated["revision"] == balanced["revision"] && repeated["root"] == balanced["root"], "Balance on a balanced layout is a no-op: {repeated}");
 
-                // w16c. Left anchor (failure case 28): with the right sidebar
-                // closed the balanced split fits; focus its right group, then
-                // open the sidebar: the canvas stays at its left (the right
-                // group is the one covered). An explicit focus still reveals.
+                // w16c. Sidebar over a fitting split (failure case 28,
+                // fit-to-window): with the right sidebar closed the balanced
+                // split fits; focus its right group, then open the sidebar:
+                // both groups shrink to fit in their saved proportions, focus
+                // stays, nothing scrolls and nothing is written.
                 set_right_sidebar(window, cx, false).await?;
                 let wide_fit = wb(window, cx)?;
                 anyhow::ensure!(wide_fit["canvasScroll"]["maxX"].as_f64().unwrap_or(1.0) < 0.5, "the split fits without the sidebar: {wide_fit}");
                 assert_contained(&wide_fit, "a fitting split")?;
                 let right_active = all_panes(&wide_fit).into_iter().find(|pane| pane["id"] == right_group.as_str()).and_then(|pane| pane["active"].as_str().map(str::to_string)).ok_or_else(|| anyhow::anyhow!("the right group has an active tab: {wide_fit}"))?;
                 click_tab(window, cx, &right_active).await?;
-                {
+                let before_sidebar = {
                     let group = right_group.clone();
-                    wait_for(window, cx, "the right group focused", move |rb| rb["focusedPane"] == group.as_str()).await?;
-                }
+                    wait_for(window, cx, "the right group focus committed", move |rb| rb["focusedPane"] == group.as_str() && rb["pendingMutations"] == 0).await?
+                };
+                let wide_left = pane_rect(&wb(window, cx)?, &main_group)?;
+                let wide_right = pane_rect(&wb(window, cx)?, &right_group)?;
                 set_right_sidebar(window, cx, true).await?;
                 let covered = wb(window, cx)?;
-                anyhow::ensure!(covered["canvasScroll"]["maxX"].as_f64().unwrap_or(0.0) > 0.5, "now the split overflows: {covered}");
-                anyhow::ensure!(covered["canvasScroll"]["x"].as_f64().unwrap_or(-1.0).abs() < 0.5, "the canvas stays anchored at its left: {covered}");
+                anyhow::ensure!(
+                    covered["canvasScroll"]["maxX"].as_f64().unwrap_or(1.0) < 0.5 && covered["canvasScroll"]["x"].as_f64().unwrap_or(1.0).abs() < 0.5,
+                    "the split still fits with the sidebar open (no outer scroll): {covered}"
+                );
                 anyhow::ensure!(covered["focusedPane"] == right_group.as_str(), "focus did not move: {covered}");
+                anyhow::ensure!(covered["root"] == before_sidebar["root"] && covered["revision"] == before_sidebar["revision"], "opening the sidebar writes nothing: {before_sidebar} -> {covered}");
                 let view = rect(&covered["rootBounds"]);
                 let left_pane = pane_rect(&covered, &main_group)?;
                 let right_pane = pane_rect(&covered, &right_group)?;
-                anyhow::ensure!(left_pane.0 >= view.0 - 0.5 && left_pane.0 < view.0 + 0.5, "the left group stays in view at the left: {covered}");
-                anyhow::ensure!(right_pane.0 + right_pane.2 > view.0 + view.2 + 0.5, "the rightmost group is the covered one: {covered}");
-                assert_contained(&covered, "left-anchored overflow")?;
-                anyhow::ensure!(covered["overflowFades"] == serde_json::json!([false, true, false, false]), "anchored left: only the right edge fades: {covered}");
-                shot(window, cx, output.join("w16c-left-anchored.png")).await?;
-                // Explicit focus: the left group, then the right one again
-                // (a click on its partly visible tab) reveals it.
+                anyhow::ensure!(
+                    left_pane.0 >= view.0 - 0.5 && right_pane.0 + right_pane.2 <= view.0 + view.2 + 0.5,
+                    "both groups fit inside the viewport: {covered}"
+                );
+                let share = |l: (f32, f32, f32, f32), r: (f32, f32, f32, f32)| l.2 / (l.2 + r.2);
+                anyhow::ensure!(
+                    (share(left_pane, right_pane) - share(wide_left, wide_right)).abs() < 0.02,
+                    "the groups keep their saved proportions: {covered}"
+                );
+                assert_contained(&covered, "fitted split under the sidebar")?;
+                anyhow::ensure!(covered["overflowFades"] == serde_json::json!([false, false, false, false]), "no overflow fades: {covered}");
+                shot(window, cx, output.join("w16c-sidebar-fits.png")).await?;
+                // Explicit focus: the left group, then the right one again.
                 click_tab(window, cx, MAIN).await?;
                 {
                     let group = main_group.clone();
@@ -3340,17 +3374,16 @@ fn main() -> anyhow::Result<()> {
                 click_tab(window, cx, &right_active).await?;
                 let revealed_right = {
                     let group = right_group.clone();
-                    wait_for(window, cx, "an explicit focus reveals the right group", move |rb| {
+                    wait_for(window, cx, "an explicit focus selects the right group", move |rb| {
                         let view = rect(&rb["rootBounds"]);
                         rb["focusedPane"] == group.as_str()
-                            && rb["canvasScroll"]["x"].as_f64().unwrap_or(0.0) < -0.5
-                            && pane_rect(rb, &group).is_ok_and(|pane| pane.0 >= view.0 - 0.5 && pane.0 + pane.2.min(view.2) <= view.0 + view.2 + 0.5)
+                            && rb["canvasScroll"]["x"].as_f64().unwrap_or(1.0).abs() < 0.5
+                            && pane_rect(rb, &group).is_ok_and(|pane| pane.0 >= view.0 - 0.5 && pane.0 + pane.2 <= view.0 + view.2 + 0.5)
                     })
                     .await?
                 };
-                assert_contained(&revealed_right, "revealed right group")?;
-                anyhow::ensure!(revealed_right["overflowFades"][0] == true, "scrolled right: content beyond the left edge fades there: {revealed_right}");
-                shot(window, cx, output.join("w16d-revealed-fades.png")).await?;
+                assert_contained(&revealed_right, "explicitly focused right group")?;
+                shot(window, cx, output.join("w16d-explicit-focus.png")).await?;
 
                 // Six groups, mixed axes: the right group split down, each
                 // left group split right (with the sidebar closed, for room),

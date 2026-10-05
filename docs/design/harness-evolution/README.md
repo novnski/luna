@@ -40,8 +40,10 @@ Delivered evidence: [execution diagnostics](verification.md) and
 [portable context and fork findings](slice-2-verification.md), and
 [shared background work](slice-3-verification.md), and
 [durable dispatch boundaries](slice-4-verification.md), and
-[host-owned automations](slice-5-verification.md). The remaining performance
-slice continues with Codex and Claude as the live acceptance targets.
+[host-owned automations](slice-5-verification.md), and
+[measured workbench performance and window resizing](slice-6-verification.md).
+All six slices are implemented and verified. Codex and Claude are the live
+acceptance targets; OpenCode is outside this delivery's acceptance scope.
 
 ## Slice 1 failure cases, specified before implementation
 

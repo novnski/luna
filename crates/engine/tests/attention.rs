@@ -14,6 +14,10 @@ use luna_proto::{
 };
 use luna_rpc::{RpcClient, methods};
 
+#[cfg(target_os = "macos")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 const TASK: &str = "l15-synthetic-task";
 
 fn config() -> ChatConfig {
@@ -430,4 +434,149 @@ async fn failed_session_survives_restart_and_resolves_only_on_settled_status() {
     reopened.workspace.record_session(&session);
     let later_failure = snapshot(&client, &device).await;
     assert_ne!(only_needs(&later_failure).id, settled.recent[0].id);
+}
+
+// Slice 6: specified before narrowing Activity's document read. The same
+// full RPC sequence runs before/after; no timing limit in ordinary tests.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "explicit isolated Activity performance and salvage E2E"]
+#[cfg(unix)]
+async fn long_history_attention_preserves_latest_assistant_and_measures_cost() {
+    fn cpu_ms() -> f64 {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        assert_eq!(
+            unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) },
+            0
+        );
+        let usage = unsafe { usage.assume_init() };
+        (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) as f64 * 1000.0
+            + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) as f64 / 1000.0
+    }
+    let output = std::path::PathBuf::from(std::env::var("LUNA_PERF_EVIDENCE").unwrap());
+    assert!(output.is_absolute());
+    std::fs::create_dir_all(&output).unwrap();
+    let mut workloads = Vec::new();
+    for count in [1200, 4200] {
+        let dir = tempfile::tempdir().unwrap();
+        let core = assemble(dir.path());
+        let device = core.device_id.clone();
+        for chat in 0..6 {
+            let id = format!("activity-perf-{chat}");
+            core.workspace
+                .create_chat(&id, None, Some(&device), Some(config()), None)
+                .unwrap();
+            let doc = core.doc_host.open(&id).unwrap();
+            let mut entries = (0..count)
+                .map(|i| SessionMessageEntry {
+                    id: format!("history-{i}"),
+                    role: MessageRole::Assistant,
+                    parts: vec![MessagePart::Text {
+                        id: "text".into(),
+                        text: "settled history text ".repeat(40),
+                    }],
+                    created_at: i as i64,
+                    device_id: device.clone(),
+                    status: Some(MessageStatus::Complete),
+                    continuation_of: None,
+                })
+                .collect::<Vec<_>>();
+            // An old unresolved request is superseded by the later assistant.
+            entries[0] = input("old-turn", "old-request", true, &device);
+            if chat == 0 {
+                entries.push(input("current-turn", "current-request", true, &device));
+            }
+            for role in [MessageRole::User, MessageRole::System] {
+                entries.push(SessionMessageEntry {
+                    id: format!("trailer-{role:?}"),
+                    role,
+                    parts: vec![MessagePart::Text {
+                        id: "text".into(),
+                        text: "trailing non-assistant".into(),
+                    }],
+                    created_at: 10000,
+                    device_id: device.clone(),
+                    status: Some(MessageStatus::Complete),
+                    continuation_of: None,
+                });
+            }
+            doc.doc()
+                .replace_conversation_entries(&entries, &Default::default())
+                .unwrap();
+            doc.doc()
+                .doc()
+                .get_list("messages")
+                .push("unsalvageable trailing slot")
+                .unwrap();
+            doc.doc().doc().commit();
+        }
+        let client = luna_rpc::memory_client(core.rpc_service());
+        let first = snapshot(&client, &device).await;
+        assert_eq!(
+            only_needs(&first).request_id.as_deref(),
+            Some("current-request")
+        );
+        assert!(claim(&client, &device, false).await.transitions.is_empty());
+        // Let the independent initial snapshot debounce settle before timing.
+        tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+        let cpu = cpu_ms();
+        let start = std::time::Instant::now();
+        for _ in 0..8 {
+            let current = snapshot(&client, &device).await;
+            assert_eq!(
+                only_needs(&current).request_id.as_deref(),
+                Some("current-request")
+            );
+            assert_eq!(current.revision, first.revision);
+            assert!(claim(&client, &device, true).await.transitions.is_empty());
+            assert!(!serde_json::to_string(&current).unwrap().contains("Private"));
+        }
+        let measurement = serde_json::json!({"historyEntriesPerChat":count,"chats":6,"pollPairs":8,"cpuMs":cpu_ms()-cpu,"wallMs":start.elapsed().as_secs_f64()*1000.0});
+        let doc = core.doc_host.open("activity-perf-0").unwrap();
+        let mut resolved = input("current-turn", "current-request", true, &device);
+        if let MessagePart::Input { resolved, .. } = &mut resolved.parts[0] {
+            *resolved = true;
+        }
+        doc.doc()
+            .replace_conversation_entries(&[resolved], &Default::default())
+            .unwrap();
+        assert_eq!(snapshot(&client, &device).await.unresolved_count, 0);
+        doc.doc()
+            .push_message(&input("salvaged-turn", "salvaged-request", false, &device))
+            .unwrap();
+        let list = doc.doc().doc().get_list("messages");
+        let Some(loro::ValueOrContainer::Container(loro::Container::Map(map))) = list.get(1) else {
+            panic!("assistant map")
+        };
+        map.delete("role").unwrap();
+        map.delete("createdAt").unwrap();
+        doc.doc().doc().commit();
+        list.push(99).unwrap();
+        doc.doc().doc().commit();
+        assert_eq!(
+            only_needs(&snapshot(&client, &device).await)
+                .request_id
+                .as_deref(),
+            Some("salvaged-request")
+        );
+        let mut user = input("only-user", "ignored-request", true, &device);
+        user.role = MessageRole::User;
+        doc.doc()
+            .replace_conversation_entries(&[user], &Default::default())
+            .unwrap();
+        assert_eq!(snapshot(&client, &device).await.unresolved_count, 0);
+        doc.doc()
+            .replace_conversation_entries(&[], &Default::default())
+            .unwrap();
+        assert_eq!(snapshot(&client, &device).await.unresolved_count, 0);
+        workloads.push(measurement);
+        drop(doc);
+        drop(client);
+        assert!(core.shutdown().await);
+    }
+    let evidence = serde_json::json!({"passed":true,"workloads":workloads,"latestApprovalOnly":true,"trailersAndMalformedSlots":true,"salvagedMissingRole":true,"resolutionThenNewRequest":true,"userOnlyAndEmpty":true,"noDuplicateOrPrivateNotification":true});
+    std::fs::write(
+        output.join("attention.json"),
+        serde_json::to_vec_pretty(&evidence).unwrap(),
+    )
+    .unwrap();
 }

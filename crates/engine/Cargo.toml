@@ -55,3 +55,6 @@ tokio-tungstenite.workspace = true
 tracing-subscriber.workspace = true
 # In-process registry server for the two-engine workspace integration tests.
 luna-sync = { workspace = true, features = ["mock-server"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+mimalloc.workspace = true

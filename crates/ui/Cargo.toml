@@ -82,6 +82,10 @@ name = "chat-workbench-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "workbench-performance-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "appearance-audit"
 required-features = ["appshots-fixture"]
 

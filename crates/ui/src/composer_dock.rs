@@ -410,6 +410,7 @@ impl Element for DockedComposer {
         state.moving = !self.reduced
             && (unsettled || state.frame.active || state.width.is_some_and(|width| width.active()));
         if state.moving {
+            crate::perf_counters::count("frame.request", "composer_dock#1", 1, 0);
             window.request_animation_frame();
         }
         drop(state);

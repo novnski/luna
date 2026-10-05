@@ -114,6 +114,16 @@ struct ChatParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct TranscriptWatchParams {
+    chat_id: String,
+    #[serde(default)]
+    transcript_resume: bool,
+    #[serde(default)]
+    known_transcript_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TaskIdentityParams {
     task_id: String,
 }
@@ -2321,9 +2331,11 @@ impl EngineRpc {
                 .doc_host
                 .open(&chat.id)
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
-            let entries = handle
+            // The projector only uses the newest assistant. Polling Activity
+            // must not deep-read every settled message in every local chat.
+            let latest_assistant = handle
                 .doc()
-                .read_entries()
+                .read_latest_assistant_entry()
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
             let queue = handle
                 .doc()
@@ -2342,7 +2354,7 @@ impl EngineRpc {
                 &self.engine_info.device_id,
                 chat,
                 session.as_ref(),
-                &entries,
+                latest_assistant.as_slice(),
                 &queue,
             ));
         }
@@ -7917,6 +7929,15 @@ fn doc_messages_stream(
     rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
     doc: std::sync::Arc<luna_doc::SessionDoc>,
 ) -> BoxStream<'static, serde_json::Value> {
+    doc_messages_stream_with_resume(rx, doc, false, None)
+}
+
+fn doc_messages_stream_with_resume(
+    rx: watch::Receiver<crate::doc_host::TranscriptSnapshot>,
+    doc: std::sync::Arc<luna_doc::SessionDoc>,
+    resume_enabled: bool,
+    known_token: Option<String>,
+) -> BoxStream<'static, serde_json::Value> {
     use luna_doc::transcript_delta::{TranscriptFrame, diff_transcript};
     futures::stream::unfold(
         (
@@ -7927,8 +7948,9 @@ fn doc_messages_stream(
             luna_proto::ContextControlState::default(),
             luna_doc::TranscriptBaseline::default(),
             None::<luna_proto::ProviderNotice>,
+            known_token,
         ),
-        |(
+        move |(
             mut rx,
             mut prev,
             doc,
@@ -7936,6 +7958,7 @@ fn doc_messages_stream(
             mut previous_context,
             mut opening_baseline,
             mut previous_notice,
+            mut known_token,
         )| async move {
             loop {
                 if prev.is_some() {
@@ -7945,7 +7968,27 @@ fn doc_messages_stream(
                 // connection used to deep-copy the entire transcript here.
                 let current = rx.borrow_and_update().clone();
                 let frame = match prev.as_ref() {
+                    None if resume_enabled
+                        && known_token.as_deref().is_some_and(|token| {
+                            !token.is_empty() && token == current.content_token.as_ref()
+                        }) =>
+                    {
+                        TranscriptFrame::Delta {
+                            upsert: Vec::new(),
+                            append: Vec::new(),
+                            remove: Vec::new(),
+                            count: current.entries.len(),
+                        }
+                    }
                     None => TranscriptFrame::reset(&current.entries),
+                    Some(prev) if std::sync::Arc::ptr_eq(&prev.entries, &current.entries) => {
+                        TranscriptFrame::Delta {
+                            upsert: Vec::new(),
+                            append: Vec::new(),
+                            remove: Vec::new(),
+                            count: current.entries.len(),
+                        }
+                    }
                     Some(prev) => diff_transcript(&prev.entries, &current.entries),
                 };
                 let replay_baseline = match prev.as_ref() {
@@ -7976,6 +8019,14 @@ fn doc_messages_stream(
                     }
                     _ => None,
                 };
+                let token_changed = resume_enabled
+                    && prev
+                        .as_ref()
+                        .is_none_or(|previous| previous.content_token != current.content_token);
+                let transcript_token = resume_enabled
+                    .then(|| current.content_token.to_string())
+                    .filter(|token| !token.is_empty());
+                known_token = None;
                 prev = Some(current);
                 // No-op commits (a second watcher attaching, command-only
                 // changes) produce empty deltas — skip the frame entirely.
@@ -7987,6 +8038,7 @@ fn doc_messages_stream(
                     && context_control == previous_context
                     && provider_notice == previous_notice
                     && replay_baseline.is_none()
+                    && !token_changed
                 {
                     continue;
                 }
@@ -7999,6 +8051,7 @@ fn doc_messages_stream(
                     context_control,
                     replay_baseline,
                     provider_notice,
+                    transcript_token,
                 })
                 .ok()?;
                 return Some((
@@ -8011,6 +8064,7 @@ fn doc_messages_stream(
                         previous_context,
                         opening_baseline,
                         previous_notice,
+                        known_token,
                     ),
                 ));
             }
@@ -10558,7 +10612,7 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&serde_json::json!({ "outcome": outcome }))
             }
             methods::WATCH_DOC_MESSAGES => {
-                let p: ChatParams = parse_params(params)?;
+                let p: TranscriptWatchParams = parse_params(params)?;
                 if self
                     .task_identity
                     .view(&p.chat_id)
@@ -10578,10 +10632,15 @@ impl RpcService for EngineRpc {
                     .doc_host
                     .open(&p.chat_id)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
-                Ok(RpcReply::Stream(doc_messages_stream(
-                    handle.watch_messages(),
-                    handle.doc_arc(),
-                )))
+                let rx = handle.watch_messages();
+                let stream = if p.transcript_resume {
+                    doc_messages_stream_with_resume(
+                        rx, handle.doc_arc(), true, p.known_transcript_token,
+                    )
+                } else {
+                    doc_messages_stream(rx, handle.doc_arc())
+                };
+                Ok(RpcReply::Stream(stream))
             }
             methods::WATCH_NATIVE_TASKS => {
                 let p: ChatParams = parse_params(params)?;

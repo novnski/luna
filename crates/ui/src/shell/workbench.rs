@@ -143,6 +143,12 @@ pub(super) struct Geometry {
     pub(super) splits: HashMap<String, Bounds<Pixels>>,
     /// Each strip's New child chat button (QA readback).
     pub(super) plus: HashMap<String, Bounds<Pixels>>,
+    /// Each compact strip's Group actions button (QA readback); a strip has
+    /// either this or `plus`, never both.
+    pub(super) group_actions: HashMap<String, Bounds<Pixels>>,
+    /// The open tab / Group actions menu's rows by id, as last painted
+    /// (QA readback; empty while it is closed).
+    pub(super) menu_rows: Vec<(&'static str, Bounds<Pixels>)>,
     /// The frame row's Balance panes button, while shown.
     pub(super) balance: Option<Bounds<Pixels>>,
     /// The frame's bottom row, and its Git action buttons by id.
@@ -153,8 +159,11 @@ pub(super) struct Geometry {
     /// Each strip's visible tab viewport: tabs scrolled outside it are
     /// clipped for hit-testing and readback.
     pub(super) tab_view: HashMap<String, Bounds<Pixels>>,
-    /// Width of the pane showing Main, for the main composer's layout.
+    /// Width of the pane showing Main, for the main composer's layout, and
+    /// the center column width it was measured at (a different column width
+    /// makes it stale).
     pub(super) main_width: Option<f32>,
+    pub(super) main_width_for: Option<f32>,
 }
 
 impl Geometry {
@@ -163,10 +172,13 @@ impl Geometry {
         self.panes.retain(|id, _| panes.contains(id.as_str()));
         self.tabs.retain(|id, _| panes.contains(id.as_str()));
         self.plus.retain(|id, _| panes.contains(id.as_str()));
+        self.group_actions
+            .retain(|id, _| panes.contains(id.as_str()));
         self.tab_view.retain(|id, _| panes.contains(id.as_str()));
         self.splits.retain(|id, _| layout.root.node(id).is_some());
         if !has_main_visible(layout) {
             self.main_width = None;
+            self.main_width_for = None;
         }
     }
 
@@ -294,6 +306,10 @@ pub(super) struct TabMenu {
     pub(super) chat_id: String,
     pub(super) pane_id: String,
     pub(super) position: Point<Pixels>,
+    /// Opened from a compact strip's Group actions: the group's own actions
+    /// (`+`, split, close) lead the menu. `chat_id` may be empty (an empty
+    /// group), in which case no tab actions are listed.
+    pub(super) group: bool,
 }
 
 pub(super) struct WorkbenchState {
@@ -405,13 +421,25 @@ pub(super) struct CanvasReveal {
 }
 
 /// When a group's active tab was last brought into view: the tab order, the
-/// active chat and the strip's width. Any change re-reveals; the user's own
+/// active chat, the strip's width, the tab width cap and whether a closed
+/// tab is still narrowing out of it. Any change re-reveals; the user's own
 /// scrolling in between is left alone.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct TabReveal {
-    key: (Vec<String>, String, i32),
+    key: (Vec<String>, String, i32, i32, bool),
     /// Frames left to settle the reveal (bounds are measured a frame late).
     pending: u8,
+}
+
+/// Re-render the Shell once this draw is over. A reveal or cap step settles
+/// against bounds measured a frame late, but a `notify` while drawing only
+/// marks the view dirty and requests no frame (GPUI ignores invalidation
+/// mid-draw), so the next step would wait for an unrelated event and a strip
+/// could stay scrolled past its active tab. The deferred notify runs after
+/// the draw and schedules the frame.
+fn notify_after_draw(cx: &mut Context<Shell>) {
+    let shell = cx.entity_id();
+    cx.defer(move |cx| cx.notify(shell));
 }
 
 impl WorkbenchState {
@@ -1402,11 +1430,32 @@ impl Shell {
     }
 
     /// Width of the pane showing Main while the workbench is split.
-    pub(super) fn workbench_main_pane_width(&self) -> Option<f32> {
+    pub(super) fn workbench_main_pane_width(&self, column_width: f32) -> Option<f32> {
         if !model::has_split(&self.workbench.layout()) {
             return None;
         }
-        self.workbench.geometry.borrow().main_width
+        self.workbench_main_width_now(column_width)
+    }
+
+    /// Main's pane width for a center column `column_width` wide: the last
+    /// measurement while it was taken at this column width, else Main's
+    /// saved share of the current viewport (a resize never keeps the
+    /// previous width; the next frame's measurement then refines it).
+    pub(super) fn workbench_main_width_now(&self, column_width: f32) -> Option<f32> {
+        {
+            let geometry = self.workbench.geometry.borrow();
+            if let (Some(width), Some(at)) = (geometry.main_width, geometry.main_width_for)
+                && (at - column_width).abs() < 0.5
+            {
+                return Some(width);
+            }
+        }
+        let layout = self.workbench.layout();
+        let pane = model::panes(&layout)
+            .into_iter()
+            .find(|pane| pane.active_chat_id == Some(layout.main_chat_id.as_str()))?;
+        let share = render::pane_width_share(&layout.root, pane.id)?;
+        Some(render::viewport_width_in(column_width) * share)
     }
 
     /// The composer that sends for `chat_id` in this workbench.
@@ -1620,7 +1669,7 @@ impl Shell {
         }
         let Some(pane) = geometry.panes.get(&layout.focused_pane_id).copied() else {
             reveal.pending -= 1;
-            cx.notify();
+            notify_after_draw(cx);
             return handle;
         };
         // The shift that brings `[start, end)` into `[view_start, view_end)`,
@@ -1656,7 +1705,7 @@ impl Shell {
         offset.y = px((f32::from(offset.y) + dy).clamp(-f32::from(max.y).max(0.0), 0.0));
         handle.set_offset(offset);
         reveal.pending -= 1;
-        cx.notify();
+        notify_after_draw(cx);
         handle
     }
 
@@ -1685,10 +1734,28 @@ impl Shell {
         let geometry = geometry.borrow();
         let view = geometry.tab_view.get(&id).copied();
         let width = view.map_or(0, |view| f32::from(view.size.width).round() as i32);
+        // The tab width cap too: a narrower cap (a compact strip, a resize)
+        // moves every tab even when the viewport kept its width.
+        let cap = self
+            .workbench
+            .tab_caps
+            .get(&id)
+            .map_or(0, |cap| cap.round() as i32);
+        // A closed tab's ghost still narrowing in this strip moves every tab
+        // after it on each frame: the reveal stays live until it is gone
+        // instead of settling on a position the next frame changes, and its
+        // end (part of the key) re-reveals against the final layout.
+        let exiting = self
+            .workbench
+            .leaving
+            .iter()
+            .any(|leaving| leaving.pane_id == id);
         let key = (
             pane.tabs.iter().map(|tab| tab.chat_id.clone()).collect(),
             active.clone(),
             width,
+            cap,
+            exiting,
         );
         let reveal = self
             .workbench
@@ -1699,8 +1766,13 @@ impl Shell {
                 pending: 4,
             });
         if reveal.key != key {
+            // The bounds on hand were measured for the old tabs, order or
+            // width (a closed tab's neighbour still where it was): act on
+            // next frame's measurement, not on these.
             reveal.key = key;
             reveal.pending = 4;
+            notify_after_draw(cx);
+            return handle;
         }
         // A tab or Related row in flight: the reveal waits for its drop.
         if reveal.pending == 0 || self.workbench.dragging.is_some() || cx.has_active_drag() {
@@ -1714,8 +1786,10 @@ impl Shell {
             .filter(|bounds| bounds.size.width > px(0.0));
         let (Some(view), Some(tab)) = (view, tab) else {
             // Not measured yet (a tab that just mounted): look next frame.
-            reveal.pending -= 1;
-            cx.notify();
+            if !exiting {
+                reveal.pending -= 1;
+            }
+            notify_after_draw(cx);
             return handle;
         };
         let mut offset = handle.offset();
@@ -1730,14 +1804,20 @@ impl Shell {
             0.0
         };
         if shift.abs() < 0.5 {
-            reveal.pending = 0;
+            // Settled only once nothing in the strip is still moving (the
+            // exit animation requests its own frames until then).
+            if !exiting {
+                reveal.pending = 0;
+            }
             return handle;
         }
         let max = f32::from(handle.max_offset().x).max(0.0);
         offset.x = px((f32::from(offset.x) + shift).clamp(-max, 0.0));
         handle.set_offset(offset);
-        reveal.pending -= 1;
-        cx.notify();
+        if !exiting {
+            reveal.pending -= 1;
+        }
+        notify_after_draw(cx);
         handle
     }
 
@@ -1765,7 +1845,7 @@ impl Shell {
             .map_or(max, |width| (width - 4.0).clamp(min, max))
             .floor();
         if self.workbench.tab_caps.insert(pane_id.to_string(), cap) != Some(cap) {
-            cx.notify();
+            notify_after_draw(cx);
         }
         cap
     }
@@ -3089,6 +3169,25 @@ impl Shell {
             chat_id,
             pane_id,
             position,
+            group: false,
+        });
+        cx.notify();
+    }
+
+    /// A compact strip's Group actions menu (the tab menu with the group's
+    /// actions first).
+    pub(super) fn open_workbench_group_menu(
+        &mut self,
+        chat_id: String,
+        pane_id: String,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.workbench.menu.open(TabMenu {
+            chat_id,
+            pane_id,
+            position,
+            group: true,
         });
         cx.notify();
     }
@@ -3371,8 +3470,8 @@ impl Shell {
         let offset = self.workbench.canvas_scroll.offset();
         let max = self.workbench.canvas_scroll.max_offset();
         let canvas_scroll = json!({
-            "x": f32::from(offset.x),
-            "y": f32::from(offset.y),
+            "x": -f32::from(offset.x),
+            "y": -f32::from(offset.y),
             "maxX": f32::from(max.x),
             "maxY": f32::from(max.y),
         });
@@ -3483,6 +3582,12 @@ impl Shell {
                     }).collect::<Vec<_>>(),
                     "splitBounds": geometry.splits.iter().map(|(id, split)| json!({"id": id, "bounds": bounds(split)})).collect::<Vec<_>>(),
                     "plusBounds": geometry.plus.iter().map(|(id, plus)| json!({"pane": id, "bounds": bounds(plus)})).collect::<Vec<_>>(),
+                    "groupActionsBounds": geometry.group_actions.iter().map(|(id, more)| json!({"pane": id, "bounds": bounds(more)})).collect::<Vec<_>>(),
+                    "menuRows": if self.workbench.menu.is_open() {
+                        geometry.menu_rows.iter().map(|(id, row)| json!({"id": id, "bounds": bounds(row)})).collect::<Vec<_>>()
+                    } else {
+                        Vec::new()
+                    },
                     "noticeDismiss": self.workbench.notice.as_ref().and(geometry.notice_dismiss.as_ref()).map(bounds),
                 })
     }
@@ -3521,6 +3626,53 @@ impl Shell {
         let composer = self.workbench_composer(chat_id, cx)?;
         let pickers = composer.read(cx).pickers().read(cx);
         Some((pickers.current_model_id(cx), pickers.is_open()))
+    }
+    /// QA capture: forget every layout probe, then re-render every view that
+    /// paints one (Shell strips and menus, visible composers and their
+    /// pickers, Main's and each tab's transcript) and refresh the window, so
+    /// the next drawn frame records only controls painted after this call.
+    /// Cached views would otherwise replay an earlier paint without
+    /// re-recording, and an old rectangle must never pass for a fresh one.
+    pub fn fixture_repaint_probes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::perf_counters::clear_bounds("");
+        for composer in self.visible_composers(cx) {
+            composer.update(cx, |composer, cx| {
+                composer.pickers().update(cx, |_, cx| cx.notify());
+                cx.notify();
+            });
+        }
+        self.transcript.update(cx, |_, cx| cx.notify());
+        let tabs: Vec<_> = self
+            .workbench
+            .views
+            .values()
+            .map(|tab| tab.view.clone())
+            .collect();
+        for view in tabs {
+            view.update(cx, |view, cx| {
+                view.transcript().update(cx, |_, cx| cx.notify());
+                cx.notify();
+            });
+        }
+        cx.notify();
+        window.refresh();
+    }
+    /// Whether `chat_id`'s compact composer controls tray is open.
+    pub fn fixture_workbench_controls_tray(&self, chat_id: &str, cx: &App) -> Option<bool> {
+        self.workbench_composer(chat_id, cx)
+            .map(|composer| composer.read(cx).controls_tray_open())
+    }
+    /// The tab / Group actions menu: `{open, closing, group, paneId,
+    /// chatId}` (its painted rows are `wb-menu:` probes).
+    pub fn fixture_workbench_menu(&self) -> serde_json::Value {
+        let menu = self.workbench.menu.get();
+        json!({
+            "open": self.workbench.menu.is_open(),
+            "closing": self.workbench.menu.is_closing(),
+            "group": menu.is_some_and(|menu| menu.group),
+            "paneId": menu.map(|menu| menu.pane_id.clone()),
+            "chatId": menu.map(|menu| menu.chat_id.clone()),
+        })
     }
     pub fn fixture_overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.overlay_owns_keyboard(cx)
@@ -3715,6 +3867,75 @@ impl Shell {
     pub fn fixture_workbench_has_focus(&self, window: &Window, cx: &App) -> bool {
         self.workbench.focus.contains_focused(window, cx)
     }
+    /// Main transcript's retained outgoing-chat caches (slice 6).
+    pub fn fixture_main_retained(&self, cx: &App) -> serde_json::Value {
+        self.transcript.read(cx).fixture_retained()
+    }
+
+    /// Lower (or restore) Main transcript's retained-cache ceilings.
+    pub fn fixture_set_main_retained_limits(
+        &mut self,
+        limits: Option<(usize, usize, usize)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.transcript.update(cx, |transcript, _| {
+            transcript.fixture_set_retained_limits(limits)
+        });
+    }
+
+    /// The painted composer surface (pill) of `chat_id`: [x, y, w, h].
+    pub fn fixture_composer_surface(&self, chat_id: &str, cx: &App) -> Option<[f32; 4]> {
+        let composer = self.workbench_composer(chat_id, cx)?;
+        let bounds = composer.read(cx).surface_bounds().get()?;
+        Some([
+            f32::from(bounds.origin.x),
+            f32::from(bounds.origin.y),
+            f32::from(bounds.size.width),
+            f32::from(bounds.size.height),
+        ])
+    }
+
+    /// SIMULATION for QA: age `chat_id`'s tab transcript paint stamp.
+    pub fn fixture_age_tab_paint(&self, chat_id: &str, ms: u64, cx: &App) {
+        if let Some(tab) = self.workbench.views.get(chat_id) {
+            tab.view
+                .read(cx)
+                .transcript()
+                .read(cx)
+                .fixture_age_paint(ms);
+        }
+    }
+
+    /// How long ago `chat_id`'s workbench tab transcript was painted.
+    pub fn fixture_tab_painted_age_ms(&self, chat_id: &str, cx: &App) -> Option<f64> {
+        self.workbench.views.get(chat_id).and_then(|tab| {
+            tab.view
+                .read(cx)
+                .transcript()
+                .read(cx)
+                .fixture_painted_age_ms()
+        })
+    }
+
+    /// Scroll Main's transcript to its first rows or back to its tail.
+    pub fn fixture_main_transcript_edge(&mut self, top: bool, cx: &mut Context<Self>) {
+        self.transcript
+            .update(cx, |transcript, cx| transcript.fixture_scroll_edge(top, cx));
+    }
+
+    /// `chat_id`'s transcript row projection: Main's view when it is the
+    /// selected chat, else its workbench tab's view (slice 6 baseline).
+    pub fn fixture_transcript_rows(&self, chat_id: &str, cx: &App) -> serde_json::Value {
+        if self.state.read(cx).selected_chat.as_deref() == Some(chat_id) {
+            return self.transcript.read(cx).fixture_rows();
+        }
+        self.workbench
+            .views
+            .get(chat_id)
+            .map(|tab| tab.view.read(cx).transcript().read(cx).fixture_rows())
+            .unwrap_or(serde_json::Value::Null)
+    }
+
     /// Type into the composer bound to `chat_id` (Main's or its tab's) and
     /// optionally submit it through the composer's own Submitted path.
     pub fn fixture_workbench_type(

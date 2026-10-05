@@ -3028,6 +3028,8 @@ impl Shell {
     }
 
     fn on_state_changed(&mut self, state: &Entity<AppState>, cx: &mut Context<Self>) {
+        // Opt-in baseline counters (slice 6): observe only.
+        let _perf = crate::perf_counters::Timer::start("shell.observe", || "shell".into());
         self.pending_task_actions.retain(|task_id, action| {
             let chat = state.read(cx).chats.iter().find(|chat| chat.id == *task_id);
             match action {
@@ -10907,6 +10909,15 @@ impl Shell {
         if self.right_plus.get().is_some() {
             return true;
         }
+        // The workbench tab / Group actions menu: Escape dismisses it and
+        // never reaches a composer (no Stop, no draft change).
+        if self.workbench.menu.is_open() {
+            self.close_workbench_menu(cx);
+            return true;
+        }
+        if self.workbench.menu.get().is_some() {
+            return true;
+        }
         self.active_changes(cx)
             .is_some_and(|changes| changes.update(cx, |changes, cx| changes.handle_escape(cx)))
     }
@@ -10963,6 +10974,19 @@ impl Shell {
         }
         if event.keystroke.key == "escape" && self.escape_open_picker(window, cx) {
             cx.stop_propagation();
+            return;
+        }
+        // Then a narrow composer's open controls tray (slice 6): Escape
+        // closes it and never reaches the stop path or the draft.
+        if event.keystroke.key == "escape" {
+            let open = self
+                .visible_composers(cx)
+                .into_iter()
+                .find(|composer| composer.read(cx).controls_tray_open());
+            if let Some(composer) = open {
+                composer.update(cx, |composer, cx| composer.close_controls_tray(cx));
+                cx.stop_propagation();
+            }
         }
     }
 
@@ -12372,6 +12396,7 @@ impl Shell {
         let term_h = self.eval_tween(self.terminal_tween, self.terminal_target(cx));
         let new_thread_background_layer = (!has_selection || dock_frame.active).then(|| {
             if artwork.is_some() && artwork_opacity < 1.0 {
+                crate::perf_counters::count("frame.request", "shell#1", 1, 0);
                 window.request_animation_frame();
             }
             new_thread_background(
@@ -12535,6 +12560,7 @@ impl Shell {
             .flex_col()
             .on_drop(cx.listener(|this, paths: &gpui::ExternalPaths, _, cx| {
                 let paths = paths.paths().to_vec();
+                crate::perf_counters::count("drop.external", "main", paths.len() as u64, 0);
                 this.composer
                     .update(cx, |composer, cx| composer.add_paths(paths, cx));
                 cx.notify();
@@ -12633,6 +12659,7 @@ impl Shell {
                                 measured.set(next_height);
                                 measured_has_composer.set(contains_composer);
                                 if changed {
+                                    crate::perf_counters::count("frame.request", "shell#2", 1, 0);
                                     window.request_animation_frame();
                                 }
                             },
@@ -14662,6 +14689,7 @@ fn header_icon_button(
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let _perf = crate::perf_counters::Timer::start("shell.render", || "shell".into());
         self.render_time = Some(self.frame_clock());
         self.sync_route_sidebar();
         self.sync_execution_focus(cx);
@@ -15098,7 +15126,7 @@ impl Render for Shell {
                 );
                 // In a split, Main's rail follows its own pane's width.
                 let main_width = self
-                    .workbench_main_pane_width()
+                    .workbench_main_pane_width(main_content_width)
                     .map_or(transcript_width, |pane| pane.min(transcript_width));
                 let main_width = (main_width - 10.0).max(0.0);
                 // Clearance excludes the terminal dock: the transcript
@@ -15342,6 +15370,7 @@ impl Render for Shell {
         // ride the same clock; their once-per-frame tick lives here (this is
         // the window's root render — it runs exactly once per frame).
         if self.motion_active.get() | motion::hover_fades_active() {
+            crate::perf_counters::count("frame.request", "shell#3", 1, 0);
             window.request_animation_frame();
         }
 
