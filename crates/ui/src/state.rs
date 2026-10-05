@@ -986,6 +986,18 @@ pub struct AppState {
     /// `sideChatContextMode` (`nativeFork` / `contextSnapshot`). Absent for
     /// older engines and generic forks: nothing is inferred from absence.
     pub side_chat_context_modes: std::collections::HashMap<String, String>,
+    /// Each locally owned task's execution observation from `WatchChats`'
+    /// `execution` (schema-checked, keyed by its own task). Remote, older or
+    /// unavailable hosts omit it: absence claims nothing, and a stream end
+    /// clears it so a cold engine never shows an old run as live.
+    pub execution_rows: std::collections::HashMap<String, luna_proto::TaskExecutionSummary>,
+    /// The chat execution diagnostics describe: the focused workbench tab
+    /// (set by the shell), else the selected chat.
+    pub execution_focus: Option<String>,
+    /// QA: per-task summaries that replace the watch's (`None`: absent).
+    #[cfg(feature = "appshots-fixture")]
+    pub execution_fixture:
+        std::collections::HashMap<String, Option<luna_proto::TaskExecutionSummary>>,
     pub sessions: Vec<Session>,
     session_presentation: Option<Vec<Session>>,
     /// The project the new-session canvas mints into. Healed by
@@ -1118,6 +1130,10 @@ impl AppState {
             side_chat_gone: Default::default(),
             fork_source_rows: Default::default(),
             side_chat_context_modes: Default::default(),
+            execution_rows: Default::default(),
+            execution_focus: None,
+            #[cfg(feature = "appshots-fixture")]
+            execution_fixture: Default::default(),
             sessions: Vec::new(),
             session_presentation: None,
             selected_space: None,
@@ -1484,6 +1500,35 @@ impl AppState {
             .iter()
             .find(|device| device.id == device_id)
             .is_some_and(|device| device.supports(capability))
+    }
+
+    /// The execution observation for `chat_id`, if its owning engine
+    /// published one this UI can read. `None` claims nothing: callers keep
+    /// their legacy behavior and never substitute local capability or
+    /// effective-state guesses.
+    pub fn execution_for(&self, chat_id: &str) -> Option<&luna_proto::TaskExecutionSummary> {
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(seeded) = self.execution_fixture.get(chat_id) {
+            return seeded.as_ref().filter(|summary| {
+                summary.schema_version == luna_proto::EXECUTION_SUMMARY_VERSION
+                    && summary.task_id == chat_id
+            });
+        }
+        self.execution_rows.get(chat_id)
+    }
+
+    /// Drop every execution observation: the chats watch ended or the engine
+    /// connection changed, so none is current until a frame republishes it.
+    pub(crate) fn invalidate_execution_observations(&mut self) {
+        self.execution_rows.clear();
+    }
+
+    /// The chat execution diagnostics follow (the focused tab, else the
+    /// selected chat).
+    pub fn execution_focus_chat(&self) -> Option<String> {
+        self.execution_focus
+            .clone()
+            .or_else(|| self.selected_chat.clone())
     }
 
     pub fn chat_host_supports(&self, chat_id: &str, capability: &str) -> bool {
@@ -2201,6 +2246,7 @@ impl AppState {
     pub(crate) fn set_test_engine(&mut self, handle: EngineHandle) {
         self.engine = Some(handle);
         self.engine_generation = self.engine_generation.wrapping_add(1);
+        self.invalidate_execution_observations();
     }
 
     /// Drop every account-scoped view and subscription after its runtime has
@@ -2209,6 +2255,7 @@ impl AppState {
     pub fn prepare_runtime_replacement(&mut self, cx: &mut Context<Self>) {
         self.engine = None;
         self.engine_generation = self.engine_generation.wrapping_add(1);
+        self.invalidate_execution_observations();
         self.watch_tasks.clear();
         self.transcript_task = None;
         self.change_request_tasks.clear();
@@ -2334,8 +2381,10 @@ impl AppState {
         self.engine = Some(handle.clone());
         self.engine_generation = self.engine_generation.wrapping_add(1);
         // Deletions are relative to one engine's rows; a re-attached (or
-        // different) engine republishes what exists.
+        // different) engine republishes what exists. Execution observations
+        // likewise belong to the previous connection.
         self.side_chat_gone.clear();
+        self.invalidate_execution_observations();
         let mut watch_tasks = Vec::with_capacity(8);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
@@ -2772,6 +2821,26 @@ pub fn side_chat_context_modes(
 }
 
 /// `forkSourceTaskId` per chat id, from a raw chats frame.
+/// `WatchChats`' per-row `execution`, kept only when it is the schema this UI
+/// reads and describes that same row's task (anything else is absent).
+pub fn execution_rows(
+    frame: &serde_json::Value,
+) -> std::collections::HashMap<String, luna_proto::TaskExecutionSummary> {
+    frame
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = row.get("id")?.as_str()?;
+            let summary: luna_proto::TaskExecutionSummary =
+                serde_json::from_value(row.get("execution")?.clone()).ok()?;
+            (summary.schema_version == luna_proto::EXECUTION_SUMMARY_VERSION
+                && summary.task_id == id)
+                .then(|| (id.to_string(), summary))
+        })
+        .collect()
+}
+
 pub fn fork_source_rows(frame: &serde_json::Value) -> std::collections::HashMap<String, String> {
     frame
         .as_array()
@@ -2837,6 +2906,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                 let side_rows = side_chat_rows(&value);
                 let fork_sources = fork_source_rows(&value);
                 let context_modes = side_chat_context_modes(&value);
+                let executions = execution_rows(&value);
                 let parsed: Vec<Chat> = match serde_json::from_value(value) {
                     Ok(parsed) => parsed,
                     Err(err) => {
@@ -2848,6 +2918,7 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                     state.apply_side_chat_rows(side_rows);
                     state.fork_source_rows = fork_sources;
                     state.side_chat_context_modes = context_modes;
+                    state.execution_rows = executions;
                     state.apply_chats(parsed);
                     state.apply_pending_deep_link(cx);
                     state.reconcile_change_request_watches(cx);
@@ -2858,7 +2929,17 @@ fn spawn_chats_watch(cx: &mut Context<AppState>, handle: EngineHandle) -> Task<(
                 }
             }
             tracing::debug!("chats stream ended; resubscribing");
-            if this.update(cx, |_, _| {}).is_err() {
+            // The engine may have restarted: its observations are no longer
+            // current until the next frame republishes them.
+            if this
+                .update(cx, |state, cx| {
+                    if !state.execution_rows.is_empty() {
+                        state.invalidate_execution_observations();
+                        cx.notify();
+                    }
+                })
+                .is_err()
+            {
                 return;
             }
             cx.background_executor().timer(RETRY_DELAY).await;
@@ -5302,6 +5383,7 @@ impl AppState {
     pub fn fixture_attachment_engine(&mut self, engine: EngineHandle) {
         self.engine = Some(engine);
         self.engine_generation = self.engine_generation.wrapping_add(1);
+        self.invalidate_execution_observations();
     }
 
     /// Start the production `WatchSessions` stream on the attached engine:

@@ -715,6 +715,34 @@ impl Shell {
         self.workbench.capable() && !self.workbench.main().is_empty()
     }
 
+    /// The chat execution diagnostics describe: the focused group's active
+    /// chat while this workbench is loaded for the selected chat, else `None`
+    /// (the selected chat applies).
+    fn workbench_execution_focus(&self, cx: &App) -> Option<String> {
+        if !self.workbench_ready()
+            || self.workbench.main.is_empty()
+            || self.state.read(cx).selected_chat.as_deref() != Some(self.workbench.main.as_str())
+        {
+            return None;
+        }
+        self.workbench
+            .layout()
+            .focused_chat_id()
+            .map(str::to_string)
+    }
+
+    /// Keep `AppState::execution_focus` on the focused tab (Settings'
+    /// Execution card and other diagnostics follow it, never Main).
+    pub(super) fn sync_execution_focus(&mut self, cx: &mut Context<Self>) {
+        let focus = self.workbench_execution_focus(cx);
+        if self.state.read(cx).execution_focus != focus {
+            self.state.update(cx, |state, cx| {
+                state.execution_focus = focus;
+                cx.notify();
+            });
+        }
+    }
+
     fn workbench_ready(&self) -> bool {
         self.workbench_available() && self.workbench.loaded() && self.workbench.profile.is_some()
     }

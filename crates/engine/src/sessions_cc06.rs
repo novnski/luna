@@ -45,7 +45,7 @@ impl RuntimeConfig {
     /// approvals, policy, worktree, auth instance, the runtime contract apart
     /// from its model/reasoning context, every other model option) must be
     /// identical.
-    fn differs_only_in_live_selection(&self, next: &RuntimeConfig) -> bool {
+    pub(super) fn differs_only_in_live_selection(&self, next: &RuntimeConfig) -> bool {
         let others = |options: &serde_json::Map<String, serde_json::Value>| {
             options
                 .iter()
@@ -75,7 +75,7 @@ impl RuntimeConfig {
 
     /// Only the switchable selection goes to the adapter; the engine already
     /// proved everything else unchanged.
-    fn live_selection(&self) -> luna_harness::LiveRuntimeSelection {
+    pub(super) fn live_selection(&self) -> luna_harness::LiveRuntimeSelection {
         luna_harness::LiveRuntimeSelection {
             model: self.model.clone(),
             reasoning: self.reasoning,
@@ -179,6 +179,7 @@ impl SessionsEngine {
         ) {
             return false;
         }
+        let execution_defaults = self.execution_defaults(chat_id);
         {
             let mut runs = lock(&self.inner.runs);
             let Some(handle) = runs
@@ -188,6 +189,7 @@ impl SessionsEngine {
                 return false;
             };
             handle.runtime_config = next;
+            handle.execution.staged_defaults = execution_defaults;
         }
         lock(&self.inner.last_requests).insert(chat_id.to_owned(), request.clone());
         tracing::info!(chat = %chat_id, "routing follow-up through a native live model/effort switch");

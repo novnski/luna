@@ -22,8 +22,9 @@ use gpui::{
 
 use luna_engine::registry::HarnessDescriptor;
 use luna_proto::{
-    AgentAccountsSnapshot, ChatConfig, ContextHandoff, ContextHandoffKind, FolderListing,
-    HarnessId, Model, PermissionMode, ReasoningLevel, RepoRef, SandboxLevel, Space,
+    AgentAccountsSnapshot, ChatConfig, ContextHandoff, ContextHandoffKind, ExecutionSettingField,
+    ExecutionSettings, FolderListing, HarnessId, Model, PermissionMode, ReasoningLevel, RepoRef,
+    SandboxLevel, Space, TaskExecutionSummary,
 };
 use luna_rpc::methods;
 
@@ -580,10 +581,11 @@ const TOOLTIP_WRAP_CHARS: usize = 40;
 impl Render for ControlTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
-        let wraps = self
-            .detail
-            .as_ref()
-            .is_some_and(|detail| detail.chars().count() > TOOLTIP_WRAP_CHARS);
+        let wraps = self.detail.as_ref().is_some_and(|detail| {
+            detail
+                .split('\n')
+                .any(|line| line.chars().count() > TOOLTIP_WRAP_CHARS)
+        });
         div()
             .when(wraps, |card| card.w(px(260.0)))
             .when(!wraps, |card| card.whitespace_nowrap())
@@ -604,13 +606,15 @@ impl Render for ControlTooltip {
                     .text_color(theme.text)
                     .child(self.title.clone()),
             )
+            // One line per `\n` (execution details: Running / Requested /
+            // how it applies / the engine's reason).
             .when_some(self.detail.clone(), |card, detail| {
-                card.child(
+                card.children(detail.split('\n').map(|line| {
                     div()
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_muted)
-                        .child(detail),
-                )
+                        .child(SharedString::from(line.to_string()))
+                }))
             })
     }
 }
@@ -3900,7 +3904,7 @@ impl Pickers {
         } else {
             label.clone()
         };
-        TriggerChip {
+        let mut chip = TriggerChip {
             label,
             set: true,
             icon: Some(icon),
@@ -3911,7 +3915,208 @@ impl Pickers {
             icon_only: fit == ModelChipFit::IconOnly,
             attention: None,
             tooltip: (title, detail),
+        };
+        self.apply_execution_to_model_chip(&mut chip, fit, theme, cx);
+        chip
+    }
+
+    // ---- execution observation (the owning engine's, never local) ----
+
+    /// The bound chat's execution summary from its owning engine. `None`
+    /// (draft, remote/older host, unavailable) keeps the legacy chips.
+    fn execution<'a>(&self, cx: &'a App) -> Option<&'a TaskExecutionSummary> {
+        let state = self.state.read(cx);
+        let chat = self.binding.chat_id(state)?;
+        state.execution_for(chat)
+    }
+
+    /// A provider's display name from the loaded catalog.
+    fn harness_name(&self, harness: HarnessId) -> String {
+        self.harnesses
+            .ready()
+            .and_then(|list| list.iter().find(|descriptor| descriptor.id == harness))
+            .map(|descriptor| descriptor.name.clone())
+            .unwrap_or_else(|| format!("{harness:?}"))
+    }
+
+    fn execution_model<'a>(&'a self, settings: &ExecutionSettings) -> Option<&'a Model> {
+        let id = settings.model.as_deref()?;
+        self.models
+            .get(&settings.provider)?
+            .ready()?
+            .iter()
+            .find(|model| model.id == id)
+    }
+
+    /// An observed model's name (its catalog label, else the remembered
+    /// label, else its id).
+    fn execution_model_label(&self, settings: &ExecutionSettings) -> Option<String> {
+        self.execution_model(settings)
+            .map(|model| model.label.clone())
+            .or_else(|| {
+                settings.model.as_deref().map(|id| {
+                    self.defaults
+                        .label_for(id)
+                        .map(str::to_string)
+                        .unwrap_or_else(|| id.to_string())
+                })
+            })
+    }
+
+    /// "Provider · Model · High · 1M" for an observed settings value.
+    pub(crate) fn execution_settings_label(
+        &self,
+        settings: &ExecutionSettings,
+        with_provider: bool,
+    ) -> String {
+        let mut parts = Vec::new();
+        if with_provider {
+            parts.push(self.harness_name(settings.provider));
         }
+        parts.extend(self.execution_model_label(settings));
+        parts.extend(traits_summary(
+            self.execution_model(settings),
+            settings.reasoning,
+            &settings.model_options,
+        ));
+        parts.join(" · ")
+    }
+
+    /// The account an observed settings value names: its LUNA label, else
+    /// the provider-authored email or plan (never the account id).
+    pub(crate) fn execution_account_label(&self, settings: &ExecutionSettings) -> String {
+        let Some(id) = settings.provider_account_id.as_deref() else {
+            return "Default account".into();
+        };
+        self.accounts
+            .ready()
+            .and_then(|snapshot| {
+                snapshot
+                    .accounts
+                    .iter()
+                    .find(|account| account.id == id && account.harness == settings.provider)
+            })
+            .and_then(|account| {
+                account
+                    .label
+                    .clone()
+                    .or_else(|| account.email.clone())
+                    .or_else(|| account.plan_label.clone())
+            })
+            .unwrap_or_else(|| "Another account".into())
+    }
+
+    /// The model chip under a pending model/provider/account/reasoning/option
+    /// change: the running settings while a turn uses them (never the
+    /// requested ones), a dot, and Running / Requested / how it applies.
+    fn apply_execution_to_model_chip(
+        &self,
+        chip: &mut TriggerChip,
+        fit: ModelChipFit,
+        theme: &Theme,
+        cx: &App,
+    ) {
+        let Some(summary) = self.execution(cx) else {
+            return;
+        };
+        if !crate::execution_view::model_pending(summary) {
+            return;
+        }
+        let provider_changed = summary
+            .running
+            .as_ref()
+            .is_some_and(|running| running.provider != summary.requested.provider)
+            || summary.pending.contains(&ExecutionSettingField::Provider);
+        let mut lines = Vec::new();
+        if let Some(running) = &summary.running {
+            lines.push(format!(
+                "{}: {}",
+                crate::execution_view::running_heading(summary),
+                self.execution_settings_label(running, provider_changed)
+            ));
+        }
+        lines.push(format!(
+            "Requested: {}",
+            self.execution_settings_label(&summary.requested, provider_changed)
+        ));
+        if summary.pending.contains(&ExecutionSettingField::Account) {
+            lines.push(format!(
+                "Requested account: {}",
+                self.execution_account_label(&summary.requested)
+            ));
+        }
+        lines.extend(crate::execution_view::transition_lines(&summary.transition));
+        if crate::execution_view::turn_active(summary)
+            && let Some(running) = &summary.running
+        {
+            let model = self.execution_model(running);
+            let label: SharedString = self
+                .execution_model_label(running)
+                .unwrap_or_default()
+                .into();
+            chip.icon = Some(harness_brand_icon(running.provider));
+            chip.icon_loading = false;
+            chip.label_loading = label.is_empty();
+            chip.label = label.clone();
+            chip.badge =
+                fast_speed(model, &running.model_options).then_some(crate::icons::BOLT_FAST);
+            chip.suffix = running
+                .reasoning
+                .filter(|_| fit == ModelChipFit::Full)
+                .map(|level| (SharedString::from(reasoning_label(level)), None));
+            chip.tooltip.0 = if label.is_empty() {
+                SharedString::from("Model")
+            } else {
+                label
+            };
+        }
+        chip.attention = Some(theme.warning);
+        chip.tooltip.1 = Some(lines.join("\n").into());
+    }
+
+    /// The access chip under a pending permission change: the enforced level
+    /// while a turn runs with it (a raise or a restriction is never shown
+    /// as applied early), a dot, and how the requested level applies.
+    fn execution_access_chip(&self, theme: &Theme, cx: &App) -> Option<AccessChip> {
+        let summary = self.execution(cx)?;
+        if !crate::execution_view::permission_pending(summary) {
+            return None;
+        }
+        let requested = summary.requested.permission_mode;
+        let shown = summary
+            .running
+            .as_ref()
+            .filter(|_| crate::execution_view::turn_active(summary))
+            .map_or(requested, |running| running.permission_mode);
+        let (icon, tint) = match shown {
+            PermissionMode::Ask => (crate::icons::LOCK_KEYHOLE, None),
+            PermissionMode::Auto => (crate::icons::SHIELD_CHECK, None),
+            PermissionMode::Full => (crate::icons::LOCK_KEYHOLE_UNLOCKED, Some(theme.warning)),
+        };
+        let mut lines = Vec::new();
+        if let Some(running) = &summary.running {
+            lines.push(format!(
+                "{}: {}",
+                crate::execution_view::running_heading(summary),
+                crate::execution_view::permission_title(running.permission_mode)
+            ));
+        }
+        lines.push(format!(
+            "Requested: {}",
+            crate::execution_view::permission_title(requested)
+        ));
+        lines.extend(crate::execution_view::transition_lines(&summary.transition));
+        Some(AccessChip {
+            icon,
+            tint: if crate::execution_view::transition_unavailable(summary) {
+                Some(theme.warning)
+            } else {
+                tint
+            },
+            title: crate::execution_view::permission_title(shown).into(),
+            detail: lines.join("\n").into(),
+            attention: true,
+        })
     }
 
     /// The model chip's measured widths `(full, name only)` at its current
@@ -3996,6 +4201,9 @@ impl Pickers {
                 detail: error.clone().into(),
                 attention: true,
             };
+        }
+        if let Some(chip) = self.execution_access_chip(theme, cx) {
+            return chip;
         }
         let choice = self.permission_choice_state(cx);
         let requested = self.requested_permission_mode(cx);
@@ -4115,6 +4323,17 @@ impl Pickers {
             "access": access.title.to_string(),
             "accessIcon": access.icon,
             "accessAttention": access.attention,
+            "modelAttention": model.attention.is_some(),
+            "modelTooltipTitle": model.tooltip.0.to_string(),
+            "accessDetail": access.detail.to_string(),
+            "execution": self.execution(cx).map(|summary| serde_json::json!({
+                "phase": summary.phase,
+                "pending": summary.pending,
+                "transition": summary.transition.kind,
+                "steer": summary.steer.kind,
+                "steerReason": summary.steer.reason,
+                "observationNote": summary.observation_note,
+            })),
             "selectedModel": self.selected_model(cx).map(|model| serde_json::json!({
                 "id": model.id,
                 "options": model.options.iter().map(|o| o.id.clone()).collect::<Vec<_>>(),

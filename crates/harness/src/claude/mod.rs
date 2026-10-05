@@ -430,6 +430,15 @@ impl Harness for ClaudeHarness {
         true
     }
 
+    fn can_reconfigure_live(
+        &self,
+        from: &crate::LiveRuntimeSelection,
+        to: &crate::LiveRuntimeSelection,
+    ) -> bool {
+        self.resolve_executable()
+            .is_ok_and(|exe| runtime_controls::plan_switch(&exe, from, to).is_some())
+    }
+
     fn stage_live_reconfiguration(
         &self,
         message_id: &str,

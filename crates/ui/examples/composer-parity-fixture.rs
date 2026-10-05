@@ -36,11 +36,43 @@
 //!    truncates or overlaps), or the pill does not sit lower in the frame
 //!    once the slot under it is gone.
 //!
+//! Execution diagnostics (harness evolution slice 1; see
+//! docs/design/harness-evolution/ui-plan.md), written before the
+//! implementation:
+//! 12. The engine's own WatchChats `execution` for Main is not decoded (schema
+//!     1, Main's task, requested provider) or the chips claim a pending change
+//!     the engine does not report.
+//! 13. While a turn runs, a requested model/reasoning/speed or access level
+//!     replaces the chip's label/icon instead of the running one, or the
+//!     change shows without its dot and Running / Requested / how it applies.
+//! 14. A summary seeded for Main leaks into the fork's composer (routing).
+//! 15. A Steer row is offered as native Steer when the engine says
+//!     unavailable or after the turn, or its reason is missing; a native
+//!     decision is not offered as Steer now.
+//! 16. Next-turn clearing (pending emptied, idle) leaves a dot or the old
+//!     running labels instead of the requested settings.
+//! 17. A parked warm runtime reads as Running, or its loaded settings replace
+//!     the requested labels.
+//! 18. New-binding copy implies context is carried over automatically.
+//! 19. A missing, old-schema or other-task summary is shown or replaced by a
+//!     local claim: chips, access and Steer must equal the legacy baseline.
+//! 20. The Execution card follows Main instead of the focused fork tab, or
+//!     shows the raw task id.
+//! 21. A late contract response for the previously focused chat overwrites
+//!     the current focus.
+//! 22. Adapter capabilities read as verified; long reasons/notes are
+//!     truncated or not wrapped in the opaque tooltip and card.
+//! 23. Pending rows in the card disagree with the engine's pending list.
+//! 24. Once the watch is invalidated (stream end, reconnect, a frame without
+//!     `execution`), a cached contract snapshot revives an old Running state.
+//! 25. A same-task contract response requested on an earlier engine
+//!     connection or profile installs after a reconnect.
+//!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example composer-parity-fixture
 //! Run:   target/debug/examples/composer-parity-fixture ABSOLUTE_EVIDENCE_DIR
-//! Writes c01..c11 PNG captures (c11 is the group minimum), readback.json
-//! and composer-parity.pass.
+//! Writes c01..c11 PNG captures (c11 is the group minimum), e01..e07
+//! execution captures, readback.json and composer-parity.pass.
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -202,6 +234,14 @@ fn capture(
     Ok(())
 }
 
+/// Lay out and paint one frame (bounds readbacks reflect it).
+fn draw(window: WindowHandle<shell::Shell>, cx: &mut AsyncApp) -> anyhow::Result<()> {
+    gpui::AnyWindowHandle::from(window).update(cx, |_, window, cx| {
+        window.draw(cx).clear();
+    })?;
+    Ok(())
+}
+
 async fn settle(cx: &mut AsyncApp, ms: u64) {
     cx.background_executor()
         .timer(Duration::from_millis(ms))
@@ -276,6 +316,113 @@ fn pane_width(workbench: &serde_json::Value, chat: &str) -> Option<f64> {
         .iter()
         .find(|entry| entry["id"] == id)?["bounds"]["w"]
         .as_f64()
+}
+
+const OPUS: &str = "claude-opus-5-5";
+
+fn exec_settings(
+    model: &str,
+    reasoning: ReasoningLevel,
+    fast: bool,
+    permission: PermissionMode,
+) -> luna_proto::ExecutionSettings {
+    let mut model_options = serde_json::Map::new();
+    if fast {
+        model_options.insert("fastMode".into(), "on".into());
+    }
+    luna_proto::ExecutionSettings {
+        provider: HarnessId::Mock,
+        provider_account_id: None,
+        model: Some(model.into()),
+        reasoning: Some(reasoning),
+        model_options,
+        permission_mode: permission,
+        sandbox: SandboxLevel::WorkspaceWrite,
+    }
+}
+
+/// What Main requests after c04 (Sonnet, High, Fast) at Full access.
+fn main_requested() -> luna_proto::ExecutionSettings {
+    exec_settings(SONNET, ReasoningLevel::High, true, PermissionMode::Full)
+}
+
+/// An older runtime still running Opus, Low, Standard at Approve for me.
+fn opus_running() -> luna_proto::ExecutionSettings {
+    exec_settings(OPUS, ReasoningLevel::Low, false, PermissionMode::Auto)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn exec_summary(
+    task: &str,
+    phase: luna_proto::ExecutionPhase,
+    requested: luna_proto::ExecutionSettings,
+    running: Option<luna_proto::ExecutionSettings>,
+    pending: &[luna_proto::ExecutionSettingField],
+    transition: (luna_proto::ExecutionTransitionKind, bool, &str),
+    steer: (luna_proto::ExecutionSteerKind, Option<&str>),
+) -> luna_proto::TaskExecutionSummary {
+    luna_proto::TaskExecutionSummary {
+        schema_version: luna_proto::EXECUTION_SUMMARY_VERSION,
+        task_id: task.into(),
+        observed_at_ms: Utc::now().timestamp_millis(),
+        phase,
+        requested,
+        running,
+        pending: pending.to_vec(),
+        transition: luna_proto::ExecutionTransition {
+            kind: transition.0,
+            waits_for_turn_end: transition.1,
+            reason: transition.2.into(),
+        },
+        steer: luna_proto::ExecutionSteerDecision {
+            kind: steer.0,
+            reason: steer.1.map(str::to_string),
+        },
+        capabilities: None,
+        binding_generation: Some(1),
+        observation_note: None,
+    }
+}
+
+/// Model, reasoning, speed and access pending (the full chip difference).
+const CHIP_PENDING: [luna_proto::ExecutionSettingField; 4] = [
+    luna_proto::ExecutionSettingField::Model,
+    luna_proto::ExecutionSettingField::Reasoning,
+    luna_proto::ExecutionSettingField::ModelOptions,
+    luna_proto::ExecutionSettingField::Permission,
+];
+
+fn contract_view(task: &str) -> serde_json::Value {
+    contract_view_with(task, None)
+}
+
+/// A contract response that also carries an execution snapshot (as an
+/// earlier `GetRuntimeContract` may have).
+fn contract_view_with(
+    task: &str,
+    execution: Option<luna_proto::TaskExecutionSummary>,
+) -> serde_json::Value {
+    serde_json::to_value(luna_proto::RuntimeContractView {
+        task_id: task.into(),
+        provider: Some(HarnessId::Mock),
+        provider_delivery: luna_proto::RuntimeDelivery::Unsupported,
+        effective: None,
+        unavailable_reason: Some("Fixture: no provider session acknowledged a contract.".into()),
+        execution,
+    })
+    .unwrap_or_default()
+}
+
+fn steer_resolutions(
+    window: WindowHandle<shell::Shell>,
+    cx: &mut AsyncApp,
+    side: &str,
+) -> anyhow::Result<(serde_json::Value, serde_json::Value)> {
+    window.update(cx, |shell, _, cx| shell.fixture_steer_resolutions(side, cx))
+}
+
+fn tooltip_text(chips: &serde_json::Value, key: &str) -> String {
+    chips[key].as_str().unwrap_or_default().to_string()
 }
 
 fn f(value: &serde_json::Value) -> f64 {
@@ -702,6 +849,356 @@ fn main() -> anyhow::Result<()> {
                     let (main, pane) = composers(window, cx, &side)?;
                     aligned(&main, &pane)?;
                     record.insert("final".into(), serde_json::json!({"main": main, "pane": pane}));
+
+                    // ---- Execution diagnostics (failure cases 12-23) ----
+                    use luna_proto::{ExecutionPhase as Phase, ExecutionSettingField as Field, ExecutionSteerKind as Steer, ExecutionTransitionKind as Move};
+                    cx.update(|cx| appearance::set_mode(appearance::AppearanceMode::Dark, cx));
+                    move_mouse(window, cx, 200.0, 300.0)?;
+                    settle(cx, 300).await;
+
+                    // e01. Failure case 12: the engine's own summary for Main.
+                    let mut watched = serde_json::Value::Null;
+                    for _ in 0..60 {
+                        watched = window.update(cx, |shell, _, cx| shell.fixture_watch_execution(PARENT, cx))?;
+                        if !watched.is_null() {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(
+                        watched["schemaVersion"] == 1
+                            && watched["taskId"] == PARENT
+                            && watched["requested"]["provider"] == serde_json::to_value(HarnessId::Mock)?,
+                        "WatchChats publishes Main's execution summary: {watched}"
+                    );
+                    let (main, _) = composers(window, cx, &side)?;
+                    let engine_model_pending = watched["pending"].as_array().is_some_and(|pending| {
+                        pending.iter().any(|field| ["provider", "account", "model", "reasoning", "modelOptions"].contains(&field.as_str().unwrap_or_default()))
+                    });
+                    let engine_access_pending = watched["pending"].as_array().is_some_and(|pending| pending.iter().any(|field| field == "permission"));
+                    anyhow::ensure!(
+                        main["chips"]["modelAttention"] == engine_model_pending && main["chips"]["accessAttention"] == engine_access_pending,
+                        "the chips' pending dots match the engine's pending list: {watched} vs {}",
+                        main["chips"]
+                    );
+                    record.insert("e01".into(), serde_json::json!({"watched": watched, "chips": main["chips"]}));
+
+                    // The legacy baseline: Main's summary absent (a remote or
+                    // older host publishes none).
+                    window.update(cx, |shell, _, cx| shell.fixture_seed_execution(PARENT, None, cx))?;
+                    settle(cx, 300).await;
+                    let (baseline, baseline_pane) = composers(window, cx, &side)?;
+                    let (baseline_steer, _) = steer_resolutions(window, cx, &side)?;
+                    let legacy = |chips: &serde_json::Value| -> bool {
+                        ["model", "effort", "fast", "access", "accessIcon"].iter().all(|key| chips[*key] == baseline["chips"][*key])
+                            && chips["modelAttention"] == false
+                    };
+                    anyhow::ensure!(baseline["chips"]["modelAttention"] == false && baseline_steer["action"] == "Steer now", "without a summary the chips claim nothing and Mock's declared mid-turn steering applies: {} {baseline_steer}", baseline["chips"]);
+
+                    // e02. Failure cases 13-14: a running turn on Opus/Low/
+                    // Standard at Approve for me while Sonnet/High/Fast at
+                    // Full access is requested.
+                    let long_reason = "The running turn keeps the settings it started with; the new model, reasoning, speed and access level apply when the next turn starts on this session.";
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_seed_execution(
+                            PARENT,
+                            Some(exec_summary(PARENT, Phase::Running, main_requested(), Some(opus_running()), &CHIP_PENDING, (Move::ApplyNextTurn, true, long_reason), (Steer::Unavailable, Some("Pending settings must apply before this chat can be steered")))),
+                            cx,
+                        )
+                    })?;
+                    settle(cx, 400).await;
+                    let (main, pane) = composers(window, cx, &side)?;
+                    let chips = &main["chips"];
+                    let model_tip = tooltip_text(chips, "modelTooltip");
+                    anyhow::ensure!(
+                        chips["model"] == "Opus 5.5" && chips["effort"] == "Low" && chips["fast"] == false && chips["modelAttention"] == true,
+                        "the model chip shows the running Opus/Low/Standard with a dot: {chips}"
+                    );
+                    anyhow::ensure!(
+                        model_tip.contains("Running: Opus 5.5 · Low") && model_tip.contains("Requested: Sonnet 5.5 · High") && model_tip.contains("Applies when the next turn starts.") && model_tip.contains(long_reason),
+                        "the model tooltip names Running, Requested, how it applies and the engine's reason: {model_tip}"
+                    );
+                    anyhow::ensure!(
+                        chips["access"] == "Approve for me" && chips["accessIcon"] == "icons/shield-check.svg" && chips["accessAttention"] == true
+                            && tooltip_text(chips, "accessDetail").contains("Running: Approve for me")
+                            && tooltip_text(chips, "accessDetail").contains("Requested: Full access"),
+                        "access shows the enforced level while the raise is pending: {chips}"
+                    );
+                    anyhow::ensure!(!model_tip.contains(PARENT) && !tooltip_text(chips, "accessDetail").contains(PARENT), "no task id in the tooltips");
+                    anyhow::ensure!(
+                        ["model", "effort", "access", "modelAttention", "accessAttention", "modelTooltip"].iter().all(|key| pane["chips"][*key] == baseline_pane["chips"][*key]),
+                        "Main's summary stays out of the fork's composer: {} vs {}",
+                        pane["chips"],
+                        baseline_pane["chips"]
+                    );
+                    let surface = &main["surface"];
+                    let (sx, sy, sh) = (f(&surface["x"]) as f32, f(&surface["y"]) as f32, f(&surface["height"]) as f32);
+                    let row_y = sy + sh - 1.0 - 12.0 - 16.0;
+                    let chips_x = sx + 1.0 + 12.0 + 28.0 + 2.0;
+                    move_mouse(window, cx, chips_x + 24.0, row_y)?;
+                    settle(cx, 900).await;
+                    capture(window, cx, output.join("e02-running-model-tooltip.png"))?;
+                    let model_width = f(&main["controlsRow"]["modelFull"]) as f32;
+                    move_mouse(window, cx, chips_x + model_width + 4.0 + 16.0, row_y)?;
+                    settle(cx, 900).await;
+                    capture(window, cx, output.join("e02b-running-access-tooltip.png"))?;
+                    move_mouse(window, cx, 200.0, 300.0)?;
+                    settle(cx, 300).await;
+                    record.insert("e02".into(), serde_json::json!({"main": main["chips"], "pane": pane["chips"]}));
+
+                    // e03. Failure case 15: Steer follows the engine.
+                    let (main_steer, pane_steer) = steer_resolutions(window, cx, &side)?;
+                    anyhow::ensure!(
+                        main_steer["action"] == "Send now"
+                            && main_steer["tooltip"].as_str().is_some_and(|tip| tip.starts_with("Steer unavailable: Pending settings must apply before this chat can be steered.") && tip.ends_with("Send now interrupts the active response.")),
+                        "an unavailable Steer offers only Send now with the engine's reason: {main_steer}"
+                    );
+                    let pane_watch = window.update(cx, |shell, _, cx| shell.fixture_watch_execution(&side, cx))?;
+                    let pane_native = if pane_watch.is_null() { true } else { pane_watch["steer"]["kind"] == "native" };
+                    anyhow::ensure!((pane_steer["action"] == "Steer now") == pane_native, "the fork's Steer follows its own engine decision: {pane_steer} {pane_watch}");
+                    let mut steer_cases = vec![serde_json::json!({"unavailable": main_steer, "pane": pane_steer})];
+                    for (kind, reason, action, lead) in [
+                        (Steer::Native, None, "Steer now", "Steer now (without interrupting)"),
+                        (Steer::AfterTurn, Some("This provider accepts follow-ups only between turns"), "Send now", "Steering applies only after this turn: This provider accepts follow-ups only between turns."),
+                    ] {
+                        window.update(cx, |shell, _, cx| {
+                            shell.fixture_seed_execution(PARENT, Some(exec_summary(PARENT, Phase::Running, main_requested(), Some(main_requested()), &[], (Move::Reuse, false, ""), (kind, reason))), cx)
+                        })?;
+                        settle(cx, 200).await;
+                        let (resolution, _) = steer_resolutions(window, cx, &side)?;
+                        anyhow::ensure!(resolution["action"] == action && resolution["tooltip"].as_str().is_some_and(|tip| tip.starts_with(lead)), "steer {kind:?}: {resolution}");
+                        steer_cases.push(resolution);
+                    }
+                    record.insert("e03".into(), serde_json::json!(steer_cases));
+
+                    // e04. Failure case 16: the next turn applied everything.
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_seed_execution(PARENT, Some(exec_summary(PARENT, Phase::Idle, main_requested(), None, &[], (Move::Reuse, false, ""), (Steer::AfterTurn, None))), cx)
+                    })?;
+                    settle(cx, 300).await;
+                    let (main, _) = composers(window, cx, &side)?;
+                    anyhow::ensure!(legacy(&main["chips"]) && main["chips"]["accessAttention"] == false, "cleared: requested labels, no dots: {} vs {}", main["chips"], baseline["chips"]);
+                    record.insert("e04".into(), main["chips"].clone());
+
+                    // e05. Failure cases 17-18: a parked warm runtime, then a
+                    // provider change that needs a new binding.
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_seed_execution(PARENT, Some(exec_summary(PARENT, Phase::Warm, main_requested(), Some(opus_running()), &CHIP_PENDING, (Move::RestartAndResume, false, ""), (Steer::AfterTurn, None))), cx)
+                    })?;
+                    settle(cx, 300).await;
+                    let (main, _) = composers(window, cx, &side)?;
+                    let chips = &main["chips"];
+                    let warm_tip = tooltip_text(chips, "modelTooltip");
+                    anyhow::ensure!(
+                        chips["model"] == baseline["chips"]["model"] && chips["effort"] == baseline["chips"]["effort"] && chips["modelAttention"] == true
+                            && warm_tip.contains("Loaded: Opus 5.5 · Low") && !warm_tip.contains("Running:") && warm_tip.contains("The session restarts and resumes with it."),
+                        "a warm runtime reads Loaded and keeps the requested labels: {chips}"
+                    );
+                    anyhow::ensure!(chips["access"] == "Full access" && tooltip_text(chips, "accessDetail").contains("Loaded: Approve for me"), "warm access shows the requested level and the loaded one: {chips}");
+                    let mut provider_change = main_requested();
+                    provider_change.provider = HarnessId::Codex;
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_seed_execution(PARENT, Some(exec_summary(PARENT, Phase::Running, provider_change.clone(), Some(main_requested()), &[Field::Provider, Field::Model], (Move::NewBinding, true, ""), (Steer::Unavailable, Some("A provider change needs a new session")))), cx)
+                    })?;
+                    settle(cx, 300).await;
+                    let (main, _) = composers(window, cx, &side)?;
+                    let binding_tip = tooltip_text(&main["chips"], "modelTooltip");
+                    anyhow::ensure!(
+                        binding_tip.contains("After this turn, a new provider session starts. Earlier context is not carried over automatically.")
+                            && !binding_tip.to_lowercase().contains("context is carried over")
+                            && !binding_tip.to_lowercase().contains("copied"),
+                        "a new binding never promises context transfer: {binding_tip}"
+                    );
+                    record.insert("e05".into(), serde_json::json!({"warm": chips, "newBinding": binding_tip}));
+
+                    // e06. Failure case 19: missing, old-schema and other-task
+                    // summaries all read as the legacy baseline.
+                    let mut old_schema = exec_summary(PARENT, Phase::Running, main_requested(), Some(opus_running()), &CHIP_PENDING, (Move::ApplyNextTurn, true, ""), (Steer::Unavailable, Some("old")));
+                    old_schema.schema_version = luna_proto::EXECUTION_SUMMARY_VERSION + 1;
+                    let mut other_task = old_schema.clone();
+                    other_task.schema_version = luna_proto::EXECUTION_SUMMARY_VERSION;
+                    other_task.task_id = side.clone();
+                    let mut fallbacks = Vec::new();
+                    for (name, seeded) in [("missing", None), ("oldSchema", Some(old_schema)), ("otherTask", Some(other_task))] {
+                        window.update(cx, |shell, _, cx| shell.fixture_seed_execution(PARENT, seeded, cx))?;
+                        settle(cx, 300).await;
+                        let (main, _) = composers(window, cx, &side)?;
+                        let (steer, _) = steer_resolutions(window, cx, &side)?;
+                        anyhow::ensure!(legacy(&main["chips"]) && main["chips"]["accessAttention"] == baseline["chips"]["accessAttention"] && main["chips"]["execution"].is_null() && steer == baseline_steer, "{name}: legacy chips and Steer, no claims: {} {steer}", main["chips"]);
+                        fallbacks.push(serde_json::json!({"case": name, "chips": main["chips"], "steer": steer}));
+                    }
+                    record.insert("e06".into(), serde_json::json!(fallbacks));
+
+                    // e07. Failure cases 20-23: the Execution card follows the
+                    // focused fork tab, discards a late response for the
+                    // previous focus, and labels declarations as such.
+                    anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(&side, window, cx))?, "focus the fork's composer");
+                    let mut focus = None;
+                    for _ in 0..40 {
+                        settle(cx, 100).await;
+                        focus = window.update(cx, |shell, _, cx| shell.fixture_execution_focus(cx))?;
+                        if focus.as_deref() == Some(side.as_str()) {
+                            break;
+                        }
+                    }
+                    anyhow::ensure!(focus.as_deref() == Some(side.as_str()), "diagnostics follow the focused fork tab, not Main: {focus:?}");
+                    let long_note = "Model, reasoning and speed are the settings this engine admitted for the running turn; the provider does not independently report them back, so they are not confirmed by the provider itself.";
+                    let mut fork_summary = exec_summary(&side, Phase::Running, main_requested(), Some(opus_running()), &CHIP_PENDING, (Move::ApplyNextTurn, true, long_reason), (Steer::Unavailable, Some("Pending settings must apply before this chat can be steered")));
+                    fork_summary.observation_note = Some(long_note.into());
+                    fork_summary.capabilities = Some(luna_proto::ProviderExecutionCapabilities {
+                        provider: HarnessId::Mock,
+                        steering: SteeringMode::StepBoundary,
+                        supports_steering: true,
+                        authoritative_prompt_end: true,
+                        deterministic_turn_end: true,
+                        safe_recovery_continuation: false,
+                        native_fork: luna_proto::ProviderForkCapability::None,
+                        runtime_delivery: luna_proto::RuntimeDelivery::Unsupported,
+                        permissions: luna_proto::ProviderPermissionCapabilities {
+                            supported_modes: vec![PermissionMode::Auto, PermissionMode::Full],
+                            supports_workspace_sandbox: true,
+                            supports_automatic_reviewer: true,
+                            supports_live_mode_change: false,
+                            supports_task_allowance: false,
+                            approval_kinds: Vec::new(),
+                            network_control: "provider".into(),
+                            known_limitations: Vec::new(),
+                        },
+                    });
+                    window.update(cx, |shell, _, cx| shell.fixture_seed_execution(&side, Some(fork_summary), cx))?;
+                    for _ in 0..3 {
+                        window.update(cx, |shell, _, cx| shell.fixture_open_execution_card(cx))?;
+                        settle(cx, 300).await;
+                    }
+                    let mut card = serde_json::Value::Null;
+                    for _ in 0..40 {
+                        card = window.update(cx, |shell, _, cx| shell.fixture_execution_card(cx))?;
+                        if card["focus"] == side.as_str() && card["rows"].is_array() {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    let rows = card["rows"].as_array().cloned().unwrap_or_default();
+                    let row = |name: &str| rows.iter().find(|row| row["setting"] == name).cloned().unwrap_or_default();
+                    anyhow::ensure!(card["focus"] == side.as_str() && card["chatTitle"].as_str().is_some_and(|title| !title.is_empty() && title != side), "the card names the focused fork by title: {card}");
+                    anyhow::ensure!(
+                        card["runningHeading"] == "Running" && row("Model")["running"] == OPUS && row("Model")["requested"] == SONNET && row("Model")["pending"] == true
+                            && row("Access")["running"] == "Approve for me" && row("Access")["requested"] == "Full access" && row("Access")["pending"] == true
+                            && row("Provider")["pending"] == false && row("Sandbox")["pending"] == false,
+                        "the card's rows and pending marks follow the engine: {card}"
+                    );
+                    anyhow::ensure!(
+                        card["declared"].as_str().is_some_and(|text| text.contains("not verified for this session")) && card["note"] == long_note
+                            && card["applies"].as_array().is_some_and(|lines| lines.iter().any(|line| line == long_reason))
+                            && card["steering"].as_str().is_some_and(|text| text.starts_with("Unavailable.")),
+                        "declarations, note, how it applies and steering: {card}"
+                    );
+                    let card_text = card.to_string();
+                    anyhow::ensure!(!card_text.contains(PARENT) || card["contractTask"] == PARENT, "the card never renders Main's task id as text: {card}");
+                    // Scroll the Providers page's real scroll container until
+                    // the card is in view, then prove it from painted bounds.
+                    draw(window, cx)?;
+                    let before = window.update(cx, |shell, _, cx| shell.fixture_execution_geometry(cx))?;
+                    anyhow::ensure!(before["card"].is_object() && before["summary"].is_object(), "the card and its summary were painted: {before}");
+                    let viewport_h = f(&before["viewport"]["h"]);
+                    let card_h = f(&before["card"]["h"]);
+                    let delta = f(&before["card"]["y"]) - f(&before["viewport"]["y"]) - 16.0;
+                    window.update(cx, |shell, _, cx| shell.fixture_scroll_providers(delta as f32, cx))?;
+                    draw(window, cx)?;
+                    settle(cx, 200).await;
+                    draw(window, cx)?;
+                    let scrolled = window.update(cx, |shell, _, cx| shell.fixture_execution_geometry(cx))?;
+                    let (top, bottom) = (f(&scrolled["viewport"]["y"]), f(&scrolled["viewport"]["y"]) + f(&scrolled["viewport"]["h"]));
+                    let card_top = f(&scrolled["card"]["y"]);
+                    anyhow::ensure!(
+                        (delta <= 0.5 || f(&scrolled["offset"]) < f(&before["offset"])) && card_top >= top - 0.5 && card_top < bottom,
+                        "the real scroll container brought the card's top into view: {before} -> {scrolled}"
+                    );
+                    capture(window, cx, output.join("e07-execution-card.png"))?;
+                    let mut card_views = vec![scrolled.clone()];
+                    if card_h <= viewport_h - 16.0 {
+                        anyhow::ensure!(
+                            card_top + f(&scrolled["card"]["h"]) <= bottom + 0.5,
+                            "the whole Execution card is visible: {scrolled}"
+                        );
+                    } else {
+                        // Taller than the viewport: a second capture with the
+                        // summary's end (long note, declarations) in view.
+                        let summary_bottom = f(&scrolled["summary"]["y"]) + f(&scrolled["summary"]["h"]);
+                        window.update(cx, |shell, _, cx| shell.fixture_scroll_providers((summary_bottom - bottom + 16.0) as f32, cx))?;
+                        draw(window, cx)?;
+                        settle(cx, 200).await;
+                        draw(window, cx)?;
+                        let lower = window.update(cx, |shell, _, cx| shell.fixture_execution_geometry(cx))?;
+                        let lower_bottom = f(&lower["viewport"]["y"]) + f(&lower["viewport"]["h"]);
+                        anyhow::ensure!(
+                            f(&lower["summary"]["y"]) + f(&lower["summary"]["h"]) <= lower_bottom + 0.5,
+                            "the summary's end (note, declarations) is visible: {lower}"
+                        );
+                        capture(window, cx, output.join("e07b-execution-card-lower.png"))?;
+                        card_views.push(lower);
+                    }
+                    // A late response: focus moves to Main, then the fork's
+                    // contract response arrives.
+                    window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
+                    settle(cx, 400).await;
+                    anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(PARENT, window, cx))?, "focus Main's composer");
+                    for _ in 0..40 {
+                        settle(cx, 100).await;
+                        focus = window.update(cx, |shell, _, cx| shell.fixture_execution_focus(cx))?;
+                        if focus.as_deref() == Some(PARENT) {
+                            break;
+                        }
+                    }
+                    anyhow::ensure!(focus.as_deref() == Some(PARENT), "focus returned to Main: {focus:?}");
+                    window.update(cx, |shell, _, cx| shell.fixture_open_execution_card(cx))?;
+                    settle(cx, 600).await;
+                    let generation = window.update(cx, |shell, _, cx| shell.fixture_engine_generation(cx))?;
+                    let late = window.update(cx, |shell, _, cx| shell.fixture_deliver_execution_contract(&side, generation, contract_view(&side), cx))?;
+                    let current = window.update(cx, |shell, _, cx| shell.fixture_deliver_execution_contract(PARENT, generation, contract_view(PARENT), cx))?;
+                    let after = window.update(cx, |shell, _, cx| shell.fixture_execution_card(cx))?;
+                    anyhow::ensure!(!late && current && after["focus"] == PARENT && after["contractTask"] == PARENT, "a late response for the fork never overwrites Main's card: late={late} current={current} {after}");
+                    record.insert("e07".into(), serde_json::json!({"fork": card, "main": after, "geometry": card_views}));
+
+                    // e08. Failure cases 24-25: the card renders execution
+                    // only from the live watch. A contract response that
+                    // carried a Running snapshot never revives it once the
+                    // watch is invalidated; a same-ID response requested on
+                    // an earlier engine connection never installs.
+                    window.update(cx, |shell, _, cx| shell.fixture_clear_execution(PARENT, cx))?;
+                    let stale_running = exec_summary(PARENT, Phase::Running, main_requested(), Some(opus_running()), &CHIP_PENDING, (Move::ApplyNextTurn, true, ""), (Steer::Unavailable, Some("stale")));
+                    let generation = window.update(cx, |shell, _, cx| shell.fixture_engine_generation(cx))?;
+                    let installed = window.update(cx, |shell, _, cx| shell.fixture_deliver_execution_contract(PARENT, generation, contract_view_with(PARENT, Some(stale_running)), cx))?;
+                    anyhow::ensure!(installed, "the current connection's response installs");
+                    window.update(cx, |shell, _, cx| shell.fixture_end_chats_watch(cx))?;
+                    let invalidated = window.update(cx, |shell, _, cx| shell.fixture_execution_card(cx))?;
+                    let (main, _) = composers(window, cx, &side)?;
+                    anyhow::ensure!(
+                        invalidated["contractExecutionPhase"] == "running"
+                            && invalidated["source"] != "contract"
+                            && invalidated["phase"] != "Running a turn"
+                            && main["chips"]["model"] == baseline["chips"]["model"]
+                            && main["chips"]["execution"]["phase"] != "running",
+                        "after the watch ends nothing revives the contract's Running snapshot: {invalidated} {}",
+                        main["chips"]
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_reconnect_engine(cx))?;
+                    let reconnected = window.update(cx, |shell, _, cx| shell.fixture_engine_generation(cx))?;
+                    anyhow::ensure!(reconnected != generation, "a reconnect is a new connection generation");
+                    let old_connection = window.update(cx, |shell, _, cx| shell.fixture_deliver_execution_contract(PARENT, generation, contract_view(PARENT), cx))?;
+                    let new_connection = window.update(cx, |shell, _, cx| shell.fixture_deliver_execution_contract(PARENT, reconnected, contract_view(PARENT), cx))?;
+                    let after_reconnect = window.update(cx, |shell, _, cx| shell.fixture_execution_card(cx))?;
+                    anyhow::ensure!(
+                        !old_connection && new_connection && after_reconnect["contractGeneration"] == reconnected && after_reconnect["contractExecutionPhase"].is_null(),
+                        "a same-ID response from the earlier connection is refused: old={old_connection} new={new_connection} {after_reconnect}"
+                    );
+                    record.insert("e08".into(), serde_json::json!({"invalidated": invalidated, "afterReconnect": after_reconnect}));
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_clear_execution(PARENT, cx);
+                        shell.fixture_clear_execution(&side, cx);
+                        shell.fixture_leave_settings(false, cx);
+                    })?;
+                    settle(cx, 300).await;
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -714,7 +1211,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("composer-parity.pass"),
-                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group at its 320 px minimum, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast\n",
+                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group at its 320 px minimum, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast; execution summaries decode from WatchChats, running settings and access show with Running / Requested / how it applies while a turn runs, clear on the next turn, read Loaded when warm, never promise context transfer on a new binding, stay out of the fork's composer, fall back to legacy chips and Steer when missing/old/other-task, Steer follows the engine's native/after-turn/unavailable decision with its reason, and the Execution card follows the focused fork tab, refuses a late response for the previous focus and labels adapter declarations as unverified\n",
                             )
                         });
                         if let Err(error) = written {

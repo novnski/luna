@@ -307,6 +307,24 @@ async fn child_permission_changes_obey_creation_and_current_parent_ceilings() {
             )
             .await
             .unwrap();
+        let observed = client
+            .call("GetRuntimeContract", json!({"taskId": child}))
+            .await
+            .unwrap();
+        let pending = observed["execution"]["pending"].as_array().unwrap();
+        assert_eq!(
+            pending.contains(&json!("permission")),
+            case == "current-parent-cap",
+            "{case}: inherited ceilings and explicit user grants remain distinct"
+        );
+        if let Some(output) = std::env::var_os("LUNA_EXECUTION_EVIDENCE") {
+            std::fs::create_dir_all(&output).unwrap();
+            std::fs::write(
+                std::path::Path::new(&output).join(format!("child-{case}.json")),
+                serde_json::to_vec_pretty(&observed).unwrap(),
+            )
+            .unwrap();
+        }
         client
             .call(
                 "Mutate",

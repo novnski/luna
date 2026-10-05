@@ -2452,3 +2452,35 @@ mod tests {
         assert!(provider_accounts(&snapshot, HarnessId::Cursor).is_empty());
     }
 }
+
+/// Headless QA: the Advanced section (and its Execution card).
+#[cfg(feature = "appshots-fixture")]
+impl AccountsPage {
+    pub fn fixture_open_advanced(&mut self, cx: &mut Context<Self>) {
+        if !self.advanced_open {
+            self.toggle_advanced(cx);
+        }
+    }
+    pub fn fixture_advanced_page(&self) -> Option<Entity<HarnessesPage>> {
+        self.advanced_page.clone()
+    }
+    /// The page's real scroll container: its viewport and offset.
+    pub fn fixture_scroll_state(&self) -> (gpui::Bounds<gpui::Pixels>, f32, f32) {
+        let handle = &self.scroll.scroll;
+        (
+            handle.bounds(),
+            f32::from(handle.offset().y),
+            f32::from(handle.max_offset().y),
+        )
+    }
+    /// Scroll the page's container down by `delta` (clamped to its range),
+    /// as a wheel would.
+    pub fn fixture_scroll_by(&mut self, delta: f32, cx: &mut Context<Self>) {
+        let handle = &self.scroll.scroll;
+        let offset = handle.offset();
+        let max = f32::from(handle.max_offset().y).max(0.0);
+        let y = (f32::from(offset.y) - delta).clamp(-max, 0.0);
+        handle.set_offset(gpui::point(offset.x, gpui::px(y)));
+        cx.notify();
+    }
+}

@@ -2054,6 +2054,7 @@ async fn recovered_typed_approval_cannot_replay_as_input_but_ordinary_question_c
 async fn rpc_permission_change_keeps_active_effective_until_replacement_starts() {
     struct PermissionTransitionHarness {
         seen: Arc<std::sync::Mutex<Vec<RunRequest>>>,
+        steers: Arc<std::sync::atomic::AtomicUsize>,
         start: Arc<tokio::sync::Semaphore>,
         finish: Arc<tokio::sync::Semaphore>,
     }
@@ -2092,6 +2093,8 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
             let start = self.start.clone();
             let finish = self.finish.clone();
             let interrupt = controls.interrupt.clone();
+            let mut steering = controls.steering;
+            let steers = self.steers.clone();
             tokio::spawn(async move {
                 let permit = start.acquire().await.unwrap();
                 permit.forget();
@@ -2105,8 +2108,15 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
                         assistant_message_id: format!("permission-answer-{run_number}"),
                     }))
                     .await;
-                let permit = finish.acquire().await.unwrap();
-                permit.forget();
+                loop {
+                    tokio::select! {
+                        permit = finish.acquire() => { permit.unwrap().forget(); break; }
+                        Some(mut message) = steering.recv() => {
+                            steers.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            if let Some(ack) = message.acceptance.take() { let _ = ack.send(SteerAcceptance::Accepted); }
+                        }
+                    }
+                }
                 let _ = tx.send(Ok(done(DoneStatus::Completed))).await;
                 interrupt.cancelled().await;
                 let _ = tx.send(Ok(done(DoneStatus::Interrupted))).await;
@@ -2132,20 +2142,25 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
     ] {
         let dir = tempfile::tempdir().unwrap();
         let seen: Arc<std::sync::Mutex<Vec<RunRequest>>> = Default::default();
+        let steers = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let start = Arc::new(tokio::sync::Semaphore::new(0));
         let finish = Arc::new(tokio::sync::Semaphore::new(0));
         let core = assemble(
             dir.path(),
             Arc::new(PermissionTransitionHarness {
                 seen: seen.clone(),
+                steers: steers.clone(),
                 start: start.clone(),
                 finish: finish.clone(),
             }),
         );
         core.workspace
+            .create_space("execution-space", &core.device_id, "/tmp", None, false)
+            .unwrap();
+        core.workspace
             .create_chat(
                 CHAT,
-                None,
+                Some("execution-space"),
                 Some(&core.device_id),
                 Some(luna_proto::ChatConfig {
                     harness: HarnessId::Mock,
@@ -2172,6 +2187,14 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
 
         let mut first = run_request(&format!("{case}-first"));
         first.permission_mode = initial;
+        first.model_options.insert(
+            "lunaProviderAuthInstance".into(),
+            "INTERNAL_AUTH_SENTINEL".into(),
+        );
+        first.model_options.insert(
+            "__private_runtime".into(),
+            "INTERNAL_PROMPT_SENTINEL".into(),
+        );
         core.sessions
             .dispatch(CHAT, HarnessId::Mock, first, None)
             .await
@@ -2191,6 +2214,35 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
             "first permission runtime start",
         )
         .await;
+
+        let mut execution_watch = client
+            .subscribe("WatchChats", serde_json::json!({}))
+            .await
+            .unwrap();
+        let before_execution = client
+            .call(
+                luna_rpc::methods::GET_RUNTIME_CONTRACT,
+                serde_json::json!({"taskId": CHAT}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            before_execution["execution"]["pending"],
+            serde_json::json!([]),
+            "inherited model/account defaults do not create a pending change"
+        );
+        assert_eq!(
+            before_execution["execution"]["running"]["model"], "mock-1",
+            "the provider-observed default model is visible"
+        );
+        assert_eq!(
+            before_execution["execution"]["running"]["modelOptions"],
+            serde_json::json!({})
+        );
+        assert!(
+            !before_execution.to_string().contains("INTERNAL_"),
+            "private runtime values are redacted"
+        );
 
         client
             .call(
@@ -2218,6 +2270,107 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
             "{case}: request is audited as pending"
         );
 
+        // Execution observations must retain the old policy until turnover,
+        // and a new steer cannot silently bypass the pending change.
+        let pending_execution = client
+            .call(
+                luna_rpc::methods::GET_RUNTIME_CONTRACT,
+                serde_json::json!({"taskId": CHAT}),
+            )
+            .await
+            .unwrap();
+        if let Some(output) = std::env::var_os("LUNA_EXECUTION_EVIDENCE") {
+            std::fs::create_dir_all(&output).unwrap();
+            std::fs::write(
+                std::path::Path::new(&output).join(format!("{case}-pending.json")),
+                serde_json::to_vec_pretty(&pending_execution).unwrap(),
+            )
+            .unwrap();
+        }
+        let execution = &pending_execution["execution"];
+        assert_eq!(
+            execution["schemaVersion"], 1,
+            "{case}: versioned execution snapshot"
+        );
+        assert_eq!(
+            execution["requested"]["permissionMode"],
+            serde_json::to_value(requested).unwrap()
+        );
+        assert_eq!(
+            execution["running"]["permissionMode"],
+            serde_json::to_value(initial).unwrap()
+        );
+        let next_sandbox = if requested == luna_proto::PermissionMode::Full {
+            SandboxLevel::DangerFullAccess
+        } else {
+            SandboxLevel::WorkspaceWrite
+        };
+        assert_eq!(
+            execution["requested"]["sandbox"],
+            serde_json::to_value(next_sandbox).unwrap(),
+            "requested sandbox follows the same permission resolution as dispatch, not stale legacy storage"
+        );
+        assert_eq!(execution["phase"], "running");
+        assert!(
+            execution["pending"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("permission"))
+        );
+        assert_eq!(execution["transition"]["kind"], "restartAndResume");
+        assert_eq!(execution["transition"]["waitsForTurnEnd"], true);
+        assert_eq!(execution["steer"]["kind"], "unavailable");
+        let published_execution = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let rows = execution_watch
+                    .recv()
+                    .await
+                    .expect("execution watch remains open");
+                if let Some(row) = rows
+                    .as_array()
+                    .and_then(|rows| rows.iter().find(|row| row["id"] == CHAT))
+                    && row["execution"]["pending"]
+                        .as_array()
+                        .is_some_and(|pending| pending.contains(&serde_json::json!("permission")))
+                {
+                    break row["execution"].clone();
+                }
+            }
+        })
+        .await
+        .expect("the chat watch publishes pending settings");
+        assert_eq!(published_execution["running"], execution["running"]);
+        assert_eq!(published_execution["requested"], execution["requested"]);
+        assert!(!published_execution.to_string().contains("INTERNAL_"));
+        assert!(
+            !execution.to_string().contains("permission-1"),
+            "no native session IDs in diagnostics"
+        );
+        let steer = core
+            .sessions
+            .steer(
+                CHAT,
+                "must not use the obsolete policy",
+                Some(format!("{case}-pending-steer")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            format!("{steer:?}"),
+            "ConfigurationChanged",
+            "{case}: changed settings block native steering before delivery"
+        );
+        assert_eq!(
+            seen.lock().unwrap().len(),
+            1,
+            "diagnostics and rejected steering start no provider"
+        );
+        assert_eq!(
+            steers.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "no prompt reached the old runtime mailbox"
+        );
+
         finish.add_permits(1);
         wait_for(
             || core.sessions.session_status(CHAT).map(|s| s.status) == Some(SessionStatus::Idle),
@@ -2225,12 +2378,18 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
         )
         .await;
 
-        let mut second = run_request(&format!("{case}-second"));
-        second.permission_mode = requested;
-        core.sessions
-            .dispatch(CHAT, HarnessId::Mock, second, None)
-            .await
-            .unwrap();
+        let handle = core.doc_host.open(CHAT).unwrap();
+        queue_as_owner(
+            &core,
+            handle.doc(),
+            &format!("{case}-follow-up"),
+            SessionCommandPayload::Steer {
+                attachments: Vec::new(),
+                input_items: Vec::new(),
+                prompt: format!("{case}-second"),
+                message_id: Some(format!("{case}-next-turn")),
+            },
+        );
         wait_for(
             || seen.lock().unwrap().len() == 2,
             "replacement permission runtime invocation",
@@ -2274,6 +2433,32 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
                 .is_some_and(|entry| !entry.provider_mapping.starts_with("pending:")),
             "{case}: SessionStarted records the applied policy"
         );
+        let applied_execution = client
+            .call(
+                luna_rpc::methods::GET_RUNTIME_CONTRACT,
+                serde_json::json!({"taskId": CHAT}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            applied_execution["execution"]["running"]["permissionMode"],
+            serde_json::to_value(requested).unwrap()
+        );
+        assert_eq!(
+            applied_execution["execution"]["pending"],
+            serde_json::json!([])
+        );
+        assert_eq!(
+            applied_execution["execution"]["transition"]["kind"],
+            "reuse"
+        );
+        if let Some(output) = std::env::var_os("LUNA_EXECUTION_EVIDENCE") {
+            std::fs::write(
+                std::path::Path::new(&output).join(format!("{case}-applied.json")),
+                serde_json::to_vec_pretty(&applied_execution).unwrap(),
+            )
+            .unwrap();
+        }
 
         finish.add_permits(1);
         wait_for(
@@ -2301,6 +2486,17 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
         assert_eq!(
             idle_applied.effective_permission_mode, initial,
             "{case}: idle retirement is an immediate safe apply boundary"
+        );
+        let idle_execution = client
+            .call(
+                luna_rpc::methods::GET_RUNTIME_CONTRACT,
+                serde_json::json!({"taskId": CHAT}),
+            )
+            .await
+            .unwrap();
+        assert!(
+            idle_execution["execution"]["running"].is_null(),
+            "retired runtimes cannot remain live in diagnostics"
         );
         core.shutdown().await;
     }

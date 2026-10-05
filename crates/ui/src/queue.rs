@@ -72,7 +72,12 @@ struct QueueActionTooltip {
 impl Render for QueueActionTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
+        // Tooltips lay out at min-content width: a long label (an engine's
+        // steer reason) wraps inside a fixed width instead of one wide line.
+        let wraps = self.label.chars().count() > 48;
         let card = div()
+            .when(wraps, |card| card.w(px(260.0)))
+            .when(!wraps, |card| card.whitespace_nowrap())
             .px(px(8.0))
             .py(px(5.0))
             .rounded(px(6.0))
@@ -374,6 +379,39 @@ mod steer_e2e;
 #[cfg(feature = "appshots-fixture")]
 pub use steer_e2e::run_queue_image_steer_e2e;
 
+/// Headless QA: a queued Steer row's decision for the bound chat while a
+/// turn runs, through the row's own resolver and note.
+#[cfg(feature = "appshots-fixture")]
+impl Composer {
+    pub fn fixture_steer_resolution(&self, cx: &gpui::App) -> serde_json::Value {
+        let Some(chat_id) = self
+            .binding
+            .chat_id(self.state.read(cx))
+            .map(str::to_string)
+        else {
+            return serde_json::Value::Null;
+        };
+        let harness = self.pickers().read(cx).resolved(cx).harness;
+        let resolution = resolve_queue_primary_action(
+            luna_proto::FollowUpBehavior::Steer,
+            true,
+            self.steer_admitted(&chat_id, harness, cx),
+            false,
+            false,
+            None,
+        );
+        let note = (resolution.action == QueuePrimaryAction::SendNow)
+            .then(|| self.steer_row_note(&chat_id, cx))
+            .flatten();
+        serde_json::json!({
+            "action": resolution.action.label(),
+            "tooltip": note
+                .map(|note| note.to_string())
+                .unwrap_or_else(|| resolution.tooltip().to_string()),
+        })
+    }
+}
+
 fn visible_queue_rows(offset: f32, height: f32, count: usize) -> std::ops::Range<usize> {
     let first = ((-offset).max(0.0) / ROW_SLOT).floor() as usize;
     let last = first.saturating_add((height.max(0.0) / ROW_SLOT).ceil() as usize + 1);
@@ -381,6 +419,33 @@ fn visible_queue_rows(offset: f32, height: f32, count: usize) -> std::ops::Range
 }
 
 impl Composer {
+    /// Whether a queued Steer may steer the running turn natively now. The
+    /// owning engine's execution decision wins (it refuses native steering
+    /// while a pending setting would otherwise run under the old one);
+    /// without one, the selected catalog's declaration applies, and an
+    /// unknown or loading catalog fails closed.
+    fn steer_admitted(
+        &self,
+        chat_id: &str,
+        harness: Option<luna_proto::HarnessId>,
+        cx: &gpui::App,
+    ) -> bool {
+        match self.state.read(cx).execution_for(chat_id) {
+            Some(summary) => summary.steer.kind == luna_proto::ExecutionSteerKind::Native,
+            None => self.pickers().read(cx).harness_steers_mid_turn(harness),
+        }
+    }
+
+    /// Why a queued Steer row offers only Send now, in the engine's words
+    /// (only when its owning engine published a decision).
+    fn steer_row_note(&self, chat_id: &str, cx: &gpui::App) -> Option<SharedString> {
+        self.state
+            .read(cx)
+            .execution_for(chat_id)
+            .and_then(|summary| crate::execution_view::steer_row_note(&summary.steer))
+            .map(SharedString::from)
+    }
+
     fn resolve_queued_primary(
         &self,
         chat_id: &str,
@@ -430,7 +495,7 @@ impl Composer {
         resolve_queue_primary_action(
             item.follow_up_behavior,
             run_live,
-            self.pickers().read(cx).harness_steers_mid_turn(harness),
+            self.steer_admitted(chat_id, harness, cx),
             !item.attachments.is_empty() && !harness.is_some_and(steers_native_inputs),
             item.hold_reason.is_some(),
             blocked,
@@ -687,9 +752,15 @@ impl Composer {
             self.resolve_queued_primary(chat_id, item, being_removed, host_supports_actions, cx);
         let primary_action = resolved_primary.action;
         let primary_id = item.id.clone();
+        let steer_note = (matches!(item.follow_up_behavior, luna_proto::FollowUpBehavior::Steer)
+            && primary_action == QueuePrimaryAction::SendNow
+            && self.run_live(cx))
+        .then(|| self.steer_row_note(chat_id, cx))
+        .flatten();
         let primary = self.queue_primary_action_button(
             &key,
             resolved_primary,
+            steer_note,
             theme,
             cx.listener(move |this, _, _, cx| {
                 this.activate_queued_primary(primary_id.clone(), primary_action, cx);
@@ -1207,18 +1278,24 @@ impl Composer {
         &self,
         key: &SharedString,
         resolution: QueuePrimaryResolution,
+        steer_note: Option<SharedString>,
         theme: &Theme,
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> AnyElement {
         let action = resolution.action;
         let enabled = resolution.enabled();
-        let tooltip = resolution.tooltip();
+        // A block explains itself; otherwise a Steer row that can't steer
+        // now says why (the engine's reason) before offering Send now.
+        let tooltip: SharedString = match (resolution.blocked, steer_note) {
+            (None, Some(note)) => note,
+            _ => resolution.tooltip().into(),
+        };
         let accent = theme.accent;
         let compact = self.queue_preview_limit() == 1;
         div()
             .id(SharedString::from(format!("{key}-primary")))
             .role(gpui::Role::Button)
-            .aria_label(tooltip)
+            .aria_label(tooltip.clone())
             // Both labels occupy the same slot; modifier previews never move
             // the message text, thumbnails, or adjacent actions.
             .w(px(if compact { 28.0 } else { 72.0 }))
@@ -1243,10 +1320,8 @@ impl Composer {
             })
             .when(!enabled, |el| el.opacity(0.45))
             .tooltip(move |_, cx| {
-                cx.new(|_| QueueActionTooltip {
-                    label: tooltip.into(),
-                })
-                .into()
+                let label = tooltip.clone();
+                cx.new(|_| QueueActionTooltip { label }).into()
             })
             .tooltip_show_delay(std::time::Duration::from_millis(350))
             .child(if compact {

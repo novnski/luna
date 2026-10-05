@@ -35,6 +35,7 @@ mod empty_project_moon;
 pub use empty_project_moon::MoonFixtureState;
 #[cfg(test)]
 pub(crate) mod engine_epoch_fixture;
+pub(crate) mod execution_view;
 pub mod file_icons;
 pub mod files;
 pub mod frost;

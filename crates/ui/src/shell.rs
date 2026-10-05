@@ -14498,6 +14498,7 @@ impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_time = Some(self.frame_clock());
         self.sync_route_sidebar();
+        self.sync_execution_focus(cx);
         self.sync_confirmation_focus(window, cx);
         if self.all_file_edits_flushed(cx)
             && self.composer.read(cx).draft_flush_complete()

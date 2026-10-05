@@ -6145,7 +6145,9 @@ impl DocHost {
                         QueueHoldReason::ProviderRejected,
                     ));
                 }
-                SteerOutcome::NotSteerable | SteerOutcome::Busy => {
+                SteerOutcome::NotSteerable
+                | SteerOutcome::Busy
+                | SteerOutcome::ConfigurationChanged => {
                     return Ok(QueueProviderOutcome::Rejected(
                         QueueHoldReason::SteeringUnavailable,
                     ));
@@ -7907,9 +7909,17 @@ impl DocHost {
                 Ok((SessionCommandStatus::Applied, None))
             }
             SteerOutcome::NotSteerable => {
-                let request = sessions
-                    .last_request(chat_id)
-                    .or_else(|| self.request_from_chat_row(chat_id, &prompt));
+                let previous = sessions.last_request(chat_id);
+                let request = self
+                    .request_from_chat_row(chat_id, &prompt)
+                    .map(|mut current| {
+                        if let Some(previous) = &previous {
+                            current.auto_approve = previous.auto_approve;
+                            current.worktree = previous.worktree.clone();
+                        }
+                        current
+                    })
+                    .or(previous);
                 let Some(mut request) = request else {
                     return Ok((
                         SessionCommandStatus::Rejected,
@@ -7934,6 +7944,16 @@ impl DocHost {
                     SessionCommandStatus::Applied,
                     Some("queued as new turn".into()),
                 ))
+            }
+            SteerOutcome::ConfigurationChanged => {
+                if let Some(message_id) = message_id.as_deref() {
+                    handle
+                        .doc
+                        .remove_rejected_user_message(message_id, &prompt)?;
+                }
+                Ok((SessionCommandStatus::Rejected, Some(
+                    "settings changed while this turn was running; wait for it to finish or stop it before sending with the new settings".into(),
+                )))
             }
             SteerOutcome::Rejected => {
                 if let Some(message_id) = message_id.as_deref() {

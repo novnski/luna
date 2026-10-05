@@ -245,6 +245,8 @@ pub struct RuntimeContractView {
     pub provider_delivery: RuntimeDelivery,
     pub effective: Option<RuntimeContractDiagnostics>,
     pub unavailable_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<crate::TaskExecutionSummary>,
 }
 
 /// LUNA-owned instructions. Provider-native instruction files stay with their

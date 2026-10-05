@@ -3,8 +3,8 @@
 //! preferences. Device scope follows the parent Providers page.
 
 use gpui::{
-    AnyElement, Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window,
-    div, prelude::*, px,
+    AnyElement, App, Context, Entity, IntoElement, Render, SharedString, Subscription, Task,
+    Window, div, prelude::*, px,
 };
 
 use crate::composer::ComposerInput;
@@ -15,8 +15,10 @@ use std::time::Duration;
 
 use luna_proto::Model;
 use luna_proto::{
-    AgentAccountsSnapshot, HarnessId, InstructionSettingsView, IntegrationInventoryView,
-    IntegrationKind, IntegrationSkillScope, RuntimeContractView, SkillDocumentView,
+    AgentAccountsSnapshot, ExecutionSettingField, ExecutionSettings, HarnessId,
+    InstructionSettingsView, IntegrationInventoryView, IntegrationKind, IntegrationSkillScope,
+    PermissionMode, RuntimeContractView, SandboxLevel, SkillDocumentView, SteeringMode,
+    TaskExecutionSummary,
 };
 use luna_rpc::methods;
 
@@ -62,6 +64,14 @@ fn skill_button(
                 .focus_visible(move |style| crate::theme::focus_ring(style, accent))
         })
         .when(!enabled, |el| el.cursor_default())
+}
+
+/// One row of the Execution card's settings table.
+struct ExecutionRow {
+    setting: &'static str,
+    running: Option<String>,
+    requested: String,
+    pending: bool,
 }
 
 fn matches_selected_contract(
@@ -114,6 +124,14 @@ pub struct HarnessesPage {
     runtime_contract: Loadable<RuntimeContractView>,
     runtime_task: Option<Task<()>>,
     runtime_task_id: Option<String>,
+    /// The engine connection generation the contract was requested on (a
+    /// reconnect or profile change bumps it; older responses never install).
+    runtime_generation: u64,
+    /// QA: the Execution card's and its summary's painted bounds.
+    #[cfg(feature = "appshots-fixture")]
+    qa_bounds: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<&'static str, gpui::Bounds<gpui::Pixels>>>,
+    >,
     /// CC-11 provider MCP actions and results.
     mcp: mcp::McpPanel,
     claude_sessions: crate::claude_advanced::ExternalSessionsState,
@@ -133,8 +151,11 @@ impl HarnessesPage {
             if page.target_device.is_some() {
                 return;
             }
-            let task_id = page.state.read(cx).selected_chat.clone();
-            if task_id != page.runtime_task_id {
+            // The focused chat (a workbench tab, not Main); Claude's MCP
+            // attachment below follows that same chat.
+            let task_id = page.state.read(cx).execution_focus_chat();
+            let generation = page.state.read(cx).engine_generation();
+            if task_id != page.runtime_task_id || generation != page.runtime_generation {
                 page.load_runtime_contract(cx);
                 // Claude MCP attachment is per selected chat session.
                 if page.integration_provider == HarnessId::ClaudeCode {
@@ -197,6 +218,9 @@ impl HarnessesPage {
             runtime_contract: Loadable::Idle,
             runtime_task: None,
             runtime_task_id: None,
+            runtime_generation: 0,
+            #[cfg(feature = "appshots-fixture")]
+            qa_bounds: Default::default(),
             mcp: mcp::McpPanel::default(),
             claude_sessions: Default::default(),
             claude_sessions_task: None,
@@ -834,13 +858,15 @@ impl HarnessesPage {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
-        let Some(task_id) = self.state.read(cx).selected_chat.clone() else {
+        let Some(task_id) = self.state.read(cx).execution_focus_chat() else {
             self.runtime_task_id = None;
             self.runtime_task = None;
             self.runtime_contract = Loadable::Idle;
             return;
         };
+        let generation = self.state.read(cx).engine_generation();
         self.runtime_task_id = Some(task_id.clone());
+        self.runtime_generation = generation;
         self.runtime_contract = Loadable::Loading;
         self.runtime_task = Some(cx.spawn(async move |this, cx| {
             let result = engine
@@ -855,47 +881,330 @@ impl HarnessesPage {
                     serde_json::from_value::<RuntimeContractView>(value).map_err(|e| e.to_string())
                 });
             this.update(cx, |page, cx| {
-                if page.target_device.is_some()
-                    || page.state.read(cx).selected_chat.as_deref() != Some(task_id.as_str())
-                {
-                    return;
-                }
-                page.runtime_contract = match result {
-                    Ok(view) => Loadable::Ready(view),
-                    Err(error) => Loadable::Error(error),
-                };
-                cx.notify();
+                page.install_runtime_contract(&task_id, generation, result, cx);
             })
             .ok();
         }));
     }
 
+    /// A contract response for `task_id` requested on engine connection
+    /// `generation`, unless that chat is no longer the focused one or the
+    /// connection (engine, reconnect, profile) has changed since: a late or
+    /// earlier-connection response never overwrites the current card.
+    fn install_runtime_contract(
+        &mut self,
+        task_id: &str,
+        generation: u64,
+        result: Result<RuntimeContractView, String>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let state = self.state.read(cx);
+        if self.target_device.is_some()
+            || state.execution_focus_chat().as_deref() != Some(task_id)
+            || state.engine_generation() != generation
+        {
+            return false;
+        }
+        self.runtime_generation = generation;
+        self.runtime_contract = match result {
+            Ok(view) => Loadable::Ready(view),
+            Err(error) => Loadable::Error(error),
+        };
+        cx.notify();
+        true
+    }
+
+    /// The focused chat's execution summary, only ever from the live
+    /// `WatchChats` accessor. The one-shot contract response's snapshot is
+    /// never a fallback: after a stream end, reconnect or a frame without
+    /// it, an old Running state must not reappear. `None` means its host
+    /// reports nothing now; nothing is inferred locally.
+    fn execution_summary<'a>(
+        &'a self,
+        cx: &'a App,
+    ) -> Option<(&'a TaskExecutionSummary, &'static str)> {
+        let state = self.state.read(cx);
+        let focus = state.execution_focus_chat()?;
+        state.execution_for(&focus).map(|live| (live, "watch"))
+    }
+
+    fn provider_name(&self, harness: HarnessId) -> String {
+        self.harnesses
+            .ready()
+            .and_then(|list| list.iter().find(|descriptor| descriptor.id == harness))
+            .map(|descriptor| descriptor.name.clone())
+            .unwrap_or_else(|| format!("{harness:?}"))
+    }
+
+    /// One settings value per row, as the card and its readback show it.
+    fn execution_values(&self, settings: &ExecutionSettings) -> [String; 7] {
+        let options = if settings.model_options.is_empty() {
+            "Defaults".to_string()
+        } else {
+            settings
+                .model_options
+                .iter()
+                .map(|(id, value)| match value.as_str() {
+                    Some(choice) => format!("{id}: {choice}"),
+                    None => format!("{id}: {value}"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        [
+            self.provider_name(settings.provider),
+            if settings.provider_account_id.is_some() {
+                "Selected account".into()
+            } else {
+                "Default".into()
+            },
+            settings
+                .model
+                .clone()
+                .unwrap_or_else(|| "Provider default".into()),
+            settings
+                .reasoning
+                .map(|level| crate::pickers::reasoning_label(level).to_string())
+                .unwrap_or_else(|| "Default".into()),
+            options,
+            crate::execution_view::permission_title(settings.permission_mode).into(),
+            match settings.sandbox {
+                SandboxLevel::ReadOnly => "Read only",
+                SandboxLevel::WorkspaceWrite => "Workspace write",
+                SandboxLevel::DangerFullAccess => "No sandbox",
+            }
+            .into(),
+        ]
+    }
+
+    /// The Setting / Running (or Loaded) / Requested rows, with pending
+    /// rows marked from the engine's own pending list.
+    fn execution_rows(&self, summary: &TaskExecutionSummary) -> Vec<ExecutionRow> {
+        const SETTINGS: [(&str, Option<ExecutionSettingField>); 7] = [
+            ("Provider", Some(ExecutionSettingField::Provider)),
+            ("Account", Some(ExecutionSettingField::Account)),
+            ("Model", Some(ExecutionSettingField::Model)),
+            ("Reasoning", Some(ExecutionSettingField::Reasoning)),
+            ("Options", Some(ExecutionSettingField::ModelOptions)),
+            ("Access", Some(ExecutionSettingField::Permission)),
+            ("Sandbox", None),
+        ];
+        let requested = self.execution_values(&summary.requested);
+        let running = summary
+            .running
+            .as_ref()
+            .map(|running| self.execution_values(running));
+        SETTINGS
+            .iter()
+            .enumerate()
+            .map(|(index, &(setting, field))| ExecutionRow {
+                setting,
+                running: running.as_ref().map(|values| values[index].clone()),
+                requested: requested[index].clone(),
+                pending: field.is_some_and(|field| summary.pending.contains(&field)),
+            })
+            .collect()
+    }
+
+    /// What the adapter declares, labelled as declarations (not proof that
+    /// this installed CLI, account or session supports it).
+    fn execution_declared(summary: &TaskExecutionSummary) -> Option<String> {
+        let capabilities = summary.capabilities.as_ref()?;
+        let steering = if !capabilities.supports_steering {
+            "no steering"
+        } else if capabilities.steering == SteeringMode::StepBoundary {
+            "steering inside a turn"
+        } else {
+            "steering between turns"
+        };
+        let modes: Vec<&str> = [
+            PermissionMode::Ask,
+            PermissionMode::Auto,
+            PermissionMode::Full,
+        ]
+        .into_iter()
+        .filter(|mode| capabilities.permissions.supported_modes.contains(mode))
+        .map(crate::execution_view::permission_title)
+        .collect();
+        Some(format!(
+            "Adapter declares (not verified for this session): {steering} · access {} · {}",
+            if modes.is_empty() {
+                "none".to_string()
+            } else {
+                modes.join(", ")
+            },
+            if capabilities.permissions.supports_live_mode_change {
+                "live access changes"
+            } else {
+                "access changes need a new turn or session"
+            }
+        ))
+    }
+
+    fn render_execution_summary(
+        &self,
+        theme: &Theme,
+        summary: &TaskExecutionSummary,
+    ) -> gpui::Stateful<gpui::Div> {
+        let muted = theme.readable_muted(0.7);
+        let heading = summary
+            .running
+            .as_ref()
+            .map(|_| crate::execution_view::running_heading(summary))
+            .unwrap_or("Running");
+        let cell = |text: SharedString, color: gpui::Hsla| {
+            div().flex_1().min_w_0().text_color(color).child(text)
+        };
+        let header = div()
+            .flex()
+            .flex_row()
+            .gap(px(12.0))
+            .text_size(crate::typography::ui_rems(11.0))
+            .text_color(muted)
+            .child(div().w(px(84.0)).flex_none().child("Setting"))
+            .child(cell(heading.into(), muted))
+            .child(cell("Requested".into(), muted));
+        let rows = self.execution_rows(summary).into_iter().map(|row| {
+            div()
+                .id(SharedString::from(format!("execution-row-{}", row.setting)))
+                .flex()
+                .flex_row()
+                .gap(px(12.0))
+                .py(px(3.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .child(
+                    div()
+                        .w(px(84.0))
+                        .flex_none()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .text_color(muted)
+                        .child(row.setting)
+                        .when(row.pending, |el| {
+                            el.child(div().size(px(6.0)).rounded_full().bg(theme.warning))
+                        }),
+                )
+                .child(cell(
+                    row.running.unwrap_or_else(|| "—".into()).into(),
+                    theme.text,
+                ))
+                .child(cell(
+                    row.requested.into(),
+                    if row.pending { theme.text } else { muted },
+                ))
+        });
+        let mut section = div()
+            .id("execution-summary")
+            .mt(px(10.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(meta_text(
+                theme,
+                format!(
+                    "State: {}",
+                    crate::execution_view::phase_label(summary.phase)
+                ),
+            ));
+        if let Some(note) = summary
+            .observation_note
+            .as_deref()
+            .filter(|note| !note.trim().is_empty())
+        {
+            section = section.child(meta_text(theme, note.to_string()));
+        }
+        section = section
+            .child(header)
+            .child(div().flex().flex_col().children(rows));
+        if summary.pending.contains(&ExecutionSettingField::Workspace) {
+            section = section.child(meta_text(theme, "A workspace change is pending."));
+        }
+        if !summary.pending.is_empty() {
+            for line in crate::execution_view::transition_lines(&summary.transition) {
+                section = section.child(meta_text(theme, line));
+            }
+        }
+        section = section.child(meta_text(
+            theme,
+            format!(
+                "Steering: {}",
+                crate::execution_view::steer_label(&summary.steer)
+            ),
+        ));
+        if let Some(declared) = Self::execution_declared(summary) {
+            section = section.child(meta_text(theme, declared));
+        }
+        section
+    }
+
     fn render_runtime_contract(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
-            .child(widgets::row_title(theme, "Effective session"))
+            .child(widgets::row_title(theme, "Execution"))
             .child(widgets::page_subtitle(theme,
-                "Redacted readback for the selected task. Instruction text and provider credentials are never shown here."))
+                "What the focused chat runs with, as its engine reports it. Instruction text, credentials and provider identifiers are never shown here."))
             .child(widgets::ghost_action(theme).id("refresh-effective-session")
-                .accessible_button("Refresh effective session", theme.accent)
+                .accessible_button("Refresh execution details", theme.accent)
                 .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
                 .on_click(cx.listener(|page, _, _, cx| { page.load_runtime_contract(cx); cx.notify(); }))
                 .child("Refresh"));
-        let selected_task = self.state.read(cx).selected_chat.clone();
+        let focus = self.state.read(cx).execution_focus_chat();
+        let Some(focus) = focus else {
+            return card
+                .child(meta_text(
+                    theme,
+                    "Select a chat to inspect what it runs with.",
+                ))
+                .into_any_element();
+        };
+        card = card.child(meta_text(
+            theme,
+            format!("Chat: {}", self.chat_title(&focus, cx)),
+        ));
+        #[cfg(feature = "appshots-fixture")]
+        self.qa_bounds.borrow_mut().remove("summary");
+        card = match self.execution_summary(cx) {
+            Some((summary, _)) => {
+                let section = self.render_execution_summary(theme, summary);
+                #[cfg(feature = "appshots-fixture")]
+                let section = section.relative().child(self.qa_measure("summary"));
+                card.child(section)
+            }
+            None => card.child(meta_text(
+                theme,
+                "This chat's host doesn't report execution details. Nothing is inferred from this device.",
+            )),
+        };
+        // The runtime contract (instructions and tools), as before.
+        card = card.child(
+            div()
+                .mt(px(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
+                .text_color(theme.readable_muted(0.7))
+                .child("Technical · last read from the engine, not live"),
+        );
+        let connection_changed = self.runtime_generation != self.state.read(cx).engine_generation();
         match &self.runtime_contract {
+            Loadable::Ready(_) if connection_changed => {
+                card = card.child(meta_text(
+                    theme,
+                    "The engine connection changed. Refreshing session evidence…",
+                ));
+            }
             Loadable::Ready(view)
                 if !matches_selected_contract(
                     view,
-                    selected_task.as_deref(),
+                    Some(focus.as_str()),
                     self.target_device.as_deref(),
                 ) =>
             {
                 card = card.child(meta_text(
                     theme,
-                    "The selected task changed. Refreshing session evidence…",
+                    "The focused chat changed. Refreshing session evidence…",
                 ));
             }
             Loadable::Ready(view) => {
-                card = card.child(meta_text(theme, format!("Task: {}", view.task_id)));
                 if let Some(effective) = &view.effective {
                     card = card.child(meta_text(
                         theme,
@@ -944,15 +1253,41 @@ impl HarnessesPage {
                 }
             }
             Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
-            Loadable::Idle => {
-                card = card.child(meta_text(
-                    theme,
-                    "Select a task to inspect its effective session.",
-                ))
-            }
-            Loadable::Loading => card = card.child(meta_text(theme, "Loading effective session…")),
+            Loadable::Idle => {}
+            Loadable::Loading => card = card.child(meta_text(theme, "Loading session evidence…")),
         }
+        #[cfg(feature = "appshots-fixture")]
+        let card = card.relative().child(self.qa_measure("card"));
         card.into_any_element()
+    }
+
+    /// QA: records `key`'s painted bounds (an absolute overlay that takes no
+    /// layout space).
+    #[cfg(feature = "appshots-fixture")]
+    fn qa_measure(&self, key: &'static str) -> impl IntoElement {
+        let sink = self.qa_bounds.clone();
+        gpui::canvas(
+            move |bounds, _, _| {
+                sink.borrow_mut().insert(key, bounds);
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+    }
+
+    /// A chat's title for the card (never its id).
+    fn chat_title(&self, chat_id: &str, cx: &App) -> String {
+        self.state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+            .and_then(|chat| chat.title.clone())
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| "Untitled chat".into())
     }
 
     fn render_integrations(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1839,5 +2174,81 @@ impl HarnessesPage {
 impl Render for HarnessesPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.render_advanced_sections(cx)
+    }
+}
+
+/// Headless QA: the Execution card as rendered.
+#[cfg(feature = "appshots-fixture")]
+impl HarnessesPage {
+    /// The Execution card's and its summary's last painted bounds.
+    pub fn fixture_execution_bounds(
+        &self,
+    ) -> std::collections::HashMap<&'static str, gpui::Bounds<gpui::Pixels>> {
+        self.qa_bounds.borrow().clone()
+    }
+
+    pub fn fixture_execution_readback(&self, cx: &App) -> serde_json::Value {
+        let focus = self.state.read(cx).execution_focus_chat();
+        let summary = self.execution_summary(cx);
+        serde_json::json!({
+            "focus": focus,
+            "chatTitle": focus.as_deref().map(|id| self.chat_title(id, cx)),
+            "contractTask": match &self.runtime_contract {
+                Loadable::Ready(view) => Some(view.task_id.clone()),
+                _ => None,
+            },
+            "contractGeneration": self.runtime_generation,
+            // What the one-shot contract carried (never rendered as live).
+            "contractExecutionPhase": match &self.runtime_contract {
+                Loadable::Ready(view) => view
+                    .execution
+                    .as_ref()
+                    .and_then(|summary| serde_json::to_value(summary.phase).ok()),
+                _ => None,
+            },
+            "contractState": match &self.runtime_contract {
+                Loadable::Idle => "idle",
+                Loadable::Loading => "loading",
+                Loadable::Ready(_) => "ready",
+                Loadable::Error(_) => "error",
+            },
+            "source": summary.map(|(_, source)| source),
+            "phase": summary.map(|(summary, _)| crate::execution_view::phase_label(summary.phase)),
+            "runningHeading": summary.and_then(|(summary, _)| {
+                summary.running.as_ref().map(|_| crate::execution_view::running_heading(summary))
+            }),
+            "rows": summary.map(|(summary, _)| {
+                self.execution_rows(summary)
+                    .into_iter()
+                    .map(|row| serde_json::json!({
+                        "setting": row.setting,
+                        "running": row.running,
+                        "requested": row.requested,
+                        "pending": row.pending,
+                    }))
+                    .collect::<Vec<_>>()
+            }),
+            "applies": summary
+                .filter(|(summary, _)| !summary.pending.is_empty())
+                .map(|(summary, _)| crate::execution_view::transition_lines(&summary.transition)),
+            "steering": summary.map(|(summary, _)| crate::execution_view::steer_label(&summary.steer)),
+            "declared": summary.and_then(|(summary, _)| Self::execution_declared(summary)),
+            "note": summary.and_then(|(summary, _)| summary.observation_note.clone()),
+        })
+    }
+    /// Install a contract response as if it arrived for `task_id` (a late
+    /// response for a chat that may no longer be focused), through the same
+    /// guard the RPC completion uses.
+    pub fn fixture_deliver_contract(
+        &mut self,
+        task_id: &str,
+        generation: u64,
+        view: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Ok(view) = serde_json::from_value::<RuntimeContractView>(view) else {
+            return false;
+        };
+        self.install_runtime_contract(task_id, generation, Ok(view), cx)
     }
 }

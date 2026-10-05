@@ -980,4 +980,164 @@ impl Shell {
                 .unwrap_or(serde_json::Value::Null),
         )
     }
+
+    /// A queued Steer row's decision in the Main and pane composers.
+    pub fn fixture_steer_resolutions(
+        &self,
+        pane_chat: &str,
+        cx: &App,
+    ) -> (serde_json::Value, serde_json::Value) {
+        let (main, pane) = self.fixture_composers(Some(pane_chat), cx);
+        (
+            main.read(cx).fixture_steer_resolution(cx),
+            pane.map(|pane| pane.read(cx).fixture_steer_resolution(cx))
+                .unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    /// Seed (or with `None` hide) a task's execution summary in place of
+    /// its engine's, through the accessor every view reads.
+    pub fn fixture_seed_execution(
+        &mut self,
+        task_id: &str,
+        summary: Option<luna_proto::TaskExecutionSummary>,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.execution_fixture.insert(task_id.to_string(), summary);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// Stop overriding a task's summary (the engine's own applies again).
+    pub fn fixture_clear_execution(&mut self, task_id: &str, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            state.execution_fixture.remove(task_id);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// The engine's own (watch-decoded) summary for `task_id`, ignoring QA
+    /// overrides.
+    pub fn fixture_watch_execution(&self, task_id: &str, cx: &App) -> serde_json::Value {
+        self.state
+            .read(cx)
+            .execution_rows
+            .get(task_id)
+            .and_then(|summary| serde_json::to_value(summary).ok())
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// The chat diagnostics follow right now.
+    pub fn fixture_execution_focus(&self, cx: &App) -> Option<String> {
+        self.state.read(cx).execution_focus_chat()
+    }
+
+    /// Settings → Providers with Advanced (the Execution card) open.
+    pub fn fixture_open_execution_card(&mut self, cx: &mut Context<Self>) {
+        self.open_settings(SettingsSection::Providers, cx);
+        if let Some(page) = self.accounts_page.clone() {
+            page.update(cx, |page, cx| page.fixture_open_advanced(cx));
+        }
+        cx.notify();
+    }
+
+    /// The Providers page's scroll viewport and offset, and the Execution
+    /// card's and its summary's painted bounds (window coordinates).
+    pub fn fixture_execution_geometry(&self, cx: &App) -> serde_json::Value {
+        let rect = |bounds: gpui::Bounds<gpui::Pixels>| {
+            serde_json::json!({
+                "x": f32::from(bounds.origin.x),
+                "y": f32::from(bounds.origin.y),
+                "w": f32::from(bounds.size.width),
+                "h": f32::from(bounds.size.height),
+            })
+        };
+        let Some(page) = self.accounts_page.as_ref() else {
+            return serde_json::Value::Null;
+        };
+        let (viewport, offset, max_offset) = page.read(cx).fixture_scroll_state();
+        let measured = page
+            .read(cx)
+            .fixture_advanced_page()
+            .map(|advanced| advanced.read(cx).fixture_execution_bounds())
+            .unwrap_or_default();
+        serde_json::json!({
+            "viewport": rect(viewport),
+            "offset": offset,
+            "maxOffset": max_offset,
+            "card": measured.get("card").copied().map(rect),
+            "summary": measured.get("summary").copied().map(rect),
+        })
+    }
+
+    /// Scroll the Providers page's real scroll container down by `delta`.
+    pub fn fixture_scroll_providers(&mut self, delta: f32, cx: &mut Context<Self>) {
+        if let Some(page) = self.accounts_page.clone() {
+            page.update(cx, |page, cx| page.fixture_scroll_by(delta, cx));
+        }
+        cx.notify();
+    }
+
+    /// The Execution card as rendered (`Null` until its page exists).
+    pub fn fixture_execution_card(&self, cx: &App) -> serde_json::Value {
+        self.accounts_page
+            .as_ref()
+            .and_then(|page| page.read(cx).fixture_advanced_page())
+            .map(|page| page.read(cx).fixture_execution_readback(cx))
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// The engine connection generation (bumped on every attach, reconnect
+    /// and profile replacement).
+    pub fn fixture_engine_generation(&self, cx: &App) -> u64 {
+        self.state.read(cx).engine_generation()
+    }
+
+    /// Re-attach the same engine as a reconnect would: a new connection
+    /// generation, and execution observations dropped until the watch
+    /// republishes them.
+    pub fn fixture_reconnect_engine(&mut self, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            if let Some(engine) = state.engine().cloned() {
+                state.set_test_engine(engine);
+            }
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// The chats watch ended (as on an engine restart): through the same
+    /// invalidation the watch runs.
+    pub fn fixture_end_chats_watch(&mut self, cx: &mut Context<Self>) {
+        self.state.update(cx, |state, cx| {
+            state.invalidate_execution_observations();
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    /// Deliver a contract response for `task_id`, requested under engine
+    /// connection `generation`, to the Execution card as a late RPC
+    /// completion would (refused for another focus or connection).
+    pub fn fixture_deliver_execution_contract(
+        &mut self,
+        task_id: &str,
+        generation: u64,
+        view: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(page) = self
+            .accounts_page
+            .as_ref()
+            .and_then(|page| page.read(cx).fixture_advanced_page())
+        else {
+            return false;
+        };
+        page.update(cx, |page, cx| {
+            page.fixture_deliver_contract(task_id, generation, view, cx)
+        })
+    }
 }

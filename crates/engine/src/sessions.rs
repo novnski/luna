@@ -142,6 +142,9 @@ pub enum SteerOutcome {
     Busy,
     /// The provider definitively rejected native in-turn steering.
     Rejected,
+    /// The saved execution selection changed while this runtime was active.
+    /// Nothing reached the native mailbox; the input remains retryable.
+    ConfigurationChanged,
     /// Acceptance could not be proved; callers must preserve the durable row
     /// and must not replay it automatically.
     Unknown,
@@ -931,6 +934,7 @@ struct RunHandle {
     /// Validated SessionStarted for this exact run, including legacy chats.
     /// Accounting display evidence only; never a command/grant authority.
     observed_provider_session_id: Option<String>,
+    execution: execution::RunExecutionObservation,
     provider_turn_readiness: watch::Sender<ProviderTurnReadiness>,
     steerable: bool,
     runtime_config: RuntimeConfig,
@@ -1378,6 +1382,8 @@ pub(crate) type SideChatAdmission = Arc<
 /// CC-06 live accounting and native live model/effort switch hooks.
 #[path = "sessions_cc06.rs"]
 mod cc06;
+#[path = "sessions_execution.rs"]
+mod execution;
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
@@ -4268,64 +4274,7 @@ impl SessionsEngine {
                 );
             }
         }
-        if !crate::permissions::provider_can_run(harness_id) {
-            return Err(EngineError::Other(format!(
-                "{} permission enforcement is unavailable; choose a provider with a verified LUNA permission contract",
-                format!("{harness_id:?}").to_lowercase()
-            )));
-        }
-        let child = self
-            .inner
-            .workspace()
-            .and_then(|workspace| workspace.chat(chat_id).ok().flatten())
-            .and_then(|chat| chat.child_thread);
-        if let Some(child) = &child {
-            let ceiling = self.child_permission_ceiling(child);
-            request.parent_permission_ceiling = Some(
-                request
-                    .parent_permission_ceiling
-                    .map_or(ceiling, |requested| std::cmp::min(requested, ceiling)),
-            );
-        }
-        // A migrated fork retains its own legacy read-only sandbox until an
-        // explicit permission change. Source changes never alter this thread.
-        let side_sandbox = self
-            .inner
-            .side_chat_lookup
-            .get()
-            .filter(|lookup| lookup(chat_id))
-            .map(|_| request.sandbox)
-            .or_else(|| child.as_ref().and_then(|child| child.sandbox_ceiling));
-        if side_sandbox == Some(SandboxLevel::ReadOnly) {
-            if !matches!(harness_id, HarnessId::Codex | HarnessId::Mock) {
-                return Err(EngineError::Other(
-                    "This provider cannot preserve this thread's read-only sandbox".into(),
-                ));
-            }
-            request.permission_mode = PermissionMode::Ask;
-        }
-        let mut permission_policy =
-            crate::permissions::resolve_run_policy(harness_id, &mut request);
-        if let Some(sandbox) = side_sandbox {
-            if sandbox == SandboxLevel::ReadOnly
-                || (sandbox == SandboxLevel::WorkspaceWrite
-                    && request.sandbox == SandboxLevel::DangerFullAccess)
-            {
-                request.sandbox = sandbox;
-            }
-        }
-        if harness_id == HarnessId::Codex && request.sandbox == SandboxLevel::ReadOnly {
-            // A legacy child/side-chat read-only ceiling also keeps Codex's
-            // read-only network policy; do not report workspace networking.
-            permission_policy.network_policy = luna_proto::PermissionNetworkPolicy::Restricted;
-            request.permission_policy = Some(permission_policy.clone());
-        }
-        if crate::permissions::hidden_ask_fallback(&permission_policy) {
-            return Err(EngineError::Other(
-                "requested permission mode would fall back to hidden Ask; choose an available Approve for me or Full access mode"
-                    .into(),
-            ));
-        }
+        self.apply_execution_policy(chat_id, harness_id, &mut request)?;
         if let Some(explicit_resume) = request.resume.as_deref()
             && let Some(task_identity) = self.inner.task_identity.get()
         {
@@ -4784,6 +4733,10 @@ impl SessionsEngine {
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
+                execution: execution::RunExecutionObservation {
+                    defaults: self.execution_defaults(chat_id),
+                    ..Default::default()
+                },
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -4928,6 +4881,9 @@ impl SessionsEngine {
         let Some(active_turn_id) = self.active_turn_id(chat_id) else {
             return Ok(SteerOutcome::NotSteerable);
         };
+        if self.pending_execution_change(chat_id)? {
+            return Ok(SteerOutcome::ConfigurationChanged);
+        }
         let target = lock(&self.inner.runs)
             .get(chat_id)
             .filter(|h| {
@@ -7123,6 +7079,7 @@ impl Inner {
         let mut runs = lock(&self.runs);
         if runs.get(chat_id).is_some_and(|h| h.run_id == run_id) {
             runs.remove(chat_id);
+            self.sessions_tx.send_modify(|_| {});
         }
     }
 
@@ -8272,6 +8229,23 @@ async fn drive_run(
         // never reaches the journal, the transcript or turn state.
         if let AgentEvent::ProviderAccounting { report } = &event {
             inner.live_usage.record(&chat_id, report);
+            if let luna_proto::ProviderAccountingReport::Runtime(readback) = report.as_ref()
+                && readback.matches
+                && let Some(run) = lock(&inner.runs).get_mut(&chat_id).filter(|run| {
+                    run.run_id == run_id
+                        && readback.native_session_id.is_some()
+                        && readback.native_session_id == run.observed_provider_session_id
+                })
+            {
+                run.execution.confirmed = Some(run.runtime_config.clone());
+                run.execution.observed_model = readback.effective_model.clone();
+                if readback.source == luna_proto::RuntimeReadbackSource::LiveSwitch
+                    && run.execution.staged_defaults.is_some()
+                {
+                    run.execution.defaults = run.execution.staged_defaults.take();
+                }
+                inner.sessions_tx.send_modify(|_| {});
+            }
             continue;
         }
 
@@ -9298,7 +9272,10 @@ async fn drive_run(
 
         match &event {
             AgentEvent::SessionStarted {
-                session_id, cwd, ..
+                session_id,
+                cwd,
+                model,
+                ..
             } => {
                 inner.reset_codex_checkpoint(&chat_id, &run_id);
                 saw_session_started = true;
@@ -9406,7 +9383,10 @@ async fn drive_run(
                         .filter(|run| run.run_id == run_id)
                 {
                     run.observed_provider_session_id = Some(session_id.clone());
+                    run.execution.confirmed = Some(run.runtime_config.clone());
+                    run.execution.observed_model = Some(model.clone());
                 }
+                inner.sessions_tx.send_modify(|_| {});
                 if let Some(contract) = runtime_contract.as_ref() {
                     let mut receipt = contract.diagnostics(session_id);
                     receipt.run_id = Some(run_id.clone());
@@ -11039,6 +11019,7 @@ mod tests {
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
+                execution: Default::default(),
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -11149,6 +11130,7 @@ mod tests {
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
+                execution: Default::default(),
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -11234,6 +11216,7 @@ mod tests {
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
+                execution: Default::default(),
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )
@@ -15328,6 +15311,7 @@ mod tests {
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
+                execution: Default::default(),
                 provider_turn_readiness: tokio::sync::watch::channel(
                     ProviderTurnReadiness::AwaitingBinding,
                 )

@@ -295,6 +295,15 @@ pub trait Harness: Send + Sync {
     /// obtain native acknowledgment and readback before writing that prompt,
     /// and must not write it under the old configuration if the change fails.
     /// `false` (the default) means only a runtime restart can apply `to`.
+    /// Read-only admission preview using the same adapter planner as staging.
+    fn can_reconfigure_live(
+        &self,
+        _from: &LiveRuntimeSelection,
+        _to: &LiveRuntimeSelection,
+    ) -> bool {
+        false
+    }
+
     fn stage_live_reconfiguration(
         &self,
         _message_id: &str,

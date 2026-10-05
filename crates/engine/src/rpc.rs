@@ -9498,6 +9498,8 @@ impl RpcService for EngineRpc {
                     receipt.provider_session_id.clear();
                 }
                 RpcReply::value(&luna_proto::RuntimeContractView {
+                    execution: self.sessions.execution_summary(&p.task_id)
+                        .map_err(|error| RpcError::Failed(error.to_string()))?,
                     task_id: p.task_id,
                     provider,
                     provider_delivery,
@@ -10821,7 +10823,12 @@ impl RpcService for EngineRpc {
                 let side_chats = self.side_chats.clone();
                 let workspace = self.workspace.clone();
                 let task_identity = self.task_identity.clone();
+                let sessions = self.sessions.clone();
                 let changes = watch_stream(self.workspace.watch_chats()).boxed();
+                let execution_workspace = workspace.clone();
+                let changes = futures::stream::select(changes, watch_stream(sessions.watch_sessions()).map(move |_| {
+                    serde_json::to_value(execution_workspace.watch_chats().borrow().clone()).unwrap_or_default()
+                })).boxed();
                 let changes = if let Some(service) = &side_chats {
                     let workspace = workspace.clone();
                     futures::stream::select(changes, watch_stream(service.watch_changes()).map(move |_| {
@@ -10835,6 +10842,10 @@ impl RpcService for EngineRpc {
                     if let Some(items) = value.as_array_mut() {
                         items.retain_mut(|chat| {
                             let Some(id) = chat.get("id").and_then(|id| id.as_str()).map(str::to_owned) else { return false };
+                            if let Ok(Some(execution)) = sessions.execution_summary(&id)
+                                && let Some(object) = chat.as_object_mut() {
+                                object.insert("execution".into(), serde_json::to_value(execution).unwrap_or_default());
+                            }
                             // Native history forks are ordinary tasks, too. Their
                             // immutable provenance is independent of the legacy
                             // side-chat service and remains valid after source

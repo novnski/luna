@@ -2804,6 +2804,106 @@ async fn queued_turn_uses_current_config_at_turn_end_and_send_now() {
     }
 }
 
+/// A changed picker selection must not make a new native steer execute under
+/// the previous runtime. The durable queue retains the exact input until the
+/// user explicitly sends it with the current settings.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pending_execution_changes_hold_steer_until_explicit_send() {
+    for case in ["selection", "account"] {
+        let (core, harness, prompts) = setup(SteeringMode::StepBoundary).await;
+        let client = luna_rpc::memory_client(core.rpc_service());
+        let mut config = luna_proto::ChatConfig {
+            harness: HarnessId::Mock,
+            provider_account_id: None,
+            model: Some("old-model".into()),
+            reasoning: Some(ReasoningLevel::Medium),
+            model_options: Default::default(),
+            sandbox: luna_proto::SandboxLevel::WorkspaceWrite,
+            permission_mode: luna_proto::PermissionMode::Ask,
+            effective_permission_mode: luna_proto::PermissionMode::Ask,
+            permission_ceiling_source: None,
+            permission_degradation_reason: None,
+            permission_audit: Vec::new(),
+        };
+        core.workspace.set_chat_config(CHAT, &config).unwrap();
+        core.doc_host
+            .queue_message(CHAT, "opening", Vec::new())
+            .unwrap();
+        wait_for(|| prompts.lock().unwrap().len() == 1, "original runtime").await;
+        if case == "selection" {
+            config.model = Some("new-model".into());
+            config.reasoning = Some(ReasoningLevel::High);
+            config
+                .model_options
+                .insert("contextWindow".into(), serde_json::json!("1m"));
+            config.permission_mode = luna_proto::PermissionMode::Full;
+        } else {
+            config.provider_account_id = Some("fixture-other-account".into());
+        }
+        core.workspace.set_chat_config(CHAT, &config).unwrap();
+        let pending = client
+            .call("GetRuntimeContract", serde_json::json!({"taskId": CHAT}))
+            .await
+            .unwrap();
+        assert_eq!(pending["execution"]["steer"]["kind"], "unavailable");
+        assert_eq!(
+            pending["execution"]["transition"]["kind"],
+            if case == "account" {
+                "newBinding"
+            } else {
+                "restartAndResume"
+            }
+        );
+        let text = format!("{case}-kept-for-explicit-send");
+        let id = enqueue_follow_up(&client, &text, "steer").await;
+        wait_for(
+            || held_for(&core, &id, luna_doc::QueueHoldReason::SteeringUnavailable),
+            "changed-settings steer held",
+        )
+        .await;
+        assert_eq!(harness.requests.lock().unwrap().len(), 1);
+        assert!(
+            !user_messages(&core).contains(&text),
+            "a refused steer is not claimed as a delivered user message"
+        );
+        let held = core.doc_host.queued_message(CHAT, &id).unwrap().unwrap();
+        assert_eq!(held.text, text);
+        assert!(core.doc_host.send_queued_now(CHAT, &id).await.unwrap());
+        wait_for(
+            || prompts.lock().unwrap().len() == 2,
+            "explicit current-settings turn",
+        )
+        .await;
+        wait_for(|| queue_texts(&core).is_empty(), "exact queue row settled").await;
+        let request = harness.requests.lock().unwrap()[1].clone();
+        assert_eq!(request.model, config.model);
+        assert_eq!(request.reasoning, config.reasoning);
+        assert_eq!(request.model_options, config.model_options);
+        assert_eq!(request.provider_account_id, config.provider_account_id);
+        assert_eq!(
+            request.permission_policy.as_ref().unwrap().effective_mode,
+            config.permission_mode
+        );
+        assert_eq!(
+            prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|prompt| **prompt == text)
+                .count(),
+            1
+        );
+        assert_eq!(user_message_id(&core, &text).as_deref(), Some(id.as_str()));
+        if let Some(output) = std::env::var_os("LUNA_EXECUTION_EVIDENCE") {
+            std::fs::create_dir_all(&output).unwrap();
+            std::fs::write(std::path::Path::new(&output).join(format!("queue-{case}.json")),
+                serde_json::to_vec_pretty(&serde_json::json!({"pending": pending, "held": held, "deliveredMessageId": id, "requests": 2, "deliveredOnce": true})).unwrap()).unwrap();
+        }
+        let _ = harness.finish.send(());
+        core.shutdown().await;
+    }
+}
+
 /// Normal queued turns each publish a completion; Send now's interrupted
 /// predecessor does not. The replacement's own completion must still arrive.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
