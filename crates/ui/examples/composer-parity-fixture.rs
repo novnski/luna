@@ -68,6 +68,44 @@
 //! 25. A same-task contract response requested on an earlier engine
 //!     connection or profile installs after a reconnect.
 //!
+//! Context transfers (harness evolution slice 2; see
+//! docs/design/harness-evolution/slice-2-ui.md), written before the
+//! implementation:
+//! 26. Send findings is offered for Main or a chat without a living lineage
+//!     source, or targets anything but the fork's source.
+//! 27. Opening the dialog or previewing writes a receipt or starts a turn.
+//! 28. Applying findings starts or interrupts a turn in the source, changes
+//!     its draft, or stores nothing (no Planned receipt from the fork).
+//! 29. The source advanced while the dialog was open and the old preview is
+//!     sent; refreshing loses the source's draft.
+//! 30. A lost apply answer is shown as sent or failed, offers a resend, or
+//!     Check status sends a second command; a refresh repeats delivered
+//!     findings instead of only new ones.
+//! 31. A preview from an earlier engine connection can still be applied.
+//! 32. The provider switch preselects a choice, or its primary button (or
+//!     Enter) acts before an explicit choice; a preview for another target
+//!     provider survives a target change.
+//! 33. Continue with context applies a handoff that starts a turn or loses the
+//!     receipt; Start fresh carries context.
+//! 34. Receipt Details cannot be opened, or omitted-item reads error out.
+//! 35. Deleting the fork breaks its source's receipts or names it as alive.
+//! 36. Start new task with context creates a task on preview or Cancel,
+//!     changes the target id between refreshes, creates an agent child, a
+//!     native session or a turn, touches the source's draft, or a lost
+//!     answer creates a second task instead of recovering the same id.
+//! 37. Details' Read more for a truncated omitted message repeats its prefix,
+//!     skips bytes, appends another message's text, ignores the returned
+//!     nextTextOffset, splits a UTF-8 character, or labels an excerpt as the
+//!     whole message.
+//! 38. An apply or Check status answer arriving after the engine connection
+//!     changed settles the dialog or panel, opens the created task, or
+//!     notifies in the current UI.
+//! 39. Refresh while an apply is in flight or unknown replaces the flow,
+//!     drops the retained command id, or enables a second apply.
+//!
+//! The host refuses a second preview from a source whose earlier transfer is
+//! still planned; steps first let the destination send (consuming it).
+//!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example composer-parity-fixture
 //! Run:   target/debug/examples/composer-parity-fixture ABSOLUTE_EVIDENCE_DIR
@@ -79,6 +117,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{TimeDelta, Utc};
+use futures::StreamExt;
 use futures::stream::BoxStream;
 use gpui::{AppContext, AsyncApp, Bounds, WindowBounds, WindowHandle, WindowOptions, px, size};
 use luna_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
@@ -179,7 +218,20 @@ impl Harness for ClaudeShaped {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
-        self.0.run(request, controls).await
+        let started = AgentEvent::SessionStarted {
+            harness: HarnessId::Mock,
+            model: request.model.clone().unwrap_or_else(|| SONNET.into()),
+            tools: Vec::new(),
+            cwd: request.cwd.clone(),
+            session_id: request
+                .resume
+                .clone()
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            assistant_message_id: uuid::Uuid::new_v4().to_string(),
+        };
+        Ok(futures::stream::once(async move { Ok(started) })
+            .chain(self.0.run(request, controls).await?)
+            .boxed())
     }
 }
 
@@ -537,13 +589,14 @@ fn main() -> anyhow::Result<()> {
     )?;
     let now = Utc::now();
     let ui_chats = runtime.block_on(async {
-        core.workspace.create_chat(
-            PARENT,
-            Some(PROJECT),
-            Some(&device),
-            Some(config()),
-            Some(project.to_string_lossy().into_owned()),
-        )?;
+        let client = luna_rpc::memory_client(core.rpc_service());
+        client
+            .call_as::<serde_json::Value>(
+                "Mutate",
+                serde_json::json!({"op":"createChat", "chatId":PARENT,
+                "spaceId":PROJECT, "cwd":project.to_string_lossy(), "config":config()}),
+            )
+            .await?;
         core.workspace
             .rename_chat(PARENT, "Plan the v0.5 release")?;
         let at = now - TimeDelta::minutes(3);
@@ -1199,6 +1252,569 @@ fn main() -> anyhow::Result<()> {
                         shell.fixture_leave_settings(false, cx);
                     })?;
                     settle(cx, 300).await;
+                    // ---- Context transfers (failure cases 26-35) ----
+                    let findings = |cx: &mut AsyncApp| window.update(cx, |shell, _, cx| shell.fixture_findings_readback(cx));
+                    let receipts = |cx: &mut AsyncApp, task: &str| {
+                        let task = task.to_string();
+                        window.update(cx, move |shell, _, cx| shell.fixture_transfer_receipts(&task, cx))
+                    };
+                    let main_transfer = |cx: &mut AsyncApp| {
+                        window.update(cx, |shell, _, cx| {
+                            let (main, _) = shell.fixture_composers(None, cx);
+                            main.read(cx).pickers().read(cx).fixture_transfer_readback(cx)
+                        })
+                    };
+                    async fn settled_preview(
+                        window: WindowHandle<shell::Shell>,
+                        cx: &mut AsyncApp,
+                        read: impl Fn(&mut AsyncApp) -> anyhow::Result<serde_json::Value>,
+                        flow: impl Fn(&serde_json::Value) -> serde_json::Value,
+                    ) -> anyhow::Result<serde_json::Value> {
+                        let _ = window;
+                        let mut last = serde_json::Value::Null;
+                        for _ in 0..80 {
+                            last = read(cx)?;
+                            if flow(&last)["preview"]["state"] != "loading" {
+                                return Ok(last);
+                            }
+                            settle(cx, 100).await;
+                        }
+                        anyhow::bail!("the host preview never settled: {last}")
+                    }
+
+                    // The destination's next explicit send consumes a planned
+                    // transfer (the host refuses another preview from the same
+                    // source until then).
+                    async fn consume(window: WindowHandle<shell::Shell>, cx: &mut AsyncApp, chat: &str, text: &str) -> anyhow::Result<()> {
+                        window.update(cx, |shell, _, cx| shell.fixture_workbench_type(chat, text, true, cx))?;
+                        let mut last = serde_json::Value::Null;
+                        for _ in 0..100 {
+                            settle(cx, 100).await;
+                            last = window.update(cx, |shell, _, cx| shell.fixture_transfer_receipts(chat, cx))?;
+                            if last.as_array().is_some_and(|items| !items.is_empty() && items.iter().all(|item| item["status"] == "consumed")) {
+                                return Ok(());
+                            }
+                        }
+                        anyhow::bail!("the explicit send did not consume its context: {last}")
+                    }
+
+                    // t01. Failure cases 26-28: the fork gets Send findings;
+                    // Main does not. A new fork message gives it findings.
+                    let offered_fork = window.update(cx, |shell, _, cx| shell.fixture_findings_offered(&side, cx))?;
+                    let offered_main = window.update(cx, |shell, _, cx| shell.fixture_findings_offered(PARENT, cx))?;
+                    anyhow::ensure!(offered_fork.as_deref() == Some(PARENT) && offered_main.is_none(), "findings go only from the fork to its lineage source: fork={offered_fork:?} main={offered_main:?}");
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&side, "Fork finding: the cache migration needs a feature flag.", true, cx))?;
+                    for _ in 0..60 {
+                        if window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(&side, cx))?.iter().any(|text| text.contains("feature flag")) {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    settle(cx, 1500).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(PARENT, "Draft kept while findings arrive", false, cx))?;
+                    let parent_draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(PARENT, cx))?;
+                    let parent_texts = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(PARENT, cx))?;
+                    let receipts_before = receipts(cx, PARENT)?.as_array().map_or(0, Vec::len);
+                    window.update(cx, |shell, _, cx| shell.fixture_open_findings(&side, cx))?;
+                    let opened = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    anyhow::ensure!(
+                        opened["open"] == true && opened["flow"]["kind"] == "forkMerge" && opened["flow"]["targetTaskId"] == PARENT
+                            && opened["flow"]["preview"]["state"] == "ready"
+                            && opened["flow"]["preview"]["included"].as_u64().unwrap_or(0) >= 1,
+                        "the dialog previews the fork's findings for its source: {opened}"
+                    );
+                    anyhow::ensure!(receipts(cx, PARENT)?.as_array().map_or(0, Vec::len) == receipts_before, "a preview writes no receipt");
+                    capture(window, cx, output.join("t01-findings-dialog.png"))?;
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_primary(cx))?;
+                    for _ in 0..60 {
+                        if findings(cx)?["open"] == false {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(findings(cx)?["open"] == false, "an applied send closes the dialog: {}", findings(cx)?);
+                    settle(cx, 1500).await;
+                    let parent_receipts = receipts(cx, PARENT)?;
+                    anyhow::ensure!(
+                        window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(PARENT, cx))? == parent_texts
+                            && window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(PARENT, cx))? == parent_draft
+                            && window.update(cx, |shell, _, cx| shell.fixture_watch_execution(PARENT, cx))?["phase"] != "running",
+                        "no turn starts in the source and its draft is untouched"
+                    );
+                    anyhow::ensure!(
+                        parent_receipts.as_array().is_some_and(|items| items.iter().any(|item| item["kind"] == "forkMerge" && item["source"] == side.as_str() && item["status"] == "planned" && item["line"].as_str().is_some_and(|line| line.starts_with("Findings from ")))),
+                        "the source holds a Planned findings receipt from the fork: {parent_receipts}"
+                    );
+                    record.insert("t01".into(), serde_json::json!({"dialog": opened, "receipts": parent_receipts}));
+
+                    // t02. Failure cases 29-30: the source advances while the
+                    // dialog is open; the stale preview is refused, the draft
+                    // stays, a refresh shows only new findings; a lost answer
+                    // reads unknown and Check status sends nothing new.
+                    consume(window, cx, PARENT, "Parent reads the findings.").await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&side, "Fork finding two: settings rename is safe.", true, cx))?;
+                    settle(cx, 2000).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_open_findings(&side, cx))?;
+                    settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(PARENT, "The parent moves on.", true, cx))?;
+                    settle(cx, 2000).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(PARENT, "Second draft stays", false, cx))?;
+                    let second_draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(PARENT, cx))?;
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_primary(cx))?;
+                    let mut conflicted = serde_json::Value::Null;
+                    for _ in 0..60 {
+                        conflicted = findings(cx)?;
+                        if conflicted["flow"]["preview"]["state"] == "stale" {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(
+                        conflicted["open"] == true && conflicted["flow"]["preview"]["state"] == "stale" && conflicted["flow"]["applyAttempts"] == 1
+                            && window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(PARENT, cx))? == second_draft,
+                        "the stale preview is refused and the draft is kept: {conflicted}"
+                    );
+                    capture(window, cx, output.join("t02-findings-stale.png"))?;
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_refresh(cx))?;
+                    let refreshed = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    anyhow::ensure!(
+                        refreshed["flow"]["preview"]["state"] == "ready" && refreshed["flow"]["preview"]["alreadyDelivered"].as_u64().unwrap_or(0) >= 1,
+                        "the refreshed preview leaves already delivered findings out: {refreshed}"
+                    );
+                    let planned_before = receipts(cx, PARENT)?.as_array().map_or(0, |items| items.iter().filter(|item| item["kind"] == "forkMerge").count());
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_findings_lose_next_apply();
+                        shell.fixture_findings_primary(cx);
+                    })?;
+                    let mut unknown = serde_json::Value::Null;
+                    for _ in 0..60 {
+                        unknown = findings(cx)?;
+                        if unknown["flow"]["apply"]["state"] == "unknown" {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(unknown["flow"]["apply"]["state"] == "unknown" && unknown["flow"]["applyAttempts"] == 2, "a lost answer reads unknown: {unknown}");
+                    capture(window, cx, output.join("t02b-findings-unknown.png"))?;
+                    // Failure case 39: Refresh refuses while unknown.
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_refresh(cx))?;
+                    settle(cx, 300).await;
+                    let after_refresh = findings(cx)?;
+                    anyhow::ensure!(
+                        after_refresh["flow"]["apply"]["state"] == "unknown"
+                            && after_refresh["flow"]["apply"]["commandId"] == unknown["flow"]["apply"]["commandId"]
+                            && after_refresh["flow"]["applyAttempts"] == 2
+                            && after_refresh["flow"]["preview"]["previewId"] == unknown["flow"]["preview"]["previewId"],
+                        "Refresh keeps an unknown apply and its command id: {after_refresh}"
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_primary(cx))?;
+                    for _ in 0..60 {
+                        if findings(cx)?["open"] == false {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    let planned_after = receipts(cx, PARENT)?.as_array().map_or(0, |items| items.iter().filter(|item| item["kind"] == "forkMerge").count());
+                    anyhow::ensure!(findings(cx)?["open"] == false && planned_after == planned_before + 1, "Check status settles it without a second send: {planned_before} -> {planned_after}");
+                    record.insert("t02".into(), serde_json::json!({"conflicted": conflicted, "refreshed": refreshed, "unknown": unknown}));
+
+                    // t03. Failure case 31: a preview from an earlier engine
+                    // connection is never applied.
+                    consume(window, cx, PARENT, "Parent reads finding two.").await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(&side, "Fork finding three.", true, cx))?;
+                    settle(cx, 2000).await;
+                    window.update(cx, |shell, _, cx| shell.fixture_open_findings(&side, cx))?;
+                    settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_reconnect_engine(cx))?;
+                    draw(window, cx)?;
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_primary(cx))?;
+                    settle(cx, 300).await;
+                    let reconnected = findings(cx)?;
+                    anyhow::ensure!(
+                        reconnected["current"] == false && reconnected["flow"]["applyAttempts"] == 0 && reconnected["flow"]["preview"]["state"] == "stale",
+                        "an earlier connection's preview is stale and unsent: {reconnected}"
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_refresh(cx))?;
+                    let fresh = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    anyhow::ensure!(fresh["current"] == true && fresh["flow"]["preview"]["state"] == "ready", "a refresh on the new connection is current: {fresh}");
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_findings_primary(cx);
+                    })?;
+                    for _ in 0..60 {
+                        if findings(cx)?["open"] == false {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    record.insert("t03".into(), serde_json::json!({"reconnected": reconnected, "fresh": fresh}));
+
+                    // t03b. Failure case 36: Start new task with context.
+                    let lineage = |cx: &mut AsyncApp, id: &str| {
+                        let id = id.to_string();
+                        window.update(cx, move |shell, _, cx| shell.fixture_chat_lineage(&id, cx))
+                    };
+                    anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_new_task_with_context_offered(PARENT, cx))?, "Main can start a new task with its context");
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_type(PARENT, "Source draft stays put", false, cx))?;
+                    let source_draft = window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(PARENT, cx))?;
+                    let chats_before = lineage(cx, PARENT)?["chatCount"].as_u64().unwrap_or(0);
+                    window.update(cx, |shell, _, cx| shell.fixture_open_new_task_with_context(PARENT, cx))?;
+                    let cancelled_preview = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    let cancelled_target = cancelled_preview["flow"]["targetTaskId"].as_str().unwrap_or_default().to_string();
+                    anyhow::ensure!(
+                        cancelled_preview["mode"] == "newTask" && cancelled_preview["flow"]["kind"] == "portableFork"
+                            && cancelled_preview["flow"]["preview"]["state"] == "ready" && cancelled_preview["config"].as_str().is_some_and(|config| !config.is_empty())
+                            && !cancelled_target.is_empty(),
+                        "the dialog previews into a reserved id and shows the config: {cancelled_preview}"
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_refresh(cx))?;
+                    let refreshed_new = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    anyhow::ensure!(refreshed_new["flow"]["targetTaskId"] == cancelled_target.as_str(), "a refresh keeps the reserved id: {refreshed_new}");
+                    capture(window, cx, output.join("t03b-new-task-with-context.png"))?;
+                    window.update(cx, |shell, _, cx| shell.fixture_close_transfer_dialog(cx))?;
+                    settle(cx, 1000).await;
+                    anyhow::ensure!(
+                        lineage(cx, &cancelled_target)?["exists"] == false && lineage(cx, PARENT)?["chatCount"].as_u64().unwrap_or(0) == chats_before,
+                        "preview and Cancel create nothing"
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_open_new_task_with_context(PARENT, cx))?;
+                    let creating = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    let new_task = creating["flow"]["targetTaskId"].as_str().unwrap_or_default().to_string();
+                    anyhow::ensure!(!new_task.is_empty() && new_task != cancelled_target, "each dialog reserves its own id: {creating}");
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_findings_lose_next_apply();
+                        shell.fixture_findings_primary(cx);
+                    })?;
+                    let mut lost = serde_json::Value::Null;
+                    for _ in 0..60 {
+                        lost = findings(cx)?;
+                        if lost["flow"]["apply"]["state"] == "unknown" {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(
+                        lost["flow"]["apply"]["state"] == "unknown" && lost["flow"]["applyAttempts"] == 1 && lost["flow"]["targetTaskId"] == new_task.as_str(),
+                        "a lost answer reads unknown and keeps the same id: {lost}"
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_primary(cx))?;
+                    let mut created = serde_json::Value::Null;
+                    for _ in 0..80 {
+                        created = lineage(cx, &new_task)?;
+                        if findings(cx)?["open"] == false && created["exists"] == true && created["selected"] == true {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    settle(cx, 1000).await;
+                    let created = lineage(cx, &new_task)?;
+                    let created_exec = window.update(cx, |shell, _, cx| shell.fixture_watch_execution(&new_task, cx))?;
+                    let created_receipts = receipts(cx, &new_task)?;
+                    anyhow::ensure!(
+                        created["exists"] == true && created["selected"] == true && created["childThread"] == false
+                            && created["chatCount"].as_u64().unwrap_or(0) == chats_before + 1
+                            && created["harness"] == lineage(cx, PARENT)?["harness"],
+                        "Check status recovers exactly one ordinary task on the source's config, and opens it: {created}"
+                    );
+                    anyhow::ensure!(
+                        window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(&new_task, cx))?.is_empty()
+                            && created_exec["running"].is_null() && created_exec["phase"] != "running",
+                        "the new task has no turn and no native session: {created_exec}"
+                    );
+                    anyhow::ensure!(
+                        created_receipts.as_array().is_some_and(|items| items.iter().any(|item| item["kind"] == "portableFork" && item["status"] == "planned" && item["source"] == PARENT)),
+                        "the new task holds the Planned context copy from its source: {created_receipts}"
+                    );
+                    // Its first explicit send takes the captured context.
+                    consume(window, cx, &new_task, "First message in the new task.").await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_workbench_open_as_main(PARENT, cx))?;
+                    for _ in 0..60 {
+                        if window.update(cx, |shell, _, cx| shell.fixture_workbench_readback(cx))?["main"] == PARENT {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    settle(cx, 600).await;
+                    anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_workbench_draft(PARENT, cx))? == source_draft, "the source's draft is untouched");
+                    record.insert("t03b".into(), serde_json::json!({"preview": creating, "lost": lost, "created": created, "receipts": created_receipts}));
+
+                    // t06b. Failure case 37: a long earlier fork message is
+                    // left out of an oversized findings transfer; Details reads
+                    // it in segments with Read more, each continuing exactly at
+                    // the returned nextTextOffset.
+                    consume(window, cx, PARENT, "Parent reads finding three.").await?;
+                    let earlier: String = std::iter::repeat("naïve café ✓ Ω ").take(2600).collect::<String>() + "END-OF-EARLIER";
+                    let latest: String = "Latest finding: ".to_string() + &"z".repeat(110 * 1024);
+                    for text in [earlier.clone(), latest] {
+                        let side_id = side.clone();
+                        window.update(cx, move |shell, _, cx| shell.fixture_workbench_type(&side_id, &text, true, cx))?;
+                        settle(cx, 2500).await;
+                    }
+                    window.update(cx, |shell, _, cx| shell.fixture_open_findings(&side, cx))?;
+                    let oversized = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    anyhow::ensure!(
+                        oversized["flow"]["preview"]["state"] == "ready" && oversized["flow"]["preview"]["omitted"].as_u64().unwrap_or(0) >= 1,
+                        "the oversized findings leave the earlier message out: {oversized}"
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_findings_primary(cx))?;
+                    for _ in 0..60 {
+                        if findings(cx)?["open"] == false {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    settle(cx, 800).await;
+                    let main_pickers_call = |cx: &mut AsyncApp, f: Box<dyn FnOnce(&mut pickers::Pickers, &mut gpui::Context<pickers::Pickers>)>| {
+                        window.update(cx, move |shell, _, cx| {
+                            let (main, _) = shell.fixture_composers(None, cx);
+                            let pickers = main.read(cx).pickers().clone();
+                            pickers.update(cx, f);
+                        })
+                    };
+                    window.update(cx, |shell, window, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
+                    })?;
+                    main_pickers_call(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| {
+                        pickers.fixture_open_tray_transfer(0, cx);
+                    }))?;
+                    let mut first = serde_json::Value::Null;
+                    for _ in 0..60 {
+                        first = main_transfer(cx)?["details"].clone();
+                        if first["loading"] == false && first["kind"] == "forkMerge" {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    let items = first["items"].as_array().cloned().unwrap_or_default();
+                    let index = items
+                        .iter()
+                        .position(|item| item["available"] == true && item["truncated"] == true && item["nextTextOffset"].is_u64())
+                        .ok_or_else(|| anyhow::anyhow!("a truncated available omitted item: {first}"))?;
+                    let before = items[index].clone();
+                    anyhow::ensure!(
+                        before["label"] == "excerpt" && before["textBytes"].as_u64().unwrap_or(0) <= 12_288,
+                        "a first segment is bounded and labelled as an excerpt: {before}"
+                    );
+                    let offset = before["nextTextOffset"].as_u64().unwrap_or(0);
+                    let read_more = window.update(cx, move |shell, _, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.fixture_transfer_read_more(index, cx))
+                    })?;
+                    anyhow::ensure!(read_more, "Read more is offered for the truncated item");
+                    let mut after = serde_json::Value::Null;
+                    for _ in 0..60 {
+                        after = main_transfer(cx)?["details"]["items"][index].clone();
+                        if after["segments"].as_u64().unwrap_or(0) >= 2 || after["error"].is_string() {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(
+                        after["messageId"] == before["messageId"]
+                            && after["segments"] == 2
+                            && after["segmentStarts"][1] == offset
+                            && after["textBytes"].as_u64().unwrap_or(0) > before["textBytes"].as_u64().unwrap_or(0)
+                            && after["prefixKept"] == true
+                            && (after["truncated"] == false || after["label"] == "excerpt"),
+                        "Read more appends exactly the same message from nextTextOffset: {before} -> {after}"
+                    );
+                    anyhow::ensure!(main_transfer(cx)?["open"] == true, "Details are in the mounted model panel");
+                    settle(cx, 300).await;
+                    capture(window, cx, output.join("t06b-details-read-more.png"))?;
+                    record.insert("t06b".into(), serde_json::json!({"preview": oversized, "before": before, "after": after}));
+                    main_pickers_call(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| {
+                        pickers.fixture_close_transfer_details(cx);
+                        pickers.fixture_close(cx);
+                    }))?;
+
+                    // t03c. Failure cases 38-39 (apply): a new task with the
+                    // fork's context is applied, and the engine connection
+                    // changes before the answer arrives. The late answer must
+                    // not settle the dialog, open the created task or notify;
+                    // Refresh refuses while it is in flight.
+                    consume(window, cx, PARENT, "Parent reads the long findings.").await?;
+                    window.update(cx, |shell, _, cx| shell.fixture_open_new_task_with_context(&side, cx))?;
+                    let racing = settled_preview(window, cx, findings, |read| read["flow"].clone()).await?;
+                    anyhow::ensure!(racing["flow"]["preview"]["state"] == "ready", "the fork's new-task preview is ready: {racing}");
+                    let race_target = racing["flow"]["targetTaskId"].as_str().unwrap_or_default().to_string();
+                    let generation_before = window.update(cx, |shell, _, cx| shell.fixture_engine_generation(cx))?;
+                    window.update(cx, |shell, _, cx| {
+                        shell.fixture_findings_primary(cx);
+                        shell.fixture_findings_refresh(cx);
+                        shell.fixture_reconnect_engine(cx);
+                    })?;
+                    settle(cx, 2500).await;
+                    let late_apply = findings(cx)?;
+                    anyhow::ensure!(
+                        window.update(cx, |shell, _, cx| shell.fixture_engine_generation(cx))? != generation_before
+                            && late_apply["open"] == true
+                            && late_apply["flow"]["apply"]["state"] == "applying"
+                            && late_apply["flow"]["applyAttempts"] == 1
+                            && late_apply["flow"]["targetTaskId"] == race_target.as_str(),
+                        "a late apply answer from the earlier connection settles nothing (and Refresh refused): {late_apply}"
+                    );
+                    anyhow::ensure!(
+                        lineage(cx, PARENT)?["selected"] == true && lineage(cx, &race_target)?["selected"] == false,
+                        "the late answer never opens the created task"
+                    );
+                    window.update(cx, |shell, _, cx| shell.fixture_close_transfer_dialog(cx))?;
+                    record.insert("t03c".into(), serde_json::json!({"lateApply": late_apply}));
+
+                    // t04. Failure case 32: the provider switch has no default
+                    // choice; its primary acts only after one; a target change
+                    // drops the preview.
+                    window.update(cx, |shell, window, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
+                    })?;
+                    let pickers_do = |cx: &mut AsyncApp, f: Box<dyn FnOnce(&mut pickers::Pickers, &mut gpui::Context<pickers::Pickers>)>| {
+                        window.update(cx, move |shell, _, cx| {
+                            let (main, _) = shell.fixture_composers(None, cx);
+                            let pickers = main.read(cx).pickers().clone();
+                            pickers.update(cx, f);
+                        })
+                    };
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| pickers.fixture_begin_switch(HarnessId::Opencode, cx)))?;
+                    let unchosen = main_transfer(cx)?;
+                    let acted = window.update(cx, |shell, _, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.fixture_switch_primary(cx))
+                    })?;
+                    anyhow::ensure!(
+                        unchosen["supported"] == true && unchosen["choice"].is_null() && unchosen["primary"]["enabled"] == false && !acted,
+                        "no choice is preselected and the primary waits for one: {unchosen}"
+                    );
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| pickers.fixture_choose_switch(true, cx)))?;
+                    let continued = settled_preview(window, cx, main_transfer, |read| read["flow"].clone()).await?;
+                    anyhow::ensure!(continued["open"] == true, "The switch panel is mounted");
+                    settle(cx, 300).await;
+                    capture(window, cx, output.join("t04-provider-switch.png"))?;
+                    anyhow::ensure!(
+                        continued["choice"] == "Continue" && continued["flow"]["kind"] == "providerHandoff" && continued["flow"]["preview"]["state"] == "ready"
+                            && continued["primary"]["label"] == "Switch and continue" && continued["primary"]["enabled"] == true,
+                        "Continue shows the host's handoff preview: {continued}"
+                    );
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| pickers.fixture_begin_switch(HarnessId::Codex, cx)))?;
+                    let retargeted = main_transfer(cx)?;
+                    anyhow::ensure!(retargeted["flow"].is_null() && retargeted["choice"].is_null(), "a new target provider drops the old preview and choice: {retargeted}");
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| pickers.fixture_choose_switch(false, cx)))?;
+                    let fresh_choice = main_transfer(cx)?;
+                    anyhow::ensure!(fresh_choice["primary"]["label"] == "Switch fresh" && fresh_choice["flow"].is_null(), "Start fresh carries no preview: {fresh_choice}");
+                    record.insert("t04".into(), serde_json::json!({"unchosen": unchosen, "continued": continued, "fresh": fresh_choice}));
+
+                    // t05. Failure cases 33, 38-39 (Check status): Continue
+                    // with context stores the handoff without a turn; its answer
+                    // is lost (unknown); Refresh refuses and keeps the command
+                    // id; a Check status answer arriving after the connection
+                    // changed settles nothing. The panel is then cancelled
+                    // (never resent); the host's receipt remains.
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| pickers.fixture_begin_switch(HarnessId::Opencode, cx)))?;
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| pickers.fixture_choose_switch(true, cx)))?;
+                    settled_preview(window, cx, main_transfer, |read| read["flow"].clone()).await?;
+                    let texts_before_switch = window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(PARENT, cx))?;
+                    let switched = window.update(cx, |shell, _, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| {
+                            pickers.fixture_lose_next_transfer_apply();
+                            pickers.fixture_switch_primary(cx)
+                        })
+                    })?;
+                    anyhow::ensure!(switched, "the enabled primary applies the handoff");
+                    let mut lost_switch = serde_json::Value::Null;
+                    for _ in 0..60 {
+                        lost_switch = main_transfer(cx)?;
+                        if lost_switch["flow"]["apply"]["state"] == "unknown" {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(lost_switch["flow"]["apply"]["state"] == "unknown" && lost_switch["primary"]["label"] == "Check status", "a lost handoff answer reads unknown: {lost_switch}");
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| {
+                        pickers.fixture_refresh_transfer(cx);
+                        pickers.fixture_begin_switch(HarnessId::Codex, cx);
+                    }))?;
+                    let kept = main_transfer(cx)?;
+                    anyhow::ensure!(
+                        kept["flow"]["apply"]["commandId"] == lost_switch["flow"]["apply"]["commandId"]
+                            && kept["flow"]["applyAttempts"] == 1
+                            && kept["switchTarget"] == lost_switch["switchTarget"],
+                        "Refresh and a new target are refused while unknown: {kept}"
+                    );
+                    window.update(cx, |shell, _, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| {
+                            pickers.fixture_switch_primary(cx);
+                        });
+                        shell.fixture_reconnect_engine(cx);
+                    })?;
+                    settle(cx, 2500).await;
+                    let late_check = main_transfer(cx)?;
+                    let main_receipts = receipts(cx, PARENT)?;
+                    anyhow::ensure!(
+                        late_check["flow"]["apply"]["state"] == "unknown"
+                            && late_check["flow"]["apply"]["commandId"] == lost_switch["flow"]["apply"]["commandId"]
+                            && late_check["flow"]["applyAttempts"] == 1
+                            && late_check["switchTarget"] == lost_switch["switchTarget"],
+                        "a late Check status answer from the earlier connection settles nothing: {late_check}"
+                    );
+                    anyhow::ensure!(
+                        main_receipts.as_array().is_some_and(|items| items.iter().any(|item| item["kind"] == "providerHandoff"))
+                            && window.update(cx, |shell, _, cx| shell.fixture_workbench_user_texts(PARENT, cx))? == texts_before_switch,
+                        "the host stored the handoff with a receipt and no turn started: {main_receipts}"
+                    );
+                    pickers_do(cx, Box::new(|pickers: &mut pickers::Pickers, cx: &mut gpui::Context<pickers::Pickers>| pickers.fixture_cancel_switch(cx)))?;
+                    record.insert("t05".into(), serde_json::json!({"lost": lost_switch, "lateCheck": late_check, "receipts": main_receipts}));
+
+                    // t06. Failure case 34: Details for the newest receipt.
+                    let opened_details = window.update(cx, |shell, _, cx| {
+                        let (main, _) = shell.fixture_composers(None, cx);
+                        let pickers = main.read(cx).pickers().clone();
+                        pickers.update(cx, |pickers, cx| pickers.fixture_open_tray_transfer(0, cx))
+                    })?;
+                    let mut details = serde_json::Value::Null;
+                    for _ in 0..40 {
+                        details = main_transfer(cx)?["details"].clone();
+                        if details["loading"] == false {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    anyhow::ensure!(opened_details && details["transferId"].is_string() && details["error"].is_null(), "Details open and read without error: {details}");
+                    let card_line = {
+                        for _ in 0..3 {
+                            window.update(cx, |shell, _, cx| shell.fixture_open_execution_card(cx))?;
+                            settle(cx, 300).await;
+                        }
+                        window.update(cx, |shell, _, cx| shell.fixture_execution_card(cx))?["lastTransfer"].clone()
+                    };
+                    window.update(cx, |shell, _, cx| shell.fixture_leave_settings(false, cx))?;
+                    anyhow::ensure!(card_line.is_string(), "the Execution card names the last context transfer: {card_line}");
+                    record.insert("t06".into(), serde_json::json!({"details": details, "card": card_line}));
+
+                    // t07. Failure case 35: deleting the fork keeps the
+                    // source's receipts and names the fork as deleted.
+                    window.update(cx, |shell, _, cx| shell.fixture_chat_action(&side, "delete", cx))?;
+                    let mut kept = serde_json::Value::Null;
+                    for _ in 0..80 {
+                        settle(cx, 150).await;
+                        kept = receipts(cx, PARENT)?;
+                        let gone = window.update(cx, |shell, _, cx| shell.fixture_findings_offered(&side, cx))?.is_none();
+                        if gone && kept.as_array().is_some_and(|items| items.iter().any(|item| item["line"].as_str().is_some_and(|line| line.contains("(deleted)")))) {
+                            break;
+                        }
+                    }
+                    anyhow::ensure!(
+                        kept.as_array().is_some_and(|items| items.iter().filter(|item| item["kind"] == "forkMerge").count() >= 2
+                            && items.iter().any(|item| item["line"].as_str().is_some_and(|line| line.starts_with("Findings from ") && line.contains("(deleted)")))),
+                        "the source keeps its findings receipts, naming the fork as deleted: {kept}"
+                    );
+                    record.insert("t07".into(), kept);
                     Ok(serde_json::Value::Object(record))
                 }
                 .await;
@@ -1211,7 +1827,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("composer-parity.pass"),
-                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group at its 320 px minimum, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast; execution summaries decode from WatchChats, running settings and access show with Running / Requested / how it applies while a turn runs, clear on the next turn, read Loaded when warm, never promise context transfer on a new binding, stay out of the fork's composer, fall back to legacy chips and Steer when missing/old/other-task, Steer follows the engine's native/after-turn/unavailable decision with its reason, and the Execution card follows the focused fork tab, refuses a late response for the previous focus and labels adapter declarations as unverified\n",
+                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group at its 320 px minimum, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast; execution summaries decode from WatchChats, running settings and access show with Running / Requested / how it applies while a turn runs, clear on the next turn, read Loaded when warm, never promise context transfer on a new binding, stay out of the fork's composer, fall back to legacy chips and Steer when missing/old/other-task, Steer follows the engine's native/after-turn/unavailable decision with its reason, and the Execution card follows the focused fork tab, refuses a late response for the previous focus and labels adapter declarations as unverified; Send findings goes only from a fork to its living source, previews without writing, stores a Planned receipt without starting a turn or touching the draft, refuses a stale or earlier-connection preview, shows a lost answer as unknown and settles it by Check status without resending, refreshes to only new findings; the provider switch has no default choice, drops a preview on a target change, stores a handoff without a turn; Details read without error; receipts survive the fork's deletion; Start new task with context previews into a reserved id kept across refreshes, creates nothing on preview or Cancel, and on apply (a lost answer recovered by Check status) creates exactly one ordinary task on the source's config with a Planned context copy, no child, no native session or turn, opens it, and leaves the source's draft untouched; apply and Check status answers arriving after the engine connection changed settle, open or notify nothing; Refresh and re-targeting refuse while an apply is in flight or unknown, keeping its command id\n",
                             )
                         });
                         if let Err(error) = written {

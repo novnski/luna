@@ -123,6 +123,10 @@ pub struct ContextControlState {
     /// acceptance for audit without causing another delivery.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_handoff: Option<ContextHandoff>,
+    /// Recent compact transfer receipts. Full payloads remain in the owning
+    /// host's local transfer ledger and are fetched explicitly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context_transfers: Vec<crate::ContextTransferReceipt>,
     /// Only populated from a provider's readable summary exposure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_summary: Option<String>,
@@ -147,6 +151,7 @@ impl Default for ContextControlState {
             last_boundary: None,
             pending_handoff: None,
             last_handoff: None,
+            context_transfers: Vec::new(),
             provider_summary: None,
             notice: None,
             goal_marks: Default::default(),

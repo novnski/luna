@@ -4996,6 +4996,10 @@ impl Composer {
             )
         });
         let pickers = cx.new(|cx| Pickers::new_bound(state.clone(), binding.clone(), cx));
+        // A context transfer preview sizes its budget with the draft (never
+        // sends it).
+        let draft_input = input.downgrade();
+        pickers.update(cx, |pickers, _| pickers.set_draft_input(draft_input));
         // The footer toolbar (checkout kind + ref picker) is rendered INLINE
         // by the composer from picker state — a pickers-side notify (refs
         // loaded, popover toggled, pick made) must repaint the composer too.

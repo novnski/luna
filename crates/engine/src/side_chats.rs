@@ -269,6 +269,7 @@ impl SideChats {
             .context_control()
             .last_boundary
             .is_some()
+            || self.0.docs.has_portable_context_transfer(id)?
         {
             return Ok(Vec::new());
         }

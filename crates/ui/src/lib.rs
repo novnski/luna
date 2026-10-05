@@ -27,6 +27,7 @@ mod comment_ui;
 pub mod comments;
 pub mod composer;
 mod composer_dock;
+pub(crate) mod context_transfer;
 pub mod context_usage;
 pub mod drafts;
 pub mod edge_fade;

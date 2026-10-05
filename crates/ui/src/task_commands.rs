@@ -41,6 +41,7 @@ fn revision_fenced_kind(kind: Option<&str>) -> bool {
                 | "restoreHistoryRecovery"
                 | "rewindConversation"
                 | "reconcileConversationRewind"
+                | "applyContextTransfer"
         )
     )
 }
@@ -82,6 +83,7 @@ fn binding_fenced_kind(kind: Option<&str>) -> bool {
                 | "restoreHistoryRecovery"
                 | "rewindConversation"
                 | "reconcileConversationRewind"
+                | "applyContextTransfer"
         )
     )
 }
@@ -122,6 +124,48 @@ pub(crate) fn failure_message(receipt: &CommandReceipt, fallback: &str) -> Strin
             .or_else(|| receipt.reason.as_ref().map(|reason| reason.message.clone()))
             .unwrap_or_else(|| fallback.to_string()),
     }
+}
+
+/// Apply exactly a host-reviewed context transfer on its destination
+/// (`preview.target`), fenced by the destination revision and binding
+/// generation the host reviewed. `command_id` is kept by the caller so a lost
+/// answer is recovered by reading its receipt, never by sending again.
+pub async fn apply_context_transfer(
+    engine: &EngineHandle,
+    preview: &luna_proto::ContextTransferPreview,
+    command_id: String,
+) -> Result<CommandReceipt, RpcError> {
+    let target = &preview.target;
+    let snapshot = luna_proto::TaskCommandSnapshot {
+        task_id: target.task_id.clone(),
+        task_revision: target.task_revision,
+        task_sequence: 0,
+        binding_id: target.binding_id.clone(),
+        binding_generation: target.binding_generation,
+        active_turn_id: None,
+    };
+    let intent = serde_json::json!({
+        "kind": "applyContextTransfer",
+        "request": preview.request,
+        "previewId": preview.preview_id,
+    });
+    execute_receipt_on_with_snapshot(
+        engine,
+        &target.task_id,
+        None,
+        command_id,
+        intent,
+        Some(snapshot),
+    )
+    .await
+}
+
+/// A command's durable receipt, if the host has one (Check status).
+pub async fn read_receipt(
+    engine: &EngineHandle,
+    command_id: &str,
+) -> Result<Option<CommandReceipt>, RpcError> {
+    receipt(engine, None, command_id).await
 }
 
 pub async fn execute(

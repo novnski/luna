@@ -193,6 +193,11 @@ impl SessionsEngine {
 
     /// Called under the same per-task transition gate as native steering.
     pub(super) fn pending_execution_change(&self, chat_id: &str) -> Result<bool, EngineError> {
+        if let Some(host) = self.inner.doc_host()
+            && host.has_pending_context_transfer(chat_id)?
+        {
+            return Ok(true);
+        }
         let Some(workspace) = self.inner.workspace() else {
             return Ok(false);
         };
@@ -405,6 +410,12 @@ impl SessionsEngine {
                     "The requested execution policy cannot be applied on this host.".into(),
                 ),
             };
+        }
+        if let Some(host) = self.inner.doc_host()
+            && host.has_pending_context_transfer(chat_id)?
+        {
+            steer = ExecutionSteerDecision { kind: ExecutionSteerKind::Unavailable,
+                reason: Some("Shared conversation context is pending. Wait for this turn to finish, then send explicitly; uncertain context delivery is never replayed.".into()) };
         }
         Ok(Some(TaskExecutionSummary {
             schema_version: EXECUTION_SUMMARY_VERSION,

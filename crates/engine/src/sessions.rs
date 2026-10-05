@@ -4198,6 +4198,16 @@ impl SessionsEngine {
         }
         // Recovery and replays never re-run a goal start (an uncertain
         // provider mutation); they continue the provider session instead.
+        // The transfer payload is execution context. Keep the user's visible
+        // entry and sidebar preview separate so round trips do not copy an
+        // injected payload back into shared visible history as a new prompt.
+        let visible_prompt = request.prompt.clone();
+        let pending_context_transfers = self
+            .inner
+            .doc_host()
+            .map(|host| host.context_transfer_prompt(chat_id, &mut request))
+            .transpose()?
+            .unwrap_or_default();
         let mut frozen_request = request.clone();
         frozen_request.goal = None;
         if let Some(recovery) = recovery.as_ref() {
@@ -4392,6 +4402,13 @@ impl SessionsEngine {
         // The Changes pane's latest-turn view remains an eager best-effort
         // snapshot. Durable checkpoints start only after a fresh run is ready
         // or a warm provider confirms its steer boundary.
+        if let Some(host) = self.inner.doc_host() {
+            host.mark_context_transfers_dispatched(
+                chat_id,
+                &original_message_id,
+                &pending_context_transfers,
+            )?;
+        }
         self.note_turn_start(chat_id, &request.cwd);
         if let Some((run_id, steerable, same_runtime, steer_tx, ledger)) = routed {
             let user_id = message_id.clone().unwrap_or_else(new_id);
@@ -4456,7 +4473,7 @@ impl SessionsEngine {
                 };
             if accepted {
                 let handle = self.doc_handle(chat_id)?;
-                handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+                handle.write_user_message(&user_id, &visible_prompt, now_ms())?;
                 if request.goal.is_some() {
                     self.mark_goal_sent(chat_id, &user_id);
                 }
@@ -4467,7 +4484,7 @@ impl SessionsEngine {
                     // — that gap read as unseen-with-no-live-run = a phantom
                     // "completed" flash on every remote send (2026-07-31).
                     self.set_status(chat_id, SessionStatus::Working, false);
-                    self.inner.note_message(chat_id, &request.prompt);
+                    self.inner.note_message(chat_id, &visible_prompt);
                     return Ok(run_id);
                 }
                 if harness_id == HarnessId::Codex {
@@ -4485,7 +4502,7 @@ impl SessionsEngine {
                     ledger.len() != before
                 };
                 if !reclaimed {
-                    self.inner.note_message(chat_id, &request.prompt);
+                    self.inner.note_message(chat_id, &visible_prompt);
                     return Ok(run_id);
                 }
                 // Keep the already-written doc entry's id for the fresh run
@@ -4513,7 +4530,7 @@ impl SessionsEngine {
         let handle = self.doc_handle(chat_id)?;
         let user_id = message_id.unwrap_or_else(new_id);
         if !attach_existing_goal {
-            handle.write_user_message(&user_id, &request.prompt, now_ms())?;
+            handle.write_user_message(&user_id, &visible_prompt, now_ms())?;
         }
         if request.goal.is_some() {
             self.mark_goal_sent(chat_id, &user_id);
@@ -4756,7 +4773,7 @@ impl SessionsEngine {
         // AFTER Working (same causal-order guarantee as the steer path): the
         // lastMessageAt bump must never be observable ahead of the live run.
         if !attach_existing_goal {
-            self.inner.note_message(chat_id, &request.prompt);
+            self.inner.note_message(chat_id, &visible_prompt);
         }
 
         // Name the chat NOW, off the first prompt — not after the first
@@ -4765,7 +4782,7 @@ impl SessionsEngine {
         // the Done-time call below stays as the retry for a failed
         // generation).
         if !attach_existing_goal && let Some(titles) = self.inner.titles.get() {
-            titles.maybe_generate(chat_id, harness_id, &request.prompt, &request.cwd);
+            titles.maybe_generate(chat_id, harness_id, &visible_prompt, &request.cwd);
         }
 
         if attach_existing_goal {
@@ -6995,6 +7012,18 @@ impl Inner {
         if session_id.is_empty() {
             return;
         }
+        // A retiring warm process can repeat its old native ID after an
+        // explicit context boundary. SessionStarted updates managed authority
+        // before reaching here; an ID from another binding is stale evidence.
+        if self
+            .task_identity
+            .get()
+            .and_then(|identity| identity.view(chat_id))
+            .and_then(|view| view.current_binding)
+            .is_some_and(|binding| binding.provider_task_id != session_id)
+        {
+            return;
+        }
         lock(&self.harness_sessions).insert(
             chat_id.to_string(),
             HarnessSessionRef {
@@ -7023,6 +7052,18 @@ impl Inner {
     /// never rides `--resume`. An empty stored id is the explicit tombstone —
     /// no resume, no falling through to staler sources.
     fn resume_for(&self, chat_id: &str, cwd: &str) -> Option<String> {
+        // An empty managed binding is a deliberate fresh start. It wins over
+        // every legacy observation, including a late old-process Done and a
+        // persisted cache row loaded after restart.
+        if self
+            .task_identity
+            .get()
+            .and_then(|identity| identity.view(chat_id))
+            .and_then(|view| view.current_binding)
+            .is_some_and(|binding| binding.provider_task_id.is_empty())
+        {
+            return None;
+        }
         let cwd_ok = |session_cwd: &str| session_cwd.is_empty() || session_cwd == cwd;
         if let Some(known) = lock(&self.harness_sessions).get(chat_id).cloned() {
             return (!known.session_id.is_empty() && cwd_ok(&known.cwd))
@@ -9595,6 +9636,11 @@ async fn drive_run(
                 inner.note_message(&chat_id, &folded_text(&folded));
             }
             if *status == DoneStatus::Completed {
+                if let Some(host) = inner.doc_host()
+                    && let Err(error) = host.consume_context_transfers(&chat_id, &run_id)
+                {
+                    tracing::warn!(chat = %chat_id, %error, "context transfer completion persistence failed; native acceptance remains recorded");
+                }
                 // A cleanly completed turn resets the auto-resume revival
                 // budget: only consecutive crash-revive-crash cycles spend it.
                 inner.journal.clear_resume_attempts(&chat_id);

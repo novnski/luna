@@ -1480,6 +1480,31 @@ impl DocsStore {
         self.save_snapshot_with_updates_and_authority_inner(doc_id, bytes, updates, authority)
     }
 
+    /// Commit a document projection and its local-only effect records under
+    /// the same SQLite/write-epoch boundary. Only the document has wire updates.
+    pub fn save_snapshot_with_local_records(
+        &self,
+        doc_id: &str,
+        bytes: &[u8],
+        updates: &[(&str, &[u8])],
+        authority: &[LocalExecutableChange],
+        records: &[(&str, &[u8])],
+    ) -> Result<(), StoreError> {
+        self.require_uncoordinated_snapshot_save()?;
+        let mut conn = self.snapshot_write_conn();
+        let tx = conn.transaction()?;
+        let mut snapshots = vec![(doc_id, bytes)];
+        snapshots.extend_from_slice(records);
+        let updates = updates
+            .iter()
+            .map(|(id, bytes)| (doc_id, *id, *bytes))
+            .collect::<Vec<_>>();
+        self.persist_snapshot_changes_tx(&tx, &snapshots, &[], &updates)?;
+        Self::apply_local_executable_changes_tx(&tx, authority)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn save_snapshot_with_updates_and_authority_inner(
         &self,
         doc_id: &str,

@@ -826,6 +826,15 @@ pub enum PickerKind {
     Device,
 }
 
+/// The provider switch panel's explicit choice (slice 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SwitchChoice {
+    /// A host-prepared copy of recent visible messages for the next message.
+    Continue,
+    /// No copied messages (the ordinary switch with no handoff).
+    Fresh,
+}
+
 /// A blank chat's provider choice, waiting for that provider's model
 /// catalog before the ordinary switch is sent. One at a time: a newer pick
 /// replaces it; a change of chat, engine or target device drops it.
@@ -958,6 +967,21 @@ pub struct Pickers {
     clear_context_confirmation: bool,
     provider_switch_target: Option<HarnessId>,
     provider_switch_handoff: bool,
+    /// On a host offering explicit transfers: the switch panel's choice
+    /// (`None` until the person picks; nothing is preselected).
+    switch_choice: Option<SwitchChoice>,
+    /// The host-previewed handoff under review for "Continue with context".
+    transfer: Option<crate::context_transfer::TransferFlow>,
+    transfer_task: Option<Task<()>>,
+    /// A receipt's Details, opened from the context tray.
+    transfer_details: Option<crate::context_transfer::TransferDetails>,
+    transfer_details_task: Option<Task<()>>,
+    /// The composer's draft input: its text sizes the preview's budget only
+    /// (it is never sent by a transfer).
+    draft_input: Option<gpui::WeakEntity<crate::composer::ComposerInput>>,
+    /// QA: report the next applied handoff as unknown (a lost answer).
+    #[cfg(feature = "appshots-fixture")]
+    lose_transfer_apply: bool,
     direct_switch: Option<DirectSwitch>,
     full_confirmation: Option<String>,
     mutate_task: Option<Task<()>>,
@@ -1217,6 +1241,14 @@ impl Pickers {
             clear_context_confirmation: false,
             provider_switch_target: None,
             provider_switch_handoff: false,
+            switch_choice: None,
+            transfer: None,
+            transfer_task: None,
+            transfer_details: None,
+            transfer_details_task: None,
+            draft_input: None,
+            #[cfg(feature = "appshots-fixture")]
+            lose_transfer_apply: false,
             direct_switch: None,
             full_confirmation: None,
             mutate_task: None,
@@ -1843,6 +1875,94 @@ impl Pickers {
         self.harnesses
             .ready()
             .is_some_and(|list| offered_harnesses(list).is_empty())
+    }
+
+    /// QA: the provider switch panel and context transfers, through the
+    /// same paths as their controls.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_begin_switch(&mut self, target: HarnessId, cx: &mut Context<Self>) {
+        self.begin_provider_switch_confirmation(target);
+        cx.notify();
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_choose_switch(&mut self, continue_with_context: bool, cx: &mut Context<Self>) {
+        self.choose_switch(
+            if continue_with_context {
+                SwitchChoice::Continue
+            } else {
+                SwitchChoice::Fresh
+            },
+            cx,
+        );
+    }
+    /// The switch panel's primary button, only when it is enabled.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_switch_primary(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(target) = self.provider_switch_target else {
+            return false;
+        };
+        if !self.switch_primary_state(cx).1 {
+            return false;
+        }
+        self.switch_primary(target, cx);
+        true
+    }
+    /// The panel's Cancel (an unknown outcome is never resent).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_cancel_switch(&mut self, cx: &mut Context<Self>) {
+        self.cancel_provider_switch_confirmation();
+        cx.notify();
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_refresh_transfer(&mut self, cx: &mut Context<Self>) {
+        self.start_transfer_preview(cx);
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_lose_next_transfer_apply(&mut self) {
+        self.lose_transfer_apply = true;
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_open_tray_transfer(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        let Some(receipt) = self.tray_transfers(cx).into_iter().nth(index) else {
+            return false;
+        };
+        self.open_transfer_details(receipt, cx);
+        true
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_transfer_read_more(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        self.read_more_transfer_item(index, cx)
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_close_transfer_details(&mut self, cx: &mut Context<Self>) {
+        self.transfer_details = None;
+        self.transfer_details_task = None;
+        cx.notify();
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_check_transfer_receipt(&mut self, cx: &mut Context<Self>) {
+        self.check_transfer_receipt(cx);
+    }
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_transfer_readback(&self, cx: &App) -> serde_json::Value {
+        let state = self.state.read(cx);
+        let chat = self.binding.chat_id(state).unwrap_or_default().to_string();
+        let (label, enabled) = self.switch_primary_state(cx);
+        serde_json::json!({
+            "open": self.is_open(),
+            "switchTarget": self.provider_switch_target,
+            "supported": self.transfer_supported(cx),
+            "choice": self.switch_choice.map(|choice| format!("{choice:?}")),
+            "primary": {"label": label, "enabled": enabled},
+            "current": self.transfer_current(cx),
+            "flow": self.transfer.as_ref().map(|flow| flow.readback()),
+            "tray": self.tray_transfers(cx)
+                .iter()
+                .map(|receipt| crate::context_transfer::receipt_line(state, receipt, &chat))
+                .collect::<Vec<_>>(),
+            "details": self.transfer_details.as_ref().map(|details| details.readback(state)),
+            "contextError": self.context_error,
+        })
     }
 
     /// Fixture-only: seed the host harness catalog without an engine.
@@ -2615,15 +2735,336 @@ impl Pickers {
     }
 
     fn begin_provider_switch_confirmation(&mut self, target: HarnessId) {
+        // A handoff being saved or of unknown outcome keeps its panel (and
+        // command id) until it is checked or cancelled.
+        if self.transfer.as_ref().is_some_and(|flow| flow.busy()) {
+            return;
+        }
         self.provider_switch_target = Some(target);
         self.provider_switch_handoff = false;
         self.clear_context_confirmation = false;
         self.context_error = None;
+        self.switch_choice = None;
+        self.transfer = None;
+        self.transfer_task = None;
     }
 
     fn cancel_provider_switch_confirmation(&mut self) {
         self.provider_switch_target = None;
         self.provider_switch_handoff = false;
+        self.switch_choice = None;
+        self.transfer = None;
+        self.transfer_task = None;
+    }
+
+    // ---- explicit context transfer (slice 2) ----
+
+    /// The composer hands its draft input over once (budget only).
+    pub(crate) fn set_draft_input(
+        &mut self,
+        input: gpui::WeakEntity<crate::composer::ComposerInput>,
+    ) {
+        self.draft_input = Some(input);
+    }
+
+    fn draft_text(&self, cx: &App) -> String {
+        self.draft_input
+            .as_ref()
+            .and_then(|input| input.upgrade())
+            .map(|input| input.read(cx).text().to_string())
+            .unwrap_or_default()
+    }
+
+    /// Whether the bound chat's host previews and applies transfers.
+    fn transfer_supported(&self, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        self.binding
+            .chat_id(state)
+            .is_some_and(|chat| crate::context_transfer::supported(state, chat))
+    }
+
+    /// The handoff under review still describes this chat, target provider
+    /// and engine connection.
+    fn transfer_current(&self, cx: &App) -> bool {
+        let state = self.state.read(cx);
+        self.transfer.as_ref().is_some_and(|flow| {
+            self.binding.chat_id(state) == Some(flow.request.source_task_id.as_str())
+                && flow.engine_generation == state.engine_generation()
+                && flow
+                    .request
+                    .target_config
+                    .as_ref()
+                    .map(|config| config.harness)
+                    == self.provider_switch_target
+        })
+    }
+
+    fn choose_switch(&mut self, choice: SwitchChoice, cx: &mut Context<Self>) {
+        if matches!(
+            self.transfer.as_ref().map(|flow| &flow.apply),
+            Some(
+                crate::context_transfer::ApplyState::Applying { .. }
+                    | crate::context_transfer::ApplyState::Unknown { .. }
+            )
+        ) {
+            // An apply in flight or of unknown outcome keeps its choice.
+            return;
+        }
+        self.switch_choice = Some(choice);
+        self.context_error = None;
+        match choice {
+            SwitchChoice::Continue => self.start_transfer_preview(cx),
+            SwitchChoice::Fresh => {
+                self.transfer = None;
+                self.transfer_task = None;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Ask the host for a fresh handoff preview (also Refresh). Refused
+    /// while an apply is in flight or unknown: its command id is kept and no
+    /// second apply can be enabled.
+    fn start_transfer_preview(&mut self, cx: &mut Context<Self>) {
+        if self.transfer.as_ref().is_some_and(|flow| flow.busy()) {
+            return;
+        }
+        let Some(target) = self.provider_switch_target else {
+            return;
+        };
+        let (chat_id, engine, generation) = {
+            let state = self.state.read(cx);
+            (
+                self.binding.chat_id(state).map(str::to_string),
+                state.engine().cloned(),
+                state.engine_generation(),
+            )
+        };
+        let (Some(chat_id), Some(engine)) = (chat_id, engine) else {
+            self.context_error = Some("Engine not connected".into());
+            return;
+        };
+        let Some(config) = self.switch_config(target, cx) else {
+            self.context_error = Some("This task has no provider configuration.".into());
+            return;
+        };
+        let request = luna_proto::ContextTransferRequest {
+            kind: luna_proto::ContextTransferKind::ProviderHandoff,
+            source_task_id: chat_id.clone(),
+            target_task_id: chat_id,
+            target_config: Some(config),
+            new_target: None,
+            message_ids: Vec::new(),
+            prompt_text: self.draft_text(cx),
+        };
+        let mut flow = crate::context_transfer::TransferFlow::new(request.clone(), generation);
+        if let Some(previous) = &self.transfer {
+            flow.show_text = previous.show_text;
+            flow.apply_attempts = previous.apply_attempts;
+        }
+        self.transfer = Some(flow);
+        self.transfer_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::context_transfer::request_preview(engine, request.clone()).await;
+            this.update(cx, |pickers, cx| {
+                // Only for the request still under review on this connection.
+                let current = pickers.transfer_current(cx);
+                if let Some(flow) = pickers.transfer.as_mut()
+                    && current
+                    && flow.request == request
+                    && flow.engine_generation == generation
+                {
+                    flow.install_preview(result);
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// The switch panel's primary button: its label and whether it may run
+    /// now (one decision for the button and QA).
+    fn switch_primary_state(&self, cx: &App) -> (&'static str, bool) {
+        match self.switch_choice {
+            None => ("Switch provider", false),
+            Some(SwitchChoice::Fresh) => ("Switch fresh", true),
+            Some(SwitchChoice::Continue) => match self.transfer.as_ref() {
+                None => ("Switch and continue", false),
+                Some(flow) => match &flow.apply {
+                    crate::context_transfer::ApplyState::Unknown { checking, .. } => {
+                        ("Check status", !checking)
+                    }
+                    _ => (
+                        "Switch and continue",
+                        self.transfer_current(cx) && flow.can_apply(),
+                    ),
+                },
+            },
+        }
+    }
+
+    /// The switch panel's primary action (button, QA alike).
+    fn switch_primary(&mut self, target: HarnessId, cx: &mut Context<Self>) {
+        match self.switch_choice {
+            None => {}
+            Some(SwitchChoice::Fresh) => {
+                // Start fresh: the ordinary switch with no handoff.
+                self.provider_switch_handoff = false;
+                self.confirm_provider_switch(target, cx);
+            }
+            Some(SwitchChoice::Continue) => match self.transfer.as_ref().map(|flow| &flow.apply) {
+                Some(crate::context_transfer::ApplyState::Unknown { .. }) => {
+                    self.check_transfer_status(cx)
+                }
+                _ => self.apply_transfer_switch(cx),
+            },
+        }
+    }
+
+    /// Apply exactly the reviewed handoff. The host makes the fresh binding
+    /// and keeps the text for the next message; no turn starts.
+    fn apply_transfer_switch(&mut self, cx: &mut Context<Self>) {
+        if !self.transfer_current(cx) {
+            if let Some(flow) = self.transfer.as_mut() {
+                flow.preview = crate::context_transfer::PreviewState::Stale(
+                    "The chat, provider or connection changed. Refresh the preview.".into(),
+                );
+            }
+            cx.notify();
+            return;
+        }
+        let Some(engine) = self.engine(cx) else {
+            self.context_error = Some("Engine not connected".into());
+            cx.notify();
+            return;
+        };
+        let Some(flow) = self.transfer.as_mut().filter(|flow| flow.can_apply()) else {
+            return;
+        };
+        let Some(preview) = flow.ready().cloned() else {
+            return;
+        };
+        let command_id = uuid::Uuid::new_v4().to_string();
+        flow.apply = crate::context_transfer::ApplyState::Applying {
+            command_id: command_id.clone(),
+        };
+        flow.apply_attempts += 1;
+        let generation = flow.engine_generation;
+        let preview_id = preview.preview_id.clone();
+        self.transfer_task = Some(cx.spawn(async move |this, cx| {
+            let outcome =
+                crate::context_transfer::apply_preview(engine, preview, command_id.clone()).await;
+            this.update(cx, |pickers, cx| {
+                pickers.settle_transfer_apply(&preview_id, generation, command_id, outcome, cx);
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    fn settle_transfer_apply(
+        &mut self,
+        preview_id: &str,
+        generation: u64,
+        command_id: String,
+        outcome: crate::context_transfer::ApplyOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        // Only on the connection that sent it, for this chat and target: a
+        // late answer from an earlier engine or profile changes nothing.
+        let (current_generation, chat) = {
+            let state = self.state.read(cx);
+            (
+                state.engine_generation(),
+                self.binding.chat_id(state).map(str::to_string),
+            )
+        };
+        let target = self.provider_switch_target;
+        let current = self.transfer.as_ref().is_some_and(|flow| {
+            current_generation == generation
+                && flow.engine_generation == generation
+                && chat.as_deref() == Some(flow.request.source_task_id.as_str())
+                && flow
+                    .request
+                    .target_config
+                    .as_ref()
+                    .map(|config| config.harness)
+                    == target
+                && flow
+                    .ready()
+                    .is_some_and(|preview| preview.preview_id == preview_id)
+        });
+        if !current {
+            return;
+        }
+        #[cfg(feature = "appshots-fixture")]
+        let outcome = if std::mem::take(&mut self.lose_transfer_apply)
+            && matches!(outcome, crate::context_transfer::ApplyOutcome::Applied)
+        {
+            crate::context_transfer::ApplyOutcome::Unknown
+        } else {
+            outcome
+        };
+        let Some(flow) = self.transfer.as_mut() else {
+            return;
+        };
+        flow.install_apply(command_id, outcome);
+        if flow.apply == crate::context_transfer::ApplyState::Applied {
+            // Stored on the host for the next message: the switch is done.
+            self.provider_switch_target = None;
+            self.switch_choice = None;
+            self.transfer = None;
+            self.config = DraftConfig::default();
+        }
+        cx.notify();
+    }
+
+    /// Unknown outcome: re-read its receipt (never resend).
+    fn check_transfer_status(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        let Some(flow) = self.transfer.as_mut() else {
+            return;
+        };
+        let crate::context_transfer::ApplyState::Unknown {
+            command_id,
+            checking,
+        } = &mut flow.apply
+        else {
+            return;
+        };
+        if *checking {
+            return;
+        }
+        *checking = true;
+        let command_id = command_id.clone();
+        let generation = flow.engine_generation;
+        let preview_id = flow.ready().map(|preview| preview.preview_id.clone());
+        self.transfer_task = Some(cx.spawn(async move |this, cx| {
+            let outcome = crate::context_transfer::check_apply(engine, command_id.clone()).await;
+            this.update(cx, |pickers, cx| match (outcome, preview_id) {
+                (Some(outcome), Some(preview_id)) => {
+                    pickers.settle_transfer_apply(&preview_id, generation, command_id, outcome, cx)
+                }
+                _ => {
+                    // Only on the connection that asked.
+                    if pickers.state.read(cx).engine_generation() == generation
+                        && let Some(crate::context_transfer::ApplyState::Unknown {
+                            checking, ..
+                        }) = pickers
+                            .transfer
+                            .as_mut()
+                            .filter(|flow| flow.engine_generation == generation)
+                            .map(|flow| &mut flow.apply)
+                    {
+                        *checking = false;
+                    }
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+        cx.notify();
     }
 
     fn toggle_provider_switch_handoff(&mut self) {
@@ -2770,11 +3211,7 @@ impl Pickers {
             self.direct_switch = None;
             return;
         };
-        let Some(mut config) = self
-            .binding
-            .chat_row(self.state.read(cx))
-            .and_then(|chat| chat.config.clone())
-        else {
+        let Some(config) = self.switch_config(target, cx) else {
             self.context_error = Some("This task has no provider configuration.".into());
             self.fail_direct_switch(target, "This task has no provider configuration.");
             cx.notify();
@@ -2786,6 +3223,29 @@ impl Pickers {
             cx.notify();
             return;
         };
+        let handoff = provider_switch_handoff_payload(
+            self.provider_switch_handoff,
+            self.binding.transcript(self.state.read(cx)),
+        );
+        self.send_provider_switch_config(
+            chat_id,
+            engine,
+            config,
+            handoff,
+            target,
+            initial_only,
+            cx,
+        );
+    }
+
+    /// The chat's configuration moved to `target` (its remembered or first
+    /// catalog model, the model's first reasoning level, no options, the
+    /// provider's own account). `None` when the chat has no configuration.
+    fn switch_config(&self, target: HarnessId, cx: &App) -> Option<ChatConfig> {
+        let mut config = self
+            .binding
+            .chat_row(self.state.read(cx))
+            .and_then(|chat| chat.config.clone())?;
         let selected_model = self
             .defaults
             .model_for(target)
@@ -2813,10 +3273,20 @@ impl Pickers {
             .as_ref()
             .and_then(|model| model.reasoning_levels.first().copied());
         config.model_options.clear();
-        let handoff = provider_switch_handoff_payload(
-            self.provider_switch_handoff,
-            self.binding.transcript(self.state.read(cx)),
-        );
+        Some(config)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn send_provider_switch_config(
+        &mut self,
+        chat_id: String,
+        engine: crate::state::EngineHandle,
+        config: ChatConfig,
+        handoff: Option<ContextHandoff>,
+        target: HarnessId,
+        initial_only: bool,
+        cx: &mut Context<Self>,
+    ) {
         // The picker this command was sent from: a late result for another
         // chat, engine or target device changes nothing here.
         let engine_generation = self.state.read(cx).engine_generation();
@@ -3712,6 +4182,26 @@ impl Pickers {
         // The frame stays mounted (and possibly focused) through the exit
         // animation — keys must not drive a dying popover.
         if !self.open.is_open() {
+            return;
+        }
+        // A transfer's Details or the explicit switch panel: Enter never picks
+        // a (hidden) row or confirms anything; Escape backs out of it.
+        if self.transfer_details.is_some()
+            || (self.provider_switch_target.is_some() && self.transfer_supported(cx))
+        {
+            match event.keystroke.key.as_str() {
+                "escape" => {
+                    if self.transfer_details.take().is_some() {
+                        self.transfer_details_task = None;
+                    } else {
+                        self.cancel_provider_switch_confirmation();
+                    }
+                    cx.stop_propagation();
+                    cx.notify();
+                }
+                "enter" => cx.stop_propagation(),
+                _ => {}
+            }
             return;
         }
         if self.setting_menu.is_some() {
@@ -5758,12 +6248,33 @@ impl Pickers {
                 .into_any_element();
         }
 
+        if self.transfer_details.is_some() {
+            let panel = self.render_transfer_details(&theme, cx);
+            return div()
+                .flex()
+                .flex_col()
+                .child(tabs)
+                .child(panel)
+                .into_any_element();
+        }
+
         if let Some(target) = self.provider_switch_target {
             let target_name = descriptors
                 .iter()
                 .find(|descriptor| descriptor.id == target)
                 .map(|descriptor| descriptor.name.clone())
                 .unwrap_or_else(|| format!("{target:?}"));
+            // Hosts with explicit transfers: two explicit choices and the
+            // host's preview (older hosts keep the bounded toggle below).
+            if self.transfer_supported(cx) {
+                let panel = self.render_transfer_switch(target, &target_name, &theme, cx);
+                return div()
+                    .flex()
+                    .flex_col()
+                    .child(tabs)
+                    .child(panel)
+                    .into_any_element();
+            }
             let handoff = self.provider_switch_handoff;
             let panel = div()
                 .p(px(14.0))
@@ -6044,6 +6555,597 @@ impl Pickers {
             .into_any_element()
     }
 
+    /// The provider switch on a host with explicit transfers: "Continue with
+    /// context" or "Start fresh", neither preselected; Continue shows the
+    /// host's preview, and the primary button names the chosen action.
+    fn render_transfer_switch(
+        &mut self,
+        target: HarnessId,
+        target_name: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        use crate::context_transfer::PreviewState;
+        // A preview for another chat, provider or connection is never applied.
+        if !self.transfer_current(cx)
+            && let Some(flow) = self.transfer.as_mut()
+            && !matches!(flow.preview, PreviewState::Stale(_))
+        {
+            flow.preview = PreviewState::Stale(
+                "The chat, provider or connection changed. Refresh the preview.".into(),
+            );
+        }
+        let choice = self.switch_choice;
+        let muted = theme.readable_muted(0.7);
+        let option = |id: &'static str, title: &'static str, body: &'static str, on: bool| {
+            div()
+                .id(id)
+                .role(gpui::Role::RadioButton)
+                .aria_label(SharedString::from(format!("{title}: {body}")))
+                .aria_toggled(if on {
+                    gpui::Toggled::True
+                } else {
+                    gpui::Toggled::False
+                })
+                .p(px(8.0))
+                .rounded(px(8.0))
+                .border_1()
+                .border_color(if on { theme.focus_ring() } else { theme.border })
+                .cursor_pointer()
+                .hover(|style| style.bg(crate::theme::ink(0.05)))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .line_height(px(16.0))
+                        .text_color(muted)
+                        .child(body),
+                )
+        };
+        let mut panel = div()
+            .id("provider-switch-transfer")
+            .p(px(14.0))
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(13.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(SharedString::from(format!("Switch to {target_name}?"))),
+            )
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .line_height(px(17.0))
+                    .text_color(theme.text_muted)
+                    .child("This creates a fresh provider binding. LUNA keeps the task history, files, draft, and queue."),
+            )
+            .child(
+                option(
+                    "provider-switch-continue",
+                    "Continue with context",
+                    "LUNA prepares a copy of recent visible messages. It is added to your next message here; nothing is sent now.",
+                    choice == Some(SwitchChoice::Continue),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.choose_switch(SwitchChoice::Continue, cx)
+                })),
+            )
+            .child(
+                option(
+                    "provider-switch-fresh",
+                    "Start fresh",
+                    "The new provider starts without this conversation's messages.",
+                    choice == Some(SwitchChoice::Fresh),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.choose_switch(SwitchChoice::Fresh, cx)
+                })),
+            );
+        let (primary_label, can_primary) = self.switch_primary_state(cx);
+        if choice == Some(SwitchChoice::Continue)
+            && let Some(flow) = &self.transfer
+        {
+            let toggle = cx.listener(|this, _, _, cx| {
+                if let Some(flow) = this.transfer.as_mut() {
+                    flow.show_text = !flow.show_text;
+                }
+                cx.notify();
+            });
+            let refresh = matches!(
+                flow.preview,
+                PreviewState::Stale(_) | PreviewState::Error(_)
+            );
+            panel = panel
+                .child(
+                    div()
+                        .id("provider-switch-preview")
+                        .max_h(px(360.0))
+                        .overflow_y_scroll()
+                        .child(crate::context_transfer::render_preview_body(
+                            theme, flow, toggle,
+                        )),
+                )
+                .children(crate::context_transfer::apply_line(theme, flow));
+            if refresh {
+                panel = panel.child(
+                    div()
+                        .id("provider-switch-refresh")
+                        .accessible_button("Refresh the preview", theme.accent)
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.accent)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.start_transfer_preview(cx);
+                            cx.notify();
+                        }))
+                        .child("Refresh the preview"),
+                );
+            }
+        }
+        let button = |id: &'static str, label: &'static str, enabled: bool, primary: bool| {
+            div()
+                .id(id)
+                .accessible_button(label, theme.accent)
+                .px(px(10.0))
+                .h(px(28.0))
+                .rounded(px(6.0))
+                .flex()
+                .items_center()
+                .when(primary, |el| el.bg(theme.accent.opacity(0.16)))
+                .when(enabled, |el| {
+                    el.cursor_pointer().hover(move |style| {
+                        style.bg(if primary {
+                            theme.accent.opacity(0.24)
+                        } else {
+                            crate::theme::ink(0.06)
+                        })
+                    })
+                })
+                .when(!enabled, |el| el.opacity(0.5))
+                .child(label)
+        };
+        panel
+            .when_some(self.context_error.clone(), |panel, error| {
+                panel.child(
+                    div()
+                        .text_size(crate::typography::ui_rems(10.0))
+                        .line_height(px(16.0))
+                        .text_color(theme.readable_tone(theme.danger_muted, 1.0))
+                        .child(SharedString::from(error)),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap(px(8.0))
+                    .child(
+                        button("provider-switch-cancel", "Cancel", true, false).on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.cancel_provider_switch_confirmation();
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child({
+                        let primary =
+                            button("provider-switch-confirm", primary_label, can_primary, true);
+                        if can_primary {
+                            primary.on_click(cx.listener(move |this, _, _, cx| {
+                                this.switch_primary(target, cx);
+                            }))
+                        } else {
+                            primary
+                        }
+                    }),
+            )
+    }
+
+    /// Recent transfer receipts in the context tray (newest first).
+    fn tray_transfers(&self, cx: &App) -> Vec<luna_proto::ContextTransferReceipt> {
+        let state = self.state.read(cx);
+        let mut receipts = self
+            .binding
+            .context_control(state)
+            .context_transfers
+            .clone();
+        receipts.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        receipts.truncate(2);
+        receipts
+    }
+
+    /// Open a receipt's Details and read its omitted items.
+    fn open_transfer_details(
+        &mut self,
+        receipt: luna_proto::ContextTransferReceipt,
+        cx: &mut Context<Self>,
+    ) {
+        let (chat_id, generation) = {
+            let state = self.state.read(cx);
+            (
+                self.binding.chat_id(state).map(str::to_string),
+                state.engine_generation(),
+            )
+        };
+        let Some(chat_id) = chat_id else {
+            return;
+        };
+        self.transfer_details = Some(crate::context_transfer::TransferDetails::new(
+            chat_id, generation, receipt,
+        ));
+        self.load_transfer_items(cx);
+        cx.notify();
+    }
+
+    fn load_transfer_items(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        let Some(details) = self.transfer_details.as_mut() else {
+            return;
+        };
+        let Some(offset) = details.next_offset.filter(|_| !details.loading) else {
+            return;
+        };
+        details.loading = true;
+        details.error = None;
+        let (task_id, transfer_id, generation) = (
+            details.task_id.clone(),
+            details.receipt.id.clone(),
+            details.engine_generation,
+        );
+        self.transfer_details_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::context_transfer::read_items(
+                engine,
+                task_id.clone(),
+                transfer_id.clone(),
+                offset,
+            )
+            .await;
+            this.update(cx, |pickers, cx| {
+                let current = {
+                    let state = pickers.state.read(cx);
+                    state.engine_generation() == generation
+                        && pickers.binding.chat_id(state) == Some(task_id.as_str())
+                };
+                if let Some(details) = pickers
+                    .transfer_details
+                    .as_mut()
+                    .filter(|details| current && details.receipt.id == transfer_id)
+                {
+                    details.loading = false;
+                    match result {
+                        Ok((items, next)) => {
+                            details.items.extend(
+                                items
+                                    .into_iter()
+                                    .map(crate::context_transfer::DetailItem::new),
+                            );
+                            details.next_offset = next;
+                        }
+                        Err(error) => details.error = Some(error),
+                    }
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Read more of omitted item `index`, exactly from the cursor its last
+    /// segment returned; only that item's next segment is appended.
+    fn read_more_transfer_item(&mut self, index: usize, cx: &mut Context<Self>) -> bool {
+        let Some(engine) = self.engine(cx) else {
+            return false;
+        };
+        let Some(details) = self.transfer_details.as_mut() else {
+            return false;
+        };
+        let Some(item) = details
+            .items
+            .get_mut(index)
+            .filter(|item| item.can_read_more())
+        else {
+            return false;
+        };
+        let Some(offset) = item.view.next_text_offset else {
+            return false;
+        };
+        item.reading = true;
+        let message_id = item.view.message_id.clone();
+        let (task_id, transfer_id, generation) = (
+            details.task_id.clone(),
+            details.receipt.id.clone(),
+            details.engine_generation,
+        );
+        self.transfer_details_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::context_transfer::read_item_segment(
+                engine,
+                task_id.clone(),
+                transfer_id.clone(),
+                message_id.clone(),
+                offset,
+            )
+            .await;
+            this.update(cx, |pickers, cx| {
+                let current = {
+                    let state = pickers.state.read(cx);
+                    state.engine_generation() == generation
+                        && pickers.binding.chat_id(state) == Some(task_id.as_str())
+                };
+                // The same Details (task, transfer, connection), the same item,
+                // still waiting at this cursor.
+                let Some(item) = pickers
+                    .transfer_details
+                    .as_mut()
+                    .filter(|details| {
+                        current && details.receipt.id == transfer_id && details.task_id == task_id
+                    })
+                    .and_then(|details| details.items.get_mut(index))
+                    .filter(|item| {
+                        item.view.message_id == message_id
+                            && item.reading
+                            && item.view.next_text_offset == Some(offset)
+                    })
+                else {
+                    return;
+                };
+                match result {
+                    Ok(next) => item.append(offset, next),
+                    Err(error) => {
+                        item.reading = false;
+                        item.error = Some(error);
+                    }
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+        true
+    }
+
+    /// Re-read the receipt's status from its host (unknown is never resent).
+    fn check_transfer_receipt(&mut self, cx: &mut Context<Self>) {
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        let Some(details) = self
+            .transfer_details
+            .as_mut()
+            .filter(|details| !details.checking)
+        else {
+            return;
+        };
+        details.checking = true;
+        let (task_id, transfer_id, generation) = (
+            details.task_id.clone(),
+            details.receipt.id.clone(),
+            details.engine_generation,
+        );
+        self.transfer_details_task = Some(cx.spawn(async move |this, cx| {
+            let result = crate::context_transfer::list_receipts(engine, task_id.clone()).await;
+            this.update(cx, |pickers, cx| {
+                let current = {
+                    let state = pickers.state.read(cx);
+                    state.engine_generation() == generation
+                        && pickers.binding.chat_id(state) == Some(task_id.as_str())
+                };
+                if let Some(details) = pickers
+                    .transfer_details
+                    .as_mut()
+                    .filter(|details| current && details.receipt.id == transfer_id)
+                {
+                    details.checking = false;
+                    match result {
+                        Ok(receipts) => {
+                            if let Some(receipt) = receipts
+                                .into_iter()
+                                .find(|receipt| receipt.id == transfer_id)
+                            {
+                                details.receipt = receipt;
+                            }
+                        }
+                        Err(error) => details.error = Some(error),
+                    }
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    /// A receipt's Details: kind, direction, status, counts, the host's
+    /// reason, and omitted items read from the source (or unavailable).
+    fn render_transfer_details(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let Some(details) = self.transfer_details.clone() else {
+            return div().id("empty-transfer-details");
+        };
+        let muted = theme.readable_muted(0.7);
+        let small = |text: String, color: gpui::Hsla| {
+            div()
+                .text_size(crate::typography::ui_rems(11.0))
+                .line_height(px(16.0))
+                .text_color(color)
+                .child(SharedString::from(text))
+        };
+        let receipt = &details.receipt;
+        let line =
+            crate::context_transfer::receipt_line(self.state.read(cx), receipt, &details.task_id);
+        let items: Vec<AnyElement> = details
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let view = &item.view;
+                let mut row = div().flex().flex_col().gap(px(2.0));
+                row = match (&view.text, view.available || item.segment_starts.len() > 1) {
+                    (Some(text), true) => {
+                        row.child(small(format!("{} · {text}", view.role), theme.text))
+                    }
+                    _ => row.child(small(
+                        format!(
+                            "{} · Unavailable{}",
+                            view.role,
+                            view.reason
+                                .as_deref()
+                                .map(|reason| format!(": {reason}"))
+                                .unwrap_or_default()
+                        ),
+                        theme.text,
+                    )),
+                };
+                // An excerpt is never presented as the whole message.
+                if view.truncated && view.text.is_some() {
+                    row = row.child(small("Excerpt. More of this message exists.".into(), muted));
+                }
+                if let Some(error) = &item.error {
+                    row = row.child(small(error.clone(), theme.warning));
+                }
+                if item.can_read_more() {
+                    row = row.child(
+                        div()
+                            .id(("transfer-read-more", index))
+                            .accessible_button("Read more of this message", theme.accent)
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.accent)
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.read_more_transfer_item(index, cx);
+                            }))
+                            .child("Read more"),
+                    );
+                } else if item.reading {
+                    row = row.child(small("Reading…".into(), muted));
+                }
+                row.into_any_element()
+            })
+            .collect();
+        let unknown = receipt.status == luna_proto::ContextTransferStatus::Unknown;
+        let mut panel = div()
+            .id("transfer-details")
+            .p(px(14.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                div()
+                    .text_size(crate::typography::ui_rems(13.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(SharedString::from(crate::context_transfer::kind_label(
+                        receipt.kind,
+                    ))),
+            )
+            .child(small(line, theme.text))
+            .child(small(
+                format!(
+                    "{} included · {} left out · about {} tokens",
+                    receipt.included_message_ids.len(),
+                    receipt.omitted_message_ids.len(),
+                    receipt.estimated_tokens
+                ),
+                muted,
+            ));
+        if let Some(reason) = receipt
+            .reason
+            .as_deref()
+            .filter(|reason| !reason.trim().is_empty())
+        {
+            panel = panel.child(small(reason.to_string(), muted));
+        }
+        if !receipt.omitted_message_ids.is_empty() {
+            panel = panel
+                .child(small("Left out (read from the source):".into(), muted))
+                .child(
+                    div()
+                        .id("transfer-details-items")
+                        .max_h(px(180.0))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .children(items),
+                );
+            if details.next_offset.is_some() && !details.loading {
+                panel = panel.child(
+                    div()
+                        .id("transfer-details-more")
+                        .accessible_button("Show more left-out messages", theme.accent)
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_color(theme.accent)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.load_transfer_items(cx)))
+                        .child("Show more"),
+                );
+            }
+        }
+        if details.loading {
+            panel = panel.child(small("Reading the source…".into(), muted));
+        }
+        if let Some(error) = details.error {
+            panel = panel.child(small(error, theme.readable_tone(theme.danger_muted, 1.0)));
+        }
+        let mut actions = div().flex().justify_end().gap(px(8.0)).child(
+            div()
+                .id("transfer-details-back")
+                .accessible_button("Back", theme.accent)
+                .px(px(10.0))
+                .h(px(28.0))
+                .rounded(px(6.0))
+                .flex()
+                .items_center()
+                .cursor_pointer()
+                .hover(|style| style.bg(crate::theme::ink(0.06)))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.transfer_details = None;
+                    this.transfer_details_task = None;
+                    cx.notify();
+                }))
+                .child("Back"),
+        );
+        if unknown {
+            actions = actions.child(
+                div()
+                    .id("transfer-details-check")
+                    .accessible_button("Check status", theme.accent)
+                    .px(px(10.0))
+                    .h(px(28.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .bg(theme.accent.opacity(0.16))
+                    .when(!details.checking, |el| {
+                        el.cursor_pointer()
+                            .on_click(cx.listener(|this, _, _, cx| this.check_transfer_receipt(cx)))
+                    })
+                    .when(details.checking, |el| el.opacity(0.5))
+                    .child(if details.checking {
+                        "Checking…"
+                    } else {
+                        "Check status"
+                    }),
+            );
+        }
+        panel.child(actions)
+    }
+
     fn render_context_controls(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
         let harness = self.effective_harness(cx);
@@ -6116,6 +7218,49 @@ impl Pickers {
                     .text_color(theme.text_muted),
             )
             .child(clear_label);
+        // Recent context transfers (receipts), each with its Details.
+        let transfer_rows: Vec<AnyElement> = {
+            let state = self.state.read(cx);
+            let chat = self.binding.chat_id(state).unwrap_or_default().to_string();
+            self.tray_transfers(cx)
+                .into_iter()
+                .enumerate()
+                .map(|(ix, receipt)| {
+                    let line = crate::context_transfer::receipt_line(state, &receipt, &chat);
+                    div()
+                        .id(("context-transfer", ix))
+                        .role(gpui::Role::Button)
+                        .aria_label(SharedString::from(format!("Details: {line}")))
+                        .min_h(px(30.0))
+                        .px(px(8.0))
+                        .py(px(4.0))
+                        .rounded(px(6.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(crate::theme::ink(0.05)))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_transfer_details(receipt.clone(), cx)
+                        }))
+                        .child(
+                            crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
+                                .size(px(13.0))
+                                .flex_none()
+                                .text_color(theme.text_muted),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .line_height(px(15.0))
+                                .child(SharedString::from(line)),
+                        )
+                        .into_any_element()
+                })
+                .collect()
+        };
         div()
             .id("context-controls-tray")
             .flex_none()
@@ -6146,6 +7291,7 @@ impl Pickers {
                 )
             })
             .child(clear)
+            .children(transfer_rows)
             .when_some(self.context_error.clone(), |panel, error| {
                 panel.child(
                     div()

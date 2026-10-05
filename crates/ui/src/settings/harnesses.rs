@@ -1176,6 +1176,9 @@ impl HarnessesPage {
                 "This chat's host doesn't report execution details. Nothing is inferred from this device.",
             )),
         };
+        if let Some(line) = self.last_transfer_line(&focus, cx) {
+            card = card.child(meta_text(theme, format!("Last context transfer: {line}")));
+        }
         // The runtime contract (instructions and tools), as before.
         card = card.child(
             div()
@@ -1276,6 +1279,18 @@ impl HarnessesPage {
         .top_0()
         .left_0()
         .size_full()
+    }
+
+    /// The focused chat's newest context transfer receipt, in words (the same
+    /// line the context tray shows).
+    fn last_transfer_line(&self, focus: &str, cx: &App) -> Option<String> {
+        let state = self.state.read(cx);
+        crate::chat_binding::ChatBinding::Chat(focus.to_string())
+            .context_control(state)
+            .context_transfers
+            .iter()
+            .max_by_key(|receipt| receipt.updated_at_ms)
+            .map(|receipt| crate::context_transfer::receipt_line(state, receipt, focus))
     }
 
     /// A chat's title for the card (never its id).
@@ -2234,6 +2249,7 @@ impl HarnessesPage {
             "steering": summary.map(|(summary, _)| crate::execution_view::steer_label(&summary.steer)),
             "declared": summary.and_then(|(summary, _)| Self::execution_declared(summary)),
             "note": summary.and_then(|(summary, _)| summary.observation_note.clone()),
+            "lastTransfer": focus.as_deref().and_then(|id| self.last_transfer_line(id, cx)),
         })
     }
     /// Install a contract response as if it arrived for `task_id` (a late

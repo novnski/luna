@@ -470,6 +470,11 @@ enum TaskCommandIntent {
     SetModel {
         config: ChatConfig,
     },
+    #[serde(rename_all = "camelCase")]
+    ApplyContextTransfer {
+        request: luna_proto::ContextTransferRequest,
+        preview_id: String,
+    },
     Goal {
         operation: luna_proto::GoalOperation,
     },
@@ -622,6 +627,7 @@ impl TaskCommandIntent {
             Self::SetHost { .. } => "setHost",
             Self::SetConfig { .. } => "setConfig",
             Self::SetModel { .. } => "setModel",
+            Self::ApplyContextTransfer { .. } => "applyContextTransfer",
             Self::Goal { .. } => "goal",
             Self::CompactContext {} => "compactContext",
             Self::ClearContext {} => "clearContext",
@@ -661,6 +667,7 @@ impl TaskCommandIntent {
                     | Self::SetHost { .. }
                     | Self::SetConfig { .. }
                     | Self::SetModel { .. }
+                    | Self::ApplyContextTransfer { .. }
                     | Self::Goal { .. }
                     | Self::CompactContext {}
                     | Self::ClearContext {}
@@ -689,7 +696,8 @@ impl TaskCommandIntent {
     }
 
     fn conflicts_with_active_turn(&self) -> bool {
-        matches!(self, Self::Session { command: SessionCommandPayload::Run { request, .. }, .. } if request.review.is_some())
+        matches!(self, Self::ApplyContextTransfer { request, .. } if request.kind == luna_proto::ContextTransferKind::ProviderHandoff)
+            || matches!(self, Self::Session { command: SessionCommandPayload::Run { request, .. }, .. } if request.review.is_some())
             || matches!(
                 self,
                 Self::SetArchived { .. }
@@ -1233,6 +1241,7 @@ enum MutateParams {
 
 mod claude_goals;
 mod claude_history;
+mod context_transfer;
 mod native_extensions;
 mod prompt_stash;
 mod side_chats;
@@ -4972,6 +4981,28 @@ impl EngineRpc {
         handoff: Option<ContextHandoff>,
         initial_only: bool,
     ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
+        self.apply_context_boundary_with_transfer(
+            command_id,
+            task_id,
+            target_config,
+            kind,
+            handoff,
+            initial_only,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_context_boundary_with_transfer(
+        &self,
+        command_id: &str,
+        task_id: &str,
+        target_config: ChatConfig,
+        kind: ContextBoundaryKind,
+        handoff: Option<ContextHandoff>,
+        initial_only: bool,
+        mut transfer: Option<crate::context_transfers::TransferRecord>,
+    ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
         let handoff = handoff
             .as_ref()
             .map(|handoff| self.visible_handoff(task_id, handoff))
@@ -5019,6 +5050,7 @@ impl EngineRpc {
             .map_err(TaskProjectionError::Mutation)?;
         if kind == ContextBoundaryKind::ProviderSwitched
             && handoff.is_none()
+            && transfer.is_none()
             && recovery.is_none()
             && self
                 .has_pristine_provider_choice(task_id, &chat)
@@ -5062,6 +5094,28 @@ impl EngineRpc {
         let handoff_for_state = handoff.clone();
         let target_for_registry = target_config.clone();
         let cwd_for_registry = cwd.clone();
+        let previous_transfer_receipts = self
+            .doc_host
+            .context_control(task_id)
+            .map_err(TaskProjectionError::Mutation)?
+            .context_transfers;
+        let mut cancelled_transfers = crate::context_transfers::records(&self.store, task_id)
+            .map_err(TaskProjectionError::Mutation)?
+            .into_iter()
+            .filter(|record| {
+                record.receipt.target.task_id == task_id
+                    && matches!(
+                        record.receipt.status,
+                        luna_proto::ContextTransferStatus::Planned
+                            | luna_proto::ContextTransferStatus::Unknown
+                    )
+            })
+            .collect::<Vec<_>>();
+        for record in &mut cancelled_transfers {
+            record.receipt.status = luna_proto::ContextTransferStatus::Failed;
+            record.receipt.updated_at_ms = crate::now_ms();
+            record.receipt.reason = Some("An explicit context boundary discarded this pending transfer; it will not be reinjected.".into());
+        }
         let committed = self.task_identity.begin_fresh_binding_with_command(
             task_id,
             target_provider,
@@ -5077,19 +5131,20 @@ impl EngineRpc {
                     created_at_ms: crate::now_ms(),
                     handoff_kind: handoff_for_state.as_ref().map(|handoff| handoff.kind),
                 };
-                let state = ContextControlState {
+                let mut state = ContextControlState {
                     binding_generation: Some(binding.generation),
                     compact: CompactOperation::default(),
                     last_boundary: Some(boundary),
                     pending_handoff: handoff_for_state.clone(),
                     last_handoff: handoff_for_state.clone(),
+                    context_transfers: previous_transfer_receipts,
                     provider_summary: None,
                     notice: Some(match kind {
                         ContextBoundaryKind::Cleared => {
                             "Old provider context was cleared. The next prompt starts a fresh provider session; LUNA history and files remain."
                                 .into()
                         }
-                        ContextBoundaryKind::ProviderSwitched if handoff_for_state.is_some() => {
+                        ContextBoundaryKind::ProviderSwitched if handoff_for_state.is_some() || transfer.is_some() => {
                             "A fresh provider binding will receive only the selected visible-history handoff."
                                 .into()
                         }
@@ -5099,6 +5154,22 @@ impl EngineRpc {
                     }),
                     ..Default::default()
                 };
+                let mut local_snapshots = Vec::new();
+                for record in cancelled_transfers {
+                    crate::context_transfers::project(&mut state, record.receipt.clone());
+                    local_snapshots.push((crate::context_transfers::key(&record.receipt.id), serde_json::to_vec(&record).map_err(|error| TaskProjectionError::Mutation(error.into()))?));
+                }
+                if let Some(record) = transfer.as_mut() {
+                    record.receipt.target.provider = target_provider;
+                    record.receipt.target.binding_id = Some(binding.binding_id.clone());
+                    record.receipt.target.binding_generation = Some(binding.generation);
+                    record.receipt.target.context_key = crate::context_transfers::context_key(Some(&binding.binding_id), Some(binding.generation), &state).map_err(TaskProjectionError::Mutation)?;
+                    record.target_native_id = None;
+                    crate::context_transfers::project(&mut state, record.receipt.clone());
+                    local_snapshots.extend(crate::context_transfers::snapshots_for_new(&self.store, record).map_err(TaskProjectionError::Mutation)?);
+                }
+                let transfer_marker = transfer.as_ref().map(|record| record.receipt.clone());
+                let snapshot_refs = local_snapshots.iter().map(|(id, bytes)| (id.as_str(), bytes.as_slice())).collect::<Vec<_>>();
                 let boundary_text = state.notice.clone().unwrap_or_default();
                 self.doc_host.commit_context_boundary(
                     task_id,
@@ -5107,7 +5178,7 @@ impl EngineRpc {
                     Some(binding.generation),
                     identity_snapshot,
                     transition.as_ref(),
-                    &[],
+                    &snapshot_refs,
                     &[],
                     move |doc| {
                         doc.clear_context_usage()?;
@@ -5116,6 +5187,9 @@ impl EngineRpc {
                         let mut state = state.clone();
                         state.goal_marks = doc.context_control().goal_marks;
                         doc.set_context_control(&state)?;
+                        if let Some(receipt) = transfer_marker.as_ref() {
+                            self.insert_context_transfer_marker(doc, receipt)?;
+                        }
                         if !doc
                             .read_entries()?
                             .iter()
@@ -6905,6 +6979,9 @@ impl EngineRpc {
             }
             TaskCommandIntent::SetModel { config } => {
                 self.apply_model_change(command_id, task_id, config)
+            }
+            TaskCommandIntent::ApplyContextTransfer { request, preview_id } => {
+                self.apply_context_transfer(command_id, task_id, request, &preview_id)
             }
             TaskCommandIntent::SetConfig { config } => {
                 if self
@@ -8892,6 +8969,9 @@ impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
+        }
+        if context_transfer::handles(method) {
+            return self.handle_context_transfer(method, params);
         }
         if method != methods::WATCH_DOC_MESSAGES
             && params

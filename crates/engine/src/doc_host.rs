@@ -44,6 +44,9 @@ use luna_sync::{
     DocsStore, LocalExecutableChange, LocalExecutableKind, TaskCommandBegin, TaskRecoveryTransition,
 };
 
+#[path = "doc_host_context_transfers.rs"]
+mod context_transfers;
+
 use crate::http_error::describe_http_error;
 use crate::sessions::{SessionsEngine, SteerOutcome};
 use crate::workspace_host::{TaskProjectionError, WorkspaceHost};
@@ -1625,12 +1628,28 @@ impl DocHost {
         let handle = self.open(task_id).ok();
         let mut prepared = None;
         let mut _projection = None;
+        let mut transfer_records = Vec::new();
         if let Some(handle) = handle.as_ref() {
             _projection = Some(lock(&handle.queue_projection_lock));
+            transfer_records = self.confirmed_context_transfer_records(
+                task_id,
+                correlation_id,
+                binding_id,
+                binding_generation,
+                &handle.doc.context_control(),
+            )?;
             let candidate = self.prepare_queue_projection(
                 handle,
                 &format!("correlation:{correlation_id}"),
                 |doc| {
+                    let transfer_changed = !transfer_records.is_empty();
+                    if transfer_changed {
+                        let mut state = doc.context_control();
+                        for record in &transfer_records {
+                            crate::context_transfers::project(&mut state, record.receipt.clone());
+                        }
+                        doc.set_context_control(&state)?;
+                    }
                     let command_id = doc
                         .read_queue()?
                         .into_iter()
@@ -1644,7 +1663,7 @@ impl DocHost {
                             QueueMessageStatus::Held => None,
                         });
                     let Some(command_id) = command_id else {
-                        return Ok(false);
+                        return Ok(transfer_changed);
                     };
                     let matching_receipt = self
                         .inner
@@ -1660,21 +1679,35 @@ impl DocHost {
                                 )
                         });
                     if !matching_receipt {
-                        return Ok(false);
+                        return Ok(transfer_changed);
                     }
                     let changed = doc.settle_queued_claim(correlation_id, &command_id)?;
-                    Ok(changed)
+                    Ok(changed || transfer_changed)
                 },
             )?;
             if candidate.outcome {
                 prepared = Some(candidate);
             }
         }
-        let snapshots = prepared
+        let transfer_snapshots = transfer_records
+            .iter()
+            .map(|record| {
+                Ok((
+                    crate::context_transfers::key(&record.receipt.id),
+                    serde_json::to_vec(record)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, EngineError>>()?;
+        let mut snapshots = prepared
             .as_ref()
             .zip(handle.as_ref())
             .map(|(prepared, handle)| vec![(handle.chat_id.as_str(), prepared.snapshot.as_slice())])
             .unwrap_or_default();
+        snapshots.extend(
+            transfer_snapshots
+                .iter()
+                .map(|(id, bytes)| (id.as_str(), bytes.as_slice())),
+        );
         let updates = prepared
             .as_ref()
             .zip(handle.as_ref())
@@ -7952,7 +7985,7 @@ impl DocHost {
                         .remove_rejected_user_message(message_id, &prompt)?;
                 }
                 Ok((SessionCommandStatus::Rejected, Some(
-                    "settings changed while this turn was running; wait for it to finish or stop it before sending with the new settings".into(),
+                    "execution settings or shared context changed while this turn was running; wait for it to finish or stop it before sending".into(),
                 )))
             }
             SteerOutcome::Rejected => {

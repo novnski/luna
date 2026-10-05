@@ -163,6 +163,10 @@ pub mod methods {
     pub const PREVIEW_WORKSPACE_IDENTITY_REPAIR: &str = "PreviewWorkspaceIdentityRepair";
     /// Redacted, provider-acknowledged LUNA runtime contract for one task.
     pub const GET_RUNTIME_CONTRACT: &str = "GetRuntimeContract";
+    pub const PREVIEW_CONTEXT_TRANSFER: &str = "PreviewContextTransfer";
+    pub const LIST_CONTEXT_TRANSFERS: &str = "ListContextTransfers";
+    pub const GET_CONTEXT_TRANSFER: &str = "GetContextTransfer";
+    pub const READ_CONTEXT_TRANSFER_ITEMS: &str = "ReadContextTransferItems";
     /// LUNA-owned global/project instruction settings, with revision readback.
     pub const GET_INSTRUCTION_SETTINGS: &str = "GetInstructionSettings";
     pub const SET_INSTRUCTION_SETTINGS: &str = "SetInstructionSettings";
@@ -408,6 +412,10 @@ pub mod methods {
         GET_TASK_IDENTITY,
         PREVIEW_WORKSPACE_IDENTITY_REPAIR,
         GET_RUNTIME_CONTRACT,
+        PREVIEW_CONTEXT_TRANSFER,
+        LIST_CONTEXT_TRANSFERS,
+        GET_CONTEXT_TRANSFER,
+        READ_CONTEXT_TRANSFER_ITEMS,
         GET_INSTRUCTION_SETTINGS,
         SET_INSTRUCTION_SETTINGS,
         GET_INTEGRATION_INVENTORY,

@@ -75,6 +75,7 @@ mod activity_center;
 mod agents;
 mod child_chats;
 mod command_palette;
+mod findings;
 mod native_file_rewind;
 mod native_review;
 mod pane_chat;
@@ -2267,6 +2268,8 @@ pub struct Shell {
     native_review_dialog: Option<native_review::NativeReviewDialog>,
     native_review_task: Option<Task<()>>,
     history_fork_dialog: Option<HistoryForkDialog>,
+    /// "Send findings to {source}" (slice 2), while open.
+    transfer_dialog: Option<findings::TransferDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
     conversation_rewind_dialog: Option<ConversationRewindDialog>,
     history_recovery_dialog: Option<HistoryRecoveryDialog>,
@@ -2791,6 +2794,7 @@ impl Shell {
             native_review_dialog: None,
             native_review_task: None,
             history_fork_dialog: None,
+            transfer_dialog: None,
             edit_earlier_message_dialog: None,
             conversation_rewind_dialog: None,
             history_recovery_dialog: None,
@@ -6956,6 +6960,7 @@ impl Shell {
         self.command_palette.is_some()
             || self.add_space.is_some()
             || self.workbench.chooser.is_some()
+            || self.transfer_dialog.is_some()
             || self
                 .visible_pickers(cx)
                 .iter()
@@ -10807,6 +10812,10 @@ impl Shell {
             self.cancel_history_flow(cx);
             return true;
         }
+        if self.transfer_dialog.is_some() {
+            self.close_transfer_dialog(cx);
+            return true;
+        }
         if self.history_fork_dialog.is_some() {
             self.cancel_history_flow(cx);
             return true;
@@ -11080,6 +11089,16 @@ impl Shell {
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();
             let recover_task_id = chat_id.clone();
+            // A fork whose source is alive can send its findings back.
+            let findings_fork = self
+                .findings_destination(&chat_id, cx)
+                .map(|_| chat_id.clone());
+            // A host with explicit transfers previews a new task with context
+            // (the row below takes it when there is no native fork; otherwise
+            // it gets its own row).
+            let portable_source = (native_history_fork
+                && self.new_task_with_context_available(&chat_id, cx))
+            .then(|| chat_id.clone());
             let menu = popover::popover_card(&theme)
                 .w(px(216.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
@@ -11226,8 +11245,15 @@ impl Shell {
                             })
                             .when(!native_history_fork, |row| {
                                 row.on_click(cx.listener(move |this, _, _, cx| {
-                                    this.close_chat_menu(cx);
-                                    this.start_new_task_with_context(&context_task_id, cx);
+                                    if this.new_task_with_context_available(&context_task_id, cx) {
+                                        this.open_new_task_with_context(
+                                            context_task_id.clone(),
+                                            cx,
+                                        );
+                                    } else {
+                                        this.close_chat_menu(cx);
+                                        this.start_new_task_with_context(&context_task_id, cx);
+                                    }
                                 }))
                             })
                             .child(
@@ -11241,6 +11267,44 @@ impl Shell {
                                 "Start new task with context…"
                             })),
                     )
+                    .when_some(portable_source, |menu, source| {
+                        menu.child(
+                            popover::menu_row(
+                                &theme,
+                                false,
+                                format!("chat-menu-portable-{chat_id}"),
+                            )
+                            .id("chat-menu-portable")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_new_task_with_context(source.clone(), cx);
+                            }))
+                            .child(
+                                icon(icons::GIT_BRANCH)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from("Start new task with context…")),
+                        )
+                    })
+                    .when_some(findings_fork, |menu, fork| {
+                        menu.child(
+                            popover::menu_row(
+                                &theme,
+                                false,
+                                format!("chat-menu-findings-{chat_id}"),
+                            )
+                            .id("chat-menu-findings")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_findings_dialog(fork.clone(), cx);
+                            }))
+                            .child(
+                                icon(icons::QUEUE_SEND)
+                                    .size(px(16.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(SharedString::from("Send findings to source…")),
+                        )
+                    })
                     .child(
                         popover::menu_row(&theme, false, format!("chat-menu-recover-{chat_id}"))
                             .id("chat-menu-recover")
@@ -11454,6 +11518,9 @@ impl Shell {
                 )
                 .into_any_element();
             overlays.push(popover::modal("rename-chat-dialog", viewport, card));
+        }
+        if let Some(card) = self.render_findings_card(window, cx) {
+            overlays.push(popover::modal("findings-dialog-modal", viewport, card));
         }
 
         if let Some(dialog) = &mut self.history_fork_dialog {

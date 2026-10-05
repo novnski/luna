@@ -127,6 +127,7 @@ mod claude_ongoing;
 mod claude_peers;
 mod command_scope;
 pub mod context_controls;
+pub(crate) mod context_transfers;
 pub mod credentials;
 pub mod cross_task_tools;
 mod device_write;

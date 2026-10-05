@@ -2133,6 +2133,21 @@ impl Shell {
                 )),
             );
         }
+        // A fork (by lineage) can send its findings back to its source.
+        if self.findings_destination(&menu.chat_id, cx).is_some() {
+            let fork = menu.chat_id.clone();
+            card = card.child(
+                row(
+                    "wb-menu-send-findings",
+                    icons::QUEUE_SEND,
+                    "Send findings to source…",
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.close_workbench_menu(cx);
+                    this.open_findings_dialog(fork.clone(), cx);
+                })),
+            );
+        }
         // Any thread but Main (a fork too) can become its own workbench Main.
         if role != TabRole::Main {
             let chat = menu.chat_id.clone();
