@@ -152,6 +152,46 @@ impl EngineRpc {
             config.reasoning = Some(reasoning);
         }
         config.model_options = request.model_options.clone();
+        if provider != HarnessId::Mock {
+            let saved = self
+                .provider_defaults
+                .as_ref()
+                .map(|service| service.get())
+                .transpose()?
+                .unwrap_or_default();
+            let defaults = saved.providers.get(&provider).cloned().unwrap_or_default();
+            let uses_default_model =
+                request.model.is_none() || request.model.as_ref() == defaults.model.as_ref();
+            config.model = request.model.clone().or(defaults.model);
+            config.reasoning = request.reasoning.or(if uses_default_model {
+                defaults.reasoning
+            } else {
+                None
+            });
+            config.model_options = if uses_default_model {
+                defaults.model_options
+            } else {
+                Default::default()
+            };
+            config.model_options.extend(request.model_options.clone());
+        }
+        if matches!(provider, HarnessId::Codex | HarnessId::ClaudeCode) {
+            config.provider_account_id = Some(
+                self.agent_accounts
+                    .resolve_execution(provider, config.provider_account_id.as_deref())?
+                    .account_id,
+            );
+        }
+        Ok(config)
+    }
+
+    fn child_access_config(
+        &self,
+        parent: &ChatConfig,
+        request: &CreateChildThreadRequest,
+        mut config: ChatConfig,
+    ) -> Result<ChatConfig, crate::EngineError> {
+        let provider = config.harness;
         config.permission_audit.clear();
         let capabilities =
             crate::permissions::provider_capabilities_for(provider, config.model.as_deref());
@@ -189,13 +229,6 @@ impl EngineRpc {
         {
             return Err(crate::EngineError::Other("This provider cannot preserve the parent's read-only sandbox; choose a compatible provider or request an explicit access grant".into()));
         }
-        if matches!(provider, HarnessId::Codex | HarnessId::ClaudeCode) {
-            config.provider_account_id = Some(
-                self.agent_accounts
-                    .resolve_execution(provider, config.provider_account_id.as_deref())?
-                    .account_id,
-            );
-        }
         Ok(config)
     }
 
@@ -226,18 +259,32 @@ impl EngineRpc {
         let parent_config = parent.config.as_ref().ok_or_else(|| {
             crate::EngineError::Other("Parent execution configuration is unavailable".into())
         })?;
-        let config = self.child_base_config(parent_config, request)?;
-        if request.model.is_some()
+        let mut config = self.child_base_config(parent_config, request)?;
+        if config.harness != HarnessId::Mock
+            || request.model.is_some()
             || request.reasoning.is_some()
             || !request.model_options.is_empty()
         {
-            let selected = config.model.as_deref().ok_or_else(|| crate::EngineError::Other("Choose an explicit model before setting reasoning or model options for another provider; use list_child_models".into()))?;
             let models = self
                 .model_cache
                 .list(config.harness, config.provider_account_id.as_deref(), false)
                 .await
                 .map_err(crate::EngineError::Other)?;
+            if config.model.is_none() {
+                config.model = models.first().map(|model| model.id.clone());
+            }
+            let selected = config.model.as_deref().ok_or_else(|| {
+                crate::EngineError::Other(
+                    "No model is available for this provider; use list_child_models".into(),
+                )
+            })?;
             let model = models.iter().find(|model| model.id == selected).ok_or_else(|| crate::EngineError::Other(format!("Model {selected:?} is unavailable for {:?}; use list_child_models to choose a supported model", config.harness)))?;
+            config.reasoning = config
+                .reasoning
+                .or_else(|| luna_proto::default_reasoning_level(&model.reasoning_levels));
+            let mut options = luna_proto::default_model_options(model);
+            options.extend(config.model_options);
+            config.model_options = options;
             if let Some(reasoning) = config.reasoning
                 && !model.reasoning_levels.contains(&reasoning)
             {
@@ -245,7 +292,7 @@ impl EngineRpc {
                     "Model {selected:?} does not support {reasoning:?} reasoning; use list_child_models for its supported levels"
                 )));
             }
-            for (key, value) in &request.model_options {
+            for (key, value) in &config.model_options {
                 let option = model
                     .options
                     .iter()
@@ -272,7 +319,7 @@ impl EngineRpc {
                 }
             }
         }
-        Ok(config)
+        self.child_access_config(parent_config, request, config)
     }
 
     pub(super) async fn child_models(
@@ -569,6 +616,11 @@ impl EngineRpc {
         crate::cross_task_tools::validate_child_tab_request(&request)
             .map_err(|error| RpcError::Failed(error.to_string()))?;
         let child_id = child_task_id(&parent_id, &request.idempotency_key);
+        let mut execution = self
+            .workspace
+            .chat(&child_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .and_then(|chat| chat.config);
         if self
             .store
             .task_command_receipt(&format!("child-create:{child_id}"))
@@ -578,9 +630,11 @@ impl EngineRpc {
             let before = self
                 .validate_child_parent(&parent_id)
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
-            self.prepare_child_execution_kind(&parent_id, &request, true)
-                .await
-                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            execution = Some(
+                self.prepare_child_execution_kind(&parent_id, &request, true)
+                    .await
+                    .map_err(|error| RpcError::Failed(error.to_string()))?,
+            );
             let current = self
                 .validate_child_parent(&parent_id)
                 .map_err(|error| RpcError::Failed(error.to_string()))?;
@@ -606,6 +660,7 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id: parent_id.clone(),
                 request,
+                execution,
                 access_grant: None,
                 draft: true,
             },
@@ -628,6 +683,7 @@ impl EngineRpc {
             .as_ref()
             .ok_or_else(|| RpcError::Failed("Created child lineage is unavailable".into()))?;
         Ok(ChildThreadReceipt {
+            placement: Some(self.place_child_in_background(&parent_id, &child_id)),
             task_id: child_id.clone(),
             parent_task_id: parent_id,
             command: receipt,
@@ -651,15 +707,22 @@ impl EngineRpc {
         request: CreateChildThreadRequest,
     ) -> Result<ChildThreadReceipt, RpcError> {
         let child_id = child_task_id(&parent_id, &request.idempotency_key);
+        let mut execution = self
+            .workspace
+            .chat(&child_id)
+            .map_err(|error| RpcError::Failed(error.to_string()))?
+            .and_then(|chat| chat.config);
         if self
             .store
             .task_command_receipt(&format!("child-create:{child_id}"))
             .map_err(|error| RpcError::Failed(error.to_string()))?
             .is_none()
         {
-            self.prepare_child_execution(&parent_id, &request)
-                .await
-                .map_err(|error| RpcError::Failed(error.to_string()))?;
+            execution = Some(
+                self.prepare_child_execution(&parent_id, &request)
+                    .await
+                    .map_err(|error| RpcError::Failed(error.to_string()))?,
+            );
         }
         // The dialog is the user's own explicit choice. Only a request that
         // names an access level carries the grant marker, so legacy payloads
@@ -676,6 +739,7 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id: parent_id.clone(),
                 request,
+                execution,
                 access_grant,
                 draft: false,
             },
@@ -700,6 +764,7 @@ impl EngineRpc {
             RpcError::Failed("Child projection is unavailable; inspect the same request ID".into())
         })?;
         Ok(ChildThreadReceipt {
+            placement: Some(self.place_child_in_background(&parent_id, &child_id)),
             task_id: child_id.clone(),
             parent_task_id: parent_id,
             command: receipt,
@@ -749,6 +814,7 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id: authority.caller_task_id.clone(),
                 request,
+                execution: None,
                 draft: false,
                 access_grant: fence
                     .access_granted
@@ -782,6 +848,7 @@ impl EngineRpc {
             .child_thread
             .ok_or(CrossTaskError::InvalidBackendResult)?;
         Ok(ChildThreadReceipt {
+            placement: Some(self.place_child_in_background(&authority.caller_task_id, &child_id)),
             task_id: child_id.clone(),
             parent_task_id: authority.caller_task_id.clone(),
             command: receipt,
@@ -799,6 +866,7 @@ impl EngineRpc {
         task_id: &str,
         parent_id: &str,
         request: CreateChildThreadRequest,
+        execution: Option<&ChatConfig>,
         access_grant: Option<ChildAccessGrant>,
         draft: bool,
         fence: Option<&ApprovedSendFence>,
@@ -836,10 +904,18 @@ impl EngineRpc {
         // command field. Retries keep the original request hash; an already
         // committed child keeps its own persisted selection.
         let ceiling = parent_config.effective_permission_mode;
-        let mut config = match fence.and_then(|fence| fence.child_execution.as_ref()) {
+        let mut config = match fence
+            .and_then(|fence| fence.child_execution.as_ref())
+            .or(execution)
+        {
             Some(config) => config.clone(),
             None => self
-                .child_base_config(&parent_config, &request)
+                .child_access_config(
+                    &parent_config,
+                    &request,
+                    self.child_base_config(&parent_config, &request)
+                        .map_err(TaskProjectionError::Mutation)?,
+                )
                 .map_err(TaskProjectionError::Mutation)?,
         };
         if config.harness != request.provider.unwrap_or(parent_config.harness) {

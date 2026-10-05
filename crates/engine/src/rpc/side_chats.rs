@@ -20,6 +20,20 @@ impl EngineRpc {
         method: &str,
         params: serde_json::Value,
     ) -> Result<RpcReply, RpcError> {
+        self.handle_side_chat_with_fence(method, params, None).await
+    }
+
+    pub(super) async fn handle_side_chat_with_fence(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+        fence: Option<&crate::cross_task_tools::ApprovedSendFence>,
+    ) -> Result<RpcReply, RpcError> {
+        if let Some(fence) = fence {
+            self.sessions
+                .with_live_approved_send(fence, || Ok(()))
+                .map_err(|error| RpcError::Failed(error.to_string()))?;
+        }
         // Side chats are local to the owning profile. Never ignore an explicit
         // remote target and accidentally create a local provider session.
         if params
@@ -129,7 +143,26 @@ impl EngineRpc {
                             "lineage":{"sourceTaskId":p.parent_id,"lifecycleOwnerTaskId":id}
                         }
                     }))?;
-                    return match self.execute_task_command(command, false).await {
+                    // A portable fork creates a new task; fence both the source
+                    // context and the new task's command admission.
+                    let mut creation_fence = fence.cloned();
+                    if let Some(source_fence) = fence {
+                        self.sessions
+                            .with_live_approved_send(source_fence, || Ok(()))
+                            .map_err(|error| RpcError::Failed(error.to_string()))?;
+                    }
+                    if let Some(fence) = &mut creation_fence {
+                        fence.request.task_id = id.clone();
+                        fence.target_snapshot = self.current_task_command_snapshot(&id)?;
+                    }
+                    return match self
+                        .execute_task_command_with_send_fence(
+                            command,
+                            false,
+                            creation_fence.as_ref(),
+                        )
+                        .await
+                    {
                         Ok(receipt)
                             if receipt.status == luna_proto::CommandReceiptStatus::Applied =>
                         {
@@ -197,7 +230,9 @@ impl EngineRpc {
                         }
                     }
                 }))?;
-                let result = self.execute_task_command(command, false).await;
+                let result = self
+                    .execute_task_command_with_send_fence(command, false, fence)
+                    .await;
                 match result {
                     Ok(receipt) if receipt.status == luna_proto::CommandReceiptStatus::Applied => {
                         RpcReply::value(&service.activate(&id).await.map_err(fail)?)

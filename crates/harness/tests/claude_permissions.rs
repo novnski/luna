@@ -371,23 +371,9 @@ async fn subagent_requests_reach_the_user_and_mcp_context_is_kept() {
 
 #[tokio::test]
 async fn full_mode_allows_once_but_never_plan_or_interactive_tools() {
-    let mut run = start("full-mode", PermissionMode::Full, "").await;
-    // Only the user's own ask rule reaches the user in Full.
-    let (questions, tx) = run.next().await;
-    let question = &questions[0];
-    let approval = question.approval.as_ref().unwrap();
-    assert_eq!(approval.provider_request_id, "cc03-r12");
-    assert!(
-        approval
-            .details
-            .as_ref()
-            .unwrap()
-            .reason
-            .as_deref()
-            .unwrap()
-            .contains("Your ask rule (userSettings) requires a prompt: Bash(git push:*)")
-    );
-    answer(tx, question, "Allow once");
+    let run = start("full-mode", PermissionMode::Full, "").await;
+    // Full resolves ordinary and matched-ask-rule permission requests once.
+    // finish() rejects any question reaching the UI bridge.
     let (events, log) = run.finish().await;
     assert_verified(&events, &log, "full-mode");
 }

@@ -207,6 +207,7 @@ impl LoginFlow {
 }
 
 pub struct AccountsPage {
+    defaults_panel: Entity<super::provider_defaults::ProviderDefaultsPanel>,
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
     /// Which device's logins are shown; `None` = this device (no passthrough).
@@ -246,6 +247,8 @@ pub struct AccountsPage {
 impl AccountsPage {
     pub fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
         self.load(true, cx);
+        self.defaults_panel
+            .update(cx, |panel, cx| panel.refresh(cx));
     }
 
     pub fn provider_update_statuses(&self) -> Option<Vec<ProviderUpdateStatus>> {
@@ -368,6 +371,8 @@ impl AccountsPage {
             }
         });
         Self {
+            defaults_panel: cx
+                .new(|cx| super::provider_defaults::ProviderDefaultsPanel::new(state.clone(), cx)),
             state,
             scroll: widgets::PageScroll::default(),
             target_device: None,
@@ -2261,6 +2266,12 @@ impl Render for AccountsPage {
                             .when_some(self.update_message.clone(), |el, message| {
                                 el.child(widgets::warning_strip(&theme, message))
                             })
+                            .when(
+                                self.target_device.as_deref().is_none_or(|id| {
+                                    self.state.read(cx).local_device_id.as_deref() == Some(id)
+                                }),
+                                |element| element.child(self.defaults_panel.clone()),
+                            )
                             .children(sections)
                             .child(
                                 widgets::ghost_action(&theme)

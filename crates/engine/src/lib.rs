@@ -151,6 +151,7 @@ mod native_tasks;
 pub mod permissions;
 pub mod profile;
 pub mod project_commands;
+mod provider_defaults;
 mod provider_inputs;
 mod provider_updates;
 pub mod recovery;
@@ -298,6 +299,7 @@ impl std::fmt::Debug for EngineConfig {
 /// The assembled engine core — also constructible without the IPC server for tests
 /// and the in-process (headed) mode.
 pub struct EngineCore {
+    provider_defaults: provider_defaults::ProviderDefaults,
     chat_workbenches: chat_workbench::ChatWorkbenches,
     github_pr: source_control::pull_requests::GitHubPullRequests,
     backup_control: Option<backup_control::BackupControl>,
@@ -688,7 +690,10 @@ impl EngineCore {
         ));
         let chat_workbenches =
             chat_workbench::ChatWorkbenches::open(profile.store_root(), device_write.handle())?;
+        let provider_defaults =
+            provider_defaults::ProviderDefaults::open(profile.store_root(), device_write.handle())?;
         Ok(Self {
+            provider_defaults,
             chat_workbenches,
             github_pr,
             side_chats,
@@ -904,7 +909,8 @@ impl EngineCore {
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
         .with_github_pr(self.github_pr.clone())
-        .with_side_chats(self.side_chats.clone());
+        .with_side_chats(self.side_chats.clone())
+        .with_provider_defaults(self.provider_defaults.clone());
         if include_backup {
             // Saved shell commands are a local desktop workflow, never relay RPCs.
             rpc = rpc.with_project_commands(self.project_commands.clone());

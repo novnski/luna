@@ -26,6 +26,7 @@ pub mod harnesses;
 pub mod native_extensions;
 pub mod notifications;
 pub mod project_defaults;
+pub mod provider_defaults;
 pub mod shortcuts;
 pub mod widgets;
 

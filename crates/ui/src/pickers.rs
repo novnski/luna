@@ -353,19 +353,9 @@ pub fn default_model(models: &[Model]) -> Option<&Model> {
     models.first()
 }
 
-/// A model's default reasoning: X-High when the ladder offers it (luna
-/// `DEFAULT_REASONING = "xhigh"`), else High, else the ladder's first entry.
-/// `None` only for ladder-less models (e.g. Haiku's thinking toggle instead).
+/// LUNA's default reasoning: High when supported, then Medium, then the first level.
 pub fn default_reasoning(ladder: &[ReasoningLevel]) -> Option<ReasoningLevel> {
-    // The recommended default is High (user-corrected — not X-High globally);
-    // fall to Medium then the ladder's first entry for shorter ladders.
-    if ladder.contains(&ReasoningLevel::High) {
-        return Some(ReasoningLevel::High);
-    }
-    if ladder.contains(&ReasoningLevel::Medium) {
-        return Some(ReasoningLevel::Medium);
-    }
-    ladder.first().copied()
+    luna_proto::default_reasoning_level(ladder)
 }
 
 /// Clamp a picked/remembered level to what the model actually offers: keep it
@@ -1685,6 +1675,28 @@ impl Pickers {
 
     pub fn permission_run_block_reason(&self, cx: &App) -> Option<String> {
         if self.binding.chat_id(self.state.read(cx)).is_none() {
+            let state = self.state.read(cx);
+            if state.engine().is_some()
+                && self.binding.device_id(state).as_deref() == state.local_device_id.as_deref()
+            {
+                if let Some(error) = &state.provider_defaults_error {
+                    return Some(format!(
+                        "Agent defaults could not load: {error}. Reload them in Providers settings."
+                    ));
+                }
+                if !state.provider_defaults_loaded {
+                    return Some("Loading saved agent defaults…".into());
+                }
+                if let Some(harness) = self.effective_harness(cx)
+                    && let Some(id) = self.effective_model_id(cx)
+                {
+                    match self.models.get(&harness).and_then(Loadable::ready) {
+                        None => return Some("Loading the selected model. Open the model picker to refresh.".into()),
+                        Some(models) if !models.iter().any(|model|model.id == id) => return Some("The selected model is unavailable. Choose another model or update Providers settings.".into()),
+                        _ => {}
+                    }
+                }
+            }
             if let Err(reason) = self.project_defaults.validate() {
                 return Some(reason.into());
             }
@@ -1707,15 +1719,6 @@ impl Pickers {
                         _ => {}
                     }
                 }
-            }
-            if self.project_defaults.permission_mode == Some(PermissionMode::Full)
-                && self.requested_permission_mode(cx) == PermissionMode::Full
-                && !self
-                    .defaults
-                    .confirmed_full_machines
-                    .contains(&self.permission_machine(cx).0)
-            {
-                return Some("Confirm Full access for this machine in the permissions picker before starting this task.".into());
             }
             if self.config.checkout == CheckoutKind::NewWorktree
                 && !self.binding.space_git(self.state.read(cx))
@@ -1761,8 +1764,43 @@ impl Pickers {
         )
     }
 
-    /// Effective model id: the draft pick, the selected chat's config, or (on
-    /// the new-chat canvas) the remembered last-used model for the harness.
+    fn fresh_provider_defaults<'a>(
+        &'a self,
+        cx: &'a App,
+    ) -> Option<&'a luna_proto::ProviderExecutionDefault> {
+        let state = self.state.read(cx);
+        if self.binding.chat_id(state).is_some()
+            || self.binding.device_id(state).as_deref() != state.local_device_id.as_deref()
+        {
+            return None;
+        }
+        state
+            .provider_defaults
+            .providers
+            .get(&self.effective_harness(cx)?)
+    }
+
+    fn compatible_fresh_provider_defaults<'a>(
+        &'a self,
+        cx: &'a App,
+    ) -> Option<&'a luna_proto::ProviderExecutionDefault> {
+        let defaults = self.fresh_provider_defaults(cx)?;
+        let harness = self.effective_harness(cx)?;
+        let models = self.models.get(&harness).and_then(Loadable::ready);
+        let default_id = defaults.model.as_deref().or_else(|| {
+            models
+                .and_then(|models| default_model(models))
+                .map(|model| model.id.as_str())
+        });
+        let selected = self.effective_model_id(cx).or_else(|| {
+            models
+                .and_then(|models| default_model(models))
+                .map(|model| model.id.as_str())
+        });
+        (default_id == selected).then_some(defaults)
+    }
+
+    /// A draft or project model overrides the provider's saved fresh-chat default.
     fn effective_model_id<'a>(&'a self, cx: &'a App) -> Option<&'a str> {
         if let Some(id) = self.config.model.as_deref() {
             return Some(id);
@@ -1773,10 +1811,12 @@ impl Pickers {
         let harness = self.effective_harness(cx)?;
         if let Some(provider) = &self.project_defaults.provider
             && provider.harness == harness
+            && provider.model.is_some()
         {
-            return self.new_task_defaults().model;
+            return provider.model.as_deref();
         }
-        self.defaults.model_for(harness).map(|m| m.id.as_str())
+        self.fresh_provider_defaults(cx)
+            .and_then(|defaults| defaults.model.as_deref())
     }
 
     /// The concrete model boundary used for permission capability checks. A
@@ -1795,7 +1835,9 @@ impl Pickers {
             match self.binding.chat_row(self.state.read(cx)) {
                 Some(chat) => chat.config.as_ref().and_then(|c| c.reasoning),
                 // New chat: the remembered last-used level.
-                None => self.defaults.reasoning,
+                None => self
+                    .compatible_fresh_provider_defaults(cx)
+                    .and_then(|defaults| defaults.reasoning),
             }
         });
         if self.selected_model(cx).is_none() {
@@ -1821,10 +1863,13 @@ impl Pickers {
             return models.iter().find(|model| model.id == id);
         }
         match self.effective_model_id(cx) {
-            Some(id) => models
-                .iter()
-                .find(|m| m.id == id)
-                .or_else(|| default_model(models)),
+            Some(id) => models.iter().find(|m| m.id == id).or_else(|| {
+                self.binding
+                    .chat_id(self.state.read(cx))
+                    .is_some()
+                    .then(|| default_model(models))
+                    .flatten()
+            }),
             None => default_model(models),
         }
     }
@@ -1840,30 +1885,20 @@ impl Pickers {
                 .map(|c| c.model_options.clone())
                 .unwrap_or_default();
         }
-        let Some(harness) = self.effective_harness(cx) else {
+        if self.effective_harness(cx).is_none() {
             return Default::default();
-        };
-        if !self.config.model_options.is_empty() {
-            return match self.selected_model(cx) {
-                Some(model) => offered_options(model, self.config.model_options.clone()),
-                None => self.config.model_options.clone(),
-            };
         }
+        let mut choices = self
+            .selected_model(cx)
+            .map(luna_proto::default_model_options)
+            .unwrap_or_default();
+        if let Some(defaults) = self.compatible_fresh_provider_defaults(cx) {
+            choices.extend(defaults.model_options.clone());
+        }
+        choices.extend(self.config.model_options.clone());
         match self.selected_model(cx) {
-            Some(model) => offered_options(
-                model,
-                self.defaults
-                    .model_options_for(harness, &model.id)
-                    .cloned()
-                    .unwrap_or_default(),
-            ),
-            // Catalog not loaded (or failed): the picks were validated for
-            // this exact model when made, so they are safe to send as-is.
-            None => self
-                .effective_model_id(cx)
-                .and_then(|id| self.defaults.model_options_for(harness, id))
-                .cloned()
-                .unwrap_or_default(),
+            Some(model) => offered_options(model, choices),
+            None => choices,
         }
     }
 
@@ -3136,9 +3171,13 @@ impl Pickers {
                 config.model = Some(model_id)
             });
         } else {
-            // New chat: draft pick + sticky last-used memory for this harness.
+            // An explicit model pick restores that model's own option picks.
+            // Fresh drafts still begin from the separate provider defaults.
             self.config.model = Some(model_id.clone());
-            self.config.model_options.clear();
+            self.config.model_options = self
+                .effective_harness(cx)
+                .and_then(|harness| self.defaults.model_options_for(harness, &model_id).cloned())
+                .unwrap_or_default();
             if self.project_defaults.provider.is_none()
                 && let Some(harness) = self.effective_harness(cx)
             {
@@ -3388,11 +3427,6 @@ impl Pickers {
         if mode == PermissionMode::Full
             && !self.defaults.confirmed_full_machines.contains(&machine_id)
         {
-            if self.full_confirmation.as_deref() != Some(machine_id.as_str()) {
-                self.full_confirmation = Some(machine_id);
-                cx.notify();
-                return;
-            }
             self.defaults.confirmed_full_machines.push(machine_id);
         }
         self.full_confirmation = None;
@@ -3479,7 +3513,9 @@ impl Pickers {
             let draft_options = &mut self.config.model_options;
             if default {
                 options.remove(&option_id);
-                draft_options.remove(&option_id);
+                // Keep this explicit default so it overrides saved provider
+                // defaults such as Fast when the user selects Normal.
+                draft_options.insert(option_id, serde_json::Value::String(choice_id));
             } else {
                 options.insert(
                     option_id.clone(),
@@ -5676,8 +5712,6 @@ impl Pickers {
     fn render_permission_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
         let choice = self.permission_choice_state(cx);
-        let (machine_id, machine_name) = self.permission_machine(cx);
-        let confirming_full = self.full_confirmation.as_deref() == Some(machine_id.as_str());
         div()
             .flex()
             .flex_col()
@@ -5700,8 +5734,6 @@ impl Pickers {
                     let warning = mode == PermissionMode::Full;
                     let description: SharedString = if let Some(reason) = unavailable {
                         reason.into()
-                    } else if warning && confirming_full {
-                        format!("Select again to remove the sandbox on {machine_name}.").into()
                     } else {
                         description.into()
                     };
@@ -8912,15 +8944,26 @@ mod tests {
                 }
                 // Returning to one setting keeps its choice, and restoring its
                 // default does not reset a sibling option or close the picker.
+                pickers.state.update(cx, |state, _| {
+                    state.provider_defaults.providers.insert(
+                        HarnessId::ClaudeCode,
+                        luna_proto::ProviderExecutionDefault {
+                            model: Some("opus".into()),
+                            model_options: serde_json::from_value(serde_json::json!({
+                                "contextWindow": "extended"
+                            }))
+                            .unwrap(),
+                            ..Default::default()
+                        },
+                    );
+                });
                 pickers.open_setting(ModelSetting::Option("contextWindow".into()), cx);
                 assert_eq!(pickers.setting_active, 1);
                 pickers.on_key_down(&key("up"), window, cx);
                 pickers.on_key_down(&key("enter"), window, cx);
-                assert!(
-                    !pickers
-                        .resolved(cx)
-                        .model_options
-                        .contains_key("contextWindow")
+                assert_eq!(
+                    pickers.resolved(cx).model_options["contextWindow"],
+                    "standard"
                 );
                 assert_eq!(
                     pickers.resolved(cx).model_options["serviceTier"],
@@ -9346,7 +9389,17 @@ mod tests {
             pickers.pick_model("haiku".into(), cx);
             assert!(pickers.resolved(cx).model_options.is_empty());
 
-            // Restart (draft cleared) and send before the catalog is usable.
+            // A cleared draft uses the saved provider default, independently
+            // of the most recently selected model and its options.
+            pickers.state.update(cx, |state, _| {
+                state.provider_defaults.providers.insert(
+                    HarnessId::ClaudeCode,
+                    luna_proto::ProviderExecutionDefault {
+                        model: Some("haiku".into()),
+                        ..Default::default()
+                    },
+                );
+            });
             for catalog in [
                 Loadable::Idle,
                 Loadable::Loading,

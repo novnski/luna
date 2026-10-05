@@ -192,6 +192,7 @@ enum PendingInputKind {
 
 #[derive(Debug)]
 struct LunaSendProposal {
+    workspace_plan: Option<crate::cross_task_tools::PreparedWorkspace>,
     automation_plan: Option<crate::cross_task_tools::PreparedAutomation>,
     child_request: Option<luna_proto::CreateChildThreadRequest>,
     /// Engine-resolved defaults and policy for a child card. Derived from the
@@ -308,6 +309,34 @@ impl ChildCardPlan {
 
 impl LunaSendProposal {
     fn question(&self) -> UserInputQuestion {
+        if let Some(plan) = &self.workspace_plan {
+            return UserInputQuestion {
+                id: format!("question-{}", self.request_id),
+                header: "LUNA workspace".into(),
+                question: format!(
+                    "{}\nMain conversation: {}\nExact request:\n{}",
+                    plan.description,
+                    plan.main_chat_id,
+                    serde_json::to_string_pretty(&plan.request).unwrap_or_default()
+                ),
+                options: vec!["Deny".into(), "Allow once".into()],
+                multi_select: false,
+                mcp: None,
+                input: None,
+                approval: Some(luna_proto::ApprovalRequest {
+                    provider_request_id: self.claim.provider_call_id.clone(),
+                    provider: self.claim.source_provider,
+                    turn_id: Some(self.claim.provider_turn_id.clone()),
+                    machine_name: self.environment_id.clone(),
+                    action_kind: luna_proto::ApprovalActionKind::LunaCrossTask,
+                    summary: plan.description.clone(),
+                    requested_scope: luna_proto::PermissionScope::Workspace,
+                    expires_at_ms: luna_proto::APPROVAL_NO_EXPIRY,
+                    supports_task_allowance: false,
+                    details: None,
+                }),
+            };
+        }
         if let Some(plan) = &self.automation_plan {
             let times = plan
                 .preview
@@ -1980,6 +2009,16 @@ impl SessionsEngine {
         {
             return Err(fail(CrossTaskError::Scope));
         }
+        let workspace_request = if invocation.name == "manage_workspace" {
+            Some(
+                serde_json::from_value::<crate::cross_task_tools::WorkspaceToolRequest>(
+                    invocation.arguments.clone(),
+                )
+                .map_err(|_| fail(CrossTaskError::Input))?,
+            )
+        } else {
+            None
+        };
         let automation_request = if invocation.name == "automation_update" {
             Some(
                 serde_json::from_value::<luna_proto::AutomationToolRequest>(
@@ -1999,7 +2038,15 @@ impl SessionsEngine {
         } else {
             None
         };
-        let request: CrossTaskSendRequest = if let Some(automation) = &automation_request {
+        let request: CrossTaskSendRequest = if let Some(workspace) = &workspace_request {
+            CrossTaskSendRequest {
+                task_id: chat_id.into(),
+                message: serde_json::to_string(workspace)
+                    .map_err(|_| fail(CrossTaskError::Input))?,
+                mode: CrossTaskSendMode::Queue,
+                idempotency_key: workspace.idempotency_key.clone(),
+            }
+        } else if let Some(automation) = &automation_request {
             CrossTaskSendRequest {
                 task_id: chat_id.into(),
                 message: serde_json::to_string(automation)
@@ -2020,7 +2067,7 @@ impl SessionsEngine {
         if request.mode != CrossTaskSendMode::Queue
             || request.message.trim().is_empty()
             || request.message.chars().count()
-                > if automation_request.is_some() {
+                > if automation_request.is_some() || workspace_request.is_some() {
                     40_000
                 } else if child_request.is_some() {
                     crate::cross_task_tools::MAX_CHILD_PROMPT_CHARS
@@ -2048,6 +2095,16 @@ impl SessionsEngine {
             )
             .await
             .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+        let workspace_plan = if let Some(request) = workspace_request {
+            Some(
+                backend
+                    .prepare_workspace(request, &authority)
+                    .await
+                    .map_err(fail)?,
+            )
+        } else {
+            None
+        };
         let automation_plan = if let Some(request) = automation_request {
             Some(
                 backend
@@ -2065,7 +2122,20 @@ impl SessionsEngine {
             environment_id,
             child_execution,
             child_auth_instance,
-        ) = if let Some(plan) = &automation_plan {
+        ) = if let Some(plan) = &workspace_plan {
+            (
+                claim,
+                plan.snapshot.clone(),
+                contract
+                    .context
+                    .project_id
+                    .clone()
+                    .ok_or_else(|| fail(CrossTaskError::TargetScope))?,
+                contract.context.environment_id.clone(),
+                None,
+                None,
+            )
+        } else if let Some(plan) = &automation_plan {
             (
                 claim,
                 plan.snapshot.clone(),
@@ -2135,6 +2205,7 @@ impl SessionsEngine {
             .as_ref()
             .map(|child| self.child_card_plan(chat_id, child, child_execution.as_ref()));
         let proposal = LunaSendProposal {
+            workspace_plan: workspace_plan.clone(),
             automation_plan: automation_plan.clone(),
             child_request: child_request.clone(),
             child_plan,
@@ -2144,62 +2215,90 @@ impl SessionsEngine {
             project_id,
             environment_id,
         };
-        let request_id = proposal.request_id.clone();
-        let question = proposal.question();
-        let (resolver, _answer_rx) = oneshot::channel();
-        let (grant_tx, grant_rx) = oneshot::channel();
-        let binding = self.inner.current_codex_binding_key(chat_id);
-        let (pending, engine_tx) = {
-            let runs = lock(&self.inner.runs);
-            let run = runs
-                .get(chat_id)
-                .filter(|run| proposal.claim.matches_live(run, binding.as_ref()))
-                .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
-            let pending = run.pending_inputs.clone();
-            lock(&pending).insert(
-                request_id.clone(),
-                PendingInput {
-                    kind: PendingInputKind::LunaSend {
-                        run_id: run_id.to_owned(),
-                        proposal: Box::new(proposal),
-                        grant_tx,
-                    },
-                    questions: vec![question.clone()],
-                    resolver,
-                },
-            );
-            (pending, run.engine_tx.clone())
-        };
-        // The same watch as Codex-native no-expiry approvals: once this
-        // waiter is dropped (`_answer_rx` closes), the card is retired.
-        schedule_approval_expiry(
-            pending.clone(),
-            engine_tx.clone(),
-            request_id.clone(),
-            std::slice::from_ref(&question),
-        );
-        if engine_tx
-            .send(AgentEvent::InputRequested {
-                request_id: request_id.clone(),
-                questions: vec![question],
+        // App coordination is already inside the user's LUNA task. Keep the
+        // provider invocation and target fences, without a second permission UI.
+        // An explicit increase above the parent's access still needs a grant.
+        let effective_mode = lock(&self.inner.runs)
+            .get(chat_id)
+            .and_then(|run| {
+                run.runtime_config
+                    .permission_policy
+                    .as_ref()
+                    .map(|policy| policy.effective_mode)
             })
-            .is_err()
-        {
+            .unwrap_or_default();
+        let needs_card = (proposal.automation_plan.is_some()
+            && effective_mode == PermissionMode::Ask)
+            || proposal
+                .child_plan
+                .as_ref()
+                .is_some_and(|plan| plan.escalation.is_some());
+        let mut fence = if !needs_card {
+            proposal.fence
+        } else {
+            let request_id = proposal.request_id.clone();
+            let question = proposal.question();
+            let (resolver, _answer_rx) = oneshot::channel();
+            let (grant_tx, grant_rx) = oneshot::channel();
+            let binding = self.inner.current_codex_binding_key(chat_id);
+            let (pending, engine_tx) = {
+                let runs = lock(&self.inner.runs);
+                let run = runs
+                    .get(chat_id)
+                    .filter(|run| proposal.claim.matches_live(run, binding.as_ref()))
+                    .ok_or_else(|| fail(CrossTaskError::Unavailable))?;
+                let pending = run.pending_inputs.clone();
+                lock(&pending).insert(
+                    request_id.clone(),
+                    PendingInput {
+                        kind: PendingInputKind::LunaSend {
+                            run_id: run_id.to_owned(),
+                            proposal: Box::new(proposal),
+                            grant_tx,
+                        },
+                        questions: vec![question.clone()],
+                        resolver,
+                    },
+                );
+                (pending, run.engine_tx.clone())
+            };
+            // The same watch as Codex-native no-expiry approvals: once this
+            // waiter is dropped (`_answer_rx` closes), the card is retired.
+            schedule_approval_expiry(
+                pending.clone(),
+                engine_tx.clone(),
+                request_id.clone(),
+                std::slice::from_ref(&question),
+            );
+            if engine_tx
+                .send(AgentEvent::InputRequested {
+                    request_id: request_id.clone(),
+                    questions: vec![question],
+                })
+                .is_err()
+            {
+                expire_pending_approval(&pending, &engine_tx, &request_id);
+                return Err(fail(CrossTaskError::Unavailable));
+            }
+            let grant = tokio::select! {
+                _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
+                result = grant_rx => result.map_err(|_| CrossTaskError::Cancelled),
+            };
             expire_pending_approval(&pending, &engine_tx, &request_id);
-            return Err(fail(CrossTaskError::Unavailable));
-        }
-        let grant = tokio::select! {
-            _ = cancel.cancelled() => Err(CrossTaskError::Cancelled),
-            result = grant_rx => result.map_err(|_| CrossTaskError::Cancelled),
+            grant.map_err(fail)?
         };
-        expire_pending_approval(&pending, &engine_tx, &request_id);
-        let mut fence = grant.map_err(fail)?;
-        // Approval opens the bounded commit window checked at the durable write.
+        // Admission opens the bounded commit window checked at the durable write.
         fence.expires_at_ms = automation_plan.as_ref().map_or_else(
             || now_ms().saturating_add(30_000),
             |p| p.preview.expires_at_ms.min(now_ms().saturating_add(30_000)),
         );
         self.with_live_approved_send(&fence, || Ok(()))?;
+        if let Some(plan) = workspace_plan {
+            return backend
+                .apply_workspace(plan, &authority, &fence)
+                .await
+                .map_err(fail);
+        }
         if let Some(plan) = automation_plan {
             return backend
                 .apply_approved_automation(plan, &authority, &fence)
@@ -4797,7 +4896,10 @@ impl SessionsEngine {
                         Box::pin(async move {
                             let result = if matches!(
                                 invocation.name.as_str(),
-                                "send_message_to_thread" | "create_thread" | "automation_update"
+                                "send_message_to_thread"
+                                    | "create_thread"
+                                    | "automation_update"
+                                    | "manage_workspace"
                             ) {
                                 sessions
                                     .invoke_approved_luna_send(
@@ -11655,6 +11757,7 @@ mod tests {
             source_task_id: source_task_id.into(),
             source_environment_id: core.device_id.clone(),
             target: Mutex::new(luna_proto::CrossTaskSummary {
+                agent: None,
                 task_id: "target-a".into(),
                 project_id: Some("project-a".into()),
                 environment_id: core.device_id.clone(),
@@ -14391,6 +14494,7 @@ mod tests {
     impl crate::cross_task_tools::CrossTaskBackend for FakeArchiveBackend {
         fn capabilities(&self) -> crate::cross_task_tools::CrossTaskCapabilities {
             crate::cross_task_tools::CrossTaskCapabilities {
+                workspace: false,
                 list: false,
                 read: false,
                 durable_queue: false,
@@ -14636,6 +14740,7 @@ mod tests {
     fn fake_archive_backend(proposal: &LunaSyntheticArchiveProposal) -> Arc<FakeArchiveBackend> {
         Arc::new(FakeArchiveBackend {
             target: luna_proto::CrossTaskSummary {
+                agent: None,
                 task_id: "task-a".into(),
                 project_id: Some("project-a".into()),
                 environment_id: proposal.target_environment_id.clone(),

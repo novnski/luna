@@ -1693,6 +1693,61 @@ async fn computer_use_approval_and_provider_evidence_stay_on_exact_turn() {
 }
 
 #[tokio::test]
+async fn full_mode_permission_paths_never_park_a_user_approval() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (provider, scenario) in [
+        (harness(), "scenario:computer-use:allow"),
+        (harness(), "scenario:computer-use:permission-allow"),
+        (adapter_peer(), "mcp-tool:once"),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        let mut req = computer_use_request(scenario, home.path());
+        req.permission_mode = luna_proto::PermissionMode::Full;
+        req.sandbox = SandboxLevel::DangerFullAccess;
+        req.auto_approve = true;
+        req.permission_policy = Some(luna_proto::PermissionPolicy {
+            requested_mode: luna_proto::PermissionMode::Full,
+            effective_mode: luna_proto::PermissionMode::Full,
+            ..Default::default()
+        });
+        let questions = Arc::new(AtomicUsize::new(0));
+        let seen = questions.clone();
+        let (steer, steering) = mpsc::channel(8);
+        let controls = RunControls {
+            request_input: Box::new(move |items| {
+                seen.fetch_add(items.len(), Ordering::SeqCst);
+                let (tx, rx) = oneshot::channel();
+                let _ = tx.send(Vec::new());
+                rx
+            }),
+            steering,
+            interrupt: CancellationToken::new(),
+            invoke_luna_tool: None,
+        };
+        let events = run_to_end(&provider, req, controls).await;
+        assert_eq!(
+            questions.load(Ordering::SeqCst),
+            0,
+            "Full parked an approval for {scenario}"
+        );
+        assert!(
+            matches!(
+                events.last(),
+                Some(AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                })
+            ),
+            "{scenario}: {events:?}"
+        );
+        if scenario == "mcp-tool:once" {
+            assert!(peer_verified(&events), "{events:?}");
+        }
+        drop(steer);
+    }
+}
+
+#[tokio::test]
 async fn computer_use_denial_has_no_computer_action() {
     let (controls, _steer, _token) = controls("Deny");
     let home = tempfile::tempdir().unwrap();

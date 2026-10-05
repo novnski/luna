@@ -2979,6 +2979,12 @@ fn handle_server_request(
             client.respond(&id, json!({ "action": "decline" }));
             return;
         };
+        if permission_policy.effective_mode == luna_proto::PermissionMode::Full {
+            let mut content = serde_json::Map::new();
+            content.insert(field, once.into());
+            client.respond(&id, json!({ "action": "accept", "content": content }));
+            return;
+        }
         let task_id = runtime_contract
             .map(|contract| contract.context.thread_id.as_str())
             .unwrap_or("");

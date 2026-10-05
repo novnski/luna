@@ -42,6 +42,13 @@ fn project_defaults_switch_restart_clear_and_preserve_draft_choices(cx: &mut gpu
         s.selected_device = Some("owner".into());
         s.selected_space = Some("a".into());
         s.spaces = spaces.clone();
+        s.provider_defaults.providers.insert(
+            HarnessId::Codex,
+            luna_proto::ProviderExecutionDefault {
+                model: Some("global-model".into()),
+                ..Default::default()
+            },
+        );
         s
     });
     let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
@@ -156,12 +163,8 @@ fn project_defaults_unavailable_choice_is_retained_and_blocked(cx: &mut gpui::Te
         assert!(p.permission_run_block_reason(cx).unwrap().contains("model"));
         p.config.model = Some("chosen-model".into());
         assert_eq!(p.resolved(cx).model.as_deref(), Some("chosen-model"));
-        assert!(
-            p.permission_run_block_reason(cx)
-                .unwrap()
-                .contains("Confirm Full")
-        );
-        p.pick_permission(PermissionMode::Full, cx);
+        // Full is already the project's selected mode; no second confirmation.
+        assert_eq!(p.permission_run_block_reason(cx), None);
         p.pick_permission(PermissionMode::Full, cx);
         assert_eq!(p.permission_run_block_reason(cx), None);
     });

@@ -253,6 +253,20 @@ impl ChatWorkbenches {
         Ok(())
     }
 
+    pub(crate) fn has_command(&self, main: &str, command_id: &str) -> Result<bool, EngineError> {
+        let mut entries = self
+            .0
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Ok(self
+            .entry(&mut entries, main)?
+            .saved
+            .receipts
+            .iter()
+            .any(|receipt| receipt.command_id == command_id))
+    }
+
     pub(crate) fn mutate(
         &self,
         request: &MutateChatWorkbenchRequest,

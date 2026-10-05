@@ -340,6 +340,11 @@ enum TaskCommandIntent {
     CreateChildChat {
         parent_task_id: String,
         request: luna_proto::CreateChildThreadRequest,
+        /// Private preflight evidence, just like the agent call's execution
+        /// fence. It is not serialized into the user's idempotency payload,
+        /// deserialized from clients, or recalculated for an applied receipt.
+        #[serde(skip)]
+        execution: Option<ChatConfig>,
         /// Engine-set only; absent for legacy payloads (unchanged hash).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         access_grant: Option<child_threads::ChildAccessGrant>,
@@ -1249,16 +1254,19 @@ enum MutateParams {
     },
 }
 
+mod agent_workspace;
 mod automations;
 mod claude_goals;
 mod claude_history;
 mod context_transfer;
 mod native_extensions;
 mod prompt_stash;
+mod provider_defaults;
 mod side_chats;
 mod task_work;
 
 pub struct EngineRpc {
+    provider_defaults: Option<crate::provider_defaults::ProviderDefaults>,
     work_writes: Option<crate::device_write::DeviceWriteHandle>,
     chat_workbenches: Option<crate::chat_workbench::ChatWorkbenches>,
     composer_catalog: std::sync::Mutex<crate::composer_catalog::CatalogCache>,
@@ -1391,6 +1399,13 @@ impl EngineRpc {
 
     pub(crate) fn with_side_chats(mut self, side_chats: crate::side_chats::SideChats) -> Self {
         self.side_chats = Some(side_chats);
+        self
+    }
+    pub(crate) fn with_provider_defaults(
+        mut self,
+        defaults: crate::provider_defaults::ProviderDefaults,
+    ) -> Self {
+        self.provider_defaults = Some(defaults);
         self
     }
     fn usage_providers_for(harnesses: &[HarnessId]) -> Vec<luna_proto::UsageProvider> {
@@ -1601,6 +1616,7 @@ impl EngineRpc {
         let rpc = Self {
             work_writes: None,
             chat_workbenches: None,
+            provider_defaults: None,
             composer_catalog: std::sync::Mutex::new(
                 crate::composer_catalog::CatalogCache::default(),
             ),
@@ -5470,6 +5486,7 @@ impl EngineRpc {
             TaskCommandIntent::CreateChildChat {
                 parent_task_id,
                 request,
+                execution,
                 access_grant,
                 draft,
             } => self
@@ -5478,6 +5495,7 @@ impl EngineRpc {
                     task_id,
                     &parent_task_id,
                     request,
+                    execution.as_ref(),
                     access_grant,
                     draft,
                     send_fence,
@@ -8280,6 +8298,7 @@ fn index_activity_task(
 fn cross_task_summary(
     chat: &Chat,
     session: Option<&luna_proto::Session>,
+    lineage: luna_proto::TaskLineage,
 ) -> luna_proto::CrossTaskSummary {
     let live = session.filter(|session| {
         session.device_id == chat.device_id
@@ -8291,6 +8310,15 @@ fn cross_task_summary(
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| "unknown".into());
     luna_proto::CrossTaskSummary {
+        agent: chat
+            .config
+            .as_ref()
+            .map(|config| luna_proto::CrossTaskAgent {
+                provider: config.harness,
+                model: config.model.clone(),
+                reasoning: config.reasoning,
+                lineage,
+            }),
         task_id: chat.id.clone(),
         project_id: chat.space_id.clone(),
         environment_id: chat.device_id.clone(),
@@ -8469,8 +8497,27 @@ fn cross_task_control_command(
 
 #[async_trait]
 impl CrossTaskBackend for EngineRpc {
+    async fn workspace(&self, authority: &CrossTaskAuthority) -> Result<Value, CrossTaskError> {
+        self.read_agent_workspace(authority)
+    }
+    async fn prepare_workspace(
+        &self,
+        request: crate::cross_task_tools::WorkspaceToolRequest,
+        authority: &CrossTaskAuthority,
+    ) -> Result<crate::cross_task_tools::PreparedWorkspace, CrossTaskError> {
+        self.prepare_agent_workspace(request, authority)
+    }
+    async fn apply_workspace(
+        &self,
+        prepared: crate::cross_task_tools::PreparedWorkspace,
+        authority: &CrossTaskAuthority,
+        fence: &crate::cross_task_tools::ApprovedSendFence,
+    ) -> Result<Value, CrossTaskError> {
+        self.apply_agent_workspace(prepared, authority, fence).await
+    }
     fn capabilities(&self) -> CrossTaskCapabilities {
         CrossTaskCapabilities {
+            workspace: self.chat_workbenches.is_some(),
             list: true,
             read: true,
             durable_queue: true,
@@ -8600,6 +8647,7 @@ impl CrossTaskBackend for EngineRpc {
         Ok(Some(cross_task_summary(
             &chat,
             sessions.iter().find(|session| session.chat_id == task_id),
+            identity.task.lineage,
         )))
     }
 
@@ -8692,7 +8740,12 @@ impl CrossTaskBackend for EngineRpc {
             })
             .map(|chat| {
                 let session = sessions.iter().find(|session| session.chat_id == chat.id);
-                cross_task_summary(&chat, session)
+                let lineage = self
+                    .task_identity
+                    .view(&chat.id)
+                    .map(|identity| identity.task.lineage)
+                    .unwrap_or_default();
+                cross_task_summary(&chat, session, lineage)
             })
             .filter(|task| {
                 request
@@ -9097,6 +9150,12 @@ where
 #[async_trait]
 impl RpcService for EngineRpc {
     async fn handle(&self, method: &str, params: serde_json::Value) -> Result<RpcReply, RpcError> {
+        if matches!(
+            method,
+            methods::GET_PROVIDER_DEFAULTS | methods::SET_PROVIDER_DEFAULTS
+        ) {
+            return self.handle_provider_defaults(method, params).await;
+        }
         if side_chats::handles(method) {
             return self.handle_side_chat(method, params).await;
         }
@@ -12595,6 +12654,7 @@ mod tests {
         };
         let summary = |task_id: &str, project: Option<&str>, environment: &str| {
             luna_proto::CrossTaskSummary {
+                agent: None,
                 task_id: task_id.into(),
                 project_id: project.map(str::to_owned),
                 environment_id: environment.into(),

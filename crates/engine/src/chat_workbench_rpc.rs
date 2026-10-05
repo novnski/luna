@@ -51,7 +51,8 @@ impl EngineRpc {
         let reader = self.chat_workbench_reader()?;
         let current = reader.read_chat_workbench(&request.main_chat_id)?;
         let target = match &request.command {
-            ChatWorkbenchCommand::OpenTab { tab, .. } => Some(tab),
+            ChatWorkbenchCommand::OpenTab { tab, .. }
+            | ChatWorkbenchCommand::OpenBackgroundTab { tab, .. } => Some(tab),
             ChatWorkbenchCommand::MoveTab { chat_id, .. }
             | ChatWorkbenchCommand::FocusTab { chat_id } => current
                 .root

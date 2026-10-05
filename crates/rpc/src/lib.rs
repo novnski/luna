@@ -70,6 +70,8 @@ pub mod methods {
     pub const SET_TITLE_SETTINGS: &str = "SetTitleSettings";
     pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
     pub const LIST_MODELS: &str = "ListModels";
+    pub const GET_PROVIDER_DEFAULTS: &str = "GetProviderDefaults";
+    pub const SET_PROVIDER_DEFAULTS: &str = "SetProviderDefaults";
     pub const LIST_COMPOSER_CATALOG: &str = "ListComposerCatalog";
     pub const LIST_COMMANDS: &str = "ListCommands";
     pub const QUEUE_COMMAND: &str = "QueueCommand";
@@ -373,6 +375,8 @@ pub mod methods {
         SET_TITLE_SETTINGS,
         SET_HARNESS_ENABLED,
         LIST_MODELS,
+        GET_PROVIDER_DEFAULTS,
+        SET_PROVIDER_DEFAULTS,
         LIST_COMMANDS,
         LIST_COMPOSER_CATALOG,
         GET_PROJECT_COMMANDS,

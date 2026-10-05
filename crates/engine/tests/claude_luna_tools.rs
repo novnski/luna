@@ -2,8 +2,8 @@
 //! per-process `luna` MCP endpoint, the engine-built authority, the provider
 //! turn fence and the durable backend. The deterministic fake CLI
 //! (`harness/tests/fixtures/fake-claude-luna.py`) is the MCP client, as the
-//! real 2.1.286 CLI is. One harmless read needs no approval; create_thread and
-//! send_message_to_thread are each separately approved (and one send denied).
+//! real 2.1.286 CLI is. Built-in reads, create_thread and same-project messages
+//! complete without an extra approval; a cross-project send is refused.
 
 #![cfg(unix)]
 
@@ -14,8 +14,7 @@ use std::time::Duration;
 use luna_engine::{AgentAccountsConfig, EngineCore, EngineProfile, HarnessRegistry};
 use luna_harness::ClaudeHarness;
 use luna_proto::{
-    AgentEvent, ApprovalDecision, DoneStatus, HarnessId, PermissionMode, RunRequest, SandboxLevel,
-    TaskLineage,
+    AgentEvent, DoneStatus, HarnessId, PermissionMode, RunRequest, SandboxLevel, TaskLineage,
 };
 use tempfile::TempDir;
 
@@ -65,7 +64,7 @@ fn run_request(prompt: &str, cwd: &Path) -> RunRequest {
         reasoning: None,
         model_options: Default::default(),
         cwd: cwd.display().to_string(),
-        sandbox: SandboxLevel::ReadOnly,
+        sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: false,
         permission_mode: PermissionMode::Ask,
         parent_permission_ceiling: None,
@@ -116,7 +115,7 @@ fn step(results: &serde_json::Value, index: usize) -> (bool, &str) {
 }
 
 #[tokio::test]
-async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_approvals() {
+async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_approvals() {
     let root = TempDir::new().unwrap();
     let registry = Arc::new(HarnessRegistry::new());
     registry.register(Arc::new(ClaudeHarness::new().with_executable(fake())));
@@ -155,7 +154,7 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_appr
         model: None,
         reasoning: None,
         model_options: Default::default(),
-        sandbox: SandboxLevel::ReadOnly,
+        sandbox: SandboxLevel::WorkspaceWrite,
         permission_mode: PermissionMode::Ask,
         effective_permission_mode: PermissionMode::Ask,
         permission_ceiling_source: None,
@@ -190,7 +189,7 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_appr
             "taskId": target, "message": "Claude queued follow-up", "mode": "queue",
             "idempotencyKey": "claude-send-1"}},
         {"tool": "send_message_to_thread", "arguments": {
-            "taskId": target, "message": "Claude denied follow-up", "mode": "queue",
+            "taskId": foreign, "message": "Claude denied follow-up", "mode": "queue",
             "idempotencyKey": "claude-send-deny"}},
         {"tool": "read_thread", "arguments": {"taskId": foreign}},
     ]);
@@ -211,64 +210,11 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_appr
         .await
         .unwrap();
     let (approvals, status) = tokio::time::timeout(Duration::from_secs(60), async {
-        let mut approvals = 0;
+        let approvals = 0;
         loop {
             match events.recv().await.unwrap().event {
-                AgentEvent::InputRequested {
-                    request_id,
-                    questions,
-                } => {
-                    approvals += 1;
-                    assert_eq!(questions.len(), 1);
-                    let question = &questions[0];
-                    let approval = question.approval.as_ref().expect("LUNA approval card");
-                    assert_eq!(approval.provider, HarnessId::ClaudeCode);
-                    assert!(
-                        approval
-                            .turn_id
-                            .as_deref()
-                            .unwrap()
-                            .starts_with("claude-turn-")
-                    );
-                    let (expected, decision, outcome) = match approvals {
-                        1 => (
-                            "Claude child brief",
-                            ApprovalDecision::AllowOnce,
-                            luna_engine::sessions::LunaApprovalOutcome::AllowedOnce,
-                        ),
-                        2 => (
-                            "Claude queued follow-up",
-                            ApprovalDecision::AllowOnce,
-                            luna_engine::sessions::LunaApprovalOutcome::AllowedOnce,
-                        ),
-                        _ => (
-                            "Claude denied follow-up",
-                            ApprovalDecision::Deny,
-                            luna_engine::sessions::LunaApprovalOutcome::Denied,
-                        ),
-                    };
-                    assert!(
-                        question.question.contains(expected),
-                        "{}",
-                        question.question
-                    );
-                    assert_eq!(
-                        core.sessions.respond_luna_local_ui_approval(
-                            &source,
-                            &request_id,
-                            decision
-                        ),
-                        outcome
-                    );
-                    // One approval authorises one call only.
-                    assert_eq!(
-                        core.sessions.respond_luna_local_ui_approval(
-                            &source,
-                            &request_id,
-                            ApprovalDecision::AllowOnce
-                        ),
-                        luna_engine::sessions::LunaApprovalOutcome::Stale
-                    );
+                AgentEvent::InputRequested { .. } => {
+                    panic!("Ordinary app coordination must not ask again")
                 }
                 AgentEvent::Done { status, .. } => break (approvals, status),
                 _ => {}
@@ -277,7 +223,10 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_appr
     })
     .await
     .expect("Claude plan turn settled");
-    assert_eq!(approvals, 3, "reads must not ask; each mutation asks once");
+    assert_eq!(
+        approvals, 0,
+        "built-in coordination must not add permission prompts"
+    );
     assert_eq!(status, DoneStatus::Completed);
 
     let run1 = read_results(&project_a, "run1").await;
@@ -322,7 +271,7 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_appr
     assert!(!failed, "{text}");
     assert!(text.contains(&target) && !text.contains(&foreign), "{text}");
 
-    // create_thread: separately approved, durable lineage.
+    // create_thread: no extra approval, durable lineage.
     let (failed, text) = step(&run1, 2);
     assert!(!failed, "{text}");
     let receipt: serde_json::Value = serde_json::from_str(text).unwrap();
@@ -339,7 +288,7 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_with_separate_appr
         Some(source.as_str())
     );
 
-    // send_message_to_thread: separately approved, durable queue receipt.
+    // send_message_to_thread: no extra approval, durable queue receipt.
     let (failed, text) = step(&run1, 3);
     assert!(!failed, "{text}");
     let sent = core

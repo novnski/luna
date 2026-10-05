@@ -1098,6 +1098,10 @@ pub struct AppState {
     /// Data directory (`ui-settings.json`, `composer-defaults.json`); set at
     /// bootstrap so child views can persist small preference files.
     pub data_dir: Option<PathBuf>,
+    /// Defaults owned by the attached engine/profile, not the last composer.
+    pub provider_defaults: luna_proto::ProviderDefaultsSnapshot,
+    pub provider_defaults_loaded: bool,
+    pub provider_defaults_error: Option<String>,
     engine: Option<EngineHandle>,
     /// Changes whenever the attached profile runtime changes. Async UI writes
     /// must match this generation before reporting success into current state.
@@ -1449,6 +1453,9 @@ impl AppState {
             local_device_id: None,
             update: None,
             data_dir: None,
+            provider_defaults: Default::default(),
+            provider_defaults_loaded: false,
+            provider_defaults_error: None,
             engine: None,
             engine_generation: 0,
             watch_tasks: Vec::new(),
@@ -2894,12 +2901,46 @@ impl AppState {
         self.local_device_id = Some(engine_info.device_id.clone());
         self.engine = Some(handle.clone());
         self.engine_generation = self.engine_generation.wrapping_add(1);
+        self.provider_defaults = Default::default();
+        self.provider_defaults_loaded = false;
+        self.provider_defaults_error = None;
+        let generation = self.engine_generation;
+        let defaults_engine = handle.clone();
+        let defaults_task = cx.spawn(async move |this, cx| {
+            let result = defaults_engine
+                .client()
+                .call(methods::GET_PROVIDER_DEFAULTS, serde_json::json!({}))
+                .await;
+            let _ = this.update(cx, |state, cx| {
+                if state.engine_generation != generation {
+                    return;
+                }
+                match result.map_err(|error| error.to_string()).and_then(|value| {
+                    serde_json::from_value::<luna_proto::ProviderDefaultsSnapshot>(value)
+                        .map_err(|error| error.to_string())
+                }) {
+                    Ok(defaults) => {
+                        if defaults.revision >= state.provider_defaults.revision {
+                            state.provider_defaults = defaults;
+                        }
+                        state.provider_defaults_loaded = true;
+                        state.provider_defaults_error = None;
+                    }
+                    Err(error) if !state.provider_defaults_loaded => {
+                        state.provider_defaults_error = Some(error)
+                    }
+                    Err(_) => {}
+                }
+                cx.notify();
+            });
+        });
         // Deletions are relative to one engine's rows; a re-attached (or
         // different) engine republishes what exists. Execution observations
         // likewise belong to the previous connection.
         self.side_chat_gone.clear();
         self.invalidate_execution_observations();
-        let mut watch_tasks = Vec::with_capacity(8);
+        let mut watch_tasks = Vec::with_capacity(9);
+        watch_tasks.push(defaults_task);
         if let Some(task) = spawn_deferred_engine_watch(cx, handle.clone()) {
             watch_tasks.push(task);
         }

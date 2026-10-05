@@ -1,5 +1,10 @@
 # Thread approval audit — 2026-10-03
 
+Historical report. The 2026-10-05 [agent workspace approval audit](agent-workspace-controls-2026-10-05.md)
+supersedes the cross-chat consent and Full-mode exception behavior described
+below. Ordinary built-in coordination now has no extra approval card; Full
+also answers valid native permission requests once or for the exact turn.
+
 ## Conclusion and scope
 
 LUNA's primary Auto/Full provider mappings agree with BB and T3. The defects

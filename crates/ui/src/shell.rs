@@ -74,7 +74,7 @@ use crate::workspace_links::resolve_workspace_file_link;
 mod activity_center;
 mod agents;
 mod automations_pane;
-mod child_chats;
+pub(crate) mod child_chats;
 mod command_palette;
 mod findings;
 mod native_file_rewind;
@@ -4378,6 +4378,22 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         match event {
+            TranscriptEvent::OpenAgentChat {
+                task_id,
+                parent_task_id,
+                split,
+            } => {
+                let valid = self.state.read(cx).chats.iter().any(|chat| {
+                    &chat.id == task_id
+                        && chat
+                            .child_thread
+                            .as_ref()
+                            .is_some_and(|child| &child.parent_task_id == parent_task_id)
+                });
+                if valid {
+                    self.show_agent_chat(task_id.clone(), *split, cx);
+                }
+            }
             TranscriptEvent::StartSideChat {
                 task_id,
                 message_id,

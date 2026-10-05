@@ -220,6 +220,12 @@ pub enum WorkbenchDestination {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ChatWorkbenchCommand {
+    /// Add a view without changing any existing pane selection or focus.
+    OpenBackgroundTab {
+        tab: ChatWorkbenchTab,
+        #[serde(default)]
+        destination: Option<WorkbenchDestination>,
+    },
     OpenTab {
         tab: ChatWorkbenchTab,
         #[serde(default)]
@@ -237,6 +243,9 @@ pub enum ChatWorkbenchCommand {
     },
     #[serde(rename_all = "camelCase")]
     CloseTab { chat_id: String },
+    /// Atomically close an exact set of views, preserving every conversation.
+    #[serde(rename_all = "camelCase")]
+    CloseTabs { chat_ids: Vec<String> },
     #[serde(rename_all = "camelCase")]
     CloseOtherTabs {
         pane_id: String,
@@ -618,6 +627,57 @@ impl ChatWorkbenchSnapshot {
 
     fn apply_inner(&mut self, command: &ChatWorkbenchCommand) -> Result<(), ChatWorkbenchError> {
         match command {
+            ChatWorkbenchCommand::OpenBackgroundTab { tab, destination } => {
+                let previous = self.root.clone();
+                let focused = self.focused_pane_id.clone();
+                if self.contains_chat(&tab.chat_id)
+                    && let Some(destination) = destination
+                {
+                    let existing = self
+                        .root
+                        .tabs()
+                        .into_iter()
+                        .find(|item| item.chat_id == tab.chat_id)
+                        .expect("existing tab");
+                    if existing != tab {
+                        return Err(invalid("A tab's source identity cannot change"));
+                    }
+                    self.apply_inner(&ChatWorkbenchCommand::MoveTab {
+                        chat_id: tab.chat_id.clone(),
+                        destination: destination.clone(),
+                    })?;
+                } else {
+                    self.apply_inner(&ChatWorkbenchCommand::OpenTab {
+                        tab: tab.clone(),
+                        destination: destination.clone(),
+                    })?;
+                }
+                fn restore(current: &mut ChatWorkbenchNode, previous: &ChatWorkbenchNode) {
+                    match current {
+                        ChatWorkbenchNode::Pane {
+                            id,
+                            tabs,
+                            active_chat_id,
+                        } => {
+                            if let Some(ChatWorkbenchNode::Pane {
+                                active_chat_id: Some(old),
+                                ..
+                            }) = previous.node(id)
+                                && tabs.iter().any(|tab| &tab.chat_id == old)
+                            {
+                                *active_chat_id = Some(old.clone());
+                            }
+                        }
+                        ChatWorkbenchNode::Split { first, second, .. } => {
+                            restore(first, previous);
+                            restore(second, previous);
+                        }
+                    }
+                }
+                restore(&mut self.root, &previous);
+                self.focused_pane_id = focused;
+                Ok(())
+            }
             ChatWorkbenchCommand::OpenTab { tab, destination } => {
                 tab.validate()?;
                 if self.contains_chat(&tab.chat_id) {
@@ -691,6 +751,18 @@ impl ChatWorkbenchSnapshot {
                 Ok(())
             }
             ChatWorkbenchCommand::CloseTab { chat_id } => self.close(chat_id),
+            ChatWorkbenchCommand::CloseTabs { chat_ids } => {
+                if chat_ids.len() > WORKBENCH_MAX_TABS {
+                    return Err(invalid("Too many views to close"));
+                }
+                for id in chat_ids {
+                    valid_id(id)?;
+                    if self.root.pane_for_chat(id).is_some() {
+                        self.close(id)?;
+                    }
+                }
+                Ok(())
+            }
             ChatWorkbenchCommand::CloseOtherTabs {
                 pane_id,
                 keep_chat_id,

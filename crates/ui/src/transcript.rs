@@ -55,6 +55,7 @@ use crate::syntax_cache::{DocumentHighlightKey, SyntaxHighlightCache};
 use crate::theme::Theme;
 use luna_syntax::LanguageId as Lang;
 
+mod agent_cards;
 mod diagrams;
 
 // ---------------------------------------------------------------------------
@@ -3183,6 +3184,7 @@ impl SavedViewportCache {
 }
 
 pub struct Transcript {
+    agent_cards: HashMap<String, Entity<agent_cards::AgentCard>>,
     state: Entity<AppState>,
     list: ListState,
     rows: Vec<Row>,
@@ -3424,6 +3426,11 @@ enum BlobFetch {
 /// Shell-facing events (the transcript itself hosts no surfaces).
 #[derive(Debug, Clone)]
 pub enum TranscriptEvent {
+    OpenAgentChat {
+        task_id: String,
+        parent_task_id: String,
+        split: bool,
+    },
     StartSideChat {
         task_id: String,
         message_id: String,
@@ -3564,6 +3571,7 @@ impl Transcript {
             state,
             list,
             rows: Vec::new(),
+            agent_cards: HashMap::new(),
             last_source: None,
             goal_marks: Default::default(),
             // Pre-set so `sync` never sees an attach edge — an override
@@ -4805,6 +4813,7 @@ impl Transcript {
             self.veil_attach_pending = true;
         }
         if attached {
+            self.agent_cards.clear();
             // Read the incoming snapshot before inserting the outgoing one:
             // a full bounded cache may evict its oldest entry, which can be
             // exactly the chat the user is reopening.
@@ -4989,6 +4998,8 @@ impl Transcript {
                     .map(|entry| entry.id.as_str())
                     .collect();
                 self.row_cache.retain(|id, _| live.contains(id.as_str()));
+                self.agent_cards
+                    .retain(|id, _| live.contains(format!("child-created:{id}").as_str()));
                 self.tree_cache.retain(|key, _| {
                     live.contains(key.split_once('#').map_or(key.as_str(), |(entry, _)| entry))
                 });
@@ -6890,212 +6901,218 @@ impl Transcript {
             .then(|| self.render_working_trailer(cx))
             .flatten();
 
-        let inner: AnyElement = match &row.kind {
-            RowKind::User {
-                text,
-                mentions,
-                attachments,
-                badges,
-                pending,
-            } => {
-                let attachments = attachments.clone();
-                let badges = badges.clone();
-                let text = text.clone();
-                let mentions = mentions.clone();
-                let pending = *pending;
-                // Attachment thumbnails ride ABOVE the bubble, right-aligned
-                // (chat-view.tsx RowView: UserAttachmentStrip then the text
-                // HStack); image-only sends show no bubble at all.
-                let mut column = div().w_full().flex().flex_col();
-                if !attachments.is_empty() {
-                    column = column.child(self.render_user_attachments(
-                        &row.id,
-                        &attachments,
-                        window,
-                        cx,
-                    ));
-                }
-                if !badges.is_empty() {
-                    column = column.child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .flex_row()
-                            .flex_wrap()
-                            .justify_end()
-                            .items_center()
-                            .gap(px(6.0))
-                            .pb(px(6.0))
-                            .children(badges.iter().enumerate().map(|(bix, badge)| {
-                                crate::badges::render(
-                                    SharedString::from(format!("{}#badge{bix}", row.id)),
-                                    badge,
-                                    &theme,
-                                )
-                            })),
-                    );
-                }
-                if !text.is_empty() {
-                    // `min_w_0` is load-bearing: gpui text answers min/max-content
-                    // probes with its UNWRAPPED width, so without it the bubble's
-                    // automatic min-size is the full single-line width — the flex
-                    // item can't shrink, `justify_end` pushes the overflow off the
-                    // left edge, and long prompts render as one clipped line
-                    // instead of wrapping inside the 80% column cap.
-                    column = column.child(
-                        div().w_full().flex().justify_end().child(
+        let inner: AnyElement = if let Some(card) = self.agent_creation_card(&row, cx) {
+            card
+        } else {
+            match &row.kind {
+                RowKind::User {
+                    text,
+                    mentions,
+                    attachments,
+                    badges,
+                    pending,
+                } => {
+                    let attachments = attachments.clone();
+                    let badges = badges.clone();
+                    let text = text.clone();
+                    let mentions = mentions.clone();
+                    let pending = *pending;
+                    // Attachment thumbnails ride ABOVE the bubble, right-aligned
+                    // (chat-view.tsx RowView: UserAttachmentStrip then the text
+                    // HStack); image-only sends show no bubble at all.
+                    let mut column = div().w_full().flex().flex_col();
+                    if !attachments.is_empty() {
+                        column = column.child(self.render_user_attachments(
+                            &row.id,
+                            &attachments,
+                            window,
+                            cx,
+                        ));
+                    }
+                    if !badges.is_empty() {
+                        column = column.child(
                             div()
-                                .min_w_0()
-                                .max_w(px(self.content_width * 0.8))
-                                .bg(crate::theme::user_bubble_bg())
-                                .rounded(px(Theme::BUBBLE_RADIUS))
-                                .px(px(16.0))
-                                .py(px(10.0))
-                                .text_size(crate::typography::ui_rems(14.0))
-                                .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
-                                .text_color(theme.text)
-                                .when(pending, |el| el.opacity(0.65))
-                                .child(self.render_user_body(
-                                    &row.id, ix, text, mentions, &theme, window, cx,
-                                )),
-                        ),
-                    );
-                }
-                column.into_any_element()
-            }
-            RowKind::Markdown { tree, block_ix } => {
-                let Some(top) = tree.blocks.get(*block_ix) else {
-                    return gpui::Empty.into_any_element();
-                };
-                let code = self.code_uis_for(&row.id, &top.block, *block_ix, cx);
-                let media = self.diagram_ui_for(&row.id, cx);
-                let opts = RenderOptions {
-                    tasks: None,
-                    media,
-                    row_key: row.id.clone(),
-                    veil: None,
-                    cache: (!render_cache_disabled()).then(|| self.render_cache.clone()),
-                    now: Instant::now(),
-                    copy: Some(self.copy_ui_for(&row.id, cx)),
-                    link: self.link_ui(),
-                    workspace_root: workspace_root.clone(),
-                    code,
-                };
-                let highlight = self.code_highlight_for(&row.id, tree, Some(*block_ix), cx);
-                render::render_block(
-                    &top.block,
-                    *block_ix,
-                    *block_ix,
-                    &opts,
-                    &theme,
-                    window,
-                    highlight
-                        .get(block_ix)
-                        .and_then(|o| o.as_deref())
-                        .map(|document| document.lines.as_slice()),
-                )
-            }
-            RowKind::LiveMarkdown { tree, block_ix } => {
-                let Some(top) = tree.blocks.get(*block_ix) else {
-                    return gpui::Empty.into_any_element();
-                };
-                let code = self.code_uis_for(&row.id, &top.block, *block_ix, cx);
-                // Per-appended-chunk fade veil (opacity only — layout commits
-                // instantly). Reduced motion renders with no veil at all.
-                // Baseline rows (text already streamed when the transcript
-                // attached) start seeded: the existing reply must not fade in
-                // on a session switch — only fresh appends animate.
-                let seed_history = !self.veils.contains_key(&row.id)
-                    && self.historical_markdown.contains_key(&row.id);
-                let veil = (!motion::reduced_motion(cx)).then(|| {
-                    self.veils
-                        .entry(row.id.clone())
-                        .or_insert_with(|| {
-                            if seed_history || self.veil_baseline.contains(&row.id) {
-                                Rc::new(RefCell::new(RowVeil::seeded()))
-                            } else {
-                                Rc::default()
-                            }
-                        })
-                        .clone()
-                });
-                let media = self.diagram_ui_for(&row.id, cx);
-                let opts = RenderOptions {
-                    tasks: None,
-                    media,
-                    row_key: row.id.clone(),
-                    veil: veil.clone(),
-                    cache: (!render_cache_disabled()).then(|| self.render_cache.clone()),
-                    now: Instant::now(),
-                    copy: Some(self.copy_ui_for(&row.id, cx)),
-                    link: self.link_ui(),
-                    workspace_root: workspace_root.clone(),
-                    code,
-                };
-                if seed_history && let Some(veil) = &veil {
-                    let historical = &self.historical_markdown[&row.id];
-                    if let RowKind::LiveMarkdown { tree, block_ix } = &historical.kind
-                        && let Some(top) = tree.blocks.get(*block_ix)
-                    {
-                        // Use the renderer's own nested element keys and text
-                        // flattening, but never cache/paint the historical tree.
-                        let seed_opts = RenderOptions {
-                            cache: None,
-                            link: None,
-                            ..opts.clone()
-                        };
-                        let _ = render::render_block(
-                            &top.block, *block_ix, *block_ix, &seed_opts, &theme, window, None,
+                                .w_full()
+                                .flex()
+                                .flex_row()
+                                .flex_wrap()
+                                .justify_end()
+                                .items_center()
+                                .gap(px(6.0))
+                                .pb(px(6.0))
+                                .children(badges.iter().enumerate().map(|(bix, badge)| {
+                                    crate::badges::render(
+                                        SharedString::from(format!("{}#badge{bix}", row.id)),
+                                        badge,
+                                        &theme,
+                                    )
+                                })),
                         );
+                    }
+                    if !text.is_empty() {
+                        // `min_w_0` is load-bearing: gpui text answers min/max-content
+                        // probes with its UNWRAPPED width, so without it the bubble's
+                        // automatic min-size is the full single-line width — the flex
+                        // item can't shrink, `justify_end` pushes the overflow off the
+                        // left edge, and long prompts render as one clipped line
+                        // instead of wrapping inside the 80% column cap.
+                        column = column.child(
+                            div().w_full().flex().justify_end().child(
+                                div()
+                                    .min_w_0()
+                                    .max_w(px(self.content_width * 0.8))
+                                    .bg(crate::theme::user_bubble_bg())
+                                    .rounded(px(Theme::BUBBLE_RADIUS))
+                                    .px(px(16.0))
+                                    .py(px(10.0))
+                                    .text_size(crate::typography::ui_rems(14.0))
+                                    .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
+                                    .text_color(theme.text)
+                                    .when(pending, |el| el.opacity(0.65))
+                                    .child(self.render_user_body(
+                                        &row.id, ix, text, mentions, &theme, window, cx,
+                                    )),
+                            ),
+                        );
+                    }
+                    column.into_any_element()
+                }
+                RowKind::Markdown { tree, block_ix } => {
+                    let Some(top) = tree.blocks.get(*block_ix) else {
+                        return gpui::Empty.into_any_element();
+                    };
+                    let code = self.code_uis_for(&row.id, &top.block, *block_ix, cx);
+                    let media = self.diagram_ui_for(&row.id, cx);
+                    let opts = RenderOptions {
+                        tasks: None,
+                        media,
+                        row_key: row.id.clone(),
+                        veil: None,
+                        cache: (!render_cache_disabled()).then(|| self.render_cache.clone()),
+                        now: Instant::now(),
+                        copy: Some(self.copy_ui_for(&row.id, cx)),
+                        link: self.link_ui(),
+                        workspace_root: workspace_root.clone(),
+                        code,
+                    };
+                    let highlight = self.code_highlight_for(&row.id, tree, Some(*block_ix), cx);
+                    render::render_block(
+                        &top.block,
+                        *block_ix,
+                        *block_ix,
+                        &opts,
+                        &theme,
+                        window,
+                        highlight
+                            .get(block_ix)
+                            .and_then(|o| o.as_deref())
+                            .map(|document| document.lines.as_slice()),
+                    )
+                }
+                RowKind::LiveMarkdown { tree, block_ix } => {
+                    let Some(top) = tree.blocks.get(*block_ix) else {
+                        return gpui::Empty.into_any_element();
+                    };
+                    let code = self.code_uis_for(&row.id, &top.block, *block_ix, cx);
+                    // Per-appended-chunk fade veil (opacity only — layout commits
+                    // instantly). Reduced motion renders with no veil at all.
+                    // Baseline rows (text already streamed when the transcript
+                    // attached) start seeded: the existing reply must not fade in
+                    // on a session switch — only fresh appends animate.
+                    let seed_history = !self.veils.contains_key(&row.id)
+                        && self.historical_markdown.contains_key(&row.id);
+                    let veil = (!motion::reduced_motion(cx)).then(|| {
+                        self.veils
+                            .entry(row.id.clone())
+                            .or_insert_with(|| {
+                                if seed_history || self.veil_baseline.contains(&row.id) {
+                                    Rc::new(RefCell::new(RowVeil::seeded()))
+                                } else {
+                                    Rc::default()
+                                }
+                            })
+                            .clone()
+                    });
+                    let media = self.diagram_ui_for(&row.id, cx);
+                    let opts = RenderOptions {
+                        tasks: None,
+                        media,
+                        row_key: row.id.clone(),
+                        veil: veil.clone(),
+                        cache: (!render_cache_disabled()).then(|| self.render_cache.clone()),
+                        now: Instant::now(),
+                        copy: Some(self.copy_ui_for(&row.id, cx)),
+                        link: self.link_ui(),
+                        workspace_root: workspace_root.clone(),
+                        code,
+                    };
+                    if seed_history && let Some(veil) = &veil {
+                        let historical = &self.historical_markdown[&row.id];
+                        if let RowKind::LiveMarkdown { tree, block_ix } = &historical.kind
+                            && let Some(top) = tree.blocks.get(*block_ix)
+                        {
+                            // Use the renderer's own nested element keys and text
+                            // flattening, but never cache/paint the historical tree.
+                            let seed_opts = RenderOptions {
+                                cache: None,
+                                link: None,
+                                ..opts.clone()
+                            };
+                            let _ = render::render_block(
+                                &top.block, *block_ix, *block_ix, &seed_opts, &theme, window, None,
+                            );
+                            veil.borrow_mut().finish_seeding();
+                        }
+                    }
+                    let highlight = self.code_highlight_for(&row.id, tree, Some(*block_ix), cx);
+                    let timer = frame_stats_enabled().then(Instant::now);
+                    let el = render::render_block(
+                        &top.block,
+                        *block_ix,
+                        *block_ix,
+                        &opts,
+                        &theme,
+                        window,
+                        highlight
+                            .get(block_ix)
+                            .and_then(|o| o.as_deref())
+                            .map(|document| document.lines.as_slice()),
+                    );
+                    if let Some(start) = timer {
+                        record_live_frame_us(start.elapsed().as_micros() as u64);
+                    }
+                    // The attach pass for this row is done (every element rendered
+                    // above seeded its baseline synchronously): elements appearing
+                    // from the NEXT pass on are newly streamed and fade normally.
+                    if let Some(veil) = &veil {
                         veil.borrow_mut().finish_seeding();
                     }
+                    // Share the loaders' bounded clock. A display-frame callback
+                    // here would pin the transcript to 60/120Hz for the whole
+                    // stream, bypassing the clock even with no loader mounted.
+                    if veil.is_some_and(|v| v.borrow().is_fading()) {
+                        motion::pulse_lease(cx.entity_id(), cx);
+                    }
+                    el
                 }
-                let highlight = self.code_highlight_for(&row.id, tree, Some(*block_ix), cx);
-                let timer = frame_stats_enabled().then(Instant::now);
-                let el = render::render_block(
-                    &top.block,
-                    *block_ix,
-                    *block_ix,
-                    &opts,
-                    &theme,
-                    window,
-                    highlight
-                        .get(block_ix)
-                        .and_then(|o| o.as_deref())
-                        .map(|document| document.lines.as_slice()),
-                );
-                if let Some(start) = timer {
-                    record_live_frame_us(start.elapsed().as_micros() as u64);
+                RowKind::ToolGroup { tools, auto_open } => {
+                    self.render_tool_group(&row.id, tools, *auto_open, &theme, cx)
                 }
-                // The attach pass for this row is done (every element rendered
-                // above seeded its baseline synchronously): elements appearing
-                // from the NEXT pass on are newly streamed and fade normally.
-                if let Some(veil) = &veil {
-                    veil.borrow_mut().finish_seeding();
+                RowKind::InputChip { header, resolved } => {
+                    input_chip(header.clone(), *resolved, &theme)
                 }
-                // Share the loaders' bounded clock. A display-frame callback
-                // here would pin the transcript to 60/120Hz for the whole
-                // stream, bypassing the clock even with no loader mounted.
-                if veil.is_some_and(|v| v.borrow().is_fading()) {
-                    motion::pulse_lease(cx.entity_id(), cx);
+                RowKind::GeneratedImage {
+                    owner,
+                    path,
+                    name,
+                    mime_type,
+                    viewed,
+                } => {
+                    self.render_generated_image(&row.id, owner, path, name, mime_type, *viewed, cx)
                 }
-                el
+                RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
+                RowKind::GoalAchieved { label } => goal_achieved_row(label.clone(), &theme),
             }
-            RowKind::ToolGroup { tools, auto_open } => {
-                self.render_tool_group(&row.id, tools, *auto_open, &theme, cx)
-            }
-            RowKind::InputChip { header, resolved } => {
-                input_chip(header.clone(), *resolved, &theme)
-            }
-            RowKind::GeneratedImage {
-                owner,
-                path,
-                name,
-                mime_type,
-                viewed,
-            } => self.render_generated_image(&row.id, owner, path, name, mime_type, *viewed, cx),
-            RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
-            RowKind::GoalAchieved { label } => goal_achieved_row(label.clone(), &theme),
         };
 
         // Hover-revealed metadata strip: a RESERVED 32px lane under the

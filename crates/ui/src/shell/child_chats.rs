@@ -21,7 +21,7 @@ use chrono::DateTime;
 use luna_proto::{Chat, ChatIndicator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ChildChatStatus {
+pub(crate) enum ChildChatStatus {
     NeedsApproval,
     NeedsInput,
     Running,
@@ -33,7 +33,7 @@ pub(super) enum ChildChatStatus {
 }
 
 impl ChildChatStatus {
-    pub(super) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::NeedsApproval => "Needs approval",
             Self::NeedsInput => "Needs input",
@@ -61,7 +61,7 @@ impl ChildChatStatus {
     }
 
     /// The sidebar's status palette, so a child reads the same in both places.
-    pub(super) fn color(self, theme: &Theme) -> gpui::Hsla {
+    pub(crate) fn color(self, theme: &Theme) -> gpui::Hsla {
         let indicator = match self {
             Self::NeedsApproval => ChatIndicator::AwaitingApproval,
             Self::NeedsInput => ChatIndicator::AwaitingInput,
@@ -119,7 +119,7 @@ pub(super) fn direct_child_counts(chats: &[Chat]) -> std::collections::HashMap<S
 /// Live session state wins; otherwise the newest recorded child outcome, then
 /// the seen marker. Outcomes are compacted after delivery, so a reported child
 /// can read Idle.
-pub(super) fn child_chat_status(
+pub(crate) fn child_chat_status(
     state: &AppState,
     chat: &Chat,
     now: DateTime<Utc>,
@@ -152,7 +152,7 @@ pub(super) fn child_chat_status(
     }
 }
 
-pub(super) fn provider_label(harness: HarnessId) -> &'static str {
+pub(crate) fn provider_label(harness: HarnessId) -> &'static str {
     match harness {
         HarnessId::Codex => "Codex",
         HarnessId::ClaudeCode => "Claude Code",

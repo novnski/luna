@@ -18,10 +18,8 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
-async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
-    use luna_proto::{
-        AgentEvent, ApprovalDecision, DoneStatus, PermissionMode, RunRequest, SandboxLevel,
-    };
+async fn fake_codex_tool_uses_real_durable_queue_without_extra_approval() {
+    use luna_proto::{AgentEvent, DoneStatus, PermissionMode, RunRequest, SandboxLevel};
 
     let root = TempDir::new().unwrap();
     let registry = Arc::new(HarnessRegistry::new());
@@ -102,55 +100,11 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
         .await
         .unwrap();
     let result = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        let mut approvals = 0;
+        let approvals = 0;
         loop {
             match events.recv().await.unwrap().event {
-                AgentEvent::InputRequested {
-                    request_id,
-                    questions,
-                } => {
-                    approvals += 1;
-                    assert_eq!(questions.len(), 1);
-                    assert!(questions[0].question.contains(&target));
-                    let decision = match approvals {
-                        1 => {
-                            assert!(
-                                questions[0]
-                                    .question
-                                    .contains("Synthetic L25 queued follow-up")
-                            );
-                            ApprovalDecision::AllowOnce
-                        }
-                        2 => {
-                            assert!(
-                                questions[0]
-                                    .question
-                                    .contains("Different synthetic L25 follow-up")
-                            );
-                            ApprovalDecision::AllowOnce
-                        }
-                        _ => ApprovalDecision::Deny,
-                    };
-                    assert_eq!(
-                        core.sessions.respond_luna_local_ui_approval(
-                            &source,
-                            &request_id,
-                            decision
-                        ),
-                        if approvals <= 2 {
-                            luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
-                        } else {
-                            luna_engine::sessions::LunaApprovalOutcome::Denied
-                        }
-                    );
-                    assert_eq!(
-                        core.sessions.respond_luna_local_ui_approval(
-                            &source,
-                            &request_id,
-                            ApprovalDecision::AllowOnce
-                        ),
-                        luna_engine::sessions::LunaApprovalOutcome::Stale
-                    );
+                AgentEvent::InputRequested { .. } => {
+                    panic!("Ordinary app coordination must not ask again")
                 }
                 AgentEvent::Done { status, .. } => break (approvals, status),
                 _ => {}
@@ -159,7 +113,7 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
     })
     .await
     .expect("synthetic provider turn settled");
-    assert_eq!(result.0, 3);
+    assert_eq!(result.0, 0);
     assert_eq!(result.1, DoneStatus::Completed);
     let receipt = core
         .doc_host
@@ -229,10 +183,8 @@ async fn fake_codex_tool_uses_local_approval_and_real_durable_queue_service() {
 }
 
 #[tokio::test]
-async fn approved_provider_send_rejects_target_revision_changed_while_waiting() {
-    use luna_proto::{
-        AgentEvent, ApprovalDecision, DoneStatus, PermissionMode, RunRequest, SandboxLevel,
-    };
+async fn provider_send_rejects_archived_target_without_parking() {
+    use luna_proto::{AgentEvent, DoneStatus, PermissionMode, RunRequest, SandboxLevel};
     use luna_rpc::methods;
 
     let root = TempDir::new().unwrap();
@@ -284,6 +236,27 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
             )
             .unwrap();
     }
+    let snapshot = core
+        .doc_host
+        .task_command_snapshot(&target)
+        .unwrap()
+        .snapshot;
+    let changed: luna_proto::CommandReceipt = client
+        .call_as(
+            methods::EXECUTE_TASK_COMMAND,
+            serde_json::json!({
+                "commandId": "target-revision-change",
+                "actorId": "synthetic-user",
+                "clientId": "synthetic-test",
+                "clientSessionId": "synthetic-test",
+                "taskId": target,
+                "expectedTaskRevision": snapshot.task_revision,
+                "intent": { "kind": "setArchived", "archived": true }
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(changed.status, luna_proto::CommandReceiptStatus::Applied);
     let (_, mut events) = core.sessions.subscribe(&source, 0).unwrap();
     core.sessions
         .dispatch(
@@ -317,36 +290,8 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
     let status = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             match events.recv().await.unwrap().event {
-                AgentEvent::InputRequested { request_id, .. } => {
-                    let snapshot = core
-                        .doc_host
-                        .task_command_snapshot(&target)
-                        .unwrap()
-                        .snapshot;
-                    let changed: luna_proto::CommandReceipt = client
-                        .call_as(
-                            methods::EXECUTE_TASK_COMMAND,
-                            serde_json::json!({
-                                "commandId": "target-revision-change",
-                                "actorId": "synthetic-user",
-                                "clientId": "synthetic-test",
-                                "clientSessionId": "synthetic-test",
-                                "taskId": target,
-                                "expectedTaskRevision": snapshot.task_revision,
-                                "intent": { "kind": "setArchived", "archived": true }
-                            }),
-                        )
-                        .await
-                        .unwrap();
-                    assert_eq!(changed.status, luna_proto::CommandReceiptStatus::Applied);
-                    assert_eq!(
-                        core.sessions.respond_luna_local_ui_approval(
-                            &source,
-                            &request_id,
-                            ApprovalDecision::AllowOnce
-                        ),
-                        luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
-                    );
+                AgentEvent::InputRequested { .. } => {
+                    panic!("Archived-target refusal must not ask for approval")
                 }
                 AgentEvent::Done { status, .. } => break status,
                 _ => {}
@@ -373,9 +318,7 @@ async fn approved_provider_send_rejects_target_revision_changed_while_waiting() 
 
 #[tokio::test]
 async fn approved_provider_send_sql_failure_has_no_queued_receipt_or_row() {
-    use luna_proto::{
-        AgentEvent, ApprovalDecision, DoneStatus, PermissionMode, RunRequest, SandboxLevel,
-    };
+    use luna_proto::{AgentEvent, DoneStatus, PermissionMode, RunRequest, SandboxLevel};
 
     let root = TempDir::new().unwrap();
     let registry = Arc::new(HarnessRegistry::new());
@@ -425,6 +368,16 @@ async fn approved_provider_send_sql_failure_has_no_queued_receipt_or_row() {
             )
             .unwrap();
     }
+    let db_path = root
+        .path()
+        .join("engine/orgs/synthetic-org/synthetic-user/docs.sqlite3");
+    let db = rusqlite::Connection::open(db_path).unwrap();
+    db.execute_batch(&format!(
+        "CREATE TRIGGER fail_l25_send BEFORE UPDATE ON snapshots
+                         WHEN OLD.doc_id='{target}'
+                         BEGIN SELECT RAISE(ABORT, 'synthetic L25 storage failure'); END;"
+    ))
+    .unwrap();
     let (_, mut events) = core.sessions.subscribe(&source, 0).unwrap();
     core.sessions
         .dispatch(
@@ -455,28 +408,11 @@ async fn approved_provider_send_sql_failure_has_no_queued_receipt_or_row() {
         )
         .await
         .unwrap();
-    let db_path = root
-        .path()
-        .join("engine/orgs/synthetic-org/synthetic-user/docs.sqlite3");
-    let db = rusqlite::Connection::open(db_path).unwrap();
     let status = tokio::time::timeout(std::time::Duration::from_secs(15), async {
         loop {
             match events.recv().await.unwrap().event {
-                AgentEvent::InputRequested { request_id, .. } => {
-                    db.execute_batch(&format!(
-                        "CREATE TRIGGER fail_l25_send BEFORE UPDATE ON snapshots
-                         WHEN OLD.doc_id='{target}'
-                         BEGIN SELECT RAISE(ABORT, 'synthetic L25 storage failure'); END;"
-                    ))
-                    .unwrap();
-                    assert_eq!(
-                        core.sessions.respond_luna_local_ui_approval(
-                            &source,
-                            &request_id,
-                            ApprovalDecision::AllowOnce
-                        ),
-                        luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
-                    );
+                AgentEvent::InputRequested { .. } => {
+                    panic!("Storage failure must not park an app approval")
                 }
                 AgentEvent::Done { status, .. } => break status,
                 _ => {}
@@ -637,6 +573,8 @@ async fn local_backend_pages_only_visible_tasks_and_waits_on_status_rows() {
     assert_eq!(
         attached_names,
         HashSet::from([
+            "get_workspace",
+            "manage_workspace",
             "automation_update",
             "list_automations",
             "create_thread",
@@ -1324,7 +1262,12 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
     for tool in tools {
         let read_only = !matches!(
             tool["name"].as_str(),
-            Some("send_message_to_thread" | "create_thread" | "automation_update")
+            Some(
+                "send_message_to_thread"
+                    | "create_thread"
+                    | "automation_update"
+                    | "manage_workspace"
+            )
         );
         assert_eq!(tool["annotations"]["readOnlyHint"], read_only, "{tool}");
     }
@@ -1440,8 +1383,7 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
     );
     assert!(failed, "foreign-project read must be rejected");
 
-    // create_thread parks on the exact local approval; nothing times it out
-    // before the user answers.
+    // Ordinary creation is an app action and completes without another card.
     let create_args = serde_json::json!({
         "prompt": "MCP child brief", "idempotencyKey": "mcp-child-1", "title": "MCP child"
     });
@@ -1458,17 +1400,6 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         let (url, token) = (a.url.clone(), a.token.clone());
         tokio::spawn(async move { mcp_post(&http, &url, &token, &body).await })
     };
-    let request_id = next_approval(&mut events).await;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    assert!(!pending_create.is_finished(), "approval must stay parked");
-    assert_eq!(
-        core.sessions.respond_luna_local_ui_approval(
-            &source,
-            &request_id,
-            ApprovalDecision::AllowOnce
-        ),
-        luna_engine::sessions::LunaApprovalOutcome::AllowedOnce
-    );
     let (failed, text) = tool_text(&pending_create.await.unwrap().1);
     assert!(!failed, "{text}");
     let receipt: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -1485,10 +1416,129 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         Some(source.as_str())
     );
 
+    // Exercise new workspace operations through the actual attached MCP
+    // endpoint while the parent provider turn remains active.
+    macro_rules! workspace_call {
+        ($wire:expr,$call:expr,$name:expr,$arguments:expr) => {{
+            let response = mcp_post(
+                &http,
+                &a.url,
+                &a.token,
+                &call($wire, $name, $arguments, &a.thread, &a.turn, $call),
+            )
+            .await
+            .1;
+            let (failed, text) = tool_text(&response);
+            assert!(!failed, "{}: {text}", $call);
+            serde_json::from_str::<serde_json::Value>(&text).unwrap()
+        }};
+    }
+    let workspace = workspace_call!(21, "workspace-read", "get_workspace", serde_json::json!({}));
+    assert_eq!(workspace["mainChatId"], source);
+    assert_eq!(workspace["layout"]["root"]["activeChatId"], source);
+    let split_request = serde_json::json!({"action":"openTab","taskIds":[child],"idempotencyKey":"runtime-split",
+        "expectedLayoutRevision":workspace["layout"]["revision"],"destination":{"kind":"split","nodeId":workspace["layout"]["root"]["id"],
+        "edge":"right","newPaneId":uuid::Uuid::new_v4(),"splitId":uuid::Uuid::new_v4()}});
+    let split = workspace_call!(
+        22,
+        "workspace-split",
+        "manage_workspace",
+        split_request.clone()
+    );
+    assert_eq!(split["snapshot"]["root"]["kind"], "split");
+    assert_eq!(
+        split["snapshot"]["focusedPaneId"],
+        workspace["layout"]["focusedPaneId"]
+    );
+    let replay = workspace_call!(
+        23,
+        "workspace-split-replay",
+        "manage_workspace",
+        split_request
+    );
+    assert_eq!(replay["snapshot"], split["snapshot"]);
+    let stale = call(
+        24,
+        "manage_workspace",
+        serde_json::json!({"action":"closeTabs","taskIds":[child],"idempotencyKey":"runtime-stale",
+        "expectedLayoutRevision":workspace["layout"]["revision"]}),
+        &a.thread,
+        &a.turn,
+        "workspace-stale",
+    );
+    assert!(tool_text(&mcp_post(&http, &a.url, &a.token, &stale).await.1).0);
+    let closed = workspace_call!(
+        25,
+        "workspace-close",
+        "manage_workspace",
+        serde_json::json!({"action":"closeTabs","taskIds":[child],"idempotencyKey":"runtime-close",
+        "expectedLayoutRevision":split["snapshot"]["revision"]})
+    );
+    let closed_layout: luna_proto::ChatWorkbenchSnapshot =
+        serde_json::from_value(closed["snapshot"].clone()).unwrap();
+    assert!(!closed_layout.contains_chat(&child));
+    assert!(!core.workspace.chat(&child).unwrap().unwrap().archived);
+    let fork = workspace_call!(
+        26,
+        "workspace-fork",
+        "manage_workspace",
+        serde_json::json!({"action":"forkThread","taskIds":[source],"idempotencyKey":"runtime-fork",
+        "expectedLayoutRevision":closed["snapshot"]["revision"]})
+    );
+    let fork_id = fork["taskId"].as_str().unwrap().to_owned();
+    assert_eq!(fork["sourceTaskId"], source);
+    assert_eq!(fork["startupState"], "idle");
+    assert_eq!(
+        core.task_identity
+            .view(&fork_id)
+            .unwrap()
+            .task
+            .lineage
+            .source_task_id
+            .as_deref(),
+        Some(source.as_str())
+    );
+    let fork2 = workspace_call!(
+        27,
+        "workspace-fork-two",
+        "manage_workspace",
+        serde_json::json!({"action":"forkThread","taskIds":[source],"idempotencyKey":"runtime-fork-two",
+        "expectedLayoutRevision":fork["placement"]["snapshot"]["revision"]})
+    );
+    let fork2_id = fork2["taskId"].as_str().unwrap().to_owned();
+    let archived = workspace_call!(
+        28,
+        "workspace-archive",
+        "manage_workspace",
+        serde_json::json!({"action":"archiveThreads","taskIds":[fork_id,fork2_id],
+        "idempotencyKey":"runtime-archive","closeTabs":true,"expectedLayoutRevision":fork2["placement"]["snapshot"]["revision"]})
+    );
+    assert_eq!(archived["allArchived"], true, "{archived}");
+    assert_eq!(archived["outcomes"].as_array().unwrap().len(), 2);
+    for id in [&fork_id, &fork2_id] {
+        assert!(core.workspace.chat(id).unwrap().unwrap().archived);
+    }
+    assert!(!core.workspace.chat(&source).unwrap().unwrap().archived);
+    assert!(!core.workspace.chat(&sibling).unwrap().unwrap().archived);
+    let forbidden = call(
+        29,
+        "manage_workspace",
+        serde_json::json!({"action":"archiveThreads","taskIds":[sibling],"idempotencyKey":"runtime-unrelated"}),
+        &a.thread,
+        &a.turn,
+        "workspace-unrelated",
+    );
+    assert!(tool_text(&mcp_post(&http, &a.url, &a.token, &forbidden).await.1).0);
+    if let Ok(directory) = std::env::var("AGENT_WORKSPACE_EVIDENCE_DIR") {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(std::path::Path::new(&directory).join("runtime-workspace.json"),serde_json::to_vec_pretty(&serde_json::json!({
+            "provider":"deterministic Codex peer through production MCP", "workspace":workspace,"split":split,"replay":replay,"closed":closed,"fork":fork,"fork2":fork2,"archived":archived
+        })).unwrap()).unwrap();
+    }
+
     // Codex abandons a parked call (notifications/cancelled): the executor is
     // dropped, the card retired, and nothing is created.
-    let abandoned_args =
-        serde_json::json!({"prompt": "Abandoned brief", "idempotencyKey": "mcp-abandoned"});
+    let abandoned_args = serde_json::json!({"prompt": "Abandoned brief", "idempotencyKey": "mcp-abandoned", "permissionMode":"full"});
     let abandoned = {
         let http = http.clone();
         let body = call(
@@ -1569,7 +1619,7 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         let body = call(
             50,
             "create_thread",
-            serde_json::json!({"prompt": "Stopped brief", "idempotencyKey": "mcp-stopped"}),
+            serde_json::json!({"prompt": "Stopped brief", "idempotencyKey": "mcp-stopped", "permissionMode":"full"}),
             &a.thread,
             &a.turn,
             "c-stop",

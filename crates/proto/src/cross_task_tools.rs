@@ -31,6 +31,17 @@ pub struct CrossTaskSummary {
     pub status: String,
     pub archived: bool,
     pub updated_at_ms: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<CrossTaskAgent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrossTaskAgent {
+    pub provider: crate::HarnessId,
+    pub model: Option<String>,
+    pub reasoning: Option<crate::ReasoningLevel>,
+    pub lineage: crate::TaskLineage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,10 +236,10 @@ pub struct CreateChildThreadRequest {
     /// using its own account/defaults, never the parent's native binding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<crate::HarnessId>,
-    /// Absent: the parent's model for the same provider; otherwise provider default.
+    /// Absent: this provider's saved fresh-chat default, then catalog default.
     #[serde(default)]
     pub model: Option<String>,
-    /// Absent: inherited only when provider and model are unchanged.
+    /// Absent: compatible saved provider reasoning, then the model default.
     #[serde(default)]
     pub reasoning: Option<crate::ReasoningLevel>,
     /// Provider-advertised option ID -> choice ID. Never internal runtime keys.
@@ -240,7 +251,7 @@ pub struct CreateChildThreadRequest {
     pub cwd: Option<String>,
     #[serde(default = "child_reports_default")]
     pub report_results: bool,
-    /// Consent to queue a new parent turn, shown in the one-use approval.
+    /// Explicit opt-in to queue a new parent turn after the child reports.
     #[serde(default)]
     pub continue_parent: bool,
     /// Where the child works. Absent: `cwd` when given, else the parent's
@@ -323,6 +334,9 @@ pub enum ChildCheckoutRequest {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChildThreadReceipt {
+    /// View placement is independent of durable conversation creation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement: Option<serde_json::Value>,
     pub task_id: String,
     pub parent_task_id: String,
     pub command: CommandReceipt,

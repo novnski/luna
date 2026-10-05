@@ -517,7 +517,12 @@ pub(super) fn handle(
     } else {
         command_choices(params)
     };
-    // Full mode remains once-only; never choose a session or durable rule.
+    // Full never parks a permission prompt. Additional permissions are scoped
+    // to this exact turn; ordinary requests remain once-only, never a rule.
+    if context.permission_policy.effective_mode == luna_proto::PermissionMode::Full && permissions {
+        client.respond(&id, choices[1].response.clone());
+        return;
+    }
     if context.auto_approve && !permissions {
         client.respond(
             &id,
@@ -618,6 +623,12 @@ pub(super) fn handle_tool_approval(
         Some(persist) => json!({"action":"accept","content":null,"_meta":{"persist":persist}}),
         None => json!({"action":"accept","content":null}),
     };
+    // The caller already validated the live thread/turn and duplicate ID.
+    // Full authorizes this invocation only, without changing connector policy.
+    if context.permission_policy.effective_mode == luna_proto::PermissionMode::Full {
+        client.respond(&id, accept(None));
+        return;
+    }
     let mut choices = vec![choice(
         "Allow once",
         "request",

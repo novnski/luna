@@ -2577,6 +2577,31 @@ impl Shell {
 
     /// A Related row's Open: a center tab when the engine has the
     /// workbench (`false` leaves the legacy right-pane view to the caller).
+    pub(super) fn show_agent_chat(&mut self, id: String, split: bool, cx: &mut Context<Self>) {
+        if !self.workbench_ready() {
+            self.open_pane_chat_as_main(id, cx);
+            return;
+        }
+        if !split {
+            self.workbench_open(TabRef::chat(id), cx);
+            return;
+        }
+        let layout = self.workbench.layout();
+        if !self.workbench_split_fits(Some(&layout.focused_pane_id), model::Edge::Right) {
+            self.no_room_notice(cx);
+            return;
+        }
+        let destination =
+            model::split_destination(layout.focused_pane_id.clone(), model::Edge::Right);
+        self.workbench_mutate(
+            model::Command::OpenBackgroundTab {
+                tab: TabRef::chat(id),
+                destination: Some(destination),
+            },
+            cx,
+        );
+    }
+
     pub(super) fn open_related_in_workbench(
         &mut self,
         id: String,

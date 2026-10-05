@@ -569,7 +569,7 @@ case "$turnline" in
   has "$response" '"isError":true' || { fail_turn "$tid" "replayed provider call accepted"; exit 0; }
   response=$(mcp_tool 87 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Different synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-1\"}" th-1 t-l25-send call-send-collision)
   has "$response" '"isError":true' || { fail_turn "$tid" "changed-payload command ID accepted"; exit 0; }
-  response=$(mcp_tool 84 send_message_to_thread "{\"taskId\":\"$target\",\"message\":\"Denied synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-deny\"}" th-1 t-l25-send call-send-deny)
+  response=$(mcp_tool 84 send_message_to_thread "{\"taskId\":\"$foreign\",\"message\":\"Denied synthetic L25 follow-up\",\"idempotencyKey\":\"l25-send-deny\"}" th-1 t-l25-send call-send-deny)
   has "$response" '"isError":true' || { fail_turn "$tid" "denied send accepted"; exit 0; }
   emit '{"method":"turn/completed","params":{"threadId":"th-1","turn":{"id":"t-l25-send","status":"completed"}}}'
   ;;

@@ -323,9 +323,9 @@ impl Controls {
             );
             return;
         }
-        // Full is explicit native bypass. A stray ask is allowed once, never
-        // widened into a rule, unless the user's own ask rule forced it.
-        if self.inner.mode == PermissionMode::Full && request.get("matched_ask_rule").is_none() {
+        // Full is the user's explicit bypass selection. A stray ask, including
+        // a matched ask rule, is allowed once without rewriting saved rules.
+        if self.inner.mode == PermissionMode::Full {
             self.answer(
                 id,
                 allow_response(&input, tool_use_id.as_deref(), None, None),
