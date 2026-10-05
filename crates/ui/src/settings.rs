@@ -549,8 +549,8 @@ pub enum SidebarSort {
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ChatPlacements {
-    /// Child chats listed in the left sidebar as their own rows instead of in
-    /// their parent's Related chats.
+    /// Children and forks explicitly dragged into the left sidebar. Child
+    /// lineage and fork source remain unchanged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub promoted: Vec<String>,
     /// Ordinary chats listed alongside another chat in its Related chats

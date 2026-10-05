@@ -741,6 +741,22 @@ impl Shell {
                 cx.notify();
             });
         }
+        // The focused chat's work watch follows the same focus (and the
+        // engine connection); unchanged, this is a comparison only.
+        let stale = {
+            let state = self.state.read(cx);
+            let focus = state.execution_focus_chat();
+            match (&state.task_work, focus) {
+                (None, None) => false,
+                (Some(view), Some(focus)) => {
+                    view.task_id != focus || view.engine_generation != state.engine_generation()
+                }
+                _ => true,
+            }
+        };
+        if stale {
+            self.state.update(cx, |state, cx| state.sync_task_work(cx));
+        }
     }
 
     fn workbench_ready(&self) -> bool {
@@ -1493,6 +1509,23 @@ impl Shell {
 
     /// Main's pickers and every visible workbench tab's that renders its
     /// composer: each can hold an open popover that owns the keyboard.
+    /// Main's composer and every visible tab's composer.
+    pub(super) fn visible_composers(&self, cx: &App) -> Vec<Entity<Composer>> {
+        let mut composers = vec![self.composer.clone()];
+        if self.workbench.main.is_empty() {
+            return composers;
+        }
+        for chat in model::visible_chat_ids(&self.workbench.layout()) {
+            if chat == self.workbench.main {
+                continue;
+            }
+            if let Some(composer) = self.workbench_tab_composer(&chat, cx) {
+                composers.push(composer);
+            }
+        }
+        composers
+    }
+
     pub(super) fn visible_pickers(&self, cx: &App) -> Vec<Entity<crate::pickers::Pickers>> {
         let mut pickers = vec![self.composer.read(cx).pickers().clone()];
         if self.workbench.main.is_empty() {

@@ -96,8 +96,8 @@ fn native_tasks(events: &[AgentEvent]) -> Vec<NativeTaskSnapshot> {
 
 /// W-1…W-11, T-1: the workflow graph through start, progress (deduped,
 /// schema-less and full snapshots), pause/resume, completion enrichment and
-/// late frames. A teammate is its own kind, a shell job and unknown ids are
-/// never captured, and the workflow never becomes a subagent.
+/// late frames. A teammate is its own kind, unknown IDs are never captured,
+/// and the workflow never becomes a subagent.
 #[tokio::test]
 async fn native_workflow_graph_survives_the_parked_wake_shape() {
     let _env = ENV_LOCK.lock().await;
@@ -129,7 +129,10 @@ async fn native_workflow_graph_survives_the_parked_wake_shape() {
         "a workflow must never route as a subagent"
     );
 
-    let tasks = native_tasks(&events);
+    let tasks: Vec<_> = native_tasks(&events)
+        .into_iter()
+        .filter(|task| task.kind != NativeTaskKind::Shell)
+        .collect();
     let ids: Vec<(&str, NativeTaskStatus)> = tasks
         .iter()
         .map(|t| (t.task_id.as_str(), t.status))
@@ -148,7 +151,7 @@ async fn native_workflow_graph_survives_the_parked_wake_shape() {
             ("wf1", NativeTaskStatus::Completed), // task_updated completed
             ("wf1", NativeTaskStatus::Completed), // notification enrichment
         ],
-        "ghost ids, the shell job and late frames produce nothing"
+        "ghost IDs and late frames produce nothing; shell lifecycle is verified separately"
     );
     let revisions: Vec<u64> = tasks.iter().map(|t| t.revision).collect();
     assert!(
@@ -551,4 +554,31 @@ async fn live_workflow_capture_replays_into_a_settled_graph() {
         last.graph_observed,
         last.tool_use_id,
     );
+}
+
+/// Slice 3: a background shell remains observable after its launching tool
+/// returns, without becoming a subagent or ending the parent turn.
+#[tokio::test]
+async fn shell_lifecycle_is_observed_without_subagent_reclassification() {
+    let _guard = ENV_LOCK.lock().await;
+    let harness = ClaudeHarness::new().with_executable(fixture_path());
+    let events = run_to_end(&harness, request("scenario:workflow")).await;
+    let shell: Vec<_> = native_tasks(&events)
+        .into_iter()
+        .filter(|task| task.task_id == "bg1")
+        .collect();
+    assert_eq!(shell.len(), 2, "running and completed shell observations");
+    assert_eq!(serde_json::to_value(shell[0].kind).unwrap(), "shell");
+    assert_eq!(shell[0].status, NativeTaskStatus::Running);
+    assert_eq!(shell[1].status, NativeTaskStatus::Completed);
+    assert!(!events.iter().any(|event| matches!(event,
+        AgentEvent::Subagent { parent_tool_use_id, .. } if parent_tool_use_id == "toolu_bash")));
+    if let Ok(dir) = std::env::var("LUNA_WORK_EVIDENCE") {
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            std::path::Path::new(&dir).join("claude-shell-native-lifecycle.json"),
+            serde_json::to_vec_pretty(&shell).unwrap(),
+        )
+        .unwrap();
+    }
 }

@@ -1245,8 +1245,10 @@ mod context_transfer;
 mod native_extensions;
 mod prompt_stash;
 mod side_chats;
+mod task_work;
 
 pub struct EngineRpc {
+    work_writes: Option<crate::device_write::DeviceWriteHandle>,
     chat_workbenches: Option<crate::chat_workbench::ChatWorkbenches>,
     composer_catalog: std::sync::Mutex<crate::composer_catalog::CatalogCache>,
     github_pr: Option<crate::source_control::pull_requests::GitHubPullRequests>,
@@ -1585,6 +1587,7 @@ impl EngineRpc {
                 .collect(),
         };
         let rpc = Self {
+            work_writes: None,
             chat_workbenches: None,
             composer_catalog: std::sync::Mutex::new(
                 crate::composer_catalog::CatalogCache::default(),
@@ -1627,6 +1630,14 @@ impl EngineRpc {
         rpc.spawn_activity_bootstrap();
         rpc.model_cache.start_background_refresh();
         rpc
+    }
+
+    pub(crate) fn with_work_write_handle(
+        mut self,
+        writes: crate::device_write::DeviceWriteHandle,
+    ) -> Self {
+        self.work_writes = Some(writes);
+        self
     }
 
     pub(crate) fn with_project_commands(
@@ -7715,7 +7726,11 @@ fn restore_owner_paths_overlap(root: &std::path::Path, other: &std::path::Path) 
 fn forwardable(method: &str) -> bool {
     matches!(
         method,
-        methods::LIST_HARNESSES
+        methods::GET_TASK_WORK
+            | methods::WATCH_TASK_WORK
+            | methods::PREVIEW_STOP_TASK_WORK
+            | methods::STOP_TASK_WORK
+            | methods::LIST_HARNESSES
             | methods::GET_PROVIDER_UPDATES
             | methods::UPDATE_PROVIDER
             | methods::GET_USAGE_SNAPSHOT
@@ -7837,7 +7852,8 @@ fn local_only_credential_method(method: &str) -> bool {
 fn is_stream_method(method: &str) -> bool {
     matches!(
         method,
-        methods::WATCH_TASK_COMMANDS
+        methods::WATCH_TASK_WORK
+            | methods::WATCH_TASK_COMMANDS
             | methods::WATCH_DOC_MESSAGES
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
@@ -9031,6 +9047,7 @@ impl RpcService for EngineRpc {
                 .await;
         }
         match method {
+            methods::GET_TASK_WORK | methods::WATCH_TASK_WORK | methods::PREVIEW_STOP_TASK_WORK | methods::STOP_TASK_WORK => self.handle_task_work(method, params).await,
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::CREATE_REMOTE_PAIRING => {

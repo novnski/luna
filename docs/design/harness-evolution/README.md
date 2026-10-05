@@ -37,8 +37,9 @@ conversation owns coordinated UI changes. Shared builds and GUI launches are
 serialized. Unrelated pending-task research remains untouched.
 
 Delivered evidence: [execution diagnostics](verification.md) and
-[portable context and fork findings](slice-2-verification.md). Subsequent
-slices continue with Codex and Claude as the live acceptance targets.
+[portable context and fork findings](slice-2-verification.md), and
+[shared background work](slice-3-verification.md). Subsequent slices continue
+with Codex and Claude as the live acceptance targets.
 
 ## Slice 1 failure cases, specified before implementation
 

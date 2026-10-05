@@ -172,6 +172,30 @@
 //! 47. A Side chat or New thread opened as its own workbench Main loses its
 //!     lineage help (reads as a plain Main), or a deleted source is not
 //!     named as "a deleted chat"; a parentless Main gains lineage copy.
+//! 48. Background work: legacy children (ancestry, no launch ownership) are
+//!     selectable for an owned-work stop, or the real host's view is missing.
+//! 49. An owned child or grandchild is not stoppable, a service or a later
+//!     independent child is selectable, or counts come from the page.
+//! 50. The Work chip shows in, or acts from, a composer that is not the
+//!     focused chat's; paging duplicates rows or treats a page as everything.
+//! 51. A stop runs without an explicit selection and preview; Requested reads
+//!     as Stopped; one preview sends more than one request id.
+//! 52. A lost stop answer is retried or shown as done.
+//! 53. A refused (stale) preview is retargeted instead of returning to the
+//!     selection with rows that are no longer stoppable dropped.
+//! 54. After the work stream ends, the last list reads as live or can be
+//!     stopped.
+//! 55. Escape in the Work popover reaches the stop path.
+//! 56. A Work row's Open targets the focused chat, a same-titled chat or the
+//!     owner instead of the row's own chat (Open chat), or the row's chat
+//!     instead of its lifecycle owner (Open owner).
+//! 57. Open from a pane composer's popover routes through Main's or opens
+//!     outside the workbench's related-chat routing; the popover stays open.
+//! 58. A row whose chat is unknown or deleted offers Open, or Open falls back
+//!     to the selected chat.
+//! 59. A service offers Open chat instead of its project commands, or Show
+//!     commands acts on another chat's checkout.
+//! 60. Open from a list read on an earlier engine connection still navigates.
 //! 27. Balance panes counts tabs instead of groups, changes an axis, the
 //!     order, IDs, active chats or focus, leaves a mixed 2-over-1 or six-group
 //!     tree with unequal group areas, writes again on a repeat, is lost on a
@@ -347,6 +371,8 @@ fn text_entry(
 
 fn child_thread(spec: &Spec, at_ms: i64) -> Option<ChildThread> {
     Some(ChildThread {
+        // Legacy fixture children: ancestry only, no launch ownership.
+        work_origin: None,
         parent_task_id: spec.parent?.into(),
         creation_command_id: format!("fixture-create-{}", spec.id),
         permission_ceiling: Default::default(),
@@ -978,6 +1004,40 @@ async fn reveal_tab(window: Window, cx: &mut AsyncApp, chat: &str) -> anyhow::Re
 
 /// A real click on `chat`'s tab, scrolled into view first if the canvas
 /// had it out of view.
+/// A host-reported work row (slice 3) for the scripted work host.
+#[allow(clippy::too_many_arguments)]
+fn work_item(
+    id: &str,
+    task: &str,
+    title: &str,
+    kind: luna_proto::TaskWorkKind,
+    state: luna_proto::TaskWorkState,
+    owned: bool,
+    blocks: bool,
+    can_stop: bool,
+    attention: bool,
+    owner: Option<(&str, &str)>,
+) -> luna_proto::TaskWorkItem {
+    luna_proto::TaskWorkItem {
+        id: id.into(),
+        task_id: task.into(),
+        title: title.into(),
+        kind,
+        state,
+        origin: owner.map(|(owner, launch)| luna_proto::WorkOrigin {
+            owner_task_id: owner.into(),
+            owner_turn_id: format!("{owner}-msg-1"),
+            launch_task_id: launch.into(),
+            launch_turn_id: format!("{launch}-msg-1"),
+        }),
+        owned,
+        blocks_completion: blocks,
+        needs_attention: attention,
+        can_stop,
+        detail: String::new(),
+    }
+}
+
 async fn click_tab(window: Window, cx: &mut AsyncApp, chat: &str) -> anyhow::Result<()> {
     let rb = reveal_tab(window, cx, chat).await?;
     click(window, cx, tab_center(&rb, chat)?, MouseButton::Left).await
@@ -3265,6 +3325,18 @@ fn main() -> anyhow::Result<()> {
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_engine_switch(handle_a.clone(), cx))?;
                 let back_in_a = wait_for(window, cx, "profile A again", |rb| rb["loaded"] == true && rb["main"] == MAIN).await?;
                 anyhow::ensure!(back_in_a["available"] == true, "profile A is available again: {back_in_a}");
+                // Its known profile is back: a layout write is accepted again
+                // (the no-profile refusal above must not linger).
+                if let Some(target) = all_panes(&back_in_a)
+                    .into_iter()
+                    .flat_map(|pane| tabs_of(&pane))
+                    .find(|id| back_in_a["focusedChat"].as_str() != Some(id.as_str()))
+                {
+                    click_tab(window, cx, &target).await?;
+                    let revision = back_in_a["revision"].as_u64().unwrap_or(0);
+                    let written = wait_for(window, cx, "profile A accepts a layout write", move |rb| rb["revision"].as_u64().unwrap_or(0) > revision && rb["pendingMutations"] == 0).await?;
+                    anyhow::ensure!(written["focusedChat"] == target.as_str(), "the write landed in profile A: {written}");
+                }
                 progress(&output, &mut record, "profiles".into(), serde_json::json!({"late": after_late, "unnamed": unnamed_after, "backInA": back_in_a}));
                 // The refused write's notice was part of the proof above; clear
                 // it with its own Dismiss control before the visual steps.
@@ -3280,8 +3352,8 @@ fn main() -> anyhow::Result<()> {
                 // makes an ordinary thread. It opens as a Side tab under its
                 // exact source, published with its real project, titled by
                 // its own row, with a live composer and no End, lease,
-                // countdown or read-only state; it is a sidebar row and in
-                // Main's Related library.
+                // countdown or read-only state; it lists in Main's Related
+                // library only, until it is explicitly placed in the sidebar.
                 window.update(cx, |shell, _, cx| {
                     shell.fixture_open_right_pane(cx);
                     shell.fixture_open_side_chats(cx);
@@ -3298,8 +3370,23 @@ fn main() -> anyhow::Result<()> {
                 }
                 assert_ordinary_fork(window, cx, &fork_one, true, "the new fork").await?;
                 let listed = related(window, cx)?;
-                anyhow::ensure!(has(&listed["sidebarOrder"], &fork_one), "the fork is a sidebar row: {listed}");
+                anyhow::ensure!(!has(&listed["sidebarOrder"], &fork_one), "an unplaced fork is not a sidebar row: {listed}");
                 anyhow::ensure!(tree_has(&listed, MAIN, &fork_one, "Side chat", None), "Main's Related library lists the fork: {listed}");
+                // The explicit placement (the Related row's drop path) makes it
+                // a sidebar row while it stays under its source.
+                window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&fork_one, "side", cx))?;
+                let mut listed = related(window, cx)?;
+                for _ in 0..40 {
+                    if has(&listed["sidebarOrder"], &fork_one) {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                    listed = related(window, cx)?;
+                }
+                anyhow::ensure!(
+                    has(&listed["sidebarOrder"], &fork_one) && tree_has(&listed, MAIN, &fork_one, "Side chat", None),
+                    "an explicitly placed fork is a sidebar row and stays under its source: {listed}"
+                );
                 shot(window, cx, output.join("w18-fork-tab.png")).await?;
 
                 // w19. Its own draft and run survive closing and reopening
@@ -3462,6 +3549,19 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(tree_has(&nested, MAIN, &fork_of_fork, "Side chat", Some(fork_two.as_str())), "a fork of a fork lists in Main's library under its source: {nested}");
                 anyhow::ensure!(tree_has(&nested, MAIN, &child_fork, "Side chat", Some(CHILD_A)), "a fork of a child lists in Main's library under the child: {nested}");
                 anyhow::ensure!(tree_has(&nested, &fork_two, &fork_of_fork, "Side chat", None), "the fork's own library lists its fork: {nested}");
+                // Placed explicitly (forks start in Related only), so its
+                // sidebar row can be checked across its source's deletion.
+                anyhow::ensure!(!has(&nested["sidebarOrder"], &fork_of_fork), "an unplaced fork of a fork is not a sidebar row: {nested}");
+                window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&fork_of_fork, "side", cx))?;
+                let mut placed_nested = related(window, cx)?;
+                for _ in 0..40 {
+                    if has(&placed_nested["sidebarOrder"], &fork_of_fork) {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                    placed_nested = related(window, cx)?;
+                }
+                anyhow::ensure!(has(&placed_nested["sidebarOrder"], &fork_of_fork), "the fork of a fork is placed in the sidebar: {placed_nested}");
                 window.update(cx, |shell, _, cx| shell.fixture_chat_action(&fork_two, "delete", cx))?;
                 let mut source_gone = false;
                 for _ in 0..80 {
@@ -3482,7 +3582,7 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(source_gone, "the second fork (a source) is deleted");
                 settle(cx, 300).await;
                 let orphaned = related(window, cx)?;
-                anyhow::ensure!(has(&orphaned["sidebarOrder"], &fork_of_fork), "the orphan fork is still a sidebar row: {orphaned}");
+                anyhow::ensure!(has(&orphaned["sidebarOrder"], &fork_of_fork), "the placed orphan fork is still a sidebar row: {orphaned}");
                 anyhow::ensure!(orphaned["forkSources"][fork_of_fork.as_str()] == fork_two.as_str(), "its source stays a link to the deleted chat: {orphaned}");
                 window.update(cx, |shell, _, cx| shell.fixture_workbench_open(&fork_of_fork, cx))?;
                 {
@@ -3529,6 +3629,7 @@ fn main() -> anyhow::Result<()> {
                 wait_row(cx, &reader, &state, &fork_one, "the fork unarchived", |row| !row.archived).await?;
                 // Placement: a fork's Related row dropped on the sidebar is
                 // placed there like any chat (no refusal).
+                anyhow::ensure!(!has(&related(window, cx)?["sidebarOrder"], &child_fork), "an unplaced fork of a child is not a sidebar row");
                 window.update(cx, |shell, _, cx| shell.fixture_place_in_sidebar(&child_fork, "side", cx))?;
                 settle(cx, 300).await;
                 let placed = related(window, cx)?;
@@ -4298,6 +4399,290 @@ fn main() -> anyhow::Result<()> {
                 })?;
                 settle(cx, 300).await;
                 progress(&output, &mut record, "shortcutConflicts".into(), serde_json::json!({"loaded": loaded_json, "refusedReset": refused_reset, "refusedRecords": refused_records, "accepted": accepted}));
+
+                // w20k. Failure cases 48-55: background work. The real host's
+                // view first (fixture children are legacy ancestry: never
+                // stoppable), then a scripted host for the rest.
+                use luna_proto::{TaskWorkKind as WorkKind, TaskWorkState as WorkState, TaskWorkStopStatus as StopStatus};
+                let work = |cx: &mut AsyncApp, chat: &str| {
+                    let chat = chat.to_string();
+                    window.update(cx, move |shell, _, cx| {
+                        shell
+                            .fixture_workbench_composer(&chat, cx)
+                            .map(|composer| composer.read(cx).fixture_work_readback(cx))
+                            .unwrap_or(serde_json::Value::Null)
+                    })
+                };
+                let on_work = |cx: &mut AsyncApp, chat: &str, f: Box<dyn FnOnce(&mut composer::Composer, &mut gpui::Context<composer::Composer>)>| {
+                    let chat = chat.to_string();
+                    window.update(cx, move |shell, _, cx| {
+                        if let Some(composer) = shell.fixture_workbench_composer(&chat, cx) {
+                            composer.update(cx, f);
+                        }
+                    })
+                };
+                activate(window, cx)?;
+                click_tab(window, cx, MAIN).await?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(MAIN, window, cx))?, "focus Main's composer");
+                let mut real = serde_json::Value::Null;
+                for _ in 0..60 {
+                    draw(window, cx)?;
+                    real = window.update(cx, |shell, _, cx| shell.fixture_task_work_view(cx))?;
+                    if real["taskId"] == MAIN && real["status"].as_str().is_some_and(|status| !status.starts_with("Loading")) {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(real["taskId"] == MAIN && real["status"] == "Live", "the host reports Main's work through the focused watch: {real}");
+                let real_rows = work(cx, MAIN)?["rows"].clone();
+                anyhow::ensure!(
+                    real_rows.as_array().is_none_or(|rows| rows.iter().filter(|row| row["kind"] == "Child chat").all(|row| row["selectable"] == false)),
+                    "legacy children (ancestry only) are never stoppable: {real_rows}"
+                );
+                // The scripted host.
+                window.update(cx, |shell, _, cx| shell.fixture_task_work_fake(Some(Default::default()), cx))?;
+                let main_items = vec![
+                    work_item("w-child", CHILD_B, "Port the parser (child)", WorkKind::ChildChat, WorkState::Running, true, true, true, false, Some((MAIN, MAIN))),
+                    work_item("w-grandchild", MAIN, "Parser tests (grandchild)", WorkKind::NativeChild, WorkState::Running, true, true, true, false, Some((MAIN, CHILD_A))),
+                    work_item("w-workflow", MAIN, "Release checklist workflow", WorkKind::Workflow, WorkState::Waiting, true, true, true, true, Some((MAIN, MAIN))),
+                    work_item("w-service", MAIN, "Dev server", WorkKind::Service, WorkState::Running, true, false, true, false, Some((MAIN, MAIN))),
+                    work_item("w-later", MAIN, "Child's own later message", WorkKind::ChildChat, WorkState::Running, false, false, true, false, Some((CHILD_A, CHILD_A))),
+                    work_item("w-legacy", "f0f0f0f0-0000-4000-8000-00000000dead", "Legacy child (gone)", WorkKind::ChildChat, WorkState::Running, false, false, false, false, None),
+                    work_item("w-owner", MAIN, "Result owned by Child B", WorkKind::ResultDelivery, WorkState::Waiting, false, false, false, false, Some((CHILD_B, MAIN))),
+                ];
+                window.update(cx, |shell, _, cx| shell.fixture_fake_work(MAIN, main_items.clone(), cx))?;
+                draw(window, cx)?;
+                let seeded = work(cx, MAIN)?;
+                let selectable: Vec<String> = seeded["rows"].as_array().into_iter().flatten().filter(|row| row["selectable"] == true).filter_map(|row| row["id"].as_str().map(str::to_string)).collect();
+                anyhow::ensure!(
+                    seeded["chip"] == true && seeded["blocking"] == 3 && selectable == ["w-child", "w-grandchild", "w-workflow"],
+                    "owned child, grandchild and workflow are stoppable; the service, later child and legacy row are not: {seeded}"
+                );
+                anyhow::ensure!(
+                    seeded["rows"].as_array().is_some_and(|rows| rows.iter().any(|row| row["id"] == "w-service" && row["group"] == "Services")
+                        && rows.iter().any(|row| row["id"] == "w-later" && row["group"] == "Elsewhere")),
+                    "the service and the later independent child keep their own groups: {seeded}"
+                );
+                // Failure cases 56-60: Open routes. Each row opens its own
+                // chat, its lifecycle owner, or a service's commands; unknown
+                // chats offer nothing; the shell routes it like Related chats.
+                let opens: std::collections::HashMap<String, serde_json::Value> = seeded["rows"].as_array().into_iter().flatten().filter_map(|row| Some((row["id"].as_str()?.to_string(), row["open"].clone()))).collect();
+                anyhow::ensure!(
+                    opens["w-child"]["taskId"] == CHILD_B && opens["w-child"]["label"] == "Open chat"
+                        && opens["w-owner"]["taskId"] == CHILD_B && opens["w-owner"]["label"] == "Open owner"
+                        && opens["w-service"]["taskId"] == MAIN && opens["w-service"]["commands"] == true
+                        && opens["w-legacy"].is_null() && opens["w-grandchild"].is_null(),
+                    "Open targets follow each row's chat or owner, never an unknown chat: {opens:?}"
+                );
+                let open_row = |cx: &mut AsyncApp, chat: &str, row: &str| {
+                    let (chat, row) = (chat.to_string(), row.to_string());
+                    window.update(cx, move |shell, window, cx| {
+                        shell
+                            .fixture_workbench_composer(&chat, cx)
+                            .is_some_and(|composer| composer.update(cx, |composer, cx| {
+                                composer.fixture_open_work(cx);
+                                composer.fixture_work_open(&row, window, cx)
+                            }))
+                    })
+                };
+                anyhow::ensure!(open_row(cx, MAIN, "w-child")?, "the child row offers Open");
+                let opened_child = wait_for(window, cx, "Open chat focuses Child B in the workbench", |rb| rb["focusedChat"] == CHILD_B && rb["main"] == MAIN).await?;
+                let route = window.update(cx, |shell, _, _| shell.fixture_last_work_open())?;
+                anyhow::ensure!(route["route"] == "chat" && route["taskId"] == CHILD_B && work(cx, MAIN)?["menu"].is_null(), "Open routes Child B through related-chat routing and closes the popover: {route} {}", opened_child["focusedChat"]);
+                click_tab(window, cx, MAIN).await?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(MAIN, window, cx))?, "focus Main again");
+                draw(window, cx)?;
+                anyhow::ensure!(open_row(cx, MAIN, "w-service")?, "the service row offers its commands");
+                let commands = window.update(cx, |shell, _, _| shell.fixture_last_work_open())?;
+                anyhow::ensure!(commands["route"] == "commands" && commands["terminalOpen"] == true, "a service opens its own chat's project commands: {commands}");
+                window.update(cx, |shell, window, cx| shell.fixture_close_terminal(window, cx))?;
+                settle(cx, 400).await;
+                // Failure case 50: only the focused chat's composer has the chip;
+                // a second pane's watch replaces it and pages by the aggregate.
+                let other = work(cx, CHILD_A)?;
+                anyhow::ensure!(other.is_null() || other["chip"] == false, "an unfocused composer shows no Work chip: {other}");
+                let many: Vec<_> = (0..120).map(|index| work_item(&format!("w-a-{index:03}"), CHILD_A, &format!("Batch item {index}"), WorkKind::Shell, WorkState::Running, true, true, true, false, Some((CHILD_A, CHILD_A)))).collect();
+                window.update(cx, |shell, _, cx| shell.fixture_fake_work(CHILD_A, many, cx))?;
+                click_tab(window, cx, CHILD_A).await?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(CHILD_A, window, cx))?, "focus Child A's composer");
+                let mut paged = serde_json::Value::Null;
+                for _ in 0..40 {
+                    draw(window, cx)?;
+                    paged = work(cx, CHILD_A)?;
+                    if paged["taskId"] == CHILD_A {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                anyhow::ensure!(
+                    paged["chip"] == true && paged["loaded"] == 50 && paged["total"] == 120 && paged["blocking"] == 120 && paged["moreOffset"] == 50,
+                    "the focused second pane pages and counts from the aggregate: {paged}"
+                );
+                anyhow::ensure!(work(cx, MAIN)?["chip"] == false, "Main's composer no longer shows the chip");
+                on_work(cx, CHILD_A, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| composer.fixture_work_more(cx)))?;
+                on_work(cx, CHILD_A, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| composer.fixture_work_more(cx)))?;
+                let all = work(cx, CHILD_A)?;
+                let ids: std::collections::HashSet<String> = all["rows"].as_array().into_iter().flatten().filter_map(|row| row["id"].as_str().map(str::to_string)).collect();
+                anyhow::ensure!(all["loaded"] == 120 && ids.len() == 120 && all["moreOffset"].is_null(), "Show more appends each page once: {}", all["loaded"]);
+                shot(window, cx, output.join("w20k-work-paging.png")).await?;
+
+                // Open from a pane composer's popover routes through the shell
+                // too: a Child A row owned by Main opens Main's tab.
+                let mut pane_rows = (0..120).map(|index| work_item(&format!("w-a-{index:03}"), CHILD_A, &format!("Batch item {index}"), WorkKind::Shell, WorkState::Running, true, true, true, false, Some((CHILD_A, CHILD_A)))).collect::<Vec<_>>();
+                pane_rows.insert(0, work_item("w-a-main", MAIN, "Main's release workflow", WorkKind::Workflow, WorkState::Running, false, false, false, false, Some((MAIN, CHILD_A))));
+                window.update(cx, |shell, _, cx| shell.fixture_fake_work(CHILD_A, pane_rows, cx))?;
+                draw(window, cx)?;
+                anyhow::ensure!(open_row(cx, CHILD_A, "w-a-main")?, "the pane's row offers Open");
+                wait_for(window, cx, "Open from the pane focuses Main's tab", |rb| rb["focusedChat"] == MAIN).await?;
+                let pane_route = window.update(cx, |shell, _, _| shell.fixture_last_work_open())?;
+                anyhow::ensure!(pane_route["route"] == "chat" && pane_route["taskId"] == MAIN, "the pane composer's Open reaches the shell: {pane_route}");
+                // Failure case 60: an earlier connection's list never navigates.
+                click_tab(window, cx, CHILD_A).await?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(CHILD_A, window, cx))?, "focus Child A again");
+                draw(window, cx)?;
+                let stale_open = window.update(cx, |shell, window, cx| {
+                    // The popover opens on the current connection, then the
+                    // engine reconnects before its row's Open is clicked.
+                    let composer = shell.fixture_workbench_composer(CHILD_A, cx);
+                    if let Some(composer) = &composer {
+                        composer.update(cx, |composer, cx| composer.fixture_open_work(cx));
+                    }
+                    shell.fixture_reconnect_engine(cx);
+                    composer.is_some_and(|composer| composer.update(cx, |composer, cx| composer.fixture_work_open("w-a-main", window, cx)))
+                })?;
+                settle(cx, 300).await;
+                let refused_open = window.update(cx, |shell, _, _| shell.fixture_last_work_open())?;
+                anyhow::ensure!(
+                    stale_open && refused_open["route"] == "refused" && wb(window, cx)?["focusedChat"] == CHILD_A,
+                    "a list from an earlier connection never navigates: {refused_open}"
+                );
+                // Restore the controlled frame: that refusal's sidebar notice
+                // is persistent, so dismiss it with its own Dismiss control
+                // (later steps sample the left chrome's background). Its
+                // label is found down the card's right edge in the band above
+                // the footer (the notice's slot), where only the Dismiss
+                // glyphs differ from the card.
+                let refusal = related(window, cx)?["notice"].clone();
+                anyhow::ensure!(refusal.as_str().is_some_and(|text| text.contains("reconnected")), "the refusal says why: {refusal}");
+                let sidebar_now = frame(window, cx)?["sidebarNow"].as_f64().unwrap_or(0.0) as f32;
+                let column = sidebar_now - 38.0;
+                let rows: Vec<(f32, f32)> = ((HEIGHT as i32 - 170)..(HEIGHT as i32 - 30)).map(|y| (column, y as f32)).collect();
+                let pixels = sample(window, cx, &rows)?;
+                let luma = |pixel: &[u8; 4]| 0.2126 * pixel[0] as f32 + 0.7152 * pixel[1] as f32 + 0.0722 * pixel[2] as f32;
+                let mut sorted: Vec<f32> = pixels.iter().map(luma).collect();
+                sorted.sort_by(|a, b| a.total_cmp(b));
+                let median = sorted[sorted.len() / 2];
+                let glyph_rows: Vec<f32> = rows
+                    .iter()
+                    .zip(pixels.iter())
+                    .filter(|(_, pixel)| (luma(pixel) - median).abs() > 80.0)
+                    .map(|((_, y), _)| *y)
+                    .collect();
+                anyhow::ensure!(!glyph_rows.is_empty() && sidebar_now > 120.0, "the notice's Dismiss label is visible in the sidebar (width {sidebar_now})");
+                let dismiss_y = glyph_rows.iter().sum::<f32>() / glyph_rows.len() as f32;
+                click(window, cx, (column, dismiss_y), MouseButton::Left).await?;
+                let mut cleared = related(window, cx)?;
+                for _ in 0..20 {
+                    if cleared["notice"].is_null() {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                    cleared = related(window, cx)?;
+                }
+                anyhow::ensure!(cleared["notice"].is_null(), "Dismiss clears the refusal notice (clicked at {column},{dismiss_y}): {}", cleared["notice"]);
+                click_tab(window, cx, MAIN).await?;
+                anyhow::ensure!(window.update(cx, |shell, window, cx| shell.fixture_workbench_focus_input(MAIN, window, cx))?, "focus Main again");
+                for _ in 0..40 {
+                    draw(window, cx)?;
+                    if work(cx, MAIN)?["taskId"] == MAIN {
+                        break;
+                    }
+                    settle(cx, 100).await;
+                }
+                // Failure case 51: explicit selection, preview, one request id.
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| {
+                    composer.fixture_open_work(cx);
+                    for id in ["w-child", "w-grandchild", "w-service", "w-later", "w-legacy"] {
+                        composer.fixture_work_toggle(id, cx);
+                    }
+                }))?;
+                draw(window, cx)?;
+                shot(window, cx, output.join("w20k-work-popover.png")).await?;
+                let chosen = work(cx, MAIN)?;
+                anyhow::ensure!(chosen["menu"]["selected"] == serde_json::json!(["w-child", "w-grandchild"]), "only owned stoppable rows can be chosen: {chosen}");
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| composer.fixture_work_review(cx)))?;
+                let reviewed = work(cx, MAIN)?;
+                anyhow::ensure!(
+                    reviewed["menu"]["phase"]["kind"] == "preview" && reviewed["menu"]["phase"]["items"] == serde_json::json!(["w-child", "w-grandchild"]),
+                    "the preview names exactly the chosen rows: {reviewed}"
+                );
+                let statuses: std::collections::HashMap<String, StopStatus> = [("w-child".to_string(), StopStatus::Requested), ("w-grandchild".to_string(), StopStatus::Stopped)].into_iter().collect();
+                window.update(cx, |shell, _, cx| shell.fixture_fake_stop(Some(statuses), false, cx))?;
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| composer.fixture_work_confirm(cx)))?;
+                let answered = work(cx, MAIN)?;
+                let receipt = answered["menu"]["phase"]["answer"]["receipt"].clone();
+                anyhow::ensure!(
+                    receipt.as_array().is_some_and(|results| results.iter().any(|result| result["workId"] == "w-child" && result["label"] == "Stop requested; not stopped yet")
+                        && results.iter().any(|result| result["workId"] == "w-grandchild" && result["label"] == "Stopped")),
+                    "Requested never reads as Stopped: {answered}"
+                );
+                let calls = window.update(cx, |shell, _, cx| shell.fixture_task_work_calls(cx))?;
+                anyhow::ensure!(calls["stopCalls"] == 1 && calls["requestIds"].as_array().map_or(0, Vec::len) == 1, "one stop request per preview: {calls}");
+                shot(window, cx, output.join("w20k-work-receipt.png")).await?;
+                // Failure case 52: a lost answer is unknown and never retried.
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| {
+                    composer.fixture_work_refresh(cx);
+                    composer.fixture_work_toggle("w-workflow", cx);
+                    composer.fixture_work_review(cx);
+                }))?;
+                window.update(cx, |shell, _, cx| shell.fixture_fake_stop(None, false, cx))?;
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| composer.fixture_work_confirm(cx)))?;
+                settle(cx, 1000).await;
+                let lost = work(cx, MAIN)?;
+                let calls = window.update(cx, |shell, _, cx| shell.fixture_task_work_calls(cx))?;
+                anyhow::ensure!(lost["menu"]["phase"]["answer"]["lost"] == true && calls["stopCalls"] == 2, "a lost answer reads unknown and is not retried: {lost} {calls}");
+                // Failure case 53: a refused (stale) preview returns to the
+                // selection, dropping rows that are no longer stoppable.
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| {
+                    composer.fixture_work_refresh(cx);
+                    composer.fixture_work_toggle("w-child", cx);
+                    composer.fixture_work_review(cx);
+                }))?;
+                let mut ended = main_items.clone();
+                ended[0].state = WorkState::Completed;
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_fake_work(MAIN, ended.clone(), cx);
+                    shell.fixture_fake_stop(Some(Default::default()), true, cx);
+                })?;
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| composer.fixture_work_confirm(cx)))?;
+                let refused = work(cx, MAIN)?;
+                anyhow::ensure!(
+                    refused["menu"]["phase"]["kind"] == "select" && refused["menu"]["selected"] == serde_json::json!([]) && refused["menu"]["note"].is_string(),
+                    "a stale preview returns to the selection without the ended row: {refused}"
+                );
+                // Failure case 54: after the stream ends nothing is stoppable.
+                window.update(cx, |shell, _, cx| shell.fixture_end_task_work_watch(cx))?;
+                let previews_before = window.update(cx, |shell, _, cx| shell.fixture_task_work_calls(cx))?["previewCalls"].clone();
+                on_work(cx, MAIN, Box::new(|composer: &mut composer::Composer, cx: &mut gpui::Context<composer::Composer>| {
+                    composer.fixture_work_toggle("w-grandchild", cx);
+                    composer.fixture_work_review(cx);
+                }))?;
+                let unknown = work(cx, MAIN)?;
+                anyhow::ensure!(
+                    unknown["status"] == "unknown" && unknown["chip"] == true && unknown["menu"]["selected"] == serde_json::json!([])
+                        && window.update(cx, |shell, _, cx| shell.fixture_task_work_calls(cx))?["previewCalls"] == previews_before,
+                    "an ended stream reads unknown and nothing can be stopped: {unknown}"
+                );
+                // Failure case 55: Escape closes the popover, never the stop path.
+                let escapes_before = window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log().len())?;
+                key(window, cx, "escape")?;
+                settle(cx, 200).await;
+                anyhow::ensure!(
+                    work(cx, MAIN)?["menu"].is_null() && window.update(cx, |shell, _, _| shell.fixture_workbench_escape_log().len())? == escapes_before,
+                    "Escape closes the Work popover without reaching stop handling"
+                );
+                window.update(cx, |shell, _, cx| shell.fixture_task_work_fake(None, cx))?;
+                progress(&output, &mut record, "backgroundWork".into(), serde_json::json!({"real": real, "seeded": seeded, "paged": paged["loaded"], "receipt": receipt, "lost": lost["menu"], "refused": refused["menu"], "unknown": unknown["status"]}));
 
                 // w21-w30. The surrounding frame: one chrome surface around
                 // the inset canvas in every sidebar combination, while

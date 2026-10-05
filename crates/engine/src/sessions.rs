@@ -916,7 +916,15 @@ fn recovery_task_configuration(chat: &luna_proto::Chat) -> serde_json::Value {
     })
 }
 
+#[path = "sessions_work.rs"]
+mod work;
+pub(crate) use work::WorkRuntime;
+
 struct RunHandle {
+    work_message_id: String,
+    /// Active work actually observed by this runtime; never restored from a
+    /// historical document merely because the native session ID matches.
+    work_observations: HashSet<String>,
     run_id: String,
     started_for_goal_attachment: bool,
     workspace_repair_revision: u64,
@@ -4472,6 +4480,9 @@ impl SessionsEngine {
                     false
                 };
             if accepted {
+                if let Some(run) = lock(&self.inner.runs).get_mut(chat_id) {
+                    run.work_message_id = user_id.clone();
+                }
                 let handle = self.doc_handle(chat_id)?;
                 handle.write_user_message(&user_id, &visible_prompt, now_ms())?;
                 if request.goal.is_some() {
@@ -4746,6 +4757,8 @@ impl SessionsEngine {
                 workspace_repair_revision,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: run_id.clone(),
+                work_message_id: user_id.clone(),
+                work_observations: HashSet::new(),
                 started_for_goal_attachment: attach_existing_goal,
                 provider_turn: None,
                 run_provider_binding: None,
@@ -4979,6 +4992,9 @@ impl SessionsEngine {
                 message_id: user_id.clone(),
                 delivery: luna_harness::SteerDelivery::RequireActiveTurn,
             });
+        }
+        if let Some(run) = lock(&self.inner.runs).get_mut(chat_id) {
+            run.work_message_id = user_id.clone();
         }
         let acceptance =
             tokio::time::timeout(std::time::Duration::from_secs(5), acceptance_rx).await;
@@ -8340,6 +8356,13 @@ async fn drive_run(
             event: sub_event,
         } = &event
         {
+            inner.note_work_observation(
+                &chat_id,
+                &run_id,
+                "child",
+                parent_tool_use_id,
+                !matches!(sub_event.as_ref(), AgentEvent::Done { .. }),
+            );
             if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
                 journal_failure = Some(error);
                 break SessionStatus::Errored;
@@ -8599,6 +8622,13 @@ async fn drive_run(
         // Native workflow/teammate state keeps arriving after the launching
         // turn's Done; persist it without reopening the parked turn.
         if let AgentEvent::NativeTaskChanged { task } = &event {
+            inner.note_work_observation(
+                &chat_id,
+                &run_id,
+                "task",
+                &task.task_id,
+                !task.status.is_terminal(),
+            );
             if crate::native_tasks::persist(doc_ref, &chat_id, task) {
                 native_activity_at = Some(tokio::time::Instant::now());
             }
@@ -11062,6 +11092,8 @@ mod tests {
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
+                work_message_id: "fixture-message".into(),
+                work_observations: HashSet::new(),
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
@@ -11173,6 +11205,8 @@ mod tests {
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
+                work_message_id: "fixture-message".into(),
+                work_observations: HashSet::new(),
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
@@ -11259,6 +11293,8 @@ mod tests {
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-a".into(),
+                work_message_id: "fixture-message".into(),
+                work_observations: HashSet::new(),
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,
@@ -15354,6 +15390,8 @@ mod tests {
                 workspace_repair_revision: 0,
                 idle_stream_closed: Arc::new(AtomicBool::new(false)),
                 run_id: "run-active".into(),
+                work_message_id: "fixture-message".into(),
+                work_observations: HashSet::new(),
                 provider_turn: None,
                 run_provider_binding: None,
                 observed_provider_session_id: None,

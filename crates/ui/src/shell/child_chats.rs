@@ -40,7 +40,9 @@ impl ChildChatStatus {
             Self::Running => "Running",
             Self::Failed => "Failed",
             Self::Interrupted => "Interrupted",
-            Self::Completed => "Completed",
+            // A child's own turn ended; its owned background work (if any)
+            // is the work view's, never implied done here.
+            Self::Completed => "Turn completed",
             Self::Idle => "Idle",
             Self::Archived => "Archived",
         }
@@ -145,7 +147,7 @@ pub(super) fn child_chat_status(
         Some("failed" | "errored") => ChildChatStatus::Failed,
         Some("interrupted") => ChildChatStatus::Interrupted,
         Some("turn-completed") => ChildChatStatus::Completed,
-        _ if chat.unseen() => ChildChatStatus::Completed,
+        // Unread alone never implies a completed turn.
         _ => ChildChatStatus::Idle,
     }
 }

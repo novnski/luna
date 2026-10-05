@@ -4646,6 +4646,7 @@ mod claude_prompts_e2e;
 #[cfg(feature = "appshots-fixture")]
 mod codex_prompts_e2e;
 mod goals;
+mod work;
 #[cfg(feature = "appshots-fixture")]
 pub use claude_prompts_e2e::run_claude_prompts_e2e;
 #[cfg(feature = "appshots-fixture")]
@@ -4806,6 +4807,9 @@ pub struct Composer {
     /// being queued. Kept independently so stopping one chat cannot replace
     /// another chat's request when the user navigates quickly.
     interrupting: HashSet<String>,
+    /// The Work popover (slice 3), while open, and its in-flight request.
+    work_menu: Option<work::WorkMenu>,
+    work_task: Option<Task<()>>,
     interrupt_tasks: HashMap<String, Task<()>>,
     /// QA: the outcome of each chat's latest Stop — the engine's receipt, or
     /// the error the user saw.
@@ -5169,6 +5173,8 @@ impl Composer {
             advance_task: None,
             send_task: None,
             interrupting: HashSet::new(),
+            work_menu: None,
+            work_task: None,
             interrupt_tasks: HashMap::new(),
             #[cfg(feature = "appshots-fixture")]
             last_stop: HashMap::new(),
@@ -5339,6 +5345,7 @@ impl Composer {
                 "height": f32::from(bounds.size.height),
             })),
             "chips": self.pickers.read(cx).chip_readback(self.pickers.entity_id(), cx),
+            "work": self.work_readback(cx),
             "controlsRow": self.controls_row.map(|row| serde_json::json!({
                 "budget": row.budget,
                 "modelFull": row.model_full,
@@ -12530,7 +12537,14 @@ impl Render for Composer {
             )
         });
         let (model_full, model_name_only) = self.pickers.read(cx).model_chip_widths(window, cx);
-        let row_budget = controls_row_budget(surface_width);
+        // The Work chip (focused chat only) takes a fixed slot first.
+        let work_width = self.work_chip_width(cx);
+        let row_budget = controls_row_budget(surface_width)
+            - if work_width > 0.0 {
+                work_width + CHIP_GAP
+            } else {
+                0.0
+            };
         let fit = controls_row_fit(
             row_budget,
             model_full,
@@ -12559,6 +12573,7 @@ impl Render for Composer {
                 !fit.usage_icon_only,
             )
         });
+        let work_chip = self.render_work_chip(window, &theme, cx);
         let model_picker = div()
             .min_w_0()
             .flex()
@@ -12567,7 +12582,8 @@ impl Render for Composer {
             .gap(px(CHIP_GAP))
             .child(div().min_w_0().child(self.pickers.clone()))
             .children(goal_mode_chip)
-            .children(usage_chip);
+            .children(usage_chip)
+            .children(work_chip);
         // Textarea on top (`px-4 pb-1 pt-4`), actions row (12px bottom + 2px
         // top, 32px chips → 46px) ABSOLUTE at the pill's stationary bottom —
         // the pill sits at the bottom of its column and grows upward, so the

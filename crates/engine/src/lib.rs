@@ -895,6 +895,7 @@ impl EngineCore {
             self.workspace_scope,
             self.cleanup_boot_id.clone(),
         )
+        .with_work_write_handle(self.device_write.handle())
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
         .with_github_pr(self.github_pr.clone())

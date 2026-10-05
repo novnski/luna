@@ -996,7 +996,15 @@ impl EngineRpc {
             granted_by_user,
             escalation_denied,
         };
+        let launch_turn = self
+            .sessions
+            .work_runtime(parent_id)
+            .filter(|_| self.sessions.active_turn_id(parent_id).is_some())
+            .map(|r| r.message_id)
+            .unwrap_or_else(|| format!("child-command:{command_id}"));
         let child = ChildThread {
+            work_origin: (!request.prompt.is_empty())
+                .then(|| self.sessions.work_origin(parent_id, &launch_turn)),
             parent_task_id: parent_id.into(),
             creation_command_id: command_id.into(),
             permission_ceiling: if granted_by_user { granted } else { ceiling },

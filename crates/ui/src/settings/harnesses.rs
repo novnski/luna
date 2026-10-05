@@ -1176,6 +1176,9 @@ impl HarnessesPage {
                 "This chat's host doesn't report execution details. Nothing is inferred from this device.",
             )),
         };
+        if let Some(line) = self.background_work_line(&focus, cx) {
+            card = card.child(meta_text(theme, format!("Background work: {line}")));
+        }
         if let Some(line) = self.last_transfer_line(&focus, cx) {
             card = card.child(meta_text(theme, format!("Last context transfer: {line}")));
         }
@@ -1279,6 +1282,17 @@ impl HarnessesPage {
         .top_0()
         .left_0()
         .size_full()
+    }
+
+    /// The focused chat's background work summary (its host's aggregate
+    /// counts, or why it is unknown), when it has any.
+    fn background_work_line(&self, focus: &str, cx: &App) -> Option<String> {
+        self.state
+            .read(cx)
+            .task_work
+            .as_ref()
+            .filter(|view| view.task_id == focus && view.has_work())
+            .map(|view| view.summary())
     }
 
     /// The focused chat's newest context transfer receipt, in words (the same
@@ -2250,6 +2264,7 @@ impl HarnessesPage {
             "declared": summary.and_then(|(summary, _)| Self::execution_declared(summary)),
             "note": summary.and_then(|(summary, _)| summary.observation_note.clone()),
             "lastTransfer": focus.as_deref().and_then(|id| self.last_transfer_line(id, cx)),
+            "backgroundWork": focus.as_deref().and_then(|id| self.background_work_line(id, cx)),
         })
     }
     /// Install a contract response as if it arrived for `task_id` (a late

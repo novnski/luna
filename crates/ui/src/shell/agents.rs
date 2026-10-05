@@ -42,6 +42,11 @@ impl Shell {
             .flex()
             .flex_col()
             .gap(px(8.0));
+        // The focused chat's background work, grouped by lifecycle owner
+        // (read-only here; the owned-work stop lives in its composer).
+        if let Some(section) = work_section(&theme, self.state.read(cx)) {
+            content = content.child(section);
+        }
         // Native workflows/teammates are their own family, never subagent rows.
         let native =
             crate::claude_advanced::native_task_section(&theme, &self.state.read(cx).native_tasks);
@@ -166,6 +171,157 @@ pub(super) struct AgentRow {
 }
 
 /// Rows for the first 100 spawn chips, plus the total observed.
+impl Shell {
+    /// A Work row's Open: only on the connection its list was read on, only
+    /// for a chat this window knows; chats open through the related-chat
+    /// routing (a workbench tab, else the chat), a service's commands in the
+    /// terminal panel of its own (selected) chat.
+    pub(super) fn open_work_target(
+        &mut self,
+        open: &OpenWorkTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (current, exists, selected) = {
+            let state = self.state.read(cx);
+            (
+                state.engine_generation() == open.engine_generation,
+                state.chats.iter().any(|chat| chat.id == open.task_id),
+                state.selected_chat.as_deref() == Some(open.task_id.as_str()),
+            )
+        };
+        let route = if !current {
+            self.sidebar_notice =
+                Some("That list was read before the engine reconnected; open it again.".into());
+            "refused"
+        } else if !exists {
+            self.sidebar_notice = Some("That chat isn't available here.".into());
+            "refused"
+        } else if open.commands {
+            if selected {
+                if !self.terminal_open(cx) {
+                    self.toggle_terminal(window, cx);
+                }
+                "commands"
+            } else {
+                // Commands follow the selected chat's checkout: open the
+                // service's own chat first.
+                self.open_side_chat_in_pane(open.task_id.clone(), cx);
+                self.sidebar_notice = Some(
+                    "Opened the service's chat. Its project commands are in that chat's terminal panel."
+                        .into(),
+                );
+                "chat"
+            }
+        } else {
+            self.open_side_chat_in_pane(open.task_id.clone(), cx);
+            "chat"
+        };
+        #[cfg(feature = "appshots-fixture")]
+        {
+            self.last_work_open = Some(serde_json::json!({
+                "taskId": open.task_id,
+                "commands": open.commands,
+                "route": route,
+                "terminalOpen": self.terminal_open(cx),
+            }));
+        }
+        let _ = route;
+        cx.notify();
+    }
+}
+
+/// "Work · this conversation": the focused chat's host-reported work, by
+/// owner (owned, services, started here but owned elsewhere).
+fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElement> {
+    use crate::task_work::{WorkGroup, kind_label, state_label};
+    let view = state.task_work.as_ref().filter(|view| view.has_work())?;
+    let title = state
+        .chats
+        .iter()
+        .find(|chat| chat.id == view.task_id)
+        .and_then(|chat| chat.title.clone())
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or_else(|| "Untitled chat".into());
+    let muted = theme.readable_muted(0.7);
+    let mut section = div()
+        .id("agents-work")
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .pb(px(8.0))
+        .child(
+            div()
+                .text_color(theme.text)
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .child(SharedString::from(format!("Work · {title}"))),
+        )
+        .child(
+            div()
+                .text_size(crate::typography::ui_rems(11.0))
+                .text_color(muted)
+                .child(SharedString::from(view.summary())),
+        );
+    for group in [WorkGroup::Owned, WorkGroup::Services, WorkGroup::Elsewhere] {
+        let items: Vec<_> = view
+            .items()
+            .filter(|item| WorkGroup::of(item) == group)
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        section = section.child(
+            div()
+                .pt(px(4.0))
+                .text_size(crate::typography::ui_rems(10.0))
+                .text_color(theme.text_faint)
+                .child(group.title()),
+        );
+        for item in items {
+            section = section.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_color(theme.text)
+                            .child(SharedString::from(item.title.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(muted)
+                            .child(SharedString::from(if item.detail.trim().is_empty() {
+                                format!("{} · {}", state_label(item.state), kind_label(item.kind))
+                            } else {
+                                format!(
+                                    "{} · {} · {}",
+                                    state_label(item.state),
+                                    kind_label(item.kind),
+                                    item.detail
+                                )
+                            })),
+                    ),
+            );
+        }
+    }
+    if view.more_offset.is_some() {
+        section = section.child(
+            div()
+                .text_size(crate::typography::ui_rems(11.0))
+                .text_color(muted)
+                .child(SharedString::from(format!(
+                    "Showing {} of {}. Use the Work button in its composer for more.",
+                    view.loaded(),
+                    view.snapshot
+                        .as_ref()
+                        .map_or(0, |snapshot| snapshot.total_count)
+                ))),
+        );
+    }
+    Some(section.into_any_element())
+}
+
 pub(super) fn agent_rows(transcript: &[luna_doc::SessionMessageEntry]) -> (Vec<AgentRow>, usize) {
     let mut seen = std::collections::HashSet::new();
     let mut rows = Vec::new();
@@ -317,6 +473,77 @@ impl Shell {
                 "text": text(state.sub_transcript(doc)),
                 "chips": chips(state.sub_transcript(doc)),
             })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// QA: the scripted work host and the watch, for the workbench fixture.
+#[cfg(feature = "appshots-fixture")]
+impl Shell {
+    /// Script the work host (`None`: back to the engine's real watch).
+    pub fn fixture_task_work_fake(
+        &mut self,
+        fake: Option<crate::task_work::TaskWorkFake>,
+        cx: &mut Context<Self>,
+    ) {
+        self.state
+            .update(cx, |state, cx| state.fixture_set_task_work_fake(fake, cx));
+    }
+    pub fn fixture_fake_work(
+        &mut self,
+        task_id: &str,
+        items: Vec<luna_proto::TaskWorkItem>,
+        cx: &mut Context<Self>,
+    ) {
+        self.state.update(cx, |state, cx| {
+            state.fixture_set_fake_work(task_id, items, cx)
+        });
+    }
+    pub fn fixture_fake_stop(
+        &mut self,
+        statuses: Option<std::collections::HashMap<String, luna_proto::TaskWorkStopStatus>>,
+        refuse: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.state
+            .update(cx, |state, _| state.fixture_set_fake_stop(statuses, refuse));
+    }
+    pub fn fixture_end_task_work_watch(&mut self, cx: &mut Context<Self>) {
+        self.state
+            .update(cx, |state, cx| state.fixture_end_task_work_watch(cx));
+    }
+    /// The scripted host's call counts and the stop request ids it saw.
+    pub fn fixture_task_work_calls(&self, cx: &App) -> serde_json::Value {
+        let state = self.state.read(cx);
+        match state.fixture_task_work_fake() {
+            None => serde_json::Value::Null,
+            Some(fake) => serde_json::json!({
+                "previewCalls": fake.preview_calls,
+                "stopCalls": fake.stop_calls,
+                "requestIds": fake.stop_request_ids,
+            }),
+        }
+    }
+    /// Close the terminal panel if open (restores the frame after QA).
+    pub fn fixture_close_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terminal_open(cx) {
+            self.toggle_terminal(window, cx);
+        }
+    }
+    /// What the last Work row Open did (route, target, terminal state).
+    pub fn fixture_last_work_open(&self) -> serde_json::Value {
+        self.last_work_open
+            .clone()
+            .unwrap_or(serde_json::Value::Null)
+    }
+    /// The focused chat's work view (which chat the single watch follows).
+    pub fn fixture_task_work_view(&self, cx: &App) -> serde_json::Value {
+        let state = self.state.read(cx);
+        serde_json::json!({
+            "focus": state.execution_focus_chat(),
+            "taskId": state.task_work.as_ref().map(|view| view.task_id.clone()),
+            "status": state.task_work.as_ref().map(|view| format!("{:?}", view.status)),
+            "total": state.task_work.as_ref().and_then(|view| view.snapshot.as_ref().map(|snapshot| snapshot.total_count)),
         })
     }
 }

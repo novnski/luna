@@ -304,7 +304,12 @@ impl Normalizer {
                 }
                 // Native workflows/teammates/remote agents (CC-13) first: they
                 // are never subagent spawns.
-                if let Some(events) = self.coordination.observe(&f) {
+                if let Some(mut events) = self.coordination.observe(&f) {
+                    // A shell's durable lifecycle does not consume its original
+                    // completion routing into the owning child transcript.
+                    if self.coordination.is_shell(f.task_id.as_deref()) {
+                        events.extend(self.tasks.system(&f).unwrap_or_default());
+                    }
                     return events;
                 }
                 // Agent/shell/workflow task lifecycle (started, progress,
@@ -1059,7 +1064,13 @@ mod tests {
             r#"{"type":"system","subtype":"task_notification","task_id":"bg1","tool_use_id":"toolu_bash","status":"completed"}"#,
         )
         .expect("parses");
-        assert!(norm.normalize(done, false).is_empty());
+        assert!(
+            norm.normalize(done, false)
+                .iter()
+                .all(|event| matches!(event,
+            AgentEvent::NativeTaskChanged { task } if task.kind == luna_proto::NativeTaskKind::Shell
+                && task.status == luna_proto::NativeTaskStatus::Completed))
+        );
     }
 
     #[test]

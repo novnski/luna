@@ -1,10 +1,10 @@
 //! Native coordination tasks: Claude dynamic workflows (`local_workflow`),
 //! experimental agent-team teammates (`in_process_teammate`) and remote agents
-//! (`remote_agent`).
+//! (`remote_agent`), plus background shell lifecycle (`local_bash`).
 //!
 //! These ride the same `system` task frames as native subagents
-//! (`local_agent`) and shell jobs (`local_bash`), which keep their existing
-//! routing. A task is owned here only once its `task_started` names one of
+//! (`local_agent`). Shell jobs additionally keep their existing nested tool
+//! result routing; this ledger is a parallel observation. A task is owned here only once its `task_started` names one of
 //! the families above. Later frames are matched by `task_id`, so frames for an
 //! unknown id are never guessed onto a task or the root turn.
 //!
@@ -66,6 +66,7 @@ pub(crate) struct TaskFrameFields {
 
 fn owned_kind(task_type: &Value) -> Option<NativeTaskKind> {
     match task_type.as_str()? {
+        "local_bash" => Some(NativeTaskKind::Shell),
         "local_workflow" => Some(NativeTaskKind::Workflow),
         "in_process_teammate" => Some(NativeTaskKind::Teammate),
         "remote_agent" => Some(NativeTaskKind::RemoteAgent),
@@ -102,6 +103,12 @@ pub(crate) struct CoordinationTracker {
 }
 
 impl CoordinationTracker {
+    pub(crate) fn is_shell(&self, task_id: Option<&str>) -> bool {
+        task_id
+            .and_then(|id| self.tasks.get(id))
+            .is_some_and(|task| task.kind == NativeTaskKind::Shell)
+    }
+
     /// `None`: the frame is not a coordination frame this tracker owns, so the
     /// caller keeps its own handling. `Some(events)`: consumed (possibly with
     /// no event when nothing observable changed).

@@ -126,8 +126,12 @@ async fn parked_workflow_updates_persist_and_stream_without_reopening_the_turn()
     assert_eq!(
         ledger.tasks.len(),
         2,
-        "workflow + teammate; ghost/shell never captured"
+        "legacy workflow ledger stays compatible; shells use an additive key"
     );
+    let shells = core.doc_host.open(CHAT).unwrap().doc().native_shell_tasks();
+    assert_eq!(shells.tasks.len(), 1);
+    assert_eq!(shells.tasks[0].kind, NativeTaskKind::Shell);
+    assert_eq!(shells.tasks[0].status, NativeTaskStatus::Completed);
     let workflow = &ledger.tasks[0];
     assert_eq!(
         (workflow.task_id.as_str(), workflow.kind),

@@ -994,6 +994,14 @@ pub struct AppState {
     /// The chat execution diagnostics describe: the focused workbench tab
     /// (set by the shell), else the selected chat.
     pub execution_focus: Option<String>,
+    /// The focused chat's background work (slice 3): one watch, fenced by
+    /// chat and engine connection (see `task_work`).
+    pub task_work: Option<crate::task_work::TaskWorkView>,
+    pub(crate) task_work_task: Option<Task<()>>,
+    pub(crate) task_work_more_task: Option<Task<()>>,
+    /// QA: a scripted work host in place of the engine's.
+    #[cfg(feature = "appshots-fixture")]
+    pub(crate) task_work_fake: Option<crate::task_work::TaskWorkFake>,
     /// QA: per-task summaries that replace the watch's (`None`: absent).
     #[cfg(feature = "appshots-fixture")]
     pub execution_fixture:
@@ -1132,6 +1140,11 @@ impl AppState {
             side_chat_context_modes: Default::default(),
             execution_rows: Default::default(),
             execution_focus: None,
+            task_work: None,
+            task_work_task: None,
+            task_work_more_task: None,
+            #[cfg(feature = "appshots-fixture")]
+            task_work_fake: None,
             #[cfg(feature = "appshots-fixture")]
             execution_fixture: Default::default(),
             sessions: Vec::new(),

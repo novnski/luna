@@ -246,6 +246,20 @@ fn titlebar_new_session_alpha(is_chat_route: bool, has_selected_chat: bool) -> f
 #[action(namespace = shell, no_json)]
 pub struct JumpSession(pub usize);
 
+/// Open what a Work row refers to (slice 3): a chat (its own or its
+/// lifecycle owner's) through the related-chat routing, or a service's
+/// project commands. Dispatched from the Work popover of whichever composer
+/// shows it (Main's or a pane's), so it always reaches the shell.
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = shell, no_json)]
+pub struct OpenWorkTarget {
+    pub task_id: String,
+    /// A service: its checkout's project commands, not a chat.
+    pub commands: bool,
+    /// The engine connection the list was read on.
+    pub engine_generation: u64,
+}
+
 // ---------------------------------------------------------------------------
 // Traffic-light-aware titlebar layout (feature-inventory §1.1)
 // ---------------------------------------------------------------------------
@@ -2268,6 +2282,9 @@ pub struct Shell {
     native_review_dialog: Option<native_review::NativeReviewDialog>,
     native_review_task: Option<Task<()>>,
     history_fork_dialog: Option<HistoryForkDialog>,
+    /// QA: what the last Work row Open did.
+    #[cfg(feature = "appshots-fixture")]
+    last_work_open: Option<serde_json::Value>,
     /// "Send findings to {source}" (slice 2), while open.
     transfer_dialog: Option<findings::TransferDialog>,
     edit_earlier_message_dialog: Option<EditEarlierMessageDialog>,
@@ -2794,6 +2811,8 @@ impl Shell {
             native_review_dialog: None,
             native_review_task: None,
             history_fork_dialog: None,
+            #[cfg(feature = "appshots-fixture")]
+            last_work_open: None,
             transfer_dialog: None,
             edit_earlier_message_dialog: None,
             conversation_rewind_dialog: None,
@@ -6962,6 +6981,10 @@ impl Shell {
             || self.workbench.chooser.is_some()
             || self.transfer_dialog.is_some()
             || self
+                .visible_composers(cx)
+                .iter()
+                .any(|composer| composer.read(cx).work_menu_open())
+            || self
                 .visible_pickers(cx)
                 .iter()
                 .any(|pickers| pickers.read(cx).is_open())
@@ -10897,6 +10920,19 @@ impl Shell {
         // as it owns ⌘W and the ⌘1…⌘9 slots: it closes (a setting submenu
         // first) before Escape can reach the stop path, and wherever keyboard
         // focus sits, so a pane's popover never depends on its focus path.
+        // An open Work popover closes before Escape can reach a picker or
+        // the stop path (the owned-work stop is never a keystroke).
+        if event.keystroke.key == "escape" {
+            let open = self
+                .visible_composers(cx)
+                .into_iter()
+                .find(|composer| composer.read(cx).work_menu_open());
+            if let Some(composer) = open {
+                composer.update(cx, |composer, cx| composer.close_work_menu(cx));
+                cx.stop_propagation();
+                return;
+            }
+        }
         if event.keystroke.key == "escape" && self.escape_open_picker(window, cx) {
             cx.stop_propagation();
         }
@@ -14869,6 +14905,9 @@ impl Render for Shell {
             // it. The MODEL menu advertises these same slots on its rows and
             // this matched binding beats its key handler to the dispatch —
             // forward the slot instead of eating it.
+            .on_action(cx.listener(|this, open: &OpenWorkTarget, window, cx| {
+                this.open_work_target(open, window, cx);
+            }))
             .on_action(cx.listener(|this, jump: &JumpSession, _, cx| {
                 // The slot goes to whichever visible composer's model menu
                 // is open (Main's or a workbench tab's), never another.

@@ -1,10 +1,9 @@
 //! Chat placement across the two sidebars: where a chat is *listed*, never
 //! what it is.
 //!
-//! - A **promoted** child chat lists in the left sidebar as its own row (in
-//!   its pin and sort scope) instead of in its parent's Related chats. It is
-//!   still that parent's child: same lineage, owner and agent control, and
-//!   every left-sidebar child wears a Child badge.
+//! - A **placed** child or fork lists in the left sidebar only after a user
+//!   drags it there. A child keeps its lineage and a fork keeps its source;
+//!   neither is listed automatically just because it is selected or pinned.
 //! - A **docked** ordinary chat lists in another chat's Related chats as
 //!   "Alongside" instead of the left sidebar. It gains no parent.
 //!
@@ -13,9 +12,8 @@
 //! device and scope, so nothing else separates them: without a profile id
 //! (older engines, pre-profile bootstrap) placement is off, never guessed.
 //! Entries that no longer apply (a deleted chat, a missing or archived host,
-//! a chat that is not a child) are ignored, and pruned on the next change.
-//! A side chat (a fork) is an ordinary root row placed like any chat; its
-//! source is only a link.
+//! or a chat with no parent/source) are ignored, and pruned on the next change.
+//! A side chat (a fork) keeps its source link when placed.
 
 use super::*;
 use crate::settings::ChatPlacements;
@@ -68,8 +66,8 @@ pub(super) fn parent_title(index: &ChatIndex<'_>, id: &str) -> Option<String> {
 }
 
 /// Where a chat is listed when not in the left sidebar's roots: its dock
-/// host, or the parent its sidebar row folds into (a child that is neither
-/// listed in the sidebar nor pinned). `None` lists it as a sidebar root.
+/// host, or its parent when the child has no explicit sidebar placement.
+/// `None` lists it as a sidebar root.
 fn listed_under<'a>(
     placed: &'a EffectivePlacements,
     chat: &'a luna_proto::Chat,
@@ -78,7 +76,7 @@ fn listed_under<'a>(
         return Some(host);
     }
     let parent = lineage_parent_id(chat)?;
-    (!placed.is_promoted(&chat.id) && chat.pinned_order.is_none()).then_some(parent)
+    (!placed.is_promoted(&chat.id)).then_some(parent)
 }
 
 /// Whether following "listed under" from `start` (docks and lineage alike,
@@ -113,18 +111,26 @@ fn listing_reaches(
     }
 }
 
-/// The saved placements that apply: promotions of actual children; docks of
-/// ordinary chats under an existing, unarchived host. Docks are taken in a
+/// The saved placements that apply: children or forks explicitly dragged to
+/// the sidebar, and docks of ordinary chats under an existing, unarchived
+/// host. Docks are taken in a
 /// fixed (id) order and one that would close a cycle with those before it is
 /// skipped, so a saved cycle (from an older build or another device's edits)
 /// never hides its chats; [`Shell::prune_placements`] then drops it.
-fn effective(saved: &ChatPlacements, index: &ChatIndex<'_>) -> EffectivePlacements {
+fn effective(
+    saved: &ChatPlacements,
+    index: &ChatIndex<'_>,
+    is_fork: impl Fn(&str) -> bool,
+) -> EffectivePlacements {
     let find = |id: &str| index.get(id).copied();
     let mut placed = EffectivePlacements {
         promoted: saved
             .promoted
             .iter()
-            .filter(|id| find(id.as_str()).is_some_and(|chat| lineage_parent_id(chat).is_some()))
+            .filter(|id| {
+                find(id.as_str()).is_some_and(|chat| lineage_parent_id(chat).is_some())
+                    || (find(id.as_str()).is_some() && is_fork(id))
+            })
             .cloned()
             .collect(),
         docked: Default::default(),
@@ -173,7 +179,10 @@ impl Shell {
         let Some(saved) = self.settings.chat_placements.get(&scope) else {
             return EffectivePlacements::default();
         };
-        effective(saved, &chat_index(&self.state.read(cx).chats))
+        let state = self.state.read(cx);
+        effective(saved, &chat_index(&state.chats), |id| {
+            super::side_chats::is_fork(&state, id)
+        })
     }
 
     /// Change this profile's placements, pruning entries for chats that no
@@ -223,7 +232,7 @@ impl Shell {
             };
             let index = chat_index(&state.chats);
             let known = |id: &str| index.contains_key(id);
-            let applied = effective(saved, &index);
+            let applied = effective(saved, &index, |id| super::side_chats::is_fork(&state, id));
             // A dock that would close a cycle is skipped on load; drop it.
             let cyclic: Vec<String> = saved
                 .docked
@@ -270,11 +279,9 @@ impl Shell {
             .unwrap_or_else(|| "this chat".into())
     }
 
-    /// A related row dropped on the left sidebar: a child is listed there as
-    /// its own row (still its parent's child); an alongside chat returns. A
-    /// fork is an ordinary sidebar row already: the drop only places it
-    /// (its source link stays). A drop slot places it under Manual sort,
-    /// exactly like dragging a sidebar row there.
+    /// A related row dropped on the left sidebar: a child or fork is listed
+    /// there explicitly; an alongside ordinary chat returns. A drop slot
+    /// places it under Manual sort, exactly like dragging a sidebar row there.
     pub(super) fn place_in_sidebar(
         &mut self,
         drag: &SidebarChatDrag,
@@ -304,8 +311,12 @@ impl Shell {
                 )));
             }
             related_chats::RelatedKind::Alongside | related_chats::RelatedKind::Side => {
+                let is_fork = super::side_chats::is_fork(self.state.read(cx), &id);
                 self.update_placements(cx, |placements| {
                     placements.docked.remove(&id);
+                    if is_fork && !placements.promoted.contains(&id) {
+                        placements.promoted.push(id.clone());
+                    }
                 });
             }
         }
@@ -370,15 +381,6 @@ impl Shell {
                 self.update_placements(cx, |placements| {
                     placements.promoted.retain(|promoted| *promoted != id);
                 });
-                // Pins always list in the sidebar's Pinned group as well.
-                if chat.pinned_order.is_some() {
-                    return refuse(
-                        self,
-                        "It is pinned, so it also stays in the sidebar's Pinned list. Unpin it to list it only here."
-                            .into(),
-                        cx,
-                    );
-                }
                 return;
             }
             let parent_title = self.chat_title(&parent, cx);

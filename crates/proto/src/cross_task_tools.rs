@@ -393,6 +393,10 @@ pub struct ChildProvisioning {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChildThread {
+    /// Explicit ownership of the initial delegated message only. Legacy rows
+    /// remain ancestry-only and cannot gain stop authority on upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_origin: Option<crate::WorkOrigin>,
     pub parent_task_id: String,
     pub creation_command_id: String,
     #[serde(default)]

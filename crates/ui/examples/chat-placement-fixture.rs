@@ -1,7 +1,6 @@
-//! Headless GPUI E2E for chat placement across the two sidebars: child chats
-//! dragged from Related chats into the left sidebar and back, ordinary chats
-//! docked alongside the selected chat and back, and every child in the left
-//! sidebar identified as one, with a parent breadcrumb when opened.
+//! Headless GPUI E2E for explicit sidebar placement: children and forks begin
+//! in Related chats, enter the left sidebar only after a drag, and render as
+//! aligned cards. Ordinary chats can still dock alongside and return.
 //!
 //! Drives the production `Shell` in a hidden window with real pointer input
 //! (GPUI hit testing, drag and drop, clicks) against an in-process
@@ -19,14 +18,14 @@
 //! 4. Self, duplicate, ancestor and pinned-child drops change placement; a
 //!    dock closes a cycle through docks and parents (A<->B, longer, mixed)
 //!    or lands on an archived host; a saved cycle hides chats for good.
-//! 5. A side chat (a persistent fork, an ordinary root row) is refused the
-//!    sidebar or a dock, loses its listing under its source when placed,
+//! 5. A child or fork (including pinned/orphaned children) appears in any
+//!    sidebar section before a manual drag; selecting one reveals it there.
+//! 6. A fork is refused the sidebar or a dock, loses its source when placed,
 //!    gains a parent, or cannot return from a dock.
-//! 6. A sidebar child (promoted, pinned, orphaned, archived parent) is not
-//!    identified as a child; the breadcrumb names a dock host instead of the
-//!    record's parent, cannot open the actual (or archived) parent, or links
+//! 7. A placed child is indented or loses its Child identity; a breadcrumb
+//!    names a dock host, cannot open the actual (or archived) parent, or links
 //!    a missing parent.
-//! 7. Placement does not survive closing the pane or a settings reload, or
+//! 8. Placement does not survive closing the pane or a settings reload, or
 //!    leaks to (or is pruned by) another profile on the same device and
 //!    scope; an engine with no profile id applies, stores or prunes any.
 //!
@@ -216,6 +215,7 @@ fn child_thread(spec: &Spec, at_ms: i64) -> Option<ChildThread> {
         outcomes: Vec::new(),
         outcome_floor_ms: Some(at_ms),
         provisioning: None,
+        work_origin: None,
     })
 }
 
@@ -703,9 +703,9 @@ fn main() -> anyhow::Result<()> {
                     cx.update(|cx| state.update(cx, |state, cx| state.select_chat(Some(id), cx)));
                 };
 
-                // p01. Every child in the left sidebar is marked: a pinned
-                // child, a child whose parent is gone, a child of an archived
-                // parent. Folded children list under their parent.
+                // p01. Every parent-created chat begins outside the sidebar,
+                // including pinned and orphaned children. All remain in the
+                // parent's Related chats when that parent exists.
                 window.update(cx, |shell, _, cx| {
                     shell.fixture_open_right_pane(cx);
                     shell.fixture_open_child_chats(cx);
@@ -714,12 +714,18 @@ fn main() -> anyhow::Result<()> {
                 capture(window, cx, output.join("p01-initial.png"))?;
                 let initial = readback(window, cx)?;
                 anyhow::ensure!(
-                    ids(&initial["sidebarOrder"]) == [PINNED_TOP, CHILD_PINNED, PARENT, OTHER, ORPHAN, ARCH_CHILD, THIRD],
+                    ids(&initial["sidebarOrder"]) == [PINNED_TOP, PARENT, OTHER, THIRD],
                     "seeded sidebar: {initial}"
                 );
-                anyhow::ensure!(ids(&initial["sidebarChildRows"]) == [CHILD_PINNED, ORPHAN, ARCH_CHILD], "sidebar children must be marked: {initial}");
+                anyhow::ensure!(ids(&initial["sidebarChildRows"]).is_empty(), "unplaced children must have no sidebar rows: {initial}");
                 let related = related_ids(&initial);
-                anyhow::ensure!(has(&related, CHILD_A) && has(&related, CHILD_B), "children list under their parent: {initial}");
+                anyhow::ensure!(has(&related, CHILD_A) && has(&related, CHILD_B) && has(&related, CHILD_PINNED), "children list under their parent: {initial}");
+                select(cx, CHILD_A);
+                settle(cx, 300).await;
+                let selected_child = readback(window, cx)?;
+                anyhow::ensure!(!has(&ids(&selected_child["sidebarOrder"]), CHILD_A), "opening a child must not reveal it in the sidebar: {selected_child}");
+                select(cx, PARENT);
+                settle(cx, 300).await;
                 let lineage = initial["lineage"].clone();
                 record.insert("initial".into(), initial);
 
@@ -746,7 +752,7 @@ fn main() -> anyhow::Result<()> {
                 capture(window, cx, output.join("p03-pin-boundary.png"))?;
                 let boundary = readback(window, cx)?;
                 let order = ids(&boundary["sidebarOrder"]);
-                anyhow::ensure!(order.iter().position(|id| id == CHILD_B) == Some(2), "child must land first below the pins: {boundary}");
+                anyhow::ensure!(order.iter().position(|id| id == CHILD_B) == Some(1), "child must land first below the pins: {boundary}");
                 anyhow::ensure!(!has(&ids(&boundary["pinnedOrder"]), CHILD_B) && boundary["sidebarSort"] == "Manual", "a slot drop sorts manually and never pins: {boundary}");
                 record.insert("pinBoundary".into(), boundary);
 
@@ -789,12 +795,19 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(window.update(cx, |shell, _, cx| shell.fixture_workbench_close(OTHER, cx))?, "close the alongside view without changing placement");
                 settle(cx, 300).await;
 
-                // Pinned child onto its parent: stays in the Pinned list.
-                let left = row_spans(window, cx, sidebar_x, "chat-")?;
+                // Even a pinned child needs a manual drag into the sidebar;
+                // dragging it back removes that placement without unpinning.
+                focus_related(window, cx, &state, PARENT).await?;
                 let before = readback(window, cx)?["placements"].clone();
+                let right = row_spans(window, cx, pane_x, "child-pane-chat-")?;
+                let left = row_spans(window, cx, sidebar_x, "chat-")?;
+                drag(window, cx, (pane_x, center(&right, CHILD_PINNED)?), (sidebar_x, lowest(&left) + 40.0)).await?;
+                let manually_pinned = readback(window, cx)?;
+                anyhow::ensure!(has(&ids(&manually_pinned["sidebarOrder"]), CHILD_PINNED) && has(&ids(&manually_pinned["placements"]["promoted"]), CHILD_PINNED), "a pinned child needs explicit placement: {manually_pinned}");
+                let left = row_spans(window, cx, sidebar_x, "chat-")?;
                 drag(window, cx, (sidebar_x, center(&left, CHILD_PINNED)?), pane_drop).await?;
                 let pinned_child = readback(window, cx)?;
-                anyhow::ensure!(pinned_child["placements"] == before && has(&ids(&pinned_child["sidebarOrder"]), CHILD_PINNED), "a pinned child stays pinned: {pinned_child}");
+                anyhow::ensure!(pinned_child["placements"] == before && !has(&ids(&pinned_child["sidebarOrder"]), CHILD_PINNED) && has(&related_ids(&pinned_child), CHILD_PINNED), "a pinned child returns to Related chats: {pinned_child}");
 
                 // A promoted child returns to its parent's Related chats.
                 let left = row_spans(window, cx, sidebar_x, "chat-")?;
@@ -842,15 +855,14 @@ fn main() -> anyhow::Result<()> {
                 record.insert("cycles".into(), serde_json::json!({ "twoWay": two, "longer": longer, "mixed": mixed }));
                 focus_related(window, cx, &state, PARENT).await?;
 
-                // p06. A fork is placed like any chat: dropping its
-                // Related row on the sidebar is accepted (it is a sidebar
-                // root row already, and stays listed under its source), and
-                // it docks beside another chat and returns.
+                // p06. A fork starts in Related chats alone. Dragging it to
+                // the sidebar saves placement while retaining the source;
+                // docking it beside another chat and returning also works.
                 window.update(cx, |shell, _, cx| shell.fixture_open_side_chats(cx))?;
                 let side_id = fork(window, cx, &state, &workspace, SIDE_Q).await?;
                 focus_related(window, cx, &state, PARENT).await?;
                 let listed = readback(window, cx)?;
-                anyhow::ensure!(has(&related_ids(&listed), &side_id) && has(&ids(&listed["sidebarOrder"]), &side_id), "a fork lists under its source and in the sidebar: {listed}");
+                anyhow::ensure!(has(&related_ids(&listed), &side_id) && !has(&ids(&listed["sidebarOrder"]), &side_id), "an unplaced fork lists only under its source: {listed}");
                 let right = row_spans(window, cx, pane_x, "child-pane-chat-")?;
                 let left = row_spans(window, cx, sidebar_x, "chat-")?;
                 let before = listed["placements"].clone();
@@ -858,7 +870,7 @@ fn main() -> anyhow::Result<()> {
                 capture(window, cx, output.join("p06-fork-placed.png"))?;
                 let placed = readback(window, cx)?;
                 anyhow::ensure!(!placed["notice"].as_str().is_some_and(|text| text.contains("stay with")), "a fork is not refused the sidebar: {placed}");
-                anyhow::ensure!(placed["placements"]["docked"] == before["docked"] && placed["placements"]["promoted"] == before["promoted"], "placing a fork records no dock or promotion: {placed}");
+                anyhow::ensure!(placed["placements"]["docked"] == before["docked"] && has(&ids(&placed["placements"]["promoted"]), &side_id), "placing a fork saves explicit promotion: {placed}");
                 anyhow::ensure!(has(&ids(&placed["sidebarOrder"]), &side_id) && has(&related_ids(&placed), &side_id), "it stays a sidebar row and under its source: {placed}");
                 anyhow::ensure!(placed["lineage"].get(side_id.as_str()).is_none(), "a fork gains no parent: {placed}");
                 // Dock it beside Other (allowed: a fork has no lineage), then
@@ -876,7 +888,39 @@ fn main() -> anyhow::Result<()> {
                 let undocked = readback(window, cx)?;
                 anyhow::ensure!(undocked["placements"]["docked"] == before["docked"], "the fork returns from the dock: {undocked}");
                 record.insert("fork".into(), serde_json::json!({ "placed": placed, "docked": docked["placements"], "undocked": undocked["placements"] }));
+
+                // Replay a complete WatchChats frame as on cold load or
+                // reconnect. The source map and ordinary chat rows arrive
+                // atomically; an explicit placement survives, then removing
+                // it leaves the fork only in Related chats.
+                let (frame_chats, side_rows, fork_sources) = state.read_with(cx, |state, _| (
+                    state.chats.clone(),
+                    state.side_chat_rows.clone(),
+                    state.fork_source_rows.clone(),
+                ));
+                cx.update(|cx| state.update(cx, |state, cx| {
+                    state.apply_side_chat_rows(side_rows.clone());
+                    state.fork_source_rows = fork_sources.clone();
+                    state.apply_chats(frame_chats.clone());
+                    cx.notify();
+                }));
+                settle(cx, 300).await;
+                let restored_fork = readback(window, cx)?;
+                anyhow::ensure!(has(&ids(&restored_fork["sidebarOrder"]), &side_id), "saved fork placement survives a watch replay: {restored_fork}");
+                window.update(cx, |shell, _, cx| {
+                    shell.fixture_set_chat_placements(serde_json::from_value(before.clone()).expect("saved placements"), cx)
+                })?;
+                cx.update(|cx| state.update(cx, |state, cx| {
+                    state.apply_side_chat_rows(side_rows);
+                    state.fork_source_rows = fork_sources;
+                    state.apply_chats(frame_chats);
+                    cx.notify();
+                }));
+                settle(cx, 300).await;
                 focus_related(window, cx, &state, PARENT).await?;
+                let unplaced_fork = readback(window, cx)?;
+                anyhow::ensure!(!has(&ids(&unplaced_fork["sidebarOrder"]), &side_id) && has(&related_ids(&unplaced_fork), &side_id), "a cold frame without saved placement keeps the fork in Related chats only: {unplaced_fork}");
+                record.insert("watchReplay".into(), serde_json::json!({"placed": restored_fork, "unplaced": unplaced_fork}));
 
                 // p07-p08. A promoted child opened as main: the breadcrumb
                 // names its actual parent (long title) and opens it.
@@ -903,7 +947,7 @@ fn main() -> anyhow::Result<()> {
                 window.update(cx, |shell, _, cx| shell.fixture_open_child_chats(cx))?;
                 settle(cx, 500).await;
                 let before = readback(window, cx)?["placements"].clone();
-                let archived_host = drop_on_related(window, cx, ORPHAN).await?;
+                let archived_host = drop_on_related(window, cx, THIRD).await?;
                 anyhow::ensure!(archived_host["placements"] == before && archived_host["notice"].as_str().is_some_and(|text| text.contains("archived")), "an archived host must be refused: {archived_host}");
 
                 // p10. A child whose parent is gone: named, never linked.
@@ -913,7 +957,7 @@ fn main() -> anyhow::Result<()> {
                 click_at(window, cx, settings::SIDEBAR_DEFAULT + 70.0, 21.0).await?;
                 settle(cx, 300).await;
                 let orphan = readback(window, cx)?;
-                anyhow::ensure!(orphan["selected"] == ORPHAN, "a missing parent must not navigate: {orphan}");
+                anyhow::ensure!(orphan["selected"] == ORPHAN && !has(&ids(&orphan["sidebarOrder"]), ORPHAN), "a missing parent must not navigate or reveal a sidebar row: {orphan}");
 
                 // An ancestor cannot sit beside its own child.
                 select(cx, CHILD_A);
@@ -1074,6 +1118,25 @@ fn main() -> anyhow::Result<()> {
                 anyhow::ensure!(reversed["placements"].is_null(), "no placements remain: {reversed}");
                 anyhow::ensure!(reversed["lineage"] == lineage, "lineage never changes: {reversed}");
                 record.insert("reversed".into(), reversed);
+
+                // A generic history fork has `forkSourceTaskId` but no side
+                // chat service row. The same default and manual placement
+                // apply to it after a complete chats frame.
+                cx.update(|cx| state.update(cx, |state, cx| {
+                    state.fork_source_rows.insert(THIRD.into(), PARENT.into());
+                    let chats = state.chats.clone();
+                    state.apply_chats(chats);
+                    cx.notify();
+                }));
+                settle(cx, 300).await;
+                let generic_unplaced = readback(window, cx)?;
+                anyhow::ensure!(!has(&ids(&generic_unplaced["sidebarOrder"]), THIRD) && has(&related_ids(&generic_unplaced), THIRD), "generic fork starts in Related chats only: {generic_unplaced}");
+                let right = row_spans(window, cx, pane_x, "child-pane-chat-")?;
+                let left = row_spans(window, cx, sidebar_x, "chat-")?;
+                drag(window, cx, (pane_x, center(&right, THIRD)?), (sidebar_x, lowest(&left) + 40.0)).await?;
+                let generic_placed = readback(window, cx)?;
+                anyhow::ensure!(has(&ids(&generic_placed["sidebarOrder"]), THIRD) && has(&ids(&generic_placed["placements"]["promoted"]), THIRD) && generic_placed["forkSources"][THIRD] == PARENT, "generic fork accepts an explicit sidebar drag: {generic_placed}");
+                record.insert("genericFork".into(), serde_json::json!({"unplaced": generic_unplaced, "placed": generic_placed}));
                 Ok(serde_json::Value::Object(record))
             }
             .await;
@@ -1083,7 +1146,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("chat-placement.pass"),
-                                "PASS: headless production Shell with real pointer input; a child dragged into the left sidebar lists there (marked Child, lineage unchanged, never pinned; a Pinned-group drop clamps below the pins) and leaves Related chats; an ordinary chat docked alongside leaves the sidebar, lists as Alongside with no parent and opens with its own composer; self, duplicate, pinned-child and ancestor drops change nothing; a fork (New side chat) is placed like any chat: accepted in the sidebar with no dock or promotion recorded, still listed under its source with no parent, docked beside another chat and returned; promoted, pinned, orphaned and archived-parent children are marked in the sidebar; the main-chat breadcrumb opens the actual (or archived) parent and never links a missing one; placement survives closing the pane and a settings reload from disk (scoped to the profile); reverse moves restore everything\n",
+                                "PASS: headless production Shell with real pointer input; child rows (including pinned and orphaned), service side chats, and generic history forks start outside the sidebar, and selecting a child does not reveal it there; dragging a child or fork into the sidebar saves explicit placement and renders an aligned card, with lineage and source intact; a Pinned-group drop clamps below pins; an ordinary chat docks alongside with its own composer; invalid drops are refused; breadcrumbs preserve actual parent identity; saved placement survives watch replay, pane closure, and settings reload within one profile; reverse moves restore the sidebar and Related chats\n",
                             )
                         });
                     if let Err(error) = written {

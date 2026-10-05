@@ -34,6 +34,7 @@ pub mod recovery;
 pub mod runtime_contract;
 pub mod task_command;
 pub mod task_identity;
+pub mod task_work;
 pub mod usage;
 pub mod view;
 pub mod workspace;
@@ -68,6 +69,7 @@ pub use recovery::*;
 pub use runtime_contract::*;
 pub use task_command::*;
 pub use task_identity::*;
+pub use task_work::*;
 pub use usage::*;
 pub use workspace::*;
 

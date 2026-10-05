@@ -1,5 +1,5 @@
 //! Provider-native coordination work that is neither a subagent spawn, a
-//! shell job nor a LUNA child chat: Claude Code dynamic workflows, experimental
+//! LUNA child chat: Claude Code dynamic workflows, experimental
 //! agent-team teammates and remote agents, plus Claude's external background
 //! sessions (`claude agents --json`).
 //!
@@ -17,11 +17,13 @@ pub const NATIVE_TASK_MAX_AGENTS: usize = 256;
 pub const NATIVE_TASK_MAX_PHASES: usize = 64;
 
 /// Which provider task family a snapshot belongs to. Native subagents
-/// (`local_agent`) and shell jobs (`local_bash`) are deliberately absent: they
-/// keep their own transcript/chip routing.
+/// (`local_agent`) keep their transcript/chip routing. Shell observations also
+/// retain their original tool-result routing; they never become subagents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum NativeTaskKind {
+    /// Provider-observed background shell lifecycle, after its tool returns.
+    Shell,
     /// Claude `local_workflow`: a script-driven multi-agent run.
     #[default]
     Workflow,
@@ -34,6 +36,7 @@ pub enum NativeTaskKind {
 impl NativeTaskKind {
     pub fn label(self) -> &'static str {
         match self {
+            Self::Shell => "Background shell",
             Self::Workflow => "Workflow",
             Self::Teammate => "Teammate (experimental)",
             Self::RemoteAgent => "Remote agent",

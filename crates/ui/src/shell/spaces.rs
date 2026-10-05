@@ -14,10 +14,7 @@ use gpui::{FocusHandle, Window};
 use luna_proto::{ChatIndicator, Device, DriveEntry, DriveListing, FolderListing, Space};
 
 struct ActiveChatRow {
-    depth: usize,
-    /// The chat's actual parent title when it is a child (from the record's
-    /// lineage, not this row's display copy): every child in the sidebar is
-    /// marked as one.
+    /// A placed child's actual parent title, from its unchanged record.
     parent: Option<String>,
     status: ChatIndicator,
     chat: luna_proto::Chat,
@@ -28,259 +25,26 @@ struct ActiveChatRow {
     group: Option<(String, String)>,
 }
 
-/// The sidebar parent of `chat`: its child-thread parent when that row is in
-/// the same list, device, project and pin scope. Filtering, pinning or a
-/// missing/archived parent leaves the child a reachable root.
-fn lineage_parent<'a>(
-    rows: &std::collections::HashMap<&str, &'a luna_proto::Chat>,
+/// A parent-origin chat enters the main sidebar only after an explicit drag.
+/// Keep this projection shared by Activity, active, Settled, Archived, and
+/// keyboard navigation; selection and pinning never reveal an unplaced row.
+fn sidebar_rows<'a>(
+    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    state: &AppState,
+    placed: &super::placement::EffectivePlacements,
+) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
+    rows.into_iter()
+        .filter(|(_, chat)| sidebar_row_visible(chat, state, placed))
+        .collect()
+}
+
+fn sidebar_row_visible(
     chat: &luna_proto::Chat,
-) -> Option<&'a luna_proto::Chat> {
-    let id = &chat.child_thread.as_ref()?.parent_task_id;
-    let root = *rows.get(id.as_str())?;
-    (root.id != chat.id
-        && root.device_id == chat.device_id
-        && root.space_id == chat.space_id
-        && root.pinned_order.is_some() == chat.pinned_order.is_some())
-    .then_some(root)
-}
-
-/// Child chats are listed in their parent's right-pane Child chats surface,
-/// not the sidebar. Returns each folded child mapped to its nearest visible
-/// ancestor. The selected chat and its ancestors stay visible, so a child
-/// opened directly (search, notification, "Open as main chat") still shows,
-/// nested under its parent. Children whose parent is not in `chats`
-/// (archived, deleted, filtered out, other pin scope) and malformed or cyclic
-/// lineage are never folded.
-fn folded_child_chats(
-    chats: &[&luna_proto::Chat],
-    selected: Option<&str>,
-) -> std::collections::HashMap<String, String> {
-    use std::collections::{HashMap, HashSet};
-    let rows: HashMap<&str, &luna_proto::Chat> =
-        chats.iter().map(|chat| (chat.id.as_str(), *chat)).collect();
-    let mut revealed = HashSet::new();
-    let mut cursor = selected.and_then(|id| rows.get(id).copied());
-    while let Some(chat) = cursor {
-        if !revealed.insert(chat.id.as_str()) {
-            break;
-        }
-        cursor = lineage_parent(&rows, chat);
-    }
-    let reaches_root = |chat: &luna_proto::Chat| {
-        let mut seen = HashSet::new();
-        let mut cursor = chat;
-        loop {
-            if seen.len() > 32 || !seen.insert(cursor.id.as_str()) {
-                return false;
-            }
-            match lineage_parent(&rows, cursor) {
-                Some(parent) => cursor = parent,
-                None => return true,
-            }
-        }
-    };
-    let mut folded = HashMap::new();
-    for chat in chats {
-        let Some(mut ancestor) = lineage_parent(&rows, chat) else {
-            continue;
-        };
-        if revealed.contains(chat.id.as_str()) || !reaches_root(chat) {
-            continue;
-        }
-        while !revealed.contains(ancestor.id.as_str())
-            && let Some(parent) = lineage_parent(&rows, ancestor)
-        {
-            ancestor = parent;
-        }
-        folded.insert(chat.id.clone(), ancestor.id.clone());
-    }
-    folded
-}
-
-/// Remove folded child chats from sidebar rows. A parent row carries the most
-/// urgent status of the children folded into it, so a child that needs
-/// approval or input (or is still working) keeps its parent visible and
-/// unsettled.
-fn fold_child_chats<'a>(
-    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
-    selected: Option<&str>,
-) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
-    let chats: Vec<&luna_proto::Chat> = rows.iter().map(|(_, chat)| *chat).collect();
-    let folded = folded_child_chats(&chats, selected);
-    if folded.is_empty() {
-        return rows;
-    }
-    let mut summary: std::collections::HashMap<&str, ChatIndicator> =
-        std::collections::HashMap::new();
-    for (status, chat) in &rows {
-        if let Some(ancestor) = folded.get(&chat.id) {
-            let entry = summary
-                .entry(ancestor.as_str())
-                .or_insert(ChatIndicator::Idle);
-            if child_indicator_priority(*status) > child_indicator_priority(*entry) {
-                *entry = *status;
-            }
-        }
-    }
-    rows.iter()
-        .filter(|(_, chat)| !folded.contains_key(&chat.id))
-        .map(|(status, chat)| {
-            let status = match summary.get(chat.id.as_str()) {
-                Some(child)
-                    if child_indicator_priority(*child) > child_indicator_priority(*status) =>
-                {
-                    *child
-                }
-                _ => *status,
-            };
-            (status, *chat)
-        })
-        .collect()
-}
-
-/// One tree projection shared by rendering and keyboard navigation. After
-/// [`fold_child_chats`] the only nested rows left are the selected chat's
-/// lineage; malformed or cyclic imported lineage must never hide a row.
-struct ChildVisibleRow {
-    id: String,
-    depth: usize,
-}
-fn child_visible_tree(chats: &[luna_proto::Chat]) -> Vec<ChildVisibleRow> {
-    use std::collections::{HashMap, HashSet};
-    let rows: HashMap<&str, &luna_proto::Chat> =
-        chats.iter().map(|chat| (chat.id.as_str(), chat)).collect();
-    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
-    for chat in chats {
-        if let Some(parent) = lineage_parent(&rows, chat) {
-            children
-                .entry(parent.id.as_str())
-                .or_default()
-                .push(chat.id.as_str());
-        }
-    }
-    fn visit<'a>(
-        id: &'a str,
-        depth: usize,
-        children: &HashMap<&'a str, Vec<&'a str>>,
-        visited: &mut HashSet<&'a str>,
-        output: &mut Vec<ChildVisibleRow>,
-    ) {
-        if depth > 32 || !visited.insert(id) {
-            return;
-        }
-        output.push(ChildVisibleRow {
-            id: id.into(),
-            depth,
-        });
-        for &child in children.get(id).into_iter().flatten() {
-            visit(child, depth + 1, children, visited, output);
-        }
-    }
-    let mut output = Vec::new();
-    let mut visited = HashSet::new();
-    for chat in chats
-        .iter()
-        .filter(|chat| lineage_parent(&rows, chat).is_none())
-    {
-        visit(&chat.id, 0, &children, &mut visited, &mut output);
-    }
-    for chat in chats {
-        visit(&chat.id, 0, &children, &mut visited, &mut output);
-    }
-    output
-}
-
-/// Pagination selects families. Keep a visible (selected) child and its
-/// available ancestors together without resurrecting archived rows or
-/// crossing the filter/pin scope. Folded children are already absent.
-fn include_child_families<'a>(
-    mut selected: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
-    available: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
-) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
-    let mut ids: std::collections::HashSet<String> =
-        selected.iter().map(|(_, chat)| chat.id.clone()).collect();
-    loop {
-        let mut added = false;
-        for row in &available {
-            if ids.contains(&row.1.id) {
-                continue;
-            }
-            let related = selected.iter().any(|(_, chat)| {
-                chat.device_id == row.1.device_id
-                    && chat.space_id == row.1.space_id
-                    && chat.pinned_order.is_some() == row.1.pinned_order.is_some()
-                    && (chat
-                        .child_thread
-                        .as_ref()
-                        .is_some_and(|child| child.parent_task_id == row.1.id)
-                        || row
-                            .1
-                            .child_thread
-                            .as_ref()
-                            .is_some_and(|child| child.parent_task_id == chat.id))
-            });
-            if related {
-                ids.insert(row.1.id.clone());
-                selected.push(*row);
-                added = true;
-            }
-        }
-        if !added {
-            break;
-        }
-    }
-    selected
-}
-
-/// Placement on sidebar rows (see [`super::placement`]): a promoted child
-/// lists as its own root, so this display copy drops its lineage. The chat
-/// record (and every other view of it) keeps its parent.
-fn promote_rows<'a>(
-    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    state: &AppState,
     placed: &super::placement::EffectivePlacements,
-) -> Vec<(ChatIndicator, std::borrow::Cow<'a, luna_proto::Chat>)> {
-    rows.into_iter()
-        .map(|(status, chat)| {
-            if placed.is_promoted(&chat.id) {
-                let mut copy = chat.clone();
-                copy.child_thread = None;
-                (status, std::borrow::Cow::Owned(copy))
-            } else {
-                (status, std::borrow::Cow::Borrowed(chat))
-            }
-        })
-        .collect()
-}
-
-fn borrow_rows<'a>(
-    rows: &'a [(ChatIndicator, std::borrow::Cow<'_, luna_proto::Chat>)],
-) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
-    rows.iter()
-        .map(|(status, chat)| (*status, chat.as_ref()))
-        .collect()
-}
-
-/// Docked chats list beside their host, not here. Applied after folding so
-/// a docked chat's own children stay folded into it. The selected chat
-/// stays reachable.
-fn hide_docked<'a>(
-    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
-    placed: &super::placement::EffectivePlacements,
-    selected: Option<&str>,
-) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
-    rows.into_iter()
-        .filter(|(_, chat)| placed.host(&chat.id).is_none() || Some(chat.id.as_str()) == selected)
-        .collect()
-}
-
-fn child_indicator_priority(status: ChatIndicator) -> u8 {
-    match status {
-        ChatIndicator::AwaitingApproval | ChatIndicator::AwaitingInput => 5,
-        ChatIndicator::Errored => 4,
-        ChatIndicator::Working => 3,
-        ChatIndicator::Completed => 2,
-        ChatIndicator::Idle => 1,
-    }
+) -> bool {
+    let from_parent = chat.child_thread.is_some() || super::side_chats::is_fork(state, &chat.id);
+    (!from_parent || placed.is_promoted(&chat.id)) && placed.host(&chat.id).is_none()
 }
 
 pub(super) fn sidebar_thread_tooltip(
@@ -1774,8 +1538,7 @@ impl Shell {
         let placed = self.effective_placements(cx);
         let state = self.state.read(cx);
         let now = Utc::now();
-        let selected = state.selected_chat.as_deref();
-        let store = promote_rows(
+        let source = sidebar_rows(
             state.sidebar_chats(
                 now,
                 if self.activity.view_active {
@@ -1784,34 +1547,27 @@ impl Shell {
                     filter.as_deref()
                 },
             ),
+            &state,
             &placed,
         );
         let mut chats: Vec<luna_proto::Chat> = if self.activity.view_active {
-            fold_child_chats(
-                activity_sidebar_chats_with_recent(
-                    borrow_rows(&store),
-                    &attention_task_keys,
-                    &recent_completion_keys,
-                ),
-                selected,
+            activity_sidebar_chats_with_recent(
+                source,
+                &attention_task_keys,
+                &recent_completion_keys,
             )
             .into_iter()
             .filter(|(_, chat)| !self.pending_task_actions.contains_key(&chat.id))
             .map(|(_, chat)| chat.clone())
             .collect()
         } else {
-            let mut chats = hide_docked(
-                fold_child_chats(borrow_rows(&store), selected),
-                &placed,
-                selected,
-            );
+            let mut source = source;
             let ranks = self.sidebar_manual_ranks();
-            chats.sort_by(|left, right| {
+            source.sort_by(|left, right| {
                 compare_sidebar_chats_ranked(self.settings.sidebar_sort, &ranks, left.1, right.1)
             });
-            let available = chats.clone();
-            let selected = active_page(
-                chats,
+            active_page(
+                source,
                 state.selected_chat.as_deref(),
                 now,
                 self.settings.sidebar_auto_settle_after_days,
@@ -1819,19 +1575,15 @@ impl Shell {
                 &self.pending_task_actions,
                 self.active_shown,
             )
-            .0;
-            include_child_families(selected, available)
-                .into_iter()
-                .map(|(_, chat)| chat.clone())
-                .collect()
+            .0
+            .into_iter()
+            .map(|(_, chat)| chat.clone())
+            .collect()
         };
         if self.activity.view_active
             || self.settings.sidebar_organization != SidebarOrganization::ByDevice
         {
-            return child_visible_tree(&chats)
-                .into_iter()
-                .map(|row| row.id)
-                .collect();
+            return chats.into_iter().map(|chat| chat.id).collect();
         }
         let pinned_len = chats
             .iter()
@@ -1855,19 +1607,7 @@ impl Shell {
                 .flat_map(|(_, rows)| rows)
                 .map(|chat| chat.id),
         );
-        let chats: Vec<_> = ordered
-            .iter()
-            .filter_map(|id| {
-                store
-                    .iter()
-                    .find(|(_, chat)| &chat.id == id)
-                    .map(|(_, chat)| chat.as_ref().clone())
-            })
-            .collect();
-        child_visible_tree(&chats)
-            .into_iter()
-            .map(|row| row.id)
-            .collect()
+        ordered
     }
 
     /// Normal sidebar: every session (idle included) under the saved project
@@ -1888,8 +1628,7 @@ impl Shell {
         let placed = self.effective_placements(cx);
         let mut rows: Vec<ActiveChatRow> = {
             let state = self.state.read(cx);
-            let selected = state.selected_chat.as_deref();
-            let store = promote_rows(
+            let source = sidebar_rows(
                 state.sidebar_chats(
                     now,
                     if activity_view {
@@ -1898,28 +1637,22 @@ impl Shell {
                         filter.as_deref()
                     },
                 ),
+                &state,
                 &placed,
             );
             let (chats, hidden_count): (Vec<_>, usize) = if activity_view {
                 (
-                    fold_child_chats(
-                        activity_sidebar_chats_with_recent(
-                            borrow_rows(&store),
-                            &attention_task_keys,
-                            &recent_completion_keys,
-                        ),
-                        selected,
+                    activity_sidebar_chats_with_recent(
+                        source,
+                        &attention_task_keys,
+                        &recent_completion_keys,
                     ),
                     0,
                 )
             } else {
-                let mut chats = hide_docked(
-                    fold_child_chats(borrow_rows(&store), selected),
-                    &placed,
-                    selected,
-                );
+                let mut source = source;
                 let ranks = self.sidebar_manual_ranks();
-                chats.sort_by(|left, right| {
+                source.sort_by(|left, right| {
                     compare_sidebar_chats_ranked(
                         self.settings.sidebar_sort,
                         &ranks,
@@ -1927,17 +1660,15 @@ impl Shell {
                         right.1,
                     )
                 });
-                let available = chats.clone();
-                let (selected, hidden) = active_page(
-                    chats,
+                active_page(
+                    source,
                     state.selected_chat.as_deref(),
                     now,
                     self.settings.sidebar_auto_settle_after_days,
                     &settlement_task_keys,
                     &self.pending_task_actions,
                     self.active_shown,
-                );
-                (include_child_families(selected, available), hidden)
+                )
             };
             self.sidebar_hidden_active_count = hidden_count;
             let records = super::placement::chat_index(&state.chats);
@@ -1990,7 +1721,6 @@ impl Shell {
                         }
                     };
                     ActiveChatRow {
-                        depth: 0,
                         parent,
                         status,
                         chat: chat.clone(),
@@ -2014,21 +1744,6 @@ impl Shell {
             }
         }
 
-        let hierarchy_chats: Vec<_> = rows.iter().map(|row| row.chat.clone()).collect();
-        let hierarchy = child_visible_tree(&hierarchy_chats);
-        let mut mapped: std::collections::HashMap<String, ActiveChatRow> = rows
-            .into_iter()
-            .map(|row| (row.chat.id.clone(), row))
-            .collect();
-        rows = hierarchy
-            .into_iter()
-            .filter_map(|node| {
-                mapped.remove(&node.id).map(|mut row| {
-                    row.depth = node.depth;
-                    row
-                })
-            })
-            .collect();
         let child_counts = self.related_chat_counts(cx);
 
         let mut groups: Vec<(Option<(String, String)>, Vec<ActiveChatRow>)> = Vec::new();
@@ -2070,7 +1785,6 @@ impl Shell {
         }
         let organization = self.settings.sidebar_organization;
         let mut drag_rows: Vec<(String, SidebarDragScope)> = Vec::new();
-        let mut drag_root: Option<String> = None;
         let drop_slot = self
             .sidebar_drag
             .as_ref()
@@ -2085,7 +1799,6 @@ impl Shell {
             let mut rendered_rows = Vec::with_capacity(rows.len());
             for row in rows {
                 let ActiveChatRow {
-                    depth,
                     parent,
                     status,
                     chat,
@@ -2135,8 +1848,6 @@ impl Shell {
                     None
                 };
                 slot += 1;
-                // Only root rows reorder. The selected chat's nested lineage
-                // drops after its root, where the tree keeps it anyway.
                 let scope = (!activity_view).then(|| {
                     if chat.pinned_order.is_some() {
                         SidebarDragScope::Pinned
@@ -2147,13 +1858,10 @@ impl Shell {
                         )
                     }
                 });
-                if depth == 0 {
-                    drag_root = Some(chat.id.clone());
-                    if let Some(scope) = &scope {
-                        drag_rows.push((chat.id.clone(), scope.clone()));
-                    }
+                if let Some(scope) = &scope {
+                    drag_rows.push((chat.id.clone(), scope.clone()));
                 }
-                let drag = scope.filter(|_| depth == 0).map(|scope| SidebarChatDrag {
+                let drag = scope.map(|scope| SidebarChatDrag {
                     chat_id: chat.id.clone(),
                     origin: DragOrigin::Sidebar,
                     scope,
@@ -2199,29 +1907,20 @@ impl Shell {
                 );
                 let slot_place = drop_slot
                     .as_ref()
-                    .filter(|(anchor, _)| depth == 0 && *anchor == chat.id)
+                    .filter(|(anchor, _)| *anchor == chat.id)
                     .map(|(_, place)| *place);
-                let target_row = if depth == 0 {
-                    Some(chat.id.clone())
-                } else {
-                    drag_root.clone()
-                };
-                // Only the selected chat's lineage is nested now; the rest of
-                // a parent's children live in its right-pane Child chats list.
                 let element = div()
                     .id(SharedString::from(format!("sidebar-row-{}", chat.id)))
                     .relative()
-                    .pl(px((depth.min(4) * 14) as f32))
                     .child(element)
-                    .when_some(target_row.filter(|_| !activity_view), |row, target| {
-                        let nested = depth > 0;
+                    .when((!activity_view), |row| {
+                        let target = chat.id.clone();
                         row.on_drag_move::<SidebarChatDrag>(cx.listener(
                             move |this, event: &gpui::DragMoveEvent<SidebarChatDrag>, _, cx| {
                                 if !event.bounds.contains(&event.event.position) {
                                     return;
                                 }
-                                let lower =
-                                    nested || event.event.position.y > event.bounds.center().y;
+                                let lower = event.event.position.y > event.bounds.center().y;
                                 let drag = event.drag(cx).clone();
                                 this.update_sidebar_drag(&drag, &target, lower, cx);
                             },
@@ -2390,34 +2089,28 @@ impl Shell {
         let placed = self.effective_placements(cx);
         let mut rows: Vec<luna_proto::Chat> = {
             let state = self.state.read(cx);
-            // Same folding and placement as the active list, so a child never
-            // shows in Settled while its parent is listed in either section.
-            let store = promote_rows(
+            let rows = sidebar_rows(
                 state.sidebar_chats(now, self.settings.space_filter.as_deref()),
+                &state,
                 &placed,
             );
-            let selected = state.selected_chat.as_deref();
-            hide_docked(
-                fold_child_chats(borrow_rows(&store), selected),
-                &placed,
-                selected,
-            )
-            .into_iter()
-            .filter(
-                |(status, chat)| match self.pending_task_actions.get(&chat.id) {
-                    Some(TaskConfirmation::Settle) => true,
-                    Some(TaskConfirmation::Archive | TaskConfirmation::Delete) => false,
-                    None => is_settled_chat(
-                        chat,
-                        *status,
-                        now,
-                        self.settings.sidebar_auto_settle_after_days,
-                        attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
-                    ),
-                },
-            )
-            .map(|(_, chat)| chat.clone())
-            .collect()
+            rows.into_iter()
+                .filter(
+                    |(status, chat)| match self.pending_task_actions.get(&chat.id) {
+                        Some(TaskConfirmation::Settle) => true,
+                        Some(TaskConfirmation::Archive | TaskConfirmation::Delete) => false,
+                        None => is_settled_chat(
+                            chat,
+                            *status,
+                            now,
+                            self.settings.sidebar_auto_settle_after_days,
+                            attention_task_keys
+                                .contains(&(chat.device_id.clone(), chat.id.clone())),
+                        ),
+                    },
+                )
+                .map(|(_, chat)| chat.clone())
+                .collect()
         };
         if rows.is_empty() {
             return None;
@@ -2619,23 +2312,11 @@ impl Shell {
         let placed = self.effective_placements(cx);
         let mut rows: Vec<luna_proto::Chat> = {
             let state = self.state.read(cx);
-            let rows_by_id: std::collections::HashMap<&str, &luna_proto::Chat> = state
-                .chats
-                .iter()
-                .map(|chat| (chat.id.as_str(), chat))
-                .collect();
             state
                 .chats
                 .iter()
                 .filter(|c| c.archived)
-                // An archived child stays listed in its parent's Related
-                // chats; only children whose parent is gone, or that are
-                // listed in the sidebar, keep a shelf row. A docked chat's
-                // archive is its host's Related chats.
-                .filter(|chat| {
-                    placed.is_promoted(&chat.id) || lineage_parent(&rows_by_id, chat).is_none()
-                })
-                .filter(|chat| placed.host(&chat.id).is_none())
+                .filter(|chat| sidebar_row_visible(chat, &state, &placed))
                 .filter(|chat| {
                     self.pending_task_actions.get(&chat.id) != Some(&TaskConfirmation::Delete)
                 })

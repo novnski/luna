@@ -26,6 +26,7 @@ pub mod capabilities {
 
     /// Profile-local tab/split layouts and user-created blank child tabs.
     pub const CHAT_WORKBENCH_V1: &str = "chat-workbench-v1";
+    pub const TASK_WORK_V1: &str = "task-work-v1";
     pub const CONTEXT_TRANSFER_V1: &str = "context-transfer-v1";
 
     pub const CURRENT: &[&str] = &[
@@ -41,6 +42,7 @@ pub mod capabilities {
         SIDE_CHAT_PERSISTENCE_V1,
         CHAT_WORKBENCH_V1,
         CONTEXT_TRANSFER_V1,
+        TASK_WORK_V1,
     ];
 
     pub fn current() -> Vec<String> {

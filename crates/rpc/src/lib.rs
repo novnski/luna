@@ -95,6 +95,10 @@ pub mod methods {
     pub const WATCH_QUEUE: &str = "WatchQueue";
     /// Provider-native workflows/teammates observed for a chat (read-only).
     /// `{ chatId }` → stream of `NativeTaskLedger`.
+    pub const GET_TASK_WORK: &str = "GetTaskWork";
+    pub const WATCH_TASK_WORK: &str = "WatchTaskWork";
+    pub const PREVIEW_STOP_TASK_WORK: &str = "PreviewStopTaskWork";
+    pub const STOP_TASK_WORK: &str = "StopTaskWork";
     pub const WATCH_NATIVE_TASKS: &str = "WatchNativeTasks";
     /// Claude Code's own session supervisor (`claude agents --json`), read-only.
     /// `{}` → `ClaudeExternalSessionsView`. IPC-only, engine-device local.
@@ -385,6 +389,10 @@ pub mod methods {
         RENEW_SIDE_CHAT,
         WATCH_DOC_MESSAGES,
         WATCH_QUEUE,
+        GET_TASK_WORK,
+        WATCH_TASK_WORK,
+        PREVIEW_STOP_TASK_WORK,
+        STOP_TASK_WORK,
         WATCH_NATIVE_TASKS,
         LIST_CLAUDE_EXTERNAL_SESSIONS,
         QUEUE_MESSAGE,

@@ -215,6 +215,8 @@ fn text_entry(
 
 fn child_thread(spec: &Spec, at_ms: i64) -> Option<ChildThread> {
     Some(ChildThread {
+        // Legacy fixture children: ancestry only, no launch ownership.
+        work_origin: None,
         parent_task_id: spec.parent?.into(),
         creation_command_id: format!("fixture-create-{}", spec.id),
         permission_ceiling: Default::default(),
