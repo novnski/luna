@@ -14,8 +14,8 @@ pub fn notice_action(id: &'static str, label: &'static str, theme: &Theme) -> gp
         .aria_label(label)
         .tab_index(0)
         .flex_none()
-        .h(px(24.0))
-        .px(px(10.0))
+        .h(crate::typography::ui_rems(24.0))
+        .px(crate::typography::ui_rems(10.0))
         .flex()
         .items_center()
         .rounded_full()
@@ -53,25 +53,28 @@ pub fn notice_chip(
     div()
         .flex()
         .flex_col()
-        .gap(px(6.0))
+        .gap(crate::typography::ui_rems(6.0))
         // The stack ladder's notice step above the pill (audit CP-20).
         .rounded(px(crate::popover::STACK_NOTICE_RADIUS))
         .border_1()
         .border_color(accent.opacity(0.22))
         .bg(plate)
-        .px(px(10.0))
-        .py(px(8.0))
+        .px(crate::typography::ui_rems(10.0))
+        .py(crate::typography::ui_rems(8.0))
         .text_size(crate::typography::ui_rems(12.0))
         .line_height(crate::typography::ui_rems(16.0))
         .text_color(theme.readable_tone(muted, 0.9))
         .child(
             div()
                 .flex()
+                // A narrow pane or a large Interface size wraps the actions
+                // under the title instead of pushing them past the plate.
+                .flex_wrap()
                 .items_center()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .child(
                     crate::icons::icon(crate::icons::DANGER_TRIANGLE)
-                        .size(px(14.0))
+                        .size(crate::typography::ui_rems(14.0))
                         .text_color(theme.readable_tone(muted, 0.9)),
                 )
                 .child(div().font_weight(FontWeight::MEDIUM).child(label))
@@ -83,7 +86,7 @@ pub fn notice_chip(
                     div()
                         .id(SharedString::from(format!("notice-copy-{label}")))
                         .flex_none()
-                        .size(px(20.0))
+                        .size(crate::typography::ui_rems(20.0))
                         .rounded(px(6.0))
                         .flex()
                         .items_center()
@@ -102,7 +105,7 @@ pub fn notice_chip(
                         })
                         .child(
                             crate::icons::icon(crate::icons::COPY)
-                                .size(px(12.0))
+                                .size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.readable_tone(muted, 0.8)),
                         ),
                 ),

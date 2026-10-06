@@ -219,11 +219,11 @@ impl Shell {
             .aria_label(label)
             .tab_index(0)
             .h(px(crate::surface_chrome::CONTROL_SIZE))
-            .px(px(6.0))
+            .px(crate::typography::ui_rems(6.0))
             .flex_none()
             .flex()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
             .border_1()
             .border_color(gpui::transparent_black())
@@ -711,7 +711,7 @@ impl Shell {
         let quiet = |text: SharedString| {
             div()
                 .px(px(Theme::SPACE_SM))
-                .py(px(6.0))
+                .py(crate::typography::ui_rems(6.0))
                 .text_size(crate::typography::ui_rems(11.5))
                 .text_color(theme.text_muted)
                 .child(text)
@@ -739,8 +739,8 @@ impl Shell {
             .min_h_0()
             .overflow_y_scroll()
             .px(px(Theme::SPACE_SM))
-            .pt(px(4.0))
-            .pb(px(12.0))
+            .pt(crate::typography::ui_rems(4.0))
+            .pb(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col();
         if let Some(operation) = side.operation {
@@ -750,7 +750,7 @@ impl Shell {
             list = list.child(
                 div()
                     .px(px(Theme::SPACE_SM))
-                    .py(px(6.0))
+                    .py(crate::typography::ui_rems(6.0))
                     .child(crate::settings::widgets::error_strip(&theme, error)),
             );
         }
@@ -761,10 +761,10 @@ impl Shell {
             list = list.child(
                 div()
                     .px(px(Theme::SPACE_SM))
-                    .py(px(6.0))
+                    .py(crate::typography::ui_rems(6.0))
                     .flex()
                     .flex_col()
-                    .gap(px(6.0))
+                    .gap(crate::typography::ui_rems(6.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
                     .child(div().text_color(theme.text).child("Side chat not confirmed"))
@@ -774,7 +774,7 @@ impl Shell {
                             .flex()
                             .flex_row()
                             .flex_wrap()
-                            .gap(px(4.0))
+                            .gap(crate::typography::ui_rems(4.0))
                             .child(
                                 Self::related_header_button(
                                     "related-chats-unresolved-retry",
@@ -801,15 +801,18 @@ impl Shell {
             );
         } else if side.snapshot_alternative && side.error.is_some() && !side.busy {
             list = list.child(
-                div().px(px(Theme::SPACE_SM)).pb(px(6.0)).child(
-                    Self::related_header_button(
-                        "related-chats-new-snapshot",
-                        icons::PLUS,
-                        "Start with recent context",
-                        &theme,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.start_side_chat(true, cx))),
-                ),
+                div()
+                    .px(px(Theme::SPACE_SM))
+                    .pb(crate::typography::ui_rems(6.0))
+                    .child(
+                        Self::related_header_button(
+                            "related-chats-new-snapshot",
+                            icons::PLUS,
+                            "Start with recent context",
+                            &theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.start_side_chat(true, cx))),
+                    ),
             );
         }
         if empty && side.error.is_none() && !side.busy {
@@ -834,10 +837,10 @@ impl Shell {
                 .flex()
                 .flex_row()
                 .items_start()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .child(
                     icon(kind.icon())
-                        .size(px(13.0))
+                        .size(crate::typography::ui_rems(13.0))
                         .flex_none()
                         .mt(px(1.0))
                         .text_color(theme.text_muted),
@@ -846,10 +849,10 @@ impl Shell {
         };
         div()
             .px(px(Theme::SPACE_SM))
-            .py(px(10.0))
+            .py(crate::typography::ui_rems(10.0))
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .text_size(crate::typography::ui_rems(12.0))
             .text_color(theme.text_muted)
             .child(

@@ -306,6 +306,9 @@ fn mini_spinner_cells(
 const RING_STROKE: f32 = 2.5;
 /// Polyline segments for a full circle — plenty for a ≤40px ring.
 const RING_SEGMENTS: f32 = 64.0;
+/// The percent label's size as a share of the ring diameter (9 pt in the
+/// 34 pt ring), so label and ring scale together with the Interface size.
+const RING_LABEL_RATIO: f32 = 9.0 / 34.0;
 
 /// Radial upload-progress ring with the percent centered — overlaid on a
 /// sending echo's attachment thumbnail while its bytes cross the relay
@@ -320,7 +323,8 @@ pub fn upload_progress_ring(percent: u8, diameter: f32) -> AnyElement {
         |_, _, _| (),
         move |bounds, _, window, _| {
             let center = bounds.center();
-            let radius = diameter / 2.0 - RING_STROKE;
+            // The ring is rem-sized; paint to the laid-out box.
+            let radius = f32::from(bounds.size.width.min(bounds.size.height)) / 2.0 - RING_STROKE;
             let mut paint_arc = |sweep: f32, color: gpui::Hsla| {
                 if sweep <= 0.0 {
                     return;
@@ -352,14 +356,14 @@ pub fn upload_progress_ring(percent: u8, diameter: f32) -> AnyElement {
     .inset_0();
     div()
         .relative()
-        .size(px(diameter))
+        .size(crate::typography::ui_rems(diameter))
         .flex()
         .items_center()
         .justify_center()
         .child(ring)
         .child(
             div()
-                .text_size(px(9.0))
+                .text_size(crate::typography::ui_rems(diameter * RING_LABEL_RATIO))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(gpui::hsla(0.0, 0.0, 1.0, 0.95))
                 .child(SharedString::from(format!("{percent}%"))),

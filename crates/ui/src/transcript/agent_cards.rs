@@ -188,8 +188,8 @@ const NEW_THREAD: &str = "New thread";
 fn type_badge(theme: &Theme, label: &'static str) -> gpui::Div {
     div()
         .flex_none()
-        .h(px(16.0))
-        .px(px(5.0))
+        .h(crate::typography::ui_rems(16.0))
+        .px(crate::typography::ui_rems(5.0))
         .flex()
         .items_center()
         .rounded(px(crate::theme::radius::XS))
@@ -318,7 +318,7 @@ impl Render for AgentCard {
             .aria_label(format!(
                 "{provider_name} provider, {NEW_THREAD}, {status_label}"
             ))
-            .size(px(18.0))
+            .size(crate::typography::ui_rems(18.0))
             .flex_none()
             .rounded(px(crate::theme::radius::SM))
             .bg(crate::theme::ink(0.08))
@@ -327,7 +327,7 @@ impl Render for AgentCard {
             .justify_center()
             .child(
                 crate::icons::icon(icon_path)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .text_color(tint.unwrap_or(theme.content_muted)),
             );
 
@@ -338,11 +338,11 @@ impl Render for AgentCard {
             .items_center()
             .flex_none()
             .ml_auto()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .text_color(theme.content_muted)
             .child(
                 div()
-                    .size(px(6.0))
+                    .size(crate::typography::ui_rems(6.0))
                     .flex_none()
                     .rounded_full()
                     .bg(status_color),
@@ -365,11 +365,11 @@ impl Render for AgentCard {
         // (tile + badge take ~100 of the 180).
         let identity_line = div()
             .flex_1()
-            .min_w(px(180.0))
+            .min_w(crate::typography::ui_rems(180.0))
             .h(px(TOOL_LABEL_LINE_HEIGHT + 2.0))
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .child(identity)
             .child(
                 div()
@@ -385,7 +385,7 @@ impl Render for AgentCard {
             .flex()
             .flex_wrap()
             .items_center()
-            .gap_x(px(8.0))
+            .gap_x(crate::typography::ui_rems(8.0))
             .gap_y(px(2.0))
             .child(identity_line)
             .child(status);
@@ -415,10 +415,10 @@ impl Render for AgentCard {
         });
         let preview = div()
             .flex_1()
-            .min_w(px(88.0))
+            .min_w(crate::typography::ui_rems(88.0))
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .when(has_detail, |preview| {
                 preview.child(div().flex_none().text_color(theme.content_faint).child("·"))
             })
@@ -438,11 +438,11 @@ impl Render for AgentCard {
         let action = move |id: &'static str, label: &'static str, glyph: &'static str| {
             div()
                 .id(id)
-                .h(px(20.0))
-                .px(px(6.0))
+                .h(crate::typography::ui_rems(20.0))
+                .px(crate::typography::ui_rems(6.0))
                 .flex()
                 .items_center()
-                .gap(px(4.0))
+                .gap(crate::typography::ui_rems(4.0))
                 .flex_none()
                 .rounded(px(crate::theme::radius::SM))
                 .cursor_pointer()
@@ -453,7 +453,11 @@ impl Render for AgentCard {
                     muted,
                     text,
                 )
-                .child(crate::icons::icon(glyph).size(px(12.0)).text_color(faint))
+                .child(
+                    crate::icons::icon(glyph)
+                        .size(crate::typography::ui_rems(12.0))
+                        .text_color(faint),
+                )
                 .child(label)
         };
         let actions = div()
@@ -478,12 +482,12 @@ impl Render for AgentCard {
 
         // Aligned under the title (tile 18px + 8px gap).
         let details = div()
-            .pl(px(26.0))
+            .pl(crate::typography::ui_rems(26.0))
             .min_w_0()
             .flex()
             .flex_wrap()
             .items_center()
-            .gap_x(px(6.0))
+            .gap_x(crate::typography::ui_rems(6.0))
             .gap_y(px(2.0))
             .children(model)
             .child(preview)
@@ -493,8 +497,8 @@ impl Render for AgentCard {
             .id(SharedString::from(format!("agent-card-{}", self.child_id)))
             .w_full()
             .min_w_0()
-            .px(px(8.0))
-            .py(px(6.0))
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(6.0))
             .rounded(px(crate::theme::radius::LG))
             .border_1()
             .border_color(crate::theme::hairline(0.07))

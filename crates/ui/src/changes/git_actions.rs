@@ -690,8 +690,8 @@ impl Changes {
             .role(gpui::Role::Button)
             .aria_label(label)
             .tab_index(0)
-            .h(px(26.0))
-            .px(px(10.0))
+            .h(crate::typography::ui_rems(26.0))
+            .px(crate::typography::ui_rems(10.0))
             .flex()
             .items_center()
             .rounded(px(Theme::CONTROL_RADIUS))
@@ -727,7 +727,7 @@ impl Changes {
         let mut row = div()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_dim);
         match self.git_pr_status.clone() {
@@ -765,11 +765,11 @@ impl Changes {
             .id("git-card")
             .flex_none()
             .w_full()
-            .max_h(px(530.0))
+            .max_h(crate::typography::ui_rems(530.0))
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .px(px(Theme::SPACE_MD))
             .py(px(Theme::SPACE_SM))
             .border_b_1()
@@ -785,7 +785,7 @@ impl Changes {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(format!("Branch: {branch}  ·  Remote: {remote}"))
@@ -807,7 +807,7 @@ impl Changes {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .min_w_0()
                     .child(
                         div()
@@ -873,21 +873,25 @@ impl Changes {
             card = card.child(
                 div()
                     .id("git-file-list")
-                    .max_h(px(130.0))
+                    .max_h(crate::typography::ui_rems(130.0))
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(crate::typography::ui_rems(4.0))
                     .children(rows),
             );
             let selected: Vec<_> = self.git_selected.iter().cloned().collect();
             card = card
-                .child(div().h(px(30.0)).child(self.git_message.clone()))
+                .child(
+                    div()
+                        .h(crate::typography::ui_rems(30.0))
+                        .child(self.git_message.clone()),
+                )
                 .child(
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .child(
                             Self::git_button("git-generate", "Generate message", theme).on_click(
                                 cx.listener(|this, _, _, cx| this.generate_git_message(cx)),
@@ -958,7 +962,7 @@ impl Changes {
         let mut section = div()
             .flex()
             .flex_col()
-            .gap(px(5.0))
+            .gap(crate::typography::ui_rems(5.0))
             .py(px(Theme::SPACE_SM))
             .border_b_1()
             .border_color(theme.border)
@@ -995,7 +999,7 @@ impl Changes {
                 let mut line = div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(crate::typography::ui_rems(6.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_dim)
                     .child(format!("{stamp} · {outcome}"));
@@ -1055,7 +1059,7 @@ impl Changes {
                 div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(crate::typography::ui_rems(4.0))
                     .child(
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
@@ -1068,7 +1072,7 @@ impl Changes {
                     .child(
                         div()
                             .id("checkpoint-diff-view")
-                            .max_h(px(140.0))
+                            .max_h(crate::typography::ui_rems(140.0))
                             .overflow_y_scroll()
                             .text_size(crate::typography::ui_rems(11.0))
                             .font_family(theme.font_mono.clone())
@@ -1089,7 +1093,7 @@ impl Changes {
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            section = section.child(div().flex().flex_col().gap(px(4.0))
+            section = section.child(div().flex().flex_col().gap(crate::typography::ui_rems(4.0))
                 .child(div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_dim)
                     .child(format!("Restore will change {} paths: {path_text}", preview.paths.len())))
                 .child(div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_dim)

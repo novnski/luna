@@ -227,7 +227,7 @@ impl FilesSurface {
                     .pr(px(8.0 - TREE_ROW_INSET / 2.0))
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(crate::typography::ui_rems(4.0))
                     .cursor_pointer()
                     .when(node.entry.ignored, |element| element.opacity(0.52))
                     // Focused selection takes the accent, like a key
@@ -271,7 +271,7 @@ impl FilesSurface {
                     })
                     .child(
                         div()
-                            .size(px(14.0))
+                            .size(crate::typography::ui_rems(14.0))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -287,14 +287,14 @@ impl FilesSurface {
                                                 0.0
                                             }),
                                         ))
-                                        .size(px(12.0))
+                                        .size(crate::typography::ui_rems(12.0))
                                         .text_color(theme.text_faint),
                                 )
                             }),
                     )
                     .child(
                         file_icons::icon(file_identity, theme.appearance)
-                            .size(px(14.0))
+                            .size(crate::typography::ui_rems(14.0))
                             .flex_none(),
                     )
                     .child(
@@ -328,10 +328,10 @@ impl FilesSurface {
                 .w_full()
                 .flex_none()
                 .pl(px(padding + TREE_INDENT))
-                .pr(px(8.0))
+                .pr(crate::typography::ui_rems(8.0))
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(crate::typography::ui_rems(6.0))
                 .cursor_pointer()
                 .hover_wash(format!("files-tree-error-{index}"))
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -359,7 +359,7 @@ impl FilesSurface {
                 .w_full()
                 .flex_none()
                 .pl(px(padding + TREE_INDENT))
-                .pr(px(8.0))
+                .pr(crate::typography::ui_rems(8.0))
                 .flex()
                 .items_center()
                 .cursor_pointer()
@@ -496,7 +496,7 @@ fn status_row(
         .w_full()
         .flex_none()
         .pl(px(padding))
-        .pr(px(8.0))
+        .pr(crate::typography::ui_rems(8.0))
         .flex()
         .items_center()
         .font_family(theme.font_sans.clone())

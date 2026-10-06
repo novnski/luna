@@ -381,7 +381,10 @@ impl Changes {
             _ => None,
         };
         if !self.pr_panel.open {
-            let mut row = div().flex().items_center().gap(px(6.0));
+            let mut row = div()
+                .flex()
+                .items_center()
+                .gap(crate::typography::ui_rems(6.0));
             if let Some(number) = linked {
                 row = row.child(
                     Self::pr_button("pr-details-open", "PR details & checks", theme).on_click(
@@ -411,7 +414,7 @@ impl Changes {
             .id("github-pr-panel")
             .flex()
             .flex_col()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .p(px(Theme::SPACE_SM))
             .border_1()
             .border_color(theme.border)
@@ -465,7 +468,7 @@ impl Changes {
                 .child(
                     div()
                         .id("pr-description")
-                        .max_h(px(120.0))
+                        .max_h(crate::typography::ui_rems(120.0))
                         .overflow_y_scroll()
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text)
@@ -500,7 +503,7 @@ impl Changes {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text)
                     .child(div().min_w_0().truncate().child(check.name))
@@ -516,7 +519,7 @@ impl Changes {
             panel = panel.child(
                 div()
                     .flex()
-                    .gap(px(6.0))
+                    .gap(crate::typography::ui_rems(6.0))
                     .child(
                         Self::pr_button("pr-open-github", "Open on GitHub", theme)
                             .on_click(move |_, _, cx| cx.open_url(&url)),
@@ -590,7 +593,7 @@ impl Changes {
                 .child(
                     div()
                         .flex()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .child(
                             Self::pr_button("pr-create-draft", label, theme)
                                 .when(busy, |b| b.opacity(0.5))

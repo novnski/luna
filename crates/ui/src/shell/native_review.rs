@@ -398,10 +398,10 @@ impl Shell {
                 }
             }))
             .child(popover::dialog_title(&theme, "Review code"))
-            .when(claude, |card| card.child(div().mt(px(4.0)).text_size(crate::typography::ui_rems(12.0))
+            .when(claude, |card| card.child(div().mt(crate::typography::ui_rems(4.0)).text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted)
                 .child("Claude Code /code-review. Findings appear in the chat with their source revision.")))
-            .child(div().mt(px(12.0)).flex().flex_wrap().gap(px(6.0)).children(
+            .child(div().mt(crate::typography::ui_rems(12.0)).flex().flex_wrap().gap(crate::typography::ui_rems(6.0)).children(
                 targets.into_iter().enumerate().map(|(index, label)| {
                     popover::btn_ghost(&theme, label, format!("native-review-target-{index}"))
                         .id(("native-review-target", index))
@@ -411,11 +411,11 @@ impl Shell {
                         })))
                 })
             ))
-            .child(div().mt(px(8.0)).text_size(crate::typography::ui_rems(12.0))
+            .child(div().mt(crate::typography::ui_rems(8.0)).text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted).child(description))
-            .when(kind != 0, |card| card.child(div().mt(px(12.0)).child(popover::dialog_field(input.into_any_element()))))
+            .when(kind != 0, |card| card.child(div().mt(crate::typography::ui_rems(12.0)).child(popover::dialog_field(input.into_any_element()))))
             .when(kind == 1 && !branches.is_empty(), |card| {
-                card.child(div().mt(px(8.0)).flex().flex_wrap().gap(px(4.0)).children(
+                card.child(div().mt(crate::typography::ui_rems(8.0)).flex().flex_wrap().gap(crate::typography::ui_rems(4.0)).children(
                     branches.into_iter().take(12).enumerate().map(|(index, branch)| {
                         popover::btn_ghost(&theme, &branch, format!("native-review-branch-{index}"))
                             .id(("native-review-branch", index))
@@ -430,11 +430,11 @@ impl Shell {
                 ))
             })
             .when(claude, |card| card.child(claude_cloud_lane(&theme)))
-            .when(kind == 1 && reference_error.is_some(), |card| card.child(div().mt(px(6.0))
+            .when(kind == 1 && reference_error.is_some(), |card| card.child(div().mt(crate::typography::ui_rems(6.0))
                 .text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted)
                 .child(reference_error.unwrap_or_default())))
-            .child(div().mt(px(12.0)).text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted).child(format!("Checkout: {cwd}")))
-            .child(div().mt(px(12.0)).flex().gap(px(8.0)).children([false, true].into_iter().map(|choice| {
+            .child(div().mt(crate::typography::ui_rems(12.0)).text_size(crate::typography::ui_rems(12.0)).text_color(theme.text_muted).child(format!("Checkout: {cwd}")))
+            .child(div().mt(crate::typography::ui_rems(12.0)).flex().gap(crate::typography::ui_rems(8.0)).children([false, true].into_iter().map(|choice| {
                 popover::btn_ghost(&theme, if choice { "Separate review chat" } else { "In this chat" }, if choice { "native-review-separate" } else { "native-review-inline" })
                     .id(if choice { "native-review-separate" } else { "native-review-inline" })
                     .opacity(if choice == separate { 1.0 } else { 0.65 })
@@ -442,13 +442,13 @@ impl Shell {
                         if let Some(dialog) = this.native_review_dialog.as_mut() { dialog.separate = choice; cx.notify(); }
                     })))
             })))
-            .when(separate, |card| card.child(div().mt(px(8.0)).text_size(crate::typography::ui_rems(12.0))
+            .when(separate, |card| card.child(div().mt(crate::typography::ui_rems(8.0)).text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted).child("Results open in an independent review chat using this checkout and account.")))
-            .when(destination.is_some(), |card| card.child(div().mt(px(8.0)).text_size(crate::typography::ui_rems(12.0))
+            .when(destination.is_some(), |card| card.child(div().mt(crate::typography::ui_rems(8.0)).text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted).child(format!("Created review chat: {}", destination.unwrap_or_default()))))
-            .when(error.is_some(), |card| card.child(div().mt(px(8.0)).text_size(crate::typography::ui_rems(12.0))
+            .when(error.is_some(), |card| card.child(div().mt(crate::typography::ui_rems(8.0)).text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text).child(error.unwrap_or_default())))
-            .child(div().mt(px(16.0)).flex().justify_end().gap(px(8.0))
+            .child(div().mt(crate::typography::ui_rems(16.0)).flex().justify_end().gap(crate::typography::ui_rems(8.0))
                 .child(popover::btn_ghost(&theme, if sending { "Close" } else { "Cancel" }, "native-review-cancel")
                     .id("native-review-cancel")
                     .on_click(cx.listener(|this, _, _, cx| this.cancel_history_flow(cx))))
@@ -469,14 +469,14 @@ fn claude_cloud_lane(theme: &Theme) -> impl IntoElement {
         .id("native-review-cloud-lane")
         .role(gpui::Role::Status)
         .aria_label(TEXT)
-        .mt(px(10.0))
-        .px(px(10.0))
-        .py(px(8.0))
+        .mt(crate::typography::ui_rems(10.0))
+        .px(crate::typography::ui_rems(10.0))
+        .py(crate::typography::ui_rems(8.0))
         .rounded(px(8.0))
         .border_1()
         .border_color(theme.border)
         .flex()
-        .gap(px(8.0))
+        .gap(crate::typography::ui_rems(8.0))
         .items_start()
         .text_size(crate::typography::ui_rems(12.0))
         .line_height(crate::typography::ui_rems(16.0))

@@ -38,10 +38,10 @@ impl Shell {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
-            .p(px(12.0))
+            .p(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col()
-            .gap(px(8.0));
+            .gap(crate::typography::ui_rems(8.0));
         // The focused chat's background work, grouped by lifecycle owner
         // (read-only here; the owned-work stop lives in its composer).
         if let Some(section) = work_section(&theme, self.state.read(cx)) {
@@ -97,8 +97,8 @@ impl Shell {
                 div()
                     .id(SharedString::from(format!("agent-{id}")))
                     .flex_none()
-                    .px(px(10.0))
-                    .py(px(7.0))
+                    .px(crate::typography::ui_rems(10.0))
+                    .py(crate::typography::ui_rems(7.0))
                     .rounded(px(crate::theme::radius::MD))
                     .flex()
                     .flex_col()
@@ -109,8 +109,14 @@ impl Shell {
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
-                            .child(div().size(px(7.0)).flex_none().rounded_full().bg(dot))
+                            .gap(crate::typography::ui_rems(8.0))
+                            .child(
+                                div()
+                                    .size(crate::typography::ui_rems(7.0))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(dot),
+                            )
                             .child(
                                 div()
                                     .min_w_0()
@@ -135,7 +141,7 @@ impl Shell {
                     )
                     .child(
                         div()
-                            .pl(px(15.0))
+                            .pl(crate::typography::ui_rems(15.0))
                             .truncate()
                             .text_size(crate::typography::ui_rems(11.5))
                             .text_color(theme.readable_muted(0.85))
@@ -174,8 +180,8 @@ impl Shell {
             .child(content)
             .child(
                 div()
-                    .px(px(16.0))
-                    .py(px(8.0))
+                    .px(crate::typography::ui_rems(16.0))
+                    .py(crate::typography::ui_rems(8.0))
                     .border_t_1()
                     .border_color(theme.border)
                     .text_color(theme.text_muted)
@@ -278,8 +284,8 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
         .id("agents-work")
         .flex()
         .flex_col()
-        .gap(px(4.0))
-        .pb(px(8.0))
+        .gap(crate::typography::ui_rems(4.0))
+        .pb(crate::typography::ui_rems(8.0))
         .child(
             div()
                 .text_color(theme.text)
@@ -302,8 +308,8 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
         }
         section = section.child(
             div()
-                .pt(px(8.0))
-                .px(px(10.0))
+                .pt(crate::typography::ui_rems(8.0))
+                .px(crate::typography::ui_rems(10.0))
                 .text_size(crate::typography::ui_rems(11.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.readable_faint(0.9))
@@ -328,8 +334,8 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
                     "agents-work-{}-{ix}",
                     group.title()
                 )))
-                .px(px(10.0))
-                .py(px(6.0))
+                .px(crate::typography::ui_rems(10.0))
+                .py(crate::typography::ui_rems(6.0))
                 .rounded(px(crate::theme::radius::MD))
                 .flex()
                 .flex_col()
@@ -338,8 +344,14 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
-                        .child(div().size(px(7.0)).flex_none().rounded_full().bg(dot))
+                        .gap(crate::typography::ui_rems(8.0))
+                        .child(
+                            div()
+                                .size(crate::typography::ui_rems(7.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(dot),
+                        )
                         .child(
                             div()
                                 .min_w_0()
@@ -355,7 +367,7 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
                 )
                 .child(
                     div()
-                        .pl(px(15.0))
+                        .pl(crate::typography::ui_rems(15.0))
                         .text_size(crate::typography::ui_rems(11.5))
                         .text_color(muted)
                         .child(SharedString::from(status)),

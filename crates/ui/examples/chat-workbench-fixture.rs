@@ -1976,7 +1976,11 @@ fn main() -> anyhow::Result<()> {
                     focus: false,
                     ..Default::default()
                 },
-                |_, cx| cx.new(|cx| shell::Shell::new(state, boot, cx)),
+                |window, cx| {
+                    // Match the app window: the rem is the Interface size.
+                    window.set_rem_size(px(typography::font_size(cx).pixels()));
+                    cx.new(|cx| shell::Shell::new(state, boot, cx))
+                },
             )
             .unwrap()
         };

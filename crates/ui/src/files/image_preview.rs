@@ -204,7 +204,7 @@ impl Render for ImagePreview {
         } else {
             root = root.child(
                 div()
-                    .px(px(16.0))
+                    .px(crate::typography::ui_rems(16.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
                     .child(

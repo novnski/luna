@@ -77,8 +77,8 @@ pub fn render(
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(6.0))
-        .px(px(8.0))
+        .gap(crate::typography::ui_rems(6.0))
+        .px(crate::typography::ui_rems(8.0))
         .rounded(px(PILL_RADIUS))
         .bg(crate::theme::ink(0.06))
         .text_size(crate::typography::ui_rems(TEXT_SIZE))
@@ -86,7 +86,7 @@ pub fn render(
         .text_color(theme.text_muted)
         .child(
             crate::icons::icon(badge.icon)
-                .size(px(ICON_SIZE))
+                .size(crate::typography::ui_rems(ICON_SIZE))
                 .text_color(theme.readable_muted(0.7)),
         )
         .child(badge.label.clone())
@@ -111,8 +111,8 @@ impl BadgeCard {
         div()
             .flex()
             .flex_row()
-            .gap(px(8.0))
-            .p(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
+            .p(crate::typography::ui_rems(8.0))
             .rounded(px(6.0))
             .bg(crate::theme::ink(0.05))
             .child(
@@ -128,13 +128,13 @@ impl BadgeCard {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(crate::typography::ui_rems(4.0))
                     .child(
                         div()
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(crate::typography::ui_rems(6.0))
                             .font_family(theme.font_mono.clone())
                             .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_faint)
@@ -148,7 +148,7 @@ impl BadgeCard {
                             .children(detail.tag.clone().map(|tag| {
                                 div()
                                     .flex_none()
-                                    .px(px(4.0))
+                                    .px(crate::typography::ui_rems(4.0))
                                     .rounded(px(3.0))
                                     .bg(crate::theme::ink(0.10))
                                     .child(tag)
@@ -171,11 +171,11 @@ impl Render for BadgeCard {
         let theme = &Theme::of(cx).for_popup();
         let card = crate::popover::popover_card(theme)
             .bg(theme.tooltip_surface())
-            .w(px(CARD_WIDTH))
-            .p(px(6.0))
+            .w(crate::typography::ui_rems(CARD_WIDTH))
+            .p(crate::typography::ui_rems(6.0))
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .children(self.details.iter().map(|detail| Self::row(detail, theme)));
         // `frosted` is load-bearing beyond the blur: it gives the card its own
         // scene layer. Sharing the transcript's layer let the bubble's text

@@ -92,7 +92,7 @@ impl Composer {
     /// The chip's width for the controls row budget (0 when hidden).
     pub(super) fn work_chip_width(&self, cx: &App) -> f32 {
         if self.own_work(cx).is_some_and(|view| view.has_work()) {
-            WORK_CHIP_WIDTH
+            WORK_CHIP_WIDTH * Theme::of(cx).ui_scale()
         } else {
             0.0
         }
@@ -415,14 +415,14 @@ impl Composer {
             .id("composer-work-chip")
             .role(gpui::Role::Button)
             .aria_label(SharedString::from(format!("Background work: {summary}")))
-            .h(px(crate::pickers::CONTROL_HEIGHT))
-            .w(px(WORK_CHIP_WIDTH))
+            .h(crate::typography::ui_rems(crate::pickers::CONTROL_HEIGHT))
+            .w(crate::typography::ui_rems(WORK_CHIP_WIDTH))
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
             .justify_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .rounded_full()
             .cursor_pointer()
             .hover_fill(
@@ -449,7 +449,7 @@ impl Composer {
                     .relative()
                     .child(
                         crate::icons::icon(crate::icons::LIST)
-                            .size(px(16.0))
+                            .size(crate::typography::ui_rems(16.0))
                             .text_color(theme.text_muted),
                     )
                     .when(unknown || attention, |icon| {
@@ -458,7 +458,7 @@ impl Composer {
                                 .absolute()
                                 .top(px(-1.0))
                                 .right(px(-2.0))
-                                .size(px(6.0))
+                                .size(crate::typography::ui_rems(6.0))
                                 .rounded_full()
                                 .bg(theme.warning),
                         )
@@ -502,7 +502,7 @@ impl Composer {
         let small = |text: String, color: gpui::Hsla| {
             div()
                 .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
+                .line_height(crate::typography::ui_rems(16.0))
                 .text_color(color)
                 .child(SharedString::from(text))
         };
@@ -513,35 +513,37 @@ impl Composer {
                 .unwrap_or_else(|| "Work".into())
         };
         let row = |item: &TaskWorkItem, chosen: Option<bool>| {
-            let mut line =
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap(px(8.0))
-                    .p(px(6.0))
-                    .rounded(px(6.0))
-                    .when(chosen.is_some(), |el| el.cursor_pointer())
-                    .child(div().w(px(14.0)).flex_none().pt(px(1.0)).when_some(
-                        chosen,
-                        |slot, on| {
+            let mut line = div()
+                .flex()
+                .flex_row()
+                .gap(crate::typography::ui_rems(8.0))
+                .p(crate::typography::ui_rems(6.0))
+                .rounded(px(6.0))
+                .when(chosen.is_some(), |el| el.cursor_pointer())
+                .child(
+                    div()
+                        .w(crate::typography::ui_rems(14.0))
+                        .flex_none()
+                        .pt(px(1.0))
+                        .when_some(chosen, |slot, on| {
                             if on {
                                 slot.child(
                                     crate::icons::icon(crate::icons::CHECK)
-                                        .size(px(13.0))
+                                        .size(crate::typography::ui_rems(13.0))
                                         .text_color(theme.accent),
                                 )
                             } else {
                                 // An empty check box.
                                 slot.child(
                                     div()
-                                        .size(px(12.0))
+                                        .size(crate::typography::ui_rems(12.0))
                                         .rounded(px(3.0))
                                         .border_1()
                                         .border_color(muted),
                                 )
                             }
-                        },
-                    ));
+                        }),
+                );
             let mut text = div()
                 .flex_1()
                 .min_w_0()
@@ -552,7 +554,7 @@ impl Composer {
                     div()
                         .flex()
                         .flex_row()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .child(
                             div()
                                 .flex_1()
@@ -564,8 +566,8 @@ impl Composer {
                         .when(item.needs_attention, |el| {
                             el.child(
                                 div()
-                                    .mt(px(5.0))
-                                    .size(px(6.0))
+                                    .mt(crate::typography::ui_rems(5.0))
+                                    .size(crate::typography::ui_rems(6.0))
                                     .rounded_full()
                                     .bg(theme.warning),
                             )
@@ -581,7 +583,7 @@ impl Composer {
             line = line.child(text);
             line
         };
-        let mut body = div().flex().flex_col().gap(px(6.0));
+        let mut body = div().flex().flex_col().gap(crate::typography::ui_rems(6.0));
         match &menu.phase {
             WorkPhase::Select => {
                 body = body.child(small(view.summary(), theme.text));
@@ -600,7 +602,7 @@ impl Composer {
                     }
                     body = body.child(
                         div()
-                            .pt(px(4.0))
+                            .pt(crate::typography::ui_rems(4.0))
                             .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_faint)
                             .child(group.title()),
@@ -743,8 +745,8 @@ impl Composer {
             div()
                 .id(id)
                 .accessible_button(label.clone(), theme.accent)
-                .px(px(10.0))
-                .h(px(28.0))
+                .px(crate::typography::ui_rems(10.0))
+                .h(crate::typography::ui_rems(28.0))
                 .rounded(px(6.0))
                 .flex()
                 .items_center()
@@ -756,7 +758,11 @@ impl Composer {
         };
         let chat = menu.task_id.clone();
         let run_live = self.run_live(cx);
-        let mut actions = div().flex().flex_row().justify_end().gap(px(8.0));
+        let mut actions = div()
+            .flex()
+            .flex_row()
+            .justify_end()
+            .gap(crate::typography::ui_rems(8.0));
         match &menu.phase {
             WorkPhase::Select => {
                 if run_live {
@@ -823,11 +829,11 @@ impl Composer {
         let card = crate::popover::popover_card(theme)
             .id("composer-work-menu")
             .bg(theme.tooltip_surface())
-            .w(px(360.0))
-            .p(px(12.0))
+            .w(crate::typography::ui_rems(360.0))
+            .p(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .track_focus(&menu.focus)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 match event.keystroke.key.as_str() {
@@ -853,7 +859,7 @@ impl Composer {
             .child(
                 div()
                     .id("composer-work-body")
-                    .max_h(px(360.0))
+                    .max_h(crate::typography::ui_rems(360.0))
                     .overflow_y_scroll()
                     .child(body),
             )
@@ -862,7 +868,12 @@ impl Composer {
             gpui::anchored()
                 .anchor(gpui::Anchor::BottomLeft)
                 .snap_to_window_with_margin(px(8.0))
-                .child(div().occlude().mb(px(6.0)).child(card)),
+                .child(
+                    div()
+                        .occlude()
+                        .mb(crate::typography::ui_rems(6.0))
+                        .child(card),
+                ),
         )
         .priority(1)
         .into_any_element()

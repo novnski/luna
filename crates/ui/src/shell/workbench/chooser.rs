@@ -550,13 +550,13 @@ impl Shell {
         let muted = theme.readable_muted(0.7);
         let card = popover::popover_card(&theme)
             .bg(theme.tooltip_surface())
-            .w(px(340.0))
+            .w(crate::typography::ui_rems(340.0))
             .min_w_0()
             .whitespace_normal()
-            .p(px(12.0))
+            .p(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col()
-            .gap(px(10.0))
+            .gap(crate::typography::ui_rems(10.0))
             .text_size(crate::typography::ui_rems(12.0));
         // The source, named before anything is created.
         let source_row = div()
@@ -594,7 +594,7 @@ impl Shell {
                 })
                 .flex_1()
                 .min_w_0()
-                .p(px(8.0))
+                .p(crate::typography::ui_rems(8.0))
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(if on { theme.focus_ring() } else { theme.border })
@@ -602,14 +602,14 @@ impl Shell {
                 .cursor_pointer()
                 .flex()
                 .flex_col()
-                .gap(px(3.0))
+                .gap(crate::typography::ui_rems(3.0))
                 .child(
                     div()
                         .min_w_0()
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .child(
                             div()
                                 .flex_1()
@@ -630,7 +630,7 @@ impl Shell {
                         .min_w_0()
                         .whitespace_normal()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .line_height(px(15.0))
+                        .line_height(crate::typography::ui_rems(15.0))
                         .text_color(muted)
                         .child(body),
                 )
@@ -638,7 +638,7 @@ impl Shell {
         let kinds = div()
             .flex()
             .flex_row()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .child(
                 kind_option(
                     "wb-chooser-kind-thread",
@@ -691,18 +691,18 @@ impl Shell {
                     } else {
                         gpui::Toggled::False
                     })
-                    .h(px(30.0))
-                    .px(px(8.0))
+                    .h(crate::typography::ui_rems(30.0))
+                    .px(crate::typography::ui_rems(8.0))
                     .rounded(px(6.0))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(10.0))
+                    .gap(crate::typography::ui_rems(10.0))
                     .when(chosen, |el| el.bg(theme.wash(0.09)))
                     .when(!enabled, |el| el.opacity(0.45))
                     .child(
                         div()
-                            .w(px(12.0))
+                            .w(crate::typography::ui_rems(12.0))
                             .text_size(crate::typography::ui_rems(11.0))
                             .text_color(muted)
                             .child(if index < 9 && kind == CreationKind::NewThread {
@@ -713,7 +713,7 @@ impl Shell {
                     )
                     .child(
                         icon(icon_path)
-                            .size(px(14.0))
+                            .size(crate::typography::ui_rems(14.0))
                             .flex_none()
                             .text_color(tint.unwrap_or(theme.text_muted)),
                     )
@@ -815,7 +815,7 @@ impl Shell {
             .flex()
             .flex_row()
             .justify_end()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .child(
                 popover::btn_ghost(&theme, "Cancel", "wb-chooser-cancel")
                     .id("wb-chooser-cancel")
@@ -850,21 +850,21 @@ impl Shell {
             .children(provider_note.map(|note| {
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(15.0))
+                    .line_height(crate::typography::ui_rems(15.0))
                     .text_color(muted)
                     .child(note)
             }))
             .children(side_context.map(|note| {
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(15.0))
+                    .line_height(crate::typography::ui_rems(15.0))
                     .text_color(muted)
                     .child(note)
             }))
             .children(side_status.map(|(text, failed)| {
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(15.0))
+                    .line_height(crate::typography::ui_rems(15.0))
                     .text_color(if failed {
                         theme.readable_tone(theme.danger_muted, 1.0)
                     } else {
@@ -876,7 +876,7 @@ impl Shell {
                 div()
                     .id("wb-chooser-disabled-reason")
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(15.0))
+                    .line_height(crate::typography::ui_rems(15.0))
                     .text_color(muted)
                     .child(reason)
             }))

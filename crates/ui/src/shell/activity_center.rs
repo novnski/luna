@@ -568,12 +568,12 @@ impl Shell {
                         item.id
                     )))
                     .px(px(Theme::SPACE_SM))
-                    .py(px(6.0))
+                    .py(crate::typography::ui_rems(6.0))
                     .rounded(px(Theme::CONTROL_RADIUS))
                     .bg(theme.surface_raised)
                     .flex()
                     .flex_col()
-                    .gap(px(3.0))
+                    .gap(crate::typography::ui_rems(3.0))
                     .child(
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
@@ -592,7 +592,7 @@ impl Shell {
                         div()
                             .flex()
                             .flex_row()
-                            .gap(px(5.0))
+                            .gap(crate::typography::ui_rems(5.0))
                             .child(
                                 popover::btn_ghost(theme, "Open", open_key)
                                     .id(SharedString::from(format!("terminal-open-{}", item.id)))
@@ -650,10 +650,10 @@ impl Shell {
             .collect::<Vec<_>>();
         Some(
             div()
-                .mt(px(8.0))
+                .mt(crate::typography::ui_rems(8.0))
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(crate::typography::ui_rems(4.0))
                 .child(
                     div()
                         .px(px(Theme::SPACE_SM))
@@ -751,11 +751,15 @@ impl Shell {
             .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             .on_click(cx.listener(|this, _, window, cx| this.toggle_activity(window, cx)))
             .on_key_down(crate::swallow_activation_key)
-            .child(icon(icons::BELL).size(px(16.0)).text_color(if active {
-                theme.accent
-            } else {
-                theme.text_muted
-            }))
+            .child(
+                icon(icons::BELL)
+                    .size(crate::typography::ui_rems(16.0))
+                    .text_color(if active {
+                        theme.accent
+                    } else {
+                        theme.text_muted
+                    }),
+            )
             .when(has_attention, |button| {
                 // Seated on the bell's top-right shoulder (center ≈ 19.5,
                 // 8.5 in the box) instead of floating at the corner (SH-26).

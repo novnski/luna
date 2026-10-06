@@ -490,9 +490,9 @@ impl FilesSurface {
                 |element| {
                     element.child(
                         div()
-                            .h(px(24.0))
+                            .h(crate::typography::ui_rems(24.0))
                             .flex_none()
-                            .px(px(10.0))
+                            .px(crate::typography::ui_rems(10.0))
                             .flex()
                             .items_center()
                             .font_family(theme.font_sans.clone())
@@ -539,10 +539,10 @@ impl FilesSurface {
             .w_full()
             .flex_none()
             .pl(px(padding))
-            .pr(px(8.0))
+            .pr(crate::typography::ui_rems(8.0))
             .flex()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .cursor_pointer()
             .when(selected, |element| {
                 element.bg(crate::theme::fill(crate::theme::FillTier::Secondary))
@@ -562,7 +562,7 @@ impl FilesSurface {
             })
             .child(
                 div()
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -574,7 +574,7 @@ impl FilesSurface {
                             } else {
                                 icons::ALT_ARROW_RIGHT
                             })
-                            .size(px(11.0))
+                            .size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_faint),
                         )
                     }),
@@ -588,7 +588,7 @@ impl FilesSurface {
                     WorkspaceEntryKind::Symlink => FileIconIdentity::symlink(&row.name),
                 };
                 file_icons::icon(identity, theme.appearance)
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .flex_none()
             })
             .child(
@@ -614,7 +614,7 @@ fn centered_search_message(message: SharedString, color: gpui::Hsla) -> AnyEleme
         .flex()
         .items_center()
         .justify_center()
-        .px(px(24.0))
+        .px(crate::typography::ui_rems(24.0))
         .text_center()
         .text_size(crate::typography::ui_rems(11.5))
         .text_color(color)

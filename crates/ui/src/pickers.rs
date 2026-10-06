@@ -69,7 +69,7 @@ fn workspace_footer_row() -> gpui::Div {
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(4.0))
+        .gap(crate::typography::ui_rems(4.0))
 }
 
 use crate::AccessibleButton as _;
@@ -583,10 +583,14 @@ impl Render for ControlTooltip {
         });
         // The shared tooltip card (audit CP-12) with a title and detail lines.
         crate::popover::tooltip_card(theme)
-            .when(wraps, |card| card.w(px(crate::popover::TOOLTIP_MAX_WIDTH)))
+            .when(wraps, |card| {
+                card.w(crate::typography::ui_rems(
+                    crate::popover::TOOLTIP_MAX_WIDTH,
+                ))
+            })
             .when(!wraps, |card| card.whitespace_nowrap())
-            .px(px(10.0))
-            .py(px(7.0))
+            .px(crate::typography::ui_rems(10.0))
+            .py(crate::typography::ui_rems(7.0))
             .flex()
             .flex_col()
             .gap(px(2.0))
@@ -4051,7 +4055,7 @@ impl Pickers {
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
-                        .max_h(px(224.0))
+                        .max_h(crate::typography::ui_rems(224.0))
                         .children(rows.into_iter().zip(online).enumerate().map(
                             |(ix, (device, online))| {
                                 let is_local = local.as_deref() == Some(device.id.as_str());
@@ -4087,7 +4091,7 @@ impl Pickers {
                                     .when(!online, |el| {
                                         el.child(
                                             crate::icons::icon(crate::icons::WIFI_OFF)
-                                                .size(px(12.0))
+                                                .size(crate::typography::ui_rems(12.0))
                                                 .flex_none()
                                                 .text_color(
                                                     theme.readable_tone(theme.warning, 0.8),
@@ -4144,7 +4148,7 @@ impl Pickers {
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
-                        .max_h(px(224.0))
+                        .max_h(crate::typography::ui_rems(224.0))
                         .children(rows.into_iter().enumerate().map(|(ix, space)| {
                             let label: SharedString = space.display_name().to_string().into();
                             let is_selected = selected.as_deref() == Some(space.id.as_str());
@@ -4177,7 +4181,7 @@ impl Pickers {
             }))
             .child(
                 crate::icons::icon(crate::icons::PLUS)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .flex_none()
                     .text_color(theme.text_muted),
             )
@@ -4679,21 +4683,22 @@ impl Pickers {
     pub(crate) fn model_chip_widths(&self, window: &Window, cx: &App) -> (f32, f32) {
         let theme = Theme::of(cx);
         let chip = self.model_chip_content(ModelChipFit::Full, theme, cx);
+        // The chip's geometry is interface rems (16 px baseline); the text
+        // is measured at the live size, so only the constants scale.
+        let scale = theme.ui_scale();
         let label = if chip.label_loading {
-            56.0
+            56.0 * scale
         } else {
             chip_text_width(&chip.label, window, theme)
         };
         // One pixel of slack per measured run absorbs subpixel rounding.
-        let name_only = 2.0 * CHIP_PAD_X
-            + CHIP_ICON
-            + CHIP_GAP
+        let name_only = (2.0 * CHIP_PAD_X + CHIP_ICON + CHIP_GAP) * scale
             + label
             + 1.0
-            + chip.badge.map_or(0.0, |_| CHIP_GAP + CHIP_BOLT);
+            + chip.badge.map_or(0.0, |_| (CHIP_GAP + CHIP_BOLT) * scale);
         let full = name_only
             + chip.suffix.as_ref().map_or(0.0, |(suffix, _)| {
-                CHIP_GAP + chip_text_width(suffix, window, theme) + 1.0
+                CHIP_GAP * scale + chip_text_width(suffix, window, theme) + 1.0
             });
         (full, name_only)
     }
@@ -4936,7 +4941,7 @@ impl Pickers {
             .id(id)
             .role(gpui::Role::Button)
             .aria_label(tooltip_title.clone())
-            .h(px(CONTROL_HEIGHT))
+            .h(crate::typography::ui_rems(CONTROL_HEIGHT))
             // Shrinkable under row pressure: the composer drops whole pieces
             // first (see `composer::controls_row_fit`), so truncation is only
             // the last resort for an extremely narrow pill.
@@ -4945,10 +4950,14 @@ impl Pickers {
             .flex_row()
             .items_center()
             .when(icon_only, |el| {
-                el.w(px(ACCESS_CHIP_SIZE)).flex_none().justify_center()
+                el.w(crate::typography::ui_rems(ACCESS_CHIP_SIZE))
+                    .flex_none()
+                    .justify_center()
             })
             .when(!icon_only, |el| {
-                el.max_w(px(280.0)).gap(px(CHIP_GAP)).px(px(CHIP_PAD_X))
+                el.max_w(crate::typography::ui_rems(280.0))
+                    .gap(crate::typography::ui_rems(CHIP_GAP))
+                    .px(crate::typography::ui_rems(CHIP_PAD_X))
             })
             .rounded_full()
             .text_size(crate::typography::ui_rems(CHIP_TEXT_SIZE))
@@ -4994,7 +5003,7 @@ impl Pickers {
                             .relative()
                             .child(
                                 crate::icons::icon(path)
-                                    .size(px(CHIP_ICON))
+                                    .size(crate::typography::ui_rems(CHIP_ICON))
                                     .text_color(tint.unwrap_or(theme.text_muted)),
                             )
                             // A requested level still waiting to apply (or a
@@ -5006,7 +5015,7 @@ impl Pickers {
                                         .absolute()
                                         .top(px(-1.0))
                                         .right(px(-2.0))
-                                        .size(px(6.0))
+                                        .size(crate::typography::ui_rems(6.0))
                                         .rounded_full()
                                         .bg(color),
                                 )
@@ -5024,7 +5033,7 @@ impl Pickers {
             .when_some(chip.badge.filter(|_| !icon_only), |el, path| {
                 el.child(
                     crate::icons::icon(path)
-                        .size(px(CHIP_BOLT))
+                        .size(crate::typography::ui_rems(CHIP_BOLT))
                         .flex_none()
                         .text_color(label_color),
                 )
@@ -5058,13 +5067,13 @@ impl Pickers {
         let hover: SharedString = format!("{id}-{}", cx.entity_id()).into();
         div()
             .id(id)
-            .h(px(20.0))
-            .max_w(px(280.0))
+            .h(crate::typography::ui_rems(20.0))
+            .max_w(crate::typography::ui_rems(280.0))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
-            .px(px(8.0))
+            .gap(crate::typography::ui_rems(6.0))
+            .px(crate::typography::ui_rems(8.0))
             .rounded(px(FOOTER_CHIP_RADIUS))
             .text_size(crate::typography::ui_rems(12.0))
             .font_weight(gpui::FontWeight::MEDIUM)
@@ -5089,14 +5098,14 @@ impl Pickers {
             .on_click(cx.listener(move |this, _, window, cx| this.toggle(kind, window, cx)))
             .child(
                 crate::icons::icon(icon_path)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .flex_none()
                     .text_color(theme.readable_muted(0.7)),
             )
             .child(div().min_w_0().truncate().child(label))
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .flex_none()
                     .text_color(theme.readable_muted(0.5)),
             )
@@ -5106,24 +5115,24 @@ impl Pickers {
     /// `resolveLockedWorkspaceLabel` span).
     fn footer_label(icon_path: &'static str, label: SharedString, theme: &Theme) -> gpui::Div {
         div()
-            .h(px(20.0))
+            .h(crate::typography::ui_rems(20.0))
             // Four of these share one row now (device, project, checkout,
             // ref): cap each early and let them SHRINK (`min_w_0`) — without
             // it the clusters overflowed into each other and the labels
             // painted overlapped (user report).
-            .max_w(px(160.0))
+            .max_w(crate::typography::ui_rems(160.0))
             .min_w_0()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
-            .px(px(8.0))
+            .gap(crate::typography::ui_rems(6.0))
+            .px(crate::typography::ui_rems(8.0))
             .text_size(crate::typography::ui_rems(12.0))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.readable_muted(0.6))
             .child(
                 crate::icons::icon(icon_path)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .text_color(theme.readable_muted(0.6)),
             )
             .child(div().min_w_0().truncate().child(label))
@@ -5195,7 +5204,7 @@ impl Pickers {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .child(attach_overlay(
                 device_chip,
                 &mut overlay,
@@ -5314,7 +5323,7 @@ impl Pickers {
             // the row to CONTENT, and the left cluster's flex_1 (basis 0)
             // collapsed to zero width — both clusters painted from the same
             // origin, chips overlapping (user report).
-            workspace_footer_row().px(px(10.0))
+            workspace_footer_row().px(crate::typography::ui_rems(10.0))
         };
 
         if let Some(chat) = &session {
@@ -5345,7 +5354,7 @@ impl Pickers {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(4.0))
+                .gap(crate::typography::ui_rems(4.0))
                 .min_w_0()
                 .child(Self::footer_label(
                     crate::icons::GIT_BRANCH,
@@ -5458,7 +5467,7 @@ impl Pickers {
     fn popover_frame(&self, width: f32, content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
         popover::popover_card(&theme)
-            .w(px(width))
+            .w(crate::typography::ui_rems(width))
             // luna caps its tallest picker at min(640px, 75vh).
             .max_h(px(640.0))
             .track_focus(&self.focus)
@@ -5505,7 +5514,7 @@ impl Pickers {
     ) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
         popover::popover_card_flush(&theme)
-            .w(px(width))
+            .w(crate::typography::ui_rems(width))
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.on_key_down(event, window, cx)
@@ -5557,7 +5566,7 @@ impl Pickers {
                 div()
                     .id(id)
                     .px(px(Theme::SPACE_SM))
-                    .py(px(3.0))
+                    .py(crate::typography::ui_rems(3.0))
                     .rounded(px(Theme::CONTROL_RADIUS))
                     .border_1()
                     .border_color(theme.border)
@@ -5662,7 +5671,7 @@ impl Pickers {
                             .flex()
                             .flex_col()
                             .gap(px(2.0))
-                            .max_h(px(224.0))
+                            .max_h(crate::typography::ui_rems(224.0))
                             .children(rows.into_iter().take(MAX_REF_ROWS).enumerate().map(
                                 |(ix, row)| {
                                     let label: SharedString = row.name.clone().into();
@@ -5731,7 +5740,7 @@ impl Pickers {
                 popover::menu_section().child(
                     div()
                         .px(px(Theme::SPACE_SM))
-                        .py(px(4.0))
+                        .py(crate::typography::ui_rems(4.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_tone(theme.danger, 0.9))
                         .child(SharedString::from(error.clone())),
@@ -5743,7 +5752,7 @@ impl Pickers {
                 popover::menu_section().child(
                     div()
                         .px(px(Theme::SPACE_SM))
-                        .py(px(4.0))
+                        .py(crate::typography::ui_rems(4.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_faint)
                         .child(SharedString::from(format!(
@@ -5768,12 +5777,12 @@ impl Pickers {
         div()
             .flex()
             .flex_col()
-            .p(px(4.0))
+            .p(crate::typography::ui_rems(4.0))
             .child(
                 div()
-                    .px(px(10.0))
-                    .pt(px(8.0))
-                    .pb(px(6.0))
+                    .px(crate::typography::ui_rems(10.0))
+                    .pt(crate::typography::ui_rems(8.0))
+                    .pb(crate::typography::ui_rems(6.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.text_muted)
@@ -5838,8 +5847,8 @@ impl Pickers {
             .when_some(self.permission_error.clone(), |panel, error| {
                 panel.child(
                     div()
-                        .px(px(10.0))
-                        .py(px(6.0))
+                        .px(crate::typography::ui_rems(10.0))
+                        .py(crate::typography::ui_rems(6.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_tone(theme.warning, 1.0))
                         .child(error),
@@ -5898,7 +5907,7 @@ impl Pickers {
                             }))
                             .child(
                                 crate::icons::icon(icon_path)
-                                    .size(px(14.0))
+                                    .size(crate::typography::ui_rems(14.0))
                                     .text_color(theme.text_muted),
                             )
                             .child(
@@ -5938,7 +5947,7 @@ impl Pickers {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(5.0))
+                        .gap(crate::typography::ui_rems(5.0))
                         .children(accounts.into_iter().enumerate().map(|(ix, account)| {
                             let account_id = account.id.clone();
                             let is_selected = selected.as_deref() == Some(account.id.as_str());
@@ -5951,11 +5960,11 @@ impl Pickers {
                                 .into();
                             div()
                                 .id(("codex-account", ix))
-                                .max_w(px(150.0))
+                                .max_w(crate::typography::ui_rems(150.0))
                                 .truncate()
                                 .rounded(px(6.0))
-                                .px(px(7.0))
-                                .py(px(3.0))
+                                .px(crate::typography::ui_rems(7.0))
+                                .py(crate::typography::ui_rems(3.0))
                                 .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(if is_selected {
                                     theme.text
@@ -6013,20 +6022,20 @@ impl Pickers {
         Some(
             div()
                 .flex_none()
-                .min_h(px(40.0))
+                .min_h(crate::typography::ui_rems(40.0))
                 .px(px(popover::CARD_INSET))
-                .py(px(7.0))
+                .py(crate::typography::ui_rems(7.0))
                 .border_b_1()
                 .border_color(crate::theme::hairline(0.08))
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(crate::typography::ui_rems(4.0))
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         .child(
                             div()
                                 .flex_none()
@@ -6065,14 +6074,18 @@ impl Pickers {
         let list_height = if self.binding.chat_id(self.state.read(cx)).is_none() {
             // Keep the settings tray visible while the model list scrolls
             // within the room below the new-chat composer.
+            // The chrome (tabs, search, tray rows) is rem-sized, so its
+            // 16 px-baseline heights scale before they leave the list its room.
+            let scale = Theme::of(cx).ui_scale();
             let tray_height = if self.setting_groups(cx).is_empty() {
                 0.0
             } else {
-                self.setting_groups(cx).len() as f32 * 32.0 + 7.0
+                (self.setting_groups(cx).len() as f32 * 32.0 + 7.0) * scale
             };
-            (self.model_space_below.unwrap_or(640.0) - 82.0 - tray_height).clamp(30.0, 216.0)
+            (self.model_space_below.unwrap_or(640.0) - 82.0 * scale - tray_height)
+                .clamp(30.0 * scale, 216.0 * scale)
         } else {
-            216.0
+            216.0 * Theme::of(cx).ui_scale()
         };
 
         let theme = Theme::of(cx).for_popup();
@@ -6083,7 +6096,7 @@ impl Pickers {
             Loadable::Loading | Loadable::Idle => {
                 return div()
                     .h(px(list_height))
-                    .p(px(8.0))
+                    .p(crate::typography::ui_rems(8.0))
                     .child(popover::skeleton_menu_rows(
                         "harness-skeleton",
                         &theme,
@@ -6097,7 +6110,7 @@ impl Pickers {
                 let message = message.clone();
                 return div()
                     .h(px(list_height))
-                    .p(px(8.0))
+                    .p(crate::typography::ui_rems(8.0))
                     .child(self.retry_row(
                         "harness-retry",
                         &message,
@@ -6128,14 +6141,14 @@ impl Pickers {
         // guidance instead of an empty tab row.
         if descriptors.is_empty() {
             return div()
-                .p(px(16.0))
+                .p(crate::typography::ui_rems(16.0))
                 .flex()
                 .flex_col()
                 .items_center()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .child(
                     crate::icons::icon(crate::icons::TERMINAL)
-                        .size(px(20.0))
+                        .size(crate::typography::ui_rems(20.0))
                         .text_color(theme.text_muted),
                 )
                 .child(
@@ -6165,7 +6178,7 @@ impl Pickers {
         //    viewed tab's list, so switching tabs re-scopes the same query.
         let mut tabs = div()
             .flex_none()
-            .h(px(40.0))
+            .h(crate::typography::ui_rems(40.0))
             .px(px(popover::CARD_INSET))
             .border_b_1()
             .border_color(crate::theme::hairline(0.08))
@@ -6177,8 +6190,8 @@ impl Pickers {
             div()
                 .id("model-tab-favorites")
                 .relative()
-                .w(px(32.0))
-                .h(px(32.0))
+                .w(crate::typography::ui_rems(32.0))
+                .h(crate::typography::ui_rems(32.0))
                 .rounded(px(8.0))
                 .flex()
                 .items_center()
@@ -6198,7 +6211,7 @@ impl Pickers {
                 }))
                 .child(
                     crate::icons::icon(crate::icons::STAR_BOLD)
-                        .size(px(15.0))
+                        .size(crate::typography::ui_rems(15.0))
                         .text_color(if favorites_view {
                             theme.text
                         } else {
@@ -6211,35 +6224,36 @@ impl Pickers {
             let harness = descriptor.id;
             let is_viewed = !favorites_view && effective == Some(harness);
             let (icon_path, tint) = harness_brand_icon(harness);
-            tabs =
-                tabs.child(
-                    div()
-                        .id(("harness-tab", ix))
-                        .relative()
-                        .w(px(32.0))
-                        .h(px(32.0))
-                        .rounded(px(8.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_pointer()
-                        .when(locked && effective != Some(harness), |el| el.opacity(0.7))
-                        .when(!is_viewed, |el| el.hover_wash(format!("harness-tab-{ix}")))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.setting_menu = None;
-                            this.model_rail = ModelRail::Harness;
-                            this.pick_harness(harness, cx);
-                            cx.notify();
-                        }))
-                        .child(crate::icons::icon(icon_path).size(px(16.0)).text_color(
-                            tint.unwrap_or(if is_viewed {
+            tabs = tabs.child(
+                div()
+                    .id(("harness-tab", ix))
+                    .relative()
+                    .w(crate::typography::ui_rems(32.0))
+                    .h(crate::typography::ui_rems(32.0))
+                    .rounded(px(8.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .when(locked && effective != Some(harness), |el| el.opacity(0.7))
+                    .when(!is_viewed, |el| el.hover_wash(format!("harness-tab-{ix}")))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.setting_menu = None;
+                        this.model_rail = ModelRail::Harness;
+                        this.pick_harness(harness, cx);
+                        cx.notify();
+                    }))
+                    .child(
+                        crate::icons::icon(icon_path)
+                            .size(crate::typography::ui_rems(16.0))
+                            .text_color(tint.unwrap_or(if is_viewed {
                                 theme.text
                             } else {
                                 theme.text_muted
-                            }),
-                        ))
-                        .when(is_viewed, |el| el.child(tab_indicator(theme.accent))),
-                );
+                            })),
+                    )
+                    .when(is_viewed, |el| el.child(tab_indicator(theme.accent))),
+            );
         }
 
         // A blank chat's direct provider choice: loading its catalog, then
@@ -6271,8 +6285,8 @@ impl Pickers {
                 div()
                     .id(id)
                     .accessible_button(label, theme.accent)
-                    .px(px(10.0))
-                    .h(px(28.0))
+                    .px(crate::typography::ui_rems(10.0))
+                    .h(crate::typography::ui_rems(28.0))
                     .rounded(px(6.0))
                     .flex()
                     .items_center()
@@ -6284,10 +6298,10 @@ impl Pickers {
                 .id("provider-direct-switch")
                 .role(gpui::Role::Status)
                 .aria_label(SharedString::from(format!("{title}. {body}")))
-                .p(px(14.0))
+                .p(crate::typography::ui_rems(14.0))
                 .flex()
                 .flex_col()
-                .gap(px(10.0))
+                .gap(crate::typography::ui_rems(10.0))
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(13.0))
@@ -6298,7 +6312,7 @@ impl Pickers {
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .line_height(px(17.0))
+                        .line_height(crate::typography::ui_rems(17.0))
                         .text_color(if failed {
                             theme.readable_tone(theme.danger_muted, 1.0)
                         } else {
@@ -6310,7 +6324,7 @@ impl Pickers {
                     div()
                         .flex()
                         .justify_end()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         // A choice still loading can be withdrawn; the sent
                         // switch cannot, so it offers nothing to cancel.
                         .when(!direct.sending, |row| {
@@ -6369,10 +6383,10 @@ impl Pickers {
             }
             let handoff = self.provider_switch_handoff;
             let panel = div()
-                .p(px(14.0))
+                .p(crate::typography::ui_rems(14.0))
                 .flex()
                 .flex_col()
-                .gap(px(10.0))
+                .gap(crate::typography::ui_rems(10.0))
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(13.0))
@@ -6383,19 +6397,19 @@ impl Pickers {
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .line_height(px(17.0))
+                        .line_height(crate::typography::ui_rems(17.0))
                         .text_color(theme.text_muted)
                         .child("This creates a fresh provider binding. LUNA keeps the task history, files, draft, and queue."),
                 )
                 .child(
                     div()
                         .id("provider-switch-handoff")
-                        .h(px(30.0))
-                        .px(px(8.0))
+                        .h(crate::typography::ui_rems(30.0))
+                        .px(crate::typography::ui_rems(8.0))
                         .rounded(px(6.0))
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         .cursor_pointer()
                         .role(gpui::Role::Switch)
                         .aria_label("Include up to 8 recent visible messages")
@@ -6411,8 +6425,8 @@ impl Pickers {
                         }))
                         .child(
                             div()
-                                .w(px(13.0))
-                                .h(px(13.0))
+                                .w(crate::typography::ui_rems(13.0))
+                                .h(crate::typography::ui_rems(13.0))
                                 .flex_none()
                                 .flex()
                                 .items_center()
@@ -6420,7 +6434,7 @@ impl Pickers {
                                 .when(handoff, |slot| {
                                     slot.child(
                                         crate::icons::icon(crate::icons::CHECK)
-                                            .size(px(13.0))
+                                            .size(crate::typography::ui_rems(13.0))
                                             .text_color(theme.readable_on_stacks(
                                                 theme.accent,
                                                 &[&[], &[theme.ink(0.05)]],
@@ -6435,7 +6449,7 @@ impl Pickers {
                     panel.child(
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .line_height(px(16.0))
+                            .line_height(crate::typography::ui_rems(16.0))
                             .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                             .child(SharedString::from(error)),
                     )
@@ -6444,13 +6458,13 @@ impl Pickers {
                     div()
                         .flex()
                         .justify_end()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         .child(
                             div()
                                 .id("provider-switch-cancel")
                                 .accessible_button("Cancel provider switch", theme.accent)
-                                .px(px(10.0))
-                                .h(px(28.0))
+                                .px(crate::typography::ui_rems(10.0))
+                                .h(crate::typography::ui_rems(28.0))
                                 .rounded(px(6.0))
                                 .flex()
                                 .items_center()
@@ -6466,8 +6480,8 @@ impl Pickers {
                             div()
                                 .id("provider-switch-confirm")
                                 .accessible_button("Switch provider", theme.accent)
-                                .px(px(10.0))
-                                .h(px(28.0))
+                                .px(crate::typography::ui_rems(10.0))
+                                .h(crate::typography::ui_rems(28.0))
                                 .rounded(px(6.0))
                                 .flex()
                                 .items_center()
@@ -6496,17 +6510,17 @@ impl Pickers {
         //    viewed tab (user request; the old global search hid the rail).
         let search_row = div()
             .flex_none()
-            .h(px(40.0))
-            .px(px(10.0))
+            .h(crate::typography::ui_rems(40.0))
+            .px(crate::typography::ui_rems(10.0))
             .border_b_1()
             .border_color(crate::theme::hairline(0.08))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .child(
                 crate::icons::icon(crate::icons::MAGNIFER)
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .flex_none()
                     .text_color(theme.text_muted),
             )
@@ -6625,7 +6639,7 @@ impl Pickers {
                 .border_color(crate::theme::hairline(0.08))
                 // Long option stacks scroll inside the tray rather than
                 // growing the card past the viewport.
-                .max_h(px(236.0))
+                .max_h(crate::typography::ui_rems(236.0))
                 .overflow_y_scroll()
                 .px(px(popover::CARD_INSET))
                 .child(sections)
@@ -6682,7 +6696,7 @@ impl Pickers {
                 } else {
                     gpui::Toggled::False
                 })
-                .p(px(8.0))
+                .p(crate::typography::ui_rems(8.0))
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(if on { theme.focus_ring() } else { theme.border })
@@ -6700,17 +6714,17 @@ impl Pickers {
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .line_height(px(16.0))
+                        .line_height(crate::typography::ui_rems(16.0))
                         .text_color(muted)
                         .child(body),
                 )
         };
         let mut panel = div()
             .id("provider-switch-transfer")
-            .p(px(14.0))
+            .p(crate::typography::ui_rems(14.0))
             .flex()
             .flex_col()
-            .gap(px(10.0))
+            .gap(crate::typography::ui_rems(10.0))
             .child(
                 div()
                     .text_size(crate::typography::ui_rems(13.0))
@@ -6721,7 +6735,7 @@ impl Pickers {
             .child(
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(px(17.0))
+                    .line_height(crate::typography::ui_rems(17.0))
                     .text_color(theme.text_muted)
                     .child("This creates a fresh provider binding. LUNA keeps the task history, files, draft, and queue."),
             )
@@ -6765,7 +6779,7 @@ impl Pickers {
                 .child(
                     div()
                         .id("provider-switch-preview")
-                        .max_h(px(360.0))
+                        .max_h(crate::typography::ui_rems(360.0))
                         .overflow_y_scroll()
                         .child(crate::context_transfer::render_preview_body(
                             theme, flow, toggle,
@@ -6792,8 +6806,8 @@ impl Pickers {
             div()
                 .id(id)
                 .accessible_button(label, theme.accent)
-                .px(px(10.0))
-                .h(px(28.0))
+                .px(crate::typography::ui_rems(10.0))
+                .h(crate::typography::ui_rems(28.0))
                 .rounded(px(6.0))
                 .flex()
                 .items_center()
@@ -6821,7 +6835,7 @@ impl Pickers {
                 panel.child(
                     div()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .line_height(px(16.0))
+                        .line_height(crate::typography::ui_rems(16.0))
                         .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(SharedString::from(error)),
                 )
@@ -6830,7 +6844,7 @@ impl Pickers {
                 div()
                     .flex()
                     .justify_end()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .child(
                         button("provider-switch-cancel", "Cancel", true, false).on_click(
                             cx.listener(|this, _, _, cx| {
@@ -7082,7 +7096,7 @@ impl Pickers {
         let small = |text: String, color: gpui::Hsla| {
             div()
                 .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
+                .line_height(crate::typography::ui_rems(16.0))
                 .text_color(color)
                 .child(SharedString::from(text))
         };
@@ -7141,10 +7155,10 @@ impl Pickers {
         let unknown = receipt.status == luna_proto::ContextTransferStatus::Unknown;
         let mut panel = div()
             .id("transfer-details")
-            .p(px(14.0))
+            .p(crate::typography::ui_rems(14.0))
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .child(
                 div()
                     .text_size(crate::typography::ui_rems(13.0))
@@ -7177,7 +7191,7 @@ impl Pickers {
                 .child(
                     div()
                         .id("transfer-details-items")
-                        .max_h(px(180.0))
+                        .max_h(crate::typography::ui_rems(180.0))
                         .overflow_y_scroll()
                         .flex()
                         .flex_col()
@@ -7203,31 +7217,35 @@ impl Pickers {
         if let Some(error) = details.error {
             panel = panel.child(small(error, theme.readable_tone(theme.danger_muted, 1.0)));
         }
-        let mut actions = div().flex().justify_end().gap(px(8.0)).child(
-            div()
-                .id("transfer-details-back")
-                .accessible_button("Back", theme.accent)
-                .px(px(10.0))
-                .h(px(28.0))
-                .rounded(px(6.0))
-                .flex()
-                .items_center()
-                .cursor_pointer()
-                .hover_wash("transfer-details-back")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.transfer_details = None;
-                    this.transfer_details_task = None;
-                    cx.notify();
-                }))
-                .child("Back"),
-        );
+        let mut actions = div()
+            .flex()
+            .justify_end()
+            .gap(crate::typography::ui_rems(8.0))
+            .child(
+                div()
+                    .id("transfer-details-back")
+                    .accessible_button("Back", theme.accent)
+                    .px(crate::typography::ui_rems(10.0))
+                    .h(crate::typography::ui_rems(28.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .hover_wash("transfer-details-back")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.transfer_details = None;
+                        this.transfer_details_task = None;
+                        cx.notify();
+                    }))
+                    .child("Back"),
+            );
         if unknown {
             actions = actions.child(
                 div()
                     .id("transfer-details-check")
                     .accessible_button("Check status", theme.accent)
-                    .px(px(10.0))
-                    .h(px(28.0))
+                    .px(crate::typography::ui_rems(10.0))
+                    .h(crate::typography::ui_rems(28.0))
                     .rounded(px(6.0))
                     .flex()
                     .items_center()
@@ -7266,12 +7284,12 @@ impl Pickers {
             .and_then(|capabilities| capabilities.compact_unavailable_reason.clone());
         let compact = div()
             .id("context-compact")
-            .h(px(30.0))
-            .px(px(8.0))
+            .h(crate::typography::ui_rems(30.0))
+            .px(crate::typography::ui_rems(8.0))
             .rounded(px(6.0))
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .when(compact_enabled, |row| {
                 row.cursor_pointer().hover_wash("context-compact")
             })
@@ -7283,7 +7301,7 @@ impl Pickers {
             }))
             .child(
                 crate::icons::icon(crate::icons::COLLAPSE_ARROWS)
-                    .size(px(13.0))
+                    .size(crate::typography::ui_rems(13.0))
                     .text_color(theme.text_muted),
             )
             .child(compact_label);
@@ -7294,12 +7312,12 @@ impl Pickers {
         };
         let clear = div()
             .id("context-clear")
-            .h(px(30.0))
-            .px(px(8.0))
+            .h(crate::typography::ui_rems(30.0))
+            .px(crate::typography::ui_rems(8.0))
             .rounded(px(6.0))
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .cursor_pointer()
             .hover_wash("context-clear")
             .on_click(cx.listener(|this, _, _, cx| {
@@ -7314,7 +7332,7 @@ impl Pickers {
             }))
             .child(
                 crate::icons::icon(crate::icons::REFRESH)
-                    .size(px(13.0))
+                    .size(crate::typography::ui_rems(13.0))
                     .text_color(theme.text_muted),
             )
             .child(clear_label);
@@ -7331,13 +7349,13 @@ impl Pickers {
                         .id(("context-transfer", ix))
                         .role(gpui::Role::Button)
                         .aria_label(SharedString::from(format!("Details: {line}")))
-                        .min_h(px(30.0))
-                        .px(px(8.0))
-                        .py(px(4.0))
+                        .min_h(crate::typography::ui_rems(30.0))
+                        .px(crate::typography::ui_rems(8.0))
+                        .py(crate::typography::ui_rems(4.0))
                         .rounded(px(6.0))
                         .flex()
                         .items_center()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         .cursor_pointer()
                         .hover_wash(format!("context-transfer-{ix}"))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -7345,7 +7363,7 @@ impl Pickers {
                         }))
                         .child(
                             crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
-                                .size(px(13.0))
+                                .size(crate::typography::ui_rems(13.0))
                                 .flex_none()
                                 .text_color(theme.text_muted),
                         )
@@ -7354,7 +7372,7 @@ impl Pickers {
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(crate::typography::ui_rems(11.0))
-                                .line_height(px(15.0))
+                                .line_height(crate::typography::ui_rems(15.0))
                                 .child(SharedString::from(line)),
                         )
                         .into_any_element()
@@ -7367,14 +7385,14 @@ impl Pickers {
             .border_t_1()
             .border_color(crate::theme::hairline(0.08))
             .px(px(popover::CARD_INSET))
-            .py(px(6.0))
+            .py(crate::typography::ui_rems(6.0))
             .flex()
             .flex_col()
             .gap(px(2.0))
             .child(
                 div()
-                    .px(px(8.0))
-                    .pb(px(3.0))
+                    .px(crate::typography::ui_rems(8.0))
+                    .pb(crate::typography::ui_rems(3.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_faint)
                     .child("CONTEXT · PROVIDER-OWNED"),
@@ -7383,8 +7401,8 @@ impl Pickers {
             .when_some(compact_reason, |panel, reason| {
                 panel.child(
                     div()
-                        .px(px(8.0))
-                        .pb(px(3.0))
+                        .px(crate::typography::ui_rems(8.0))
+                        .pb(crate::typography::ui_rems(3.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_faint)
                         .child(SharedString::from(reason)),
@@ -7395,8 +7413,8 @@ impl Pickers {
             .when_some(self.context_error.clone(), |panel, error| {
                 panel.child(
                     div()
-                        .px(px(8.0))
-                        .pt(px(3.0))
+                        .px(crate::typography::ui_rems(8.0))
+                        .pt(crate::typography::ui_rems(3.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(SharedString::from(error)),
@@ -7442,13 +7460,13 @@ impl Pickers {
         let compact = self.model_rail == ModelRail::Harness;
         let mut el = div()
             .id(("model-row", ix))
-            .px(px(8.0))
+            .px(crate::typography::ui_rems(8.0))
             .py(px(if compact { 5.0 } else { 6.0 }))
             .rounded(px(popover::MENU_ITEM_RADIUS))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(10.0))
+            .gap(crate::typography::ui_rems(10.0))
             .cursor_pointer();
         // ONE moving highlight (t3/Base-UI combobox): hovering moves the
         // keyboard cursor instead of painting its own wash, so hover + arrow
@@ -7480,7 +7498,7 @@ impl Pickers {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
+                .gap(crate::typography::ui_rems(6.0))
                 .child(
                     div()
                         .flex_none()
@@ -7525,10 +7543,10 @@ impl Pickers {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .child(
                             crate::icons::icon(icon_path)
-                                .size(px(11.0))
+                                .size(crate::typography::ui_rems(11.0))
                                 .flex_none()
                                 .text_color(tint.unwrap_or(theme.text_muted)),
                         )
@@ -7571,8 +7589,8 @@ impl Pickers {
             div()
                 .id(("model-star", ix))
                 .flex_none()
-                .w(px(22.0))
-                .h(px(22.0))
+                .w(crate::typography::ui_rems(22.0))
+                .h(crate::typography::ui_rems(22.0))
                 .rounded(px(popover::MENU_ITEM_RADIUS))
                 .flex()
                 .items_center()
@@ -7589,7 +7607,7 @@ impl Pickers {
                     } else {
                         crate::icons::STAR
                     })
-                    .size(px(13.0))
+                    .size(crate::typography::ui_rems(13.0))
                     .text_color(if is_fav {
                         theme.warning
                     } else {
@@ -7773,7 +7791,7 @@ impl Pickers {
             )
             .id(("model-setting", ix))
             .relative()
-            .h(px(30.0))
+            .h(crate::typography::ui_rems(30.0))
             .py(px(0.0))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.active = base_index + ix;
@@ -7864,26 +7882,26 @@ impl Pickers {
             )
             .child(
                 div()
-                    .max_w(px(100.0))
+                    .max_w(crate::typography::ui_rems(100.0))
                     .truncate()
                     .text_color(theme.text_muted)
                     .child(SharedString::from(value)),
             )
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted),
             );
             if open {
                 let entity = cx.entity().downgrade();
                 let menu = popover::popover_card(&theme)
-                    .w(px(232.0))
+                    .w(crate::typography::ui_rems(232.0))
                     .relative()
                     .child(popover::menu_heading(&theme, &group.label))
                     .child(
                         div()
                             .id("model-setting-choices")
-                            .max_h(px(240.0))
+                            .max_h(crate::typography::ui_rems(240.0))
                             .overflow_y_scroll()
                             .track_scroll(&self.setting_scroll)
                             .flex()
@@ -7897,7 +7915,7 @@ impl Pickers {
                                         format!("setting-choice-{ix}-{choice_ix}"),
                                     )
                                     .id(("setting-choice", choice_ix))
-                                    .h(px(30.0))
+                                    .h(crate::typography::ui_rems(30.0))
                                     .py(px(0.0))
                                     .flex_none()
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -7913,7 +7931,7 @@ impl Pickers {
                                         |el| {
                                             el.child(
                                                 crate::icons::icon(crate::icons::CHECK)
-                                                    .size(px(14.0))
+                                                    .size(crate::typography::ui_rems(14.0))
                                                     .text_color(theme.text),
                                             )
                                         },
@@ -8144,8 +8162,8 @@ fn scoped_model_rows<'a>(
 /// Centered muted note filling an empty model list ("No models found").
 fn empty_list_note(theme: &Theme, copy: &str) -> AnyElement {
     div()
-        .px(px(8.0))
-        .py(px(24.0))
+        .px(crate::typography::ui_rems(8.0))
+        .py(crate::typography::ui_rems(24.0))
         .text_size(crate::typography::ui_rems(12.0))
         .text_color(theme.for_popup().text_muted)
         .text_center()
@@ -8585,7 +8603,7 @@ impl Render for Pickers {
             // labels paint over the attach/send buttons at narrow widths
             // instead of truncating (user report).
             .min_w_0()
-            .gap(px(crate::composer::CHIP_GAP))
+            .gap(crate::typography::ui_rems(crate::composer::CHIP_GAP))
             .child(model_chip)
             .child(permission_chip)
     }

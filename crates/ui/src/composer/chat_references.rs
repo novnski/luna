@@ -607,7 +607,7 @@ impl Composer {
         let theme = theme.for_popup();
         let mut card = crate::popover::stack_popup_card(&theme)
             .w_full()
-            .max_h(px(320.0))
+            .max_h(crate::typography::ui_rems(320.0))
             .overflow_hidden()
             // Completion choices belong to the input: keep it focused until
             // mouse-up can accept a choice.
@@ -631,8 +631,8 @@ impl Composer {
                 )
             } else {
                 div()
-                    .px(px(12.0))
-                    .py(px(10.0))
+                    .px(crate::typography::ui_rems(12.0))
+                    .py(crate::typography::ui_rems(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
                     .child("No matching chats")
@@ -678,7 +678,7 @@ impl Composer {
                             .id("chat-reference-list")
                             .role(gpui::Role::ListBox)
                             .aria_label("Chat references")
-                            .max_h(px(312.0))
+                            .max_h(crate::typography::ui_rems(312.0))
                             .flex()
                             .flex_col()
                             .gap(px(crate::popover::MENU_GAP))
@@ -754,14 +754,14 @@ impl Composer {
             .aria_size_of_set(count)
             .when(selected, |row| row.aria_active_descendant())
             .min_w_0()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.chat_reference.active = Some(index);
                 this.accept_chat_reference(cx);
             }))
             .child(
                 crate::icons::icon(mark)
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .flex_none()
                     .text_color(tint.unwrap_or(theme.text_muted)),
             )
@@ -796,8 +796,8 @@ impl Composer {
 fn conversation_type_badge(theme: &Theme, label: &'static str) -> gpui::Div {
     div()
         .flex_none()
-        .h(px(16.0))
-        .px(px(5.0))
+        .h(crate::typography::ui_rems(16.0))
+        .px(crate::typography::ui_rems(5.0))
         .flex()
         .items_center()
         .rounded(px(4.0))

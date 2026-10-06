@@ -300,13 +300,13 @@ impl Render for WorkbenchTabGhost {
         let theme = Theme::of(cx);
         div()
             .opacity(if self.armed.get() { 1.0 } else { 0.0 })
-            .h(px(26.0))
+            .h(crate::typography::ui_rems(26.0))
             .max_w(px(TAB_MAX_WIDTH))
-            .px(px(8.0))
+            .px(crate::typography::ui_rems(8.0))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .rounded(px(7.0))
             .bg(theme.surface_raised)
             .border_1()
@@ -319,7 +319,7 @@ impl Render for WorkbenchTabGhost {
                 |el, (path, tint)| {
                     el.child(
                         icon(path)
-                            .size(px(13.0))
+                            .size(crate::typography::ui_rems(13.0))
                             .flex_none()
                             .text_color(tint.unwrap_or(theme.text_muted)),
                     )
@@ -327,7 +327,7 @@ impl Render for WorkbenchTabGhost {
             )
             .child(
                 icon(self.role.icon())
-                    .size(px(11.0))
+                    .size(crate::typography::ui_rems(11.0))
                     .flex_none()
                     .text_color(theme.text_muted),
             )
@@ -1555,7 +1555,7 @@ impl Shell {
             .flex_col()
             .items_center()
             .justify_center()
-            .gap(px(12.0))
+            .gap(crate::typography::ui_rems(12.0))
             .text_color(theme.text_muted)
             .child(
                 div()
@@ -1566,7 +1566,7 @@ impl Shell {
                 div()
                     .flex()
                     .flex_row()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .child(
                         popover::btn_ghost(theme, "Open related chat", "wb-btn-open-related-chat")
                             .id(SharedString::from(format!("wb-empty-related-{}", pane.id)))
@@ -1673,7 +1673,7 @@ impl Shell {
             .top(rect.origin.y - root.origin.y)
             .w(rect.size.width)
             .h(rect.size.height)
-            .p(px(4.0))
+            .p(crate::typography::ui_rems(4.0))
             .child(
                 div()
                     .size_full()
@@ -1684,11 +1684,11 @@ impl Shell {
                     .flex()
                     .items_start()
                     .justify_center()
-                    .pt(px(12.0))
+                    .pt(crate::typography::ui_rems(12.0))
                     .child(
                         div()
-                            .px(px(8.0))
-                            .py(px(3.0))
+                            .px(crate::typography::ui_rems(8.0))
+                            .py(crate::typography::ui_rems(3.0))
                             .rounded(px(6.0))
                             .bg(theme.surface_raised)
                             .border_1()
@@ -1734,9 +1734,9 @@ impl Shell {
                     .absolute()
                     .left(px(12.0))
                     .bottom(px(12.0))
-                    .max_w(px(420.0))
-                    .px(px(10.0))
-                    .py(px(8.0))
+                    .max_w(crate::typography::ui_rems(420.0))
+                    .px(crate::typography::ui_rems(10.0))
+                    .py(crate::typography::ui_rems(8.0))
                     .rounded(px(8.0))
                     .bg(theme.surface_raised)
                     .border_1()
@@ -1744,7 +1744,7 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .child(
                         div()
@@ -1773,7 +1773,7 @@ impl Shell {
                                 .aria_label("Dismiss")
                                 // A 24 pt hit box that keeps its 18 pt
                                 // footprint (audit DS-19).
-                                .size(px(24.0))
+                                .size(crate::typography::ui_rems(24.0))
                                 .m(px(-3.0))
                                 .flex_none()
                                 .flex()
@@ -1787,7 +1787,7 @@ impl Shell {
                                 }))
                                 .child(
                                     icon(icons::CLOSE)
-                                        .size(px(11.0))
+                                        .size(crate::typography::ui_rems(11.0))
                                         .text_color(theme.text_muted),
                                 ),
                         )
@@ -1807,9 +1807,9 @@ impl Shell {
                     .absolute()
                     .left(px(12.0))
                     .bottom(px(12.0))
-                    .max_w(px(460.0))
-                    .px(px(10.0))
-                    .py(px(8.0))
+                    .max_w(crate::typography::ui_rems(460.0))
+                    .px(crate::typography::ui_rems(10.0))
+                    .py(crate::typography::ui_rems(8.0))
                     .rounded(px(8.0))
                     .bg(theme.surface_raised)
                     .border_1()
@@ -1817,7 +1817,7 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
                     .child(
@@ -1842,9 +1842,9 @@ impl Shell {
                 .absolute()
                 .left(px(12.0))
                 .bottom(px(12.0))
-                .max_w(px(420.0))
-                .px(px(10.0))
-                .py(px(6.0))
+                .max_w(crate::typography::ui_rems(420.0))
+                .px(crate::typography::ui_rems(10.0))
+                .py(crate::typography::ui_rems(6.0))
                 .rounded(px(8.0))
                 .bg(theme.surface_raised)
                 .border_1()
@@ -1852,7 +1852,7 @@ impl Shell {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted)
                 .child(div().flex_1().min_w_0().child(notice))
@@ -1861,7 +1861,7 @@ impl Shell {
                         .id("wb-notice-dismiss")
                         .role(gpui::Role::Button)
                         .aria_label("Dismiss")
-                        .size(px(18.0))
+                        .size(crate::typography::ui_rems(18.0))
                         .flex_none()
                         .flex()
                         .items_center()
@@ -1885,7 +1885,7 @@ impl Shell {
                         })
                         .child(
                             icon(icons::CLOSE)
-                                .size(px(11.0))
+                                .size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_muted),
                         ),
                 )
@@ -1963,8 +1963,13 @@ impl Shell {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(5.0))
-                .child(icon(path).size(px(12.0)).flex_none().text_color(muted))
+                .gap(crate::typography::ui_rems(5.0))
+                .child(
+                    icon(path)
+                        .size(crate::typography::ui_rems(12.0))
+                        .flex_none()
+                        .text_color(muted),
+                )
                 .child(div().min_w_0().truncate().child(text))
         };
         // Too narrow for labelled actions (both sidebars open on a small
@@ -1991,12 +1996,12 @@ impl Shell {
                 .role(gpui::Role::Button)
                 .aria_label(label.clone())
                 .tab_index(0)
-                .h(px(22.0))
-                .px(px(8.0))
+                .h(crate::typography::ui_rems(22.0))
+                .px(crate::typography::ui_rems(8.0))
                 .flex()
                 .flex_none()
                 .items_center()
-                .gap(px(5.0))
+                .gap(crate::typography::ui_rems(5.0))
                 .rounded(px(6.0))
                 .border_1()
                 .border_color(theme.border)
@@ -2006,7 +2011,11 @@ impl Shell {
                 .tooltip(move |_, cx| crate::pickers::ControlTooltip::view(label.clone(), None, cx))
                 .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
                 .relative()
-                .child(icon(glyph).size(px(12.0)).text_color(muted))
+                .child(
+                    icon(glyph)
+                        .size(crate::typography::ui_rems(12.0))
+                        .text_color(muted),
+                )
                 .when(!compact, |button| button.child(text))
                 .child(
                     gpui::canvas(
@@ -2205,7 +2214,11 @@ impl Shell {
                 .id(id)
                 .role(gpui::Role::MenuItem)
                 .aria_label(text)
-                .child(icon(glyph).size(px(16.0)).text_color(theme.text_muted))
+                .child(
+                    icon(glyph)
+                        .size(crate::typography::ui_rems(16.0))
+                        .text_color(theme.text_muted),
+                )
                 .child(SharedString::from(text))
                 // Opt-in probe (slice 6): which rows the menu painted.
                 .when(crate::perf_counters::probes_enabled(), |row| {
@@ -2225,7 +2238,7 @@ impl Shell {
                 })
         };
         let mut card = popover::popover_card(&theme)
-            .w(px(232.0))
+            .w(crate::typography::ui_rems(232.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_workbench_menu(cx)))
             .flex()
             .flex_col();

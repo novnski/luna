@@ -315,11 +315,13 @@ pub fn attachment_strip_height(count: usize, inner_width: f32) -> f32 {
     STRIP_PAD_TOP + rows as f32 * STRIP_THUMB + (rows - 1) as f32 * STRIP_GAP
 }
 
-pub fn comment_strip_height(count: usize) -> f32 {
+/// `ui_scale` is the Interface size over 16: the badge is rem-sized, so its
+/// slot must grow with it or a large interface overlaps the draft.
+pub fn comment_strip_height(count: usize, ui_scale: f32) -> f32 {
     if count == 0 {
         return 0.0;
     }
-    STRIP_PAD_TOP + crate::badges::BADGE_HEIGHT
+    STRIP_PAD_TOP + crate::badges::BADGE_HEIGHT * ui_scale
 }
 
 /// Composer height morph (round 9). The original has no height transition (its
@@ -435,20 +437,20 @@ pub fn input_side_padding(available: f32) -> f32 {
 
 /// Whether the full controls row (Attach, an icon-only model chip, access
 /// and Send at their normal sizes) fits a pill `surface_width` wide.
-pub fn controls_row_fits(surface_width: f32) -> bool {
-    controls_row_budget(surface_width) >= 2.0 * crate::pickers::ACCESS_CHIP_SIZE + CHIP_GAP
+/// `ui_scale` is [`Theme::ui_scale`]: the row's controls are interface rems.
+pub fn controls_row_fits(surface_width: f32, ui_scale: f32) -> bool {
+    controls_row_budget(surface_width, ui_scale)
+        >= (2.0 * crate::pickers::ACCESS_CHIP_SIZE + CHIP_GAP) * ui_scale
 }
 
 /// Width left for the model, access and Goal chips in a pill `surface_width`
-/// wide (border-box).
-pub fn controls_row_budget(surface_width: f32) -> f32 {
+/// wide (border-box). The hairline and the row's side insets stay in px;
+/// the buttons and gaps are interface rems, so they scale by `ui_scale`.
+pub fn controls_row_budget(surface_width: f32, ui_scale: f32) -> f32 {
     surface_width
         - PILL_BORDER_V
         - 2.0 * ACTIONS_ROW_INSET
-        - ROW_BUTTON
-        - ACTION_UTILITY_GAP
-        - ACTION_PRIMARY_GAP
-        - ROW_BUTTON
+        - (ROW_BUTTON + ACTION_UTILITY_GAP + ACTION_PRIMARY_GAP + ROW_BUTTON) * ui_scale
 }
 
 /// What the controls row shows at its current width.
@@ -484,14 +486,19 @@ pub fn controls_row_fit(
     model_name_only: f32,
     goal: Option<(f32, f32)>,
     usage: Option<(f32, f32)>,
+    ui_scale: f32,
 ) -> ControlsRowFit {
-    use crate::pickers::{ACCESS_CHIP_SIZE, ModelChipFit};
+    use crate::pickers::ModelChipFit;
+    // Measured widths arrive in px at the current Interface size; the
+    // fixed chip geometry is 16 px-baseline and scales with it.
+    let gap = CHIP_GAP * ui_scale;
+    let access = crate::pickers::ACCESS_CHIP_SIZE * ui_scale;
     let need = |model: f32, goal: Option<f32>, usage: Option<f32>| {
         model
-            + CHIP_GAP
-            + ACCESS_CHIP_SIZE
-            + goal.map_or(0.0, |goal| CHIP_GAP + goal)
-            + usage.map_or(0.0, |usage| CHIP_GAP + usage)
+            + gap
+            + access
+            + goal.map_or(0.0, |goal| gap + goal)
+            + usage.map_or(0.0, |usage| gap + usage)
     };
     let candidates = [
         (ModelChipFit::Full, false, false),
@@ -504,7 +511,7 @@ pub fn controls_row_fit(
         let model_width = match model {
             ModelChipFit::Full => model_full,
             ModelChipFit::NameOnly => model_name_only,
-            ModelChipFit::IconOnly => ACCESS_CHIP_SIZE,
+            ModelChipFit::IconOnly => access,
         };
         let goal_width = goal.map(|(label, icon)| if goal_icon_only { icon } else { label });
         let usage_width = usage.map(|(label, icon)| if usage_icon_only { icon } else { label });
@@ -3655,7 +3662,11 @@ impl ComposerInput {
             (SharedString::from(self.projection.display.clone()), false)
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
-        self.line_height = px(self.configured_line_height);
+        // The element styles its text in interface rems, so the painted line
+        // pitch scales with it; a fixed px pitch double-spaced the draft at
+        // 12 px and crowded it at 20 px.
+        self.line_height =
+            crate::typography::ui_rems(self.configured_line_height).to_pixels(window.rem_size());
 
         // Each chip keeps the familiar mono label while its semantic tone
         // separates slash commands, directories, and files.
@@ -3770,7 +3781,7 @@ impl ComposerInput {
         self.last_layout_key = Some(key);
         self.last_lines = lines;
         self.line_starts = line_starts;
-        self.content_height = content_height.max(self.configured_line_height);
+        self.content_height = content_height.max(f32::from(self.line_height));
         self.max_line_width = if is_placeholder { 0.0 } else { max_line_width };
         self.last_width = f32::from(width);
         self.needs_measure = false;
@@ -4037,11 +4048,11 @@ impl Render for MentionPathTooltip {
         motion::fade_quick(
             ("file-mention-path-tooltip", self.activation),
             div()
-                .h(px(MENTION_TOOLTIP_HEIGHT))
-                .max_w(px(480.0))
+                .h(crate::typography::ui_rems(MENTION_TOOLTIP_HEIGHT))
+                .max_w(crate::typography::ui_rems(480.0))
                 .flex()
                 .items_center()
-                .px(px(8.0))
+                .px(crate::typography::ui_rems(8.0))
                 .rounded(px(5.0))
                 .border_1()
                 .border_color(theme.border_strong)
@@ -4206,7 +4217,10 @@ impl gpui::Element for ComposerTextElement {
                     ),
                     size(local_bounds.size.width, local_bounds.size.height - px(4.0)),
                 );
-                let above_anchor = chip_bounds.top() - px(MENTION_TOOLTIP_HEIGHT) - px(1.0);
+                let above_anchor = chip_bounds.top()
+                    - crate::typography::ui_rems(MENTION_TOOLTIP_HEIGHT)
+                        .to_pixels(window.rem_size())
+                    - px(1.0);
                 let anchor_y = if above_anchor >= px(0.0) {
                     above_anchor
                 } else {
@@ -8939,7 +8953,7 @@ impl Composer {
         let token = self.mention.token.as_ref()?;
         let mut card = crate::popover::stack_popup_card(theme)
             .w_full()
-            .max_h(px(320.0))
+            .max_h(crate::typography::ui_rems(320.0))
             .overflow_hidden()
             // Completion choices belong to the input. Keep it focused until
             // mouse-up can accept a choice (or while dragging the scrollbar).
@@ -8972,8 +8986,8 @@ impl Composer {
         {
             card = card.child(
                 div()
-                    .px(px(12.0))
-                    .py(px(10.0))
+                    .px(crate::typography::ui_rems(12.0))
+                    .py(crate::typography::ui_rems(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                     .child(error),
@@ -8981,8 +8995,8 @@ impl Composer {
         } else if self.mention.results.is_empty() && self.mention.native_results.is_empty() {
             card = card.child(
                 div()
-                    .px(px(12.0))
-                    .py(px(10.0))
+                    .px(crate::typography::ui_rems(12.0))
+                    .py(crate::typography::ui_rems(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
                     .child(if token.query.is_empty() {
@@ -9027,7 +9041,7 @@ impl Composer {
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(8.0))
+                                .gap(crate::typography::ui_rems(8.0))
                                 .child(
                                     crate::file_icons::icon(
                                         if result.is_dir {
@@ -9040,7 +9054,7 @@ impl Composer {
                                         },
                                         theme.appearance,
                                     )
-                                    .size(px(14.0))
+                                    .size(crate::typography::ui_rems(14.0))
                                     .flex_none(),
                                 )
                                 .child(
@@ -9116,7 +9130,7 @@ impl Composer {
                         .child(
                             crate::icons::icon(crate::icons::MAGIC_WAND_3)
                                 .flex_none()
-                                .size(px(14.0))
+                                .size(crate::typography::ui_rems(14.0))
                                 .text_color(theme.readable_icon(theme.warning)),
                         )
                         .child(
@@ -9167,7 +9181,7 @@ impl Composer {
                             .id("mention-list")
                             .role(Role::ListBox)
                             .aria_label("Mention suggestions")
-                            .max_h(px(312.0))
+                            .max_h(crate::typography::ui_rems(312.0))
                             .flex()
                             .flex_col()
                             .gap(px(crate::popover::MENU_GAP))
@@ -9192,14 +9206,14 @@ impl Composer {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .px(px(4.0))
-                    .pt(px(6.0))
+                    .px(crate::typography::ui_rems(4.0))
+                    .pt(crate::typography::ui_rems(6.0))
                     .child(
                         div()
                             .id("native-catalog-status")
                             .role(Role::Status)
                             .aria_label(notice.clone())
-                            .px(px(8.0))
+                            .px(crate::typography::ui_rems(8.0))
                             .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text_muted)
                             .child(notice.clone()),
@@ -9583,7 +9597,7 @@ impl Composer {
         // completions share the same surface shape.
         let mut card = crate::popover::stack_popup_card(theme)
             .w_full()
-            .max_h(px(320.0))
+            .max_h(crate::typography::ui_rems(320.0))
             .overflow_hidden()
             .on_mouse_down(
                 MouseButton::Left,
@@ -9612,8 +9626,8 @@ impl Composer {
         {
             card = card.child(
                 div()
-                    .px(px(12.0))
-                    .py(px(10.0))
+                    .px(crate::typography::ui_rems(12.0))
+                    .py(crate::typography::ui_rems(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                     .child(error),
@@ -9621,8 +9635,8 @@ impl Composer {
         } else if self.slash.filtered.is_empty() {
             card = card.child(
                 div()
-                    .px(px(12.0))
-                    .py(px(10.0))
+                    .px(crate::typography::ui_rems(12.0))
+                    .py(crate::typography::ui_rems(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
                     .child(match (self.slash.kind, commands.is_empty()) {
@@ -9667,7 +9681,7 @@ impl Composer {
                                 .flex()
                                 .flex_row()
                                 .items_center()
-                                .gap(px(8.0))
+                                .gap(crate::typography::ui_rems(8.0))
                                 .child(
                                     crate::icons::icon(if sigil == SKILL_SIGIL {
                                         ComposerChipKind::Skill.icon()
@@ -9676,7 +9690,7 @@ impl Composer {
                                     } else {
                                         crate::icons::COMMAND
                                     })
-                                    .size(px(14.0))
+                                    .size(crate::typography::ui_rems(14.0))
                                     .text_color(theme.text_muted),
                                 )
                                 .child(
@@ -9711,7 +9725,7 @@ impl Composer {
                     .child(
                         div()
                             .id("slash-list")
-                            .max_h(px(312.0))
+                            .max_h(crate::typography::ui_rems(312.0))
                             .flex()
                             .flex_col()
                             .gap(px(crate::popover::MENU_GAP))
@@ -9725,8 +9739,8 @@ impl Composer {
             if let Some(error) = self.slash.error.clone() {
                 card = card.child(
                     div()
-                        .px(px(12.0))
-                        .py(px(8.0))
+                        .px(crate::typography::ui_rems(12.0))
+                        .py(crate::typography::ui_rems(8.0))
                         .text_size(crate::typography::ui_rems(11.5))
                         .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(error),
@@ -11905,9 +11919,9 @@ impl Composer {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(12.0))
-                .px(px(14.0))
-                .py(px(10.0))
+                .gap(crate::typography::ui_rems(12.0))
+                .px(crate::typography::ui_rems(14.0))
+                .py(crate::typography::ui_rems(10.0))
                 .rounded(px(12.0))
                 .border_1()
                 .border_color(if picked {
@@ -11950,7 +11964,7 @@ impl Composer {
                         })
                         .flex()
                         .flex_col()
-                        .gap(px(3.0))
+                        .gap(crate::typography::ui_rems(3.0))
                         .child(SharedString::from(label.clone()))
                         .when_some(question.option_description(ix), |el, description| {
                             el.child(
@@ -11986,7 +12000,7 @@ impl Composer {
                         // Number kbd chip: `size-[22px] rounded-md text-[11px]`.
                         div()
                             .flex_none()
-                            .size(px(22.0))
+                            .size(crate::typography::ui_rems(22.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -12017,8 +12031,8 @@ impl Composer {
             .flex_col()
             .child(
                 div()
-                    .px(px(16.0))
-                    .pt(px(16.0))
+                    .px(crate::typography::ui_rems(16.0))
+                    .pt(crate::typography::ui_rems(16.0))
                     .flex()
                     .flex_col()
                     // Header: tracked uppercase + counter chip when paged.
@@ -12027,7 +12041,7 @@ impl Composer {
                             .flex()
                             .flex_row()
                             .items_center()
-                            .gap(px(10.0))
+                            .gap(crate::typography::ui_rems(10.0))
                             .child(
                                 div()
                                     .text_size(crate::typography::ui_rems(11.0))
@@ -12040,8 +12054,8 @@ impl Composer {
                             .when(wizard.questions.len() > 1, |el| {
                                 el.child(
                                     div()
-                                        .h(px(20.0))
-                                        .px(px(6.0))
+                                        .h(crate::typography::ui_rems(20.0))
+                                        .px(crate::typography::ui_rems(6.0))
                                         .flex()
                                         .items_center()
                                         .rounded(px(6.0))
@@ -12056,9 +12070,9 @@ impl Composer {
                     .child(
                         div()
                             .id("wizard-question-text")
-                            .max_h(px(160.0))
+                            .max_h(crate::typography::ui_rems(160.0))
                             .overflow_y_scroll()
-                            .mt(px(6.0))
+                            .mt(crate::typography::ui_rems(6.0))
                             .text_size(crate::typography::ui_rems(15.0))
                             .line_height(crate::typography::ui_rems(20.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
@@ -12074,12 +12088,12 @@ impl Composer {
                         rows.push(approval_expiry_row(approval));
                         let context = div()
                             .id("approval-context")
-                            .mt(px(8.0))
-                            .max_h(px(220.0))
+                            .mt(crate::typography::ui_rems(8.0))
+                            .max_h(crate::typography::ui_rems(220.0))
                             .overflow_y_scroll()
                             .flex()
                             .flex_col()
-                            .gap(px(6.0))
+                            .gap(crate::typography::ui_rems(6.0))
                             .children(rows.into_iter().map(|(label, value)| {
                                 div()
                                     .flex()
@@ -12103,7 +12117,7 @@ impl Composer {
                     .when(question.multi_select, |el| {
                         el.child(
                             div()
-                                .mt(px(4.0))
+                                .mt(crate::typography::ui_rems(4.0))
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.readable_muted(0.65))
                                 .child(SharedString::from("Select one or more options.")),
@@ -12112,33 +12126,37 @@ impl Composer {
                     .child(
                         div()
                             .id("wizard-options")
-                            .max_h(px(220.0))
+                            .max_h(crate::typography::ui_rems(220.0))
                             .overflow_y_scroll()
-                            .mt(px(12.0))
+                            .mt(crate::typography::ui_rems(12.0))
                             .flex()
                             .flex_col()
-                            .gap(px(4.0))
+                            .gap(crate::typography::ui_rems(4.0))
                             .children(options),
                     )
                     // Same compact pill surface and input-row geometry as the
                     // ordinary composer; the input entity stays shared.
                     .when(text_input, |el| {
                         el.child(
-                            div().mt(px(12.0)).pb(px(4.0)).px(px(4.0)).child(
-                                composer_surface(&theme, surface_radius)
-                                    .id("wizard-answer-surface")
-                                    .w_full()
-                                    .h(px(COMPACT_TOTAL_HEIGHT))
-                                    .child(
-                                        div()
-                                            .h(px(COMPACT_TOTAL_HEIGHT - PILL_BORDER_V))
-                                            .flex()
-                                            .items_center()
-                                            .min_w_0()
-                                            .px(px(8.0))
-                                            .child(self.answer_input.clone()),
-                                    ),
-                            ),
+                            div()
+                                .mt(crate::typography::ui_rems(12.0))
+                                .pb(crate::typography::ui_rems(4.0))
+                                .px(crate::typography::ui_rems(4.0))
+                                .child(
+                                    composer_surface(&theme, surface_radius)
+                                        .id("wizard-answer-surface")
+                                        .w_full()
+                                        .h(px(COMPACT_TOTAL_HEIGHT))
+                                        .child(
+                                            div()
+                                                .h(px(COMPACT_TOTAL_HEIGHT - PILL_BORDER_V))
+                                                .flex()
+                                                .items_center()
+                                                .min_w_0()
+                                                .px(crate::typography::ui_rems(8.0))
+                                                .child(self.answer_input.clone()),
+                                        ),
+                                ),
                         )
                     })
                     .when(url_prompt && !submitting, |el| {
@@ -12163,14 +12181,14 @@ impl Composer {
                     .flex_row()
                     .justify_between()
                     .items_center()
-                    .px(px(16.0))
-                    .pb(px(16.0))
-                    .pt(px(4.0))
+                    .px(crate::typography::ui_rems(16.0))
+                    .pb(crate::typography::ui_rems(16.0))
+                    .pt(crate::typography::ui_rems(4.0))
                     .child(
                         div()
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
+                            .gap(crate::typography::ui_rems(8.0))
                             .when(page > 0, |el| {
                                 el.child(
                                     crate::popover::btn_ghost(&theme, "Back", "wizard-back")
@@ -12241,7 +12259,7 @@ impl Composer {
                             },
                         )
                         .id("wizard-submit")
-                        .px(px(16.0))
+                        .px(crate::typography::ui_rems(16.0))
                         .when(!can_advance, |el| el.opacity(0.4))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if retryable {
@@ -12285,8 +12303,8 @@ impl Composer {
         if self.stash_entries.is_empty() {
             rows.push(
                 div()
-                    .px(px(8.0))
-                    .py(px(8.0))
+                    .px(crate::typography::ui_rems(8.0))
+                    .py(crate::typography::ui_rems(8.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(popup_theme.text_muted)
                     .child(if self.stash_task.is_some() {
@@ -12355,7 +12373,7 @@ impl Composer {
             .child(
                 div()
                     .id("composer-stash-list")
-                    .max_h(px(220.0))
+                    .max_h(crate::typography::ui_rems(220.0))
                     .overflow_y_scroll()
                     .flex()
                     .flex_col()
@@ -12402,7 +12420,7 @@ impl Composer {
             .aria_label("Composer controls")
             .aria_expanded(open)
             .tab_index(0)
-            .size(px(COMPACT_BUTTON))
+            .size(crate::typography::ui_rems(COMPACT_BUTTON))
             .flex_none()
             .flex()
             .items_center()
@@ -12430,7 +12448,7 @@ impl Composer {
             .relative()
             .child(
                 crate::icons::icon(crate::icons::MORE_HORIZONTAL)
-                    .size(px(16.0))
+                    .size(crate::typography::ui_rems(16.0))
                     .text_color(theme.text_muted),
             )
             .when_some(probe_scope, |el, scope| {
@@ -12446,7 +12464,7 @@ impl Composer {
                         cx.notify();
                     }
                 }))
-                .p(px(6.0))
+                .p(crate::typography::ui_rems(6.0))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -12502,16 +12520,16 @@ impl Composer {
         };
         let glyph: gpui::AnyElement = match mode {
             SendButtonMode::Stop => div()
-                .size(px(11.0))
+                .size(crate::typography::ui_rems(11.0))
                 .rounded(px(3.0))
                 .bg(glyph_color)
                 .into_any_element(),
             SendButtonMode::Queue => crate::icons::icon(crate::icons::QUEUE_SEND)
-                .size(px(14.0))
+                .size(crate::typography::ui_rems(14.0))
                 .text_color(glyph_color)
                 .into_any_element(),
             SendButtonMode::Send => crate::icons::icon(crate::icons::ARROW_UP)
-                .size(px(14.0))
+                .size(crate::typography::ui_rems(14.0))
                 .text_color(glyph_color)
                 .into_any_element(),
         };
@@ -12527,7 +12545,7 @@ impl Composer {
             .id("composer-primary")
             .role(gpui::Role::Button)
             .aria_label(tooltip.clone())
-            .size(px(size))
+            .size(crate::typography::ui_rems(size))
             .flex_none()
             .rounded_full()
             .flex()
@@ -12731,7 +12749,7 @@ impl Render for Composer {
         // width: the column gutter, the input padding and the controls row.
         let available = self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH);
         let gutter = composer_gutter(available);
-        let compact = !controls_row_fits(available - 2.0 * gutter);
+        let compact = !controls_row_fits(available - 2.0 * gutter, theme.ui_scale());
         if !compact && self.controls_tray_open {
             self.controls_tray_open = false;
         }
@@ -12795,8 +12813,8 @@ impl Render for Composer {
                             ],
                         )
                         .id("composer-failure")
-                        .mx(px(4.0))
-                        .mt(px(6.0)),
+                        .mx(crate::typography::ui_rems(4.0))
+                        .mt(crate::typography::ui_rems(6.0)),
                     )
                 })
                 .when(recoverable_available, |el| {
@@ -12804,10 +12822,10 @@ impl Render for Composer {
                     el.child(
                         div()
                             .id("composer-recover-unsent")
-                            .mx(px(4.0))
-                            .mt(px(6.0))
-                            .px(px(12.0))
-                            .py(px(10.0))
+                            .mx(crate::typography::ui_rems(4.0))
+                            .mt(crate::typography::ui_rems(6.0))
+                            .px(crate::typography::ui_rems(12.0))
+                            .py(crate::typography::ui_rems(10.0))
                             // The stack ladder's notice step (audit CP-20).
                             .rounded(px(crate::popover::STACK_NOTICE_RADIUS))
                             .border_1()
@@ -12815,18 +12833,18 @@ impl Render for Composer {
                             .bg(theme.surface_card)
                             .flex()
                             .flex_col()
-                            .gap(px(7.0))
+                            .gap(crate::typography::ui_rems(7.0))
                             .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text)
                             .child(
                                 div()
                                     .flex()
                                     .items_center()
-                                    .gap(px(8.0))
+                                    .gap(crate::typography::ui_rems(8.0))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .child(
                                         crate::icons::icon(crate::icons::ARCHIVE_UP_MINIMALISTIC)
-                                            .size(px(14.0))
+                                            .size(crate::typography::ui_rems(14.0))
                                             .text_color(theme.text_muted),
                                     )
                                     .child("Unsent message saved"),
@@ -12839,7 +12857,7 @@ impl Render for Composer {
                                     .flex()
                                     .items_center()
                                     .justify_end()
-                                    .gap(px(12.0))
+                                    .gap(crate::typography::ui_rems(12.0))
                                     .child(
                                         div()
                                             .id("composer-discard-unsent")
@@ -12896,15 +12914,20 @@ impl Render for Composer {
                         "composer-queue-notice",
                         div()
                             .id("composer-queue-notice")
-                            .mx(px(8.0))
-                            .mt(px(6.0))
+                            .mx(crate::typography::ui_rems(8.0))
+                            .mt(crate::typography::ui_rems(6.0))
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(crate::typography::ui_rems(6.0))
                             .text_size(crate::typography::ui_rems(11.0))
                             .line_height(crate::typography::ui_rems(14.0))
                             .text_color(theme.text_faint)
-                            .child(div().size(px(5.0)).rounded_full().bg(dot))
+                            .child(
+                                div()
+                                    .size(crate::typography::ui_rems(5.0))
+                                    .rounded_full()
+                                    .bg(dot),
+                            )
                             .child(div().min_w_0().truncate().child(notice)),
                     ))
                 });
@@ -12959,12 +12982,17 @@ impl Render for Composer {
         });
 
         let dock_amount = self.dock_frame.map_or(0.0, |frame| frame.amount);
+        // The controls row is rem-sized (see the actions row below), so the
+        // pill's analytic height carries the row at the current Interface
+        // size; the 16 px-baseline helpers stay exact at the default.
+        let actions_row_height = ACTIONS_ROW_HEIGHT * theme.ui_scale();
+        let actions_row_extra = actions_row_height - ACTIONS_ROW_HEIGHT;
         let dock_height = |amount: f32| {
             motion::lerp(
                 composer_total_height(content_height),
                 session_total_height(content_height),
                 amount,
-            )
+            ) + actions_row_extra
         };
 
         // Committed-height morph: only the pill's height animates; the layout
@@ -12977,13 +13005,14 @@ impl Render for Composer {
             self.last_available_width.unwrap_or(COMPOSER_MAX_WIDTH) - 2.0 * Theme::SPACE_LG - 2.0;
         let appshot_count = self.staged_appshots().len();
         let strip_h = attachment_strip_height(staged_count, strip_width_hint);
-        let comment_strip_h = comment_strip_height(self.staged_comments(cx).len());
+        let comment_strip_h =
+            comment_strip_height(self.staged_comments(cx).len(), Theme::of(cx).ui_scale());
         let base_height = if self.dock_frame.is_some() {
             dock_height(dock_amount)
         } else if new_chat {
-            composer_total_height(content_height)
+            composer_total_height(content_height) + actions_row_extra
         } else {
-            session_total_height(content_height)
+            session_total_height(content_height) + actions_row_extra
         };
         let target_height =
             base_height + strip_h + appshot_strip_height(appshot_count) + comment_strip_h;
@@ -13054,12 +13083,13 @@ impl Render for Composer {
             - appshot_strip_height(appshot_count)
             - comment_strip_h
             - PILL_BORDER_V
-            - ACTIONS_ROW_HEIGHT)
+            - actions_row_height)
             .max(0.0);
         self.input.update(cx, |input, cx| {
             let height = (textarea_height - TEXTAREA_PAD_V).max(0.0);
             let settled_height =
-                (base_height - PILL_BORDER_V - ACTIONS_ROW_HEIGHT - TEXTAREA_PAD_V).max(0.0);
+                (base_height - PILL_BORDER_V - actions_row_height - TEXTAREA_PAD_V).max(0.0);
+
             let resizing = self.height_morph.is_some();
             if input.viewport_height != Some(height)
                 || input.settled_viewport_height != Some(settled_height)
@@ -13079,6 +13109,7 @@ impl Render for Composer {
         // are on (never while measuring).
         let probe_scope = crate::perf_counters::probes_enabled()
             .then(|| format!("composer:{}", self.perf_scope(cx)));
+        let ui_scale = theme.ui_scale();
         let send_button =
             self.render_send_button(mode, if compact { COMPACT_BUTTON } else { ROW_BUTTON }, cx);
         let send_button = match &probe_scope {
@@ -13098,7 +13129,7 @@ impl Render for Composer {
         let attach_hover: SharedString = format!("composer-attach-{}", cx.entity_id()).into();
         let attach = div()
             .id("composer-attach")
-            .size(px(28.0))
+            .size(crate::typography::ui_rems(ROW_BUTTON))
             .flex_none()
             .flex()
             .items_center()
@@ -13116,7 +13147,7 @@ impl Render for Composer {
             .tooltip_above(|_, cx| crate::pickers::ControlTooltip::view("Attach files", None, cx))
             .child(
                 crate::icons::icon(crate::icons::PAPERCLIP)
-                    .size(px(16.0))
+                    .size(crate::typography::ui_rems(16.0))
                     // The source path's painted bounds are centered at x=11
                     // inside a 24px viewbox. Correct that optical offset while
                     // keeping the 28px hit target geometrically centered.
@@ -13215,11 +13246,11 @@ impl Render for Composer {
         let work_width = self.work_chip_width(cx);
         // Compact: the chips live in the tray, with room for their labels.
         let row_budget = if compact {
-            TRAY_CHIP_BUDGET
+            TRAY_CHIP_BUDGET * ui_scale
         } else {
-            controls_row_budget(surface_width)
+            controls_row_budget(surface_width, ui_scale)
         } - if work_width > 0.0 {
-            work_width + CHIP_GAP
+            work_width + CHIP_GAP * ui_scale
         } else {
             0.0
         };
@@ -13229,6 +13260,7 @@ impl Render for Composer {
             model_name_only,
             goal_widths,
             usage_widths,
+            ui_scale,
         );
         self.controls_row = Some(ControlsRowMeasure {
             budget: row_budget,
@@ -13257,7 +13289,7 @@ impl Render for Composer {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(CHIP_GAP))
+            .gap(crate::typography::ui_rems(CHIP_GAP))
             .child(div().min_w_0().child(self.pickers.clone()))
             .children(goal_mode_chip)
             .children(usage_chip)
@@ -13304,13 +13336,19 @@ impl Render for Composer {
                     .left_0()
                     .right_0()
                     .bottom_0()
-                    .h(px(ACTIONS_ROW_HEIGHT))
+                    // Rem-sized like the chips and discs it holds; the
+                    // pill's analytic height adds the same scaled row.
+                    .h(px(ACTIONS_ROW_HEIGHT * ui_scale))
                     .flex()
                     .flex_row()
                     .items_center()
                     // The attachment belongs to the utility pickers, while
                     // Send has a larger structural separation.
-                    .gap(px(if compact { 2.0 } else { ACTION_PRIMARY_GAP }))
+                    .gap(crate::typography::ui_rems(if compact {
+                        2.0
+                    } else {
+                        ACTION_PRIMARY_GAP
+                    }))
                     .pl(px(if compact {
                         COMPACT_INSET
                     } else {
@@ -13321,8 +13359,8 @@ impl Render for Composer {
                     } else {
                         ACTIONS_ROW_INSET
                     }))
-                    .pt(px(2.0))
-                    .pb(px(if compact { 8.0 } else { 12.0 }))
+                    .pt(px(2.0 * ui_scale))
+                    .pb(px((if compact { 8.0 } else { 12.0 }) * ui_scale))
                     .child(if compact {
                         // Narrow: one tray button holds Attach and the
                         // pickers (all their popovers and options intact).
@@ -13436,10 +13474,10 @@ impl Render for Composer {
                 div()
                     .id("dock-target-selectors")
                     .absolute()
-                    .top(px(-28.0))
+                    .top(crate::typography::ui_rems(-28.0))
                     .left(px(Theme::SPACE_LG + 10.0))
                     .right(px(Theme::SPACE_LG + 10.0))
-                    .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT))
+                    .h(crate::typography::ui_rems(NEW_THREAD_SELECTOR_ROW_HEIGHT))
                     .flex()
                     .items_start()
                     .justify_end()
@@ -13450,7 +13488,10 @@ impl Render for Composer {
             container.child(
                 div()
                     .w_full()
-                    .h(px(NEW_THREAD_SELECTOR_ROW_HEIGHT * new_thread_chrome))
+                    // Rem-sized like the footer chips it holds.
+                    .h(crate::typography::ui_rems(
+                        NEW_THREAD_SELECTOR_ROW_HEIGHT * new_thread_chrome,
+                    ))
                     .mb(px(-Theme::SPACE_SM * (1.0 - new_thread_chrome)))
                     .px(px(10.0))
                     .flex()
@@ -13493,7 +13534,9 @@ impl Render for Composer {
             container.child(
                 div()
                     .w_full()
-                    .h(px(SESSION_FOOTER_HEIGHT * bottom_slot))
+                    .h(crate::typography::ui_rems(
+                        SESSION_FOOTER_HEIGHT * bottom_slot,
+                    ))
                     .mt(px(-Theme::SPACE_SM * (1.0 - bottom_slot)))
                     .mb(px(-Theme::SPACE_SM * bottom_slot))
                     .relative()
@@ -13515,7 +13558,7 @@ impl Render for Composer {
                                 .absolute()
                                 .inset_0()
                                 .w_full()
-                                .h(px(SESSION_FOOTER_HEIGHT))
+                                .h(crate::typography::ui_rems(SESSION_FOOTER_HEIGHT))
                                 .flex()
                                 .items_center()
                                 .opacity(session_chrome_opacity)

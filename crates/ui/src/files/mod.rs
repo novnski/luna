@@ -102,12 +102,12 @@ impl Render for WorkspacePathDragGhost {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = crate::theme::Theme::of(cx);
         div()
-            .h(px(24.0))
-            .max_w(px(220.0))
-            .px(px(8.0))
+            .h(crate::typography::ui_rems(24.0))
+            .max_w(crate::typography::ui_rems(220.0))
+            .px(crate::typography::ui_rems(8.0))
             .flex()
             .items_center()
-            .gap(px(5.0))
+            .gap(crate::typography::ui_rems(5.0))
             .rounded(px(6.0))
             .bg(theme.surface_raised)
             .border_1()
@@ -122,7 +122,7 @@ impl Render for WorkspacePathDragGhost {
                     crate::file_icons::FileIconIdentity::file(&self.payload.path)
                 };
                 crate::file_icons::icon(identity, theme.appearance)
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .flex_none()
             })
             .child(div().min_w_0().truncate().child(self.payload.title()))
@@ -217,8 +217,8 @@ impl Render for FilesSurface {
             let retry = div()
                 .id("files-retry-root")
                 .accessible_button("Retry loading workspace files", theme.accent)
-                .h(px(28.0))
-                .px(px(12.0))
+                .h(crate::typography::ui_rems(28.0))
+                .px(crate::typography::ui_rems(12.0))
                 .rounded(px(7.0))
                 .border_1()
                 .border_color(theme.border)
@@ -280,15 +280,15 @@ impl Render for FilesSurface {
             .when_some(watch_error, |element, error| {
                 element.child(
                     div()
-                        .h(px(27.0))
+                        .h(crate::typography::ui_rems(27.0))
                         .flex_none()
-                        .px(px(10.0))
+                        .px(crate::typography::ui_rems(10.0))
                         .border_b_1()
                         .border_color(theme.warning.opacity(0.22))
                         .bg(theme.warning.opacity(0.045))
                         .flex()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_on(
                             theme.warning_muted,
@@ -297,16 +297,16 @@ impl Render for FilesSurface {
                         ))
                         .child(
                             crate::icons::icon(crate::icons::REFRESH)
-                                .size(px(10.5))
+                                .size(crate::typography::ui_rems(10.5))
                                 .flex_none(),
                         )
                         .child(div().min_w_0().flex_1().truncate().child(error))
                         .child(
                             div()
                                 .id("files-watch-refresh-now")
-                                .h(px(20.0))
+                                .h(crate::typography::ui_rems(20.0))
                                 .flex_none()
-                                .px(px(6.0))
+                                .px(crate::typography::ui_rems(6.0))
                                 .rounded(px(5.0))
                                 .flex()
                                 .items_center()
@@ -671,7 +671,7 @@ impl FilesSurface {
         let closing = self.editor_context_menu.closing_since();
 
         let card = crate::popover::popover_card(theme)
-            .w(px(170.0))
+            .w(crate::typography::ui_rems(170.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_editor_context_menu(cx)))
             .flex()
             .flex_col()
@@ -1013,7 +1013,7 @@ impl FilesSurface {
                 crate::surface_chrome::input()
                     .child(
                         crate::icons::icon(crate::icons::MAGNIFER)
-                            .size(px(12.0))
+                            .size(crate::typography::ui_rems(12.0))
                             .flex_none()
                             .text_color(theme.text_faint),
                     )
