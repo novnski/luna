@@ -273,13 +273,14 @@ fn command_card_rendered_edit_toggles_and_cancel(cx: &mut TestAppContext) {
     visual.update(|window, app| key(window, app, "enter"));
     assert!(card.read_with(cx, |card, _| card.wait));
 
-    // From Preview URL, the editor's tab stops are Setup, Wait, Save, Cancel.
+    // From Preview URL, the editor's tab stops are Setup, Wait, Cancel, Save
+    // (Cancel sits left of the default Save button, as in macOS dialogs).
     // Space on Cancel must leave persisted actions intact and issue no save.
     visual.update(|window, app| window.draw(app).clear());
     let _cancel_focus = focus_from_preview(
         &mut visual,
         &preview_focus,
-        4,
+        3,
         "qa-command-cancel",
         &rpc,
         "project-command-ax-rendered-cancel-focused",
@@ -301,7 +302,7 @@ fn command_card_rendered_edit_toggles_and_cancel(cx: &mut TestAppContext) {
 fn command_card_keyboard_remove_sends_one_synthetic_save(cx: &mut TestAppContext) {
     let runtime = runtime(cx);
     let _entered = runtime.enter();
-    let (_card, rpc, window) = scene(cx, &runtime);
+    let (card, rpc, window) = scene(cx, &runtime);
     let mut visual = gpui::VisualTestContext::from_window(window.into(), cx);
     trace_rendered_controls(
         &mut visual,
@@ -331,6 +332,22 @@ fn command_card_keyboard_remove_sends_one_synthetic_save(cx: &mut TestAppContext
         }),
     );
     assert!(focused.is_some());
+    // Remove is destructive: the first Enter only arms it (the row asks to
+    // confirm) and sends nothing. The same control keeps focus, and its
+    // second Enter confirms with exactly one save.
+    visual.update(|window, app| key(window, app, "enter"));
+    fixture::drain(cx, &runtime);
+    assert_eq!(rpc.calls(methods::SAVE_PROJECT_COMMANDS), 0);
+    assert_eq!(
+        card.read_with(cx, |card, _| card.confirm_remove.clone()),
+        Some("build".into())
+    );
+    visual.update(|window, app| window.draw(app).clear());
+    assert_eq!(
+        visual.update(|window, app| window.focused(app)),
+        focused,
+        "the armed Remove keeps keyboard focus"
+    );
     visual.update(|window, app| key(window, app, "enter"));
     fixture::pump_until(cx, &runtime, |_| {
         rpc.calls(methods::SAVE_PROJECT_COMMANDS) == 1
@@ -338,7 +355,7 @@ fn command_card_keyboard_remove_sends_one_synthetic_save(cx: &mut TestAppContext
     let requests = rpc.trace();
     fixture::write_trace(
         "project-command-ax-rendered-remove",
-        &json!({"rpc":requests.clone(),"path":"rendered tab order → Remove Enter"}),
+        &json!({"rpc":requests.clone(),"path":"rendered tab order → Remove Enter (arm) → Remove Enter (confirm)"}),
     );
     rpc.release(methods::SAVE_PROJECT_COMMANDS);
     assert_eq!(rpc.calls(methods::SAVE_PROJECT_COMMANDS), 1);
@@ -392,13 +409,14 @@ fn command_card_keyboard_save_is_single_flight(cx: &mut TestAppContext) {
     let _save_focus = focus_from_preview(
         &mut visual,
         &preview_focus,
-        3,
+        4,
         "qa-command-save",
         &rpc,
         "project-command-ax-rendered-save-focused",
     );
-    // From Preview URL, Tab passes Setup and Wait before Save. A second Enter
-    // before the held save reply must not issue another old-frame request.
+    // From Preview URL, Tab passes Setup, Wait and Cancel before Save. A
+    // second Enter before the held save reply must not issue another
+    // old-frame request.
     visual.update(|window, app| {
         key(window, app, "enter");
         key(window, app, "enter");

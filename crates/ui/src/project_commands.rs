@@ -1,29 +1,56 @@
 //! Native project command settings card and checkout-scoped terminal controls.
-use crate::{composer::ComposerInput, popover, settings::widgets, state::AppState, theme::Theme};
-use gpui::{
-    Action, Context, Entity, EventEmitter, IntoElement, Render, SharedString, Subscription, Task,
-    Window, div, prelude::*, px,
+use crate::{
+    button::{self, ButtonKind, ControlSize},
+    composer::ComposerInput,
+    popover::{self, TooltipAboveExt as _},
+    settings::widgets,
+    state::AppState,
+    theme::Theme,
+    typography::{TextStyle, TypeStyleExt as _, ui_rems},
 };
-use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandsSnapshot};
+use gpui::{
+    Action, AnyElement, Context, Entity, EventEmitter, IntoElement, Render, SharedString,
+    Subscription, Task, Window, div, prelude::*, px,
+};
+use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandStatus, ProjectCommandsSnapshot};
 use luna_rpc::methods;
 
-fn command_action(
+/// A kit push button for a command control. GPUI sends Enter/Space on a
+/// focused `on_click` control as one keyboard click on key-up; the kit
+/// swallows the key-down so it never activates twice.
+fn command_button(
     theme: &Theme,
-    enabled: bool,
-    id: impl Into<SharedString>,
-) -> gpui::Stateful<gpui::Div> {
-    widgets::ghost_action(id, enabled, theme)
-}
-
-fn command_settings_button(
-    theme: &Theme,
+    kind: ButtonKind,
+    size: ControlSize,
     enabled: bool,
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    // GPUI sends Enter/Space on a focused on_click control as one keyboard
-    // click on key-up. A separate key-down handler would activate it twice.
-    command_action(theme, enabled, id).aria_label(label.into())
+    button::button(id, kind, size, enabled, theme).aria_label(label.into())
+}
+
+/// A run's status as a badge: running reads as live, a failure in the danger
+/// tone, everything else neutral.
+fn status_badge(theme: &Theme, status: ProjectCommandStatus) -> gpui::Div {
+    match status {
+        ProjectCommandStatus::Running => widgets::badge_active(theme, status.label()),
+        ProjectCommandStatus::Failed => widgets::badge(theme, status.label())
+            .border_color(theme.danger.opacity(0.35))
+            .text_color(theme.readable_tone(theme.danger_muted, 0.9)),
+        ProjectCommandStatus::Pending
+        | ProjectCommandStatus::Succeeded
+        | ProjectCommandStatus::Canceled => widgets::badge(theme, status.label()),
+    }
+}
+
+/// Command text in the code face at the Appearance code size. Code surfaces
+/// keep their own absolute size (see [`crate::typography::code_font_size`]),
+/// so this is the one text size here that is not an interface rem.
+fn code_text(theme: &Theme, cx: &gpui::App) -> gpui::Div {
+    div()
+        .font_family(theme.font_mono.clone())
+        .text_size(px(crate::typography::code_font_size(cx)))
+        .text_color(theme.code_text)
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -35,7 +62,12 @@ pub struct ProjectCommandSettings {
     state: Entity<AppState>,
     space_id: String,
     actions: Vec<ProjectAction>,
+    /// The first read has answered (successfully or not): until then the
+    /// list shows skeleton rows instead of an empty state.
+    loaded: bool,
     editing: Option<String>,
+    /// The saved command whose Remove is waiting for its confirming press.
+    confirm_remove: Option<String>,
     name: Entity<ComposerInput>,
     command: Entity<ComposerInput>,
     preview: Entity<ComposerInput>,
@@ -51,7 +83,9 @@ impl ProjectCommandSettings {
             state,
             space_id,
             actions: vec![],
+            loaded: false,
             editing: None,
+            confirm_remove: None,
             name: cx.new(|cx| {
                 ComposerInput::new("Command name (Build, Test, Start app…)", cx).with_single_line()
             }),
@@ -87,6 +121,7 @@ impl ProjectCommandSettings {
                 .await;
             let _ = this.update(cx, |view, cx| {
                 view.busy = false;
+                view.loaded = true;
                 match result {
                     Ok(actions) => {
                         view.actions = actions;
@@ -95,6 +130,13 @@ impl ProjectCommandSettings {
                         }
                     }
                     Err(error) => view.error = Some(error.to_string()),
+                }
+                if view
+                    .confirm_remove
+                    .as_ref()
+                    .is_some_and(|id| !view.actions.iter().any(|action| &action.id == id))
+                {
+                    view.confirm_remove = None;
                 }
                 cx.notify();
             });
@@ -105,6 +147,7 @@ impl ProjectCommandSettings {
         if self.busy {
             return;
         }
+        self.confirm_remove = None;
         let action = action.unwrap_or_else(|| ProjectAction {
             id: uuid::Uuid::new_v4().to_string(),
             name: String::new(),
@@ -150,10 +193,18 @@ impl ProjectCommandSettings {
         self.request(Some(actions), cx);
     }
 
+    /// Remove is destructive, so it takes two presses on the same control:
+    /// the first arms it (the row asks to confirm), the second removes.
     fn remove(&mut self, id: &str, cx: &mut Context<Self>) {
         if self.busy {
             return;
         }
+        if self.confirm_remove.as_deref() != Some(id) {
+            self.confirm_remove = Some(id.to_string());
+            cx.notify();
+            return;
+        }
+        self.confirm_remove = None;
         let actions = self
             .actions
             .iter()
@@ -161,6 +212,11 @@ impl ProjectCommandSettings {
             .cloned()
             .collect();
         self.request(Some(actions), cx);
+    }
+
+    fn cancel_remove(&mut self, cx: &mut Context<Self>) {
+        self.confirm_remove = None;
+        cx.notify();
     }
 
     fn toggle_setup(&mut self, cx: &mut Context<Self>) {
@@ -183,159 +239,366 @@ impl ProjectCommandSettings {
             self.request(None, cx);
         }
     }
+
+    /// One saved command: name, the command's first line, its badges, and
+    /// Edit / Remove at the right (Remove asks to confirm in place).
+    fn command_row(
+        &self,
+        action: &ProjectAction,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let confirming = self.confirm_remove.as_deref() == Some(action.id.as_str());
+        let name: SharedString = if action.name.trim().is_empty() {
+            "Untitled command".into()
+        } else {
+            action.name.clone().into()
+        };
+        let first_line = action
+            .command
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        let multi_line = action.command.trim_end().contains('\n');
+        let mut text = div()
+            .flex_1()
+            .min_w(ui_rems(widgets::ROW_TEXT_MIN))
+            .flex()
+            .flex_col()
+            .gap(ui_rems(2.0))
+            .child(widgets::row_title(theme, name.clone()));
+        if confirming {
+            text = text.child(
+                widgets::row_description(theme, "Remove this command from the project?")
+                    .text_color(theme.readable_tone(theme.danger_muted, 0.9)),
+            );
+        } else if !first_line.trim().is_empty() {
+            // User data: one line, truncated, with the whole command on hover.
+            text = text.child(
+                code_text(theme, cx)
+                    .id(SharedString::from(format!("command-preview-{}", action.id)))
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme.readable_muted(0.85))
+                    .text_tooltip_above(action.command.clone())
+                    .child(SharedString::from(if multi_line {
+                        format!("{first_line} …")
+                    } else {
+                        first_line
+                    })),
+            );
+        }
+        let mut controls = widgets::row_controls();
+        if !confirming {
+            if action.setup_on_worktree_create {
+                controls = controls.child(widgets::badge(theme, "Worktree setup"));
+            }
+            if action.preview_url.is_some() {
+                controls = controls.child(widgets::badge(theme, "Preview"));
+            }
+        }
+        let edit_click = action.clone();
+        let edit_selector_id = action.id.clone();
+        let remove_selector_id = action.id.clone();
+        let remove_click_id = action.id.clone();
+        controls = if confirming {
+            controls.child(
+                command_button(
+                    theme,
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    !self.busy,
+                    SharedString::from(format!("keep-command-{}", action.id)),
+                    format!("Keep project command: {}", action.name),
+                )
+                .child("Cancel")
+                .when(!self.busy, |el| {
+                    el.on_click(cx.listener(|view, _, _, cx| view.cancel_remove(cx)))
+                }),
+            )
+        } else {
+            controls.child(
+                command_button(
+                    theme,
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    !self.busy,
+                    SharedString::from(format!("edit-command-{}", action.id)),
+                    format!("Edit project command: {}", action.name),
+                )
+                .when(cfg!(test), |el| {
+                    el.debug_selector(move || format!("qa-command-edit-{edit_selector_id}"))
+                })
+                .child("Edit")
+                .when(!self.busy, |el| {
+                    el.on_click(
+                        cx.listener(move |view, _, _, cx| view.edit(Some(edit_click.clone()), cx)),
+                    )
+                }),
+            )
+        };
+        // The same control (and so the same focus) arms and confirms; only
+        // the armed press is the loud, destructive one.
+        controls = controls.child(
+            command_button(
+                theme,
+                if confirming {
+                    ButtonKind::Danger
+                } else {
+                    ButtonKind::Secondary
+                },
+                ControlSize::Sm,
+                !self.busy,
+                SharedString::from(format!("remove-command-{}", action.id)),
+                if confirming {
+                    format!("Confirm removing project command: {}", action.name)
+                } else {
+                    format!("Remove project command: {}", action.name)
+                },
+            )
+            .when(cfg!(test), |el| {
+                el.debug_selector(move || format!("qa-command-remove-{remove_selector_id}"))
+            })
+            .child("Remove")
+            .when(!self.busy, |el| {
+                el.on_click(cx.listener(move |view, _, _, cx| {
+                    view.remove(&remove_click_id, cx);
+                }))
+            }),
+        );
+        widgets::card_row(theme, false)
+            .child(widgets::row_tile(theme, crate::icons::TERMINAL))
+            .child(text)
+            .child(controls)
+    }
+
+    /// The draft editor, as rows under the list: three fields, the two
+    /// setup switches, then Cancel and Save at the right.
+    fn editor_rows(&self, theme: &Theme, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let field = |title: &'static str,
+                     description: Option<&'static str>,
+                     input: AnyElement,
+                     min_h: Option<f32>| {
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    title,
+                    description.map(SharedString::from),
+                ))
+                .child(
+                    widgets::row_block().mt_0().child(
+                        div()
+                            .w_full()
+                            .when_some(min_h, |el, min_h| el.min_h(ui_rems(min_h)))
+                            .child(popover::dialog_field(input)),
+                    ),
+                )
+                .into_any_element()
+        };
+        let creating = self
+            .editing
+            .as_ref()
+            .is_none_or(|id| !self.actions.iter().any(|action| &action.id == id));
+        vec![
+            widgets::card_row(theme, false)
+                .child(
+                    widgets::row_title(
+                        theme,
+                        if creating { "New command" } else { "Edit command" },
+                    )
+                    .font_weight(gpui::FontWeight::SEMIBOLD),
+                )
+                .into_any_element(),
+            field("Name", None, self.name.clone().into_any_element(), None),
+            field(
+                "Command",
+                Some("Runs with /bin/sh in the task's checkout, so shell operators and environment variables work."),
+                self.command.clone().into_any_element(),
+                Some(56.0),
+            ),
+            field(
+                "Preview URL",
+                Some("Optional. Adds a Preview button beside the command in Terminal → Commands."),
+                self.preview.clone().into_any_element(),
+                None,
+            ),
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    "Run on new worktree creation",
+                    Some("Setup runs only for newly created worktrees. Interrupted or failed setup stays visible and needs an explicit retry. Editing this command doesn't rerun existing setup.".into()),
+                ))
+                .child(
+                    widgets::row_controls().child(
+                        widgets::switch_control(
+                            "command-setup",
+                            "Run on new worktree creation",
+                            self.setup,
+                            theme,
+                            cx,
+                            |view, cx| view.toggle_setup(cx),
+                        )
+                        .when(cfg!(test), |el| el.debug_selector(|| "qa-command-setup".into())),
+                    ),
+                )
+                .into_any_element(),
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    "Wait for setup before dependent work",
+                    Some("When off, work can start while setup is still running.".into()),
+                ))
+                .child(
+                    widgets::row_controls().child(
+                        widgets::switch_control(
+                            "command-wait",
+                            "Wait for setup before dependent work",
+                            self.wait,
+                            theme,
+                            cx,
+                            |view, cx| view.toggle_wait(cx),
+                        )
+                        .when(cfg!(test), |el| el.debug_selector(|| "qa-command-wait".into())),
+                    ),
+                )
+                .into_any_element(),
+            widgets::card_row(theme, false)
+                .child(
+                    widgets::row_controls()
+                        .child(
+                            command_button(
+                                theme,
+                                ButtonKind::Secondary,
+                                ControlSize::Md,
+                                true,
+                                "cancel-command-edit",
+                                "Cancel command edit",
+                            )
+                            .when(cfg!(test), |el| el.debug_selector(|| "qa-command-cancel".into()))
+                            .child("Cancel")
+                            .on_click(cx.listener(|view, _, _, cx| view.cancel_edit(cx))),
+                        )
+                        .child(
+                            command_button(
+                                theme,
+                                ButtonKind::Primary,
+                                ControlSize::Md,
+                                !self.busy,
+                                "save-command",
+                                "Save project command",
+                            )
+                            .when(cfg!(test), |el| el.debug_selector(|| "qa-command-save".into()))
+                            .child(if self.busy { "Saving…" } else { "Save command" })
+                            .when(!self.busy, |el| {
+                                el.on_click(cx.listener(|view, _, _, cx| view.save(cx)))
+                            }),
+                        ),
+                )
+                .into_any_element(),
+        ]
+    }
 }
 impl Render for ProjectCommandSettings {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
-        let mut card = widgets::section_card(&theme)
-            .mt(px(20.0))
-            .p(px(16.0))
-            .gap(px(8.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(8.0))
-                    .child(widgets::row_title(&theme, "Project commands"))
-                    .when(self.editing.is_none(), |row| {
-                        row.child(
-                            command_settings_button(&theme, !self.busy, "add-project-command", "Add project command")
-                                .border_1()
-                                .border_color(theme.border)
-                                .bg(theme.surface_raised)
-                                .child(crate::icons::icon(crate::icons::PLUS).size(px(14.0)))
-                                .child(if self.busy { "Loading…" } else { "Add command" })
-                                .when(!self.busy, |el| {
-                                    el.on_click(cx.listener(|view, _, _, cx| view.edit(None, cx)))
-                                }),
-                        )
-                    }),
-            )
-            .child(widgets::page_subtitle(&theme, "Saved on this device. Run commands from Terminal → Commands in the selected task’s checkout. Foreground commands use /bin/sh; shell operators and environment variables are supported."));
-        for action in self.actions.clone() {
-            let edit_click = action.clone();
-            let edit_selector_id = action.id.clone();
-            let remove_selector_id = action.id.clone();
-            let remove_click_id = action.id.clone();
+        let connected = self.state.read(cx).engine().is_some();
+        let editing = self.editing.is_some();
+        // The section action sits in the header. It hides while a draft is
+        // open, so a second press cannot replace the draft.
+        let mut header_actions = Vec::new();
+        if !editing {
+            header_actions.push(
+                command_button(
+                    &theme,
+                    ButtonKind::Secondary,
+                    ControlSize::Md,
+                    !self.busy,
+                    "add-project-command",
+                    "Add project command",
+                )
+                .child(button::glyph(crate::icons::PLUS, ControlSize::Md))
+                .child("Add command")
+                .when(!self.busy, |el| {
+                    el.on_click(cx.listener(|view, _, _, cx| view.edit(None, cx)))
+                })
+                .into_any_element(),
+            );
+        }
+        let mut card = widgets::section_card(&theme).child(widgets::section_header(
+            &theme,
+            "Commands",
+            Some("Saved on this device. Run them from Terminal → Commands in the selected task's checkout.".into()),
+            header_actions,
+        ));
+        if !connected {
+            card = card.child(
+                widgets::card_row(&theme, false).child(
+                    widgets::warning_strip(
+                        &theme,
+                        "Connect to this project's device to load and edit its commands.",
+                    )
+                    .mt_0()
+                    .w_full(),
+                ),
+            );
+        } else if !self.loaded && self.busy {
             card = card.child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
+                    .w_full()
+                    .px(ui_rems(widgets::ROW_PAD_X))
+                    .py(ui_rems(widgets::ROW_PAD_Y))
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(popover::skeleton_rows(
+                        "project-commands-loading",
+                        &theme,
+                        2,
+                        cx.entity_id(),
+                        cx,
+                    )),
+            );
+        } else if self.actions.is_empty() && !editing && self.error.is_none() {
+            card = card.child(
+                widgets::card_row(&theme, false).child(widgets::row_description(
+                    &theme,
+                    "No commands yet. Add Build, Test or Start app to run it from the terminal.",
+                )),
+            );
+        }
+        for action in self.actions.clone() {
+            card = card.child(self.command_row(&action, &theme, cx));
+        }
+        if editing {
+            card = card.children(self.editor_rows(&theme, cx));
+        }
+        if let Some(error) = &self.error {
+            card = card.child(
+                widgets::card_row(&theme, false)
+                    .child(widgets::error_strip(&theme, error.clone()).mt_0().w_full())
                     .child(
-                        div()
-                            .flex_1()
-                            .text_color(theme.text)
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .child(SharedString::from(format!(
-                                "{}{}",
-                                action.name,
-                                if action.setup_on_worktree_create {
-                                    " · Worktree setup"
-                                } else {
-                                    ""
-                                }
-                            ))),
-                    )
-                    .child(
-                        command_settings_button(
-                            &theme,
-                            !self.busy,
-                            SharedString::from(format!("edit-command-{}", action.id)),
-                            format!("Edit project command: {}", action.name),
-                        )
-                        .when(cfg!(test), |el| {
-                            el.debug_selector(move || format!("qa-command-edit-{edit_selector_id}"))
-                        })
-                        .child("Edit")
-                        .when(!self.busy, |el| {
-                            el.on_click(cx.listener(move |view, _, _, cx| {
-                                view.edit(Some(edit_click.clone()), cx)
-                            }))
-                        }),
-                    )
-                    .child(
-                        command_settings_button(
-                            &theme,
-                            !self.busy,
-                            SharedString::from(format!("remove-command-{}", action.id)),
-                            format!("Remove project command: {}", action.name),
-                        )
-                        .when(cfg!(test), |el| {
-                            el.debug_selector(move || {
-                                format!("qa-command-remove-{remove_selector_id}")
-                            })
-                        })
-                        .child("Remove")
-                        .when(!self.busy, |el| {
-                            el.on_click(cx.listener(move |view, _, _, cx| {
-                                view.remove(&remove_click_id, cx);
-                            }))
-                        }),
+                        widgets::row_controls().child(
+                            command_button(
+                                &theme,
+                                ButtonKind::Secondary,
+                                ControlSize::Sm,
+                                !self.busy,
+                                "reload-project-commands",
+                                "Reload saved project commands and keep draft",
+                            )
+                            .child(button::glyph(crate::icons::REFRESH, ControlSize::Sm))
+                            .child("Reload saved commands")
+                            .when(!self.busy, |el| {
+                                el.on_click(cx.listener(|view, _, _, cx| view.reload(cx)))
+                            }),
+                        ),
                     ),
             );
         }
-        if self.editing.is_some() {
-            card = card
-                .child(widgets::field_label(&theme, "Name"))
-                .child(popover::dialog_field(self.name.clone().into_any_element()))
-                .child(widgets::field_label(&theme, "Command"))
-                .child(div().min_h(px(56.0)).child(popover::dialog_field(self.command.clone().into_any_element())))
-                .child(widgets::field_label(&theme, "Preview URL"))
-                .child(popover::dialog_field(self.preview.clone().into_any_element()))
-                .child(
-                    command_settings_button(&theme, true, "command-setup", "Run on new worktree creation")
-                        .aria_toggled(if self.setup { gpui::Toggled::True } else { gpui::Toggled::False })
-                        .when(cfg!(test), |el| el.debug_selector(|| "qa-command-setup".into()))
-                        .child(if self.setup { "✓ Run on new worktree creation" } else { "Run on new worktree creation" })
-                        .on_click(cx.listener(|view, _, _, cx| view.toggle_setup(cx))),
-                )
-                .child(
-                    command_settings_button(&theme, true, "command-wait", "Wait for setup before dependent work")
-                        .aria_toggled(if self.wait { gpui::Toggled::True } else { gpui::Toggled::False })
-                        .when(cfg!(test), |el| el.debug_selector(|| "qa-command-wait".into()))
-                        .child(if self.wait { "✓ Wait for setup before dependent work" } else { "Allow work while setup runs" })
-                        .on_click(cx.listener(|view, _, _, cx| view.toggle_wait(cx))),
-                )
-                .child(widgets::page_subtitle(&theme,"Setup runs only for newly created worktrees. Interrupted or failed setup stays visible and requires an explicit retry. Editing this command does not rerun existing setup."))
-                .child(
-                    div()
-                        .flex()
-                        .gap(px(8.0))
-                        .child(
-                            command_settings_button(&theme, !self.busy, "save-command", "Save project command")
-                                .when(cfg!(test), |el| el.debug_selector(|| "qa-command-save".into()))
-                                .child(if self.busy { "Saving…" } else { "Save command" })
-                                .when(!self.busy, |el| {
-                                    el.on_click(cx.listener(|view, _, _, cx| view.save(cx)))
-                                }),
-                        )
-                        .child(
-                            command_settings_button(&theme, true, "cancel-command-edit", "Cancel command edit")
-                                .when(cfg!(test), |el| el.debug_selector(|| "qa-command-cancel".into()))
-                                .child("Cancel")
-                                .on_click(cx.listener(|view, _, _, cx| view.cancel_edit(cx))),
-                        ),
-                );
-        }
-        if let Some(error) = &self.error {
-            card = card
-                .child(widgets::error_strip(&theme, error.clone()))
-                .child(
-                    command_settings_button(
-                        &theme,
-                        !self.busy,
-                        "reload-project-commands",
-                        "Reload saved project commands and keep draft",
-                    )
-                    .child("Reload saved commands (keep draft)")
-                    .when(!self.busy, |el| {
-                        el.on_click(cx.listener(|view, _, _, cx| view.reload(cx)))
-                    }),
-                );
-        }
-        card.child(widgets::page_subtitle(&theme,"Configuration and receipts are included in backups. Terminal output follows local terminal retention and is excluded from backups. Stop controls foreground processes; commands that detach themselves must manage their own lifecycle."))
+        div().w_full().flex().flex_col().child(card).child(widgets::section_footer(
+            &theme,
+            "Configuration and receipts are included in backups. Terminal output follows local terminal retention and is excluded from backups. Stop controls foreground processes; commands that detach themselves must manage their own lifecycle.",
+        ))
     }
 }
 
@@ -550,6 +813,340 @@ impl ProjectCommandPanel {
         }));
         cx.notify();
     }
+
+    /// One saved command: its name and, at the right, Preview (when it has a
+    /// URL) and Run.
+    fn action_row(
+        &self,
+        action: ProjectAction,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let action_id = action.id.clone();
+        let origin = self.scope.clone();
+        let selector_id = action.id.clone();
+        let mut controls = div()
+            .flex_none()
+            .ml_auto()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(ui_rems(6.0));
+        if let Some(url) = action.preview_url.clone() {
+            controls = controls.child(
+                command_button(
+                    theme,
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    true,
+                    SharedString::from(format!("preview-command-{}", action.id)),
+                    format!("Preview {}", action.name),
+                )
+                .child(button::glyph(crate::icons::GLOBAL, ControlSize::Sm))
+                .child("Preview")
+                .on_click(move |_, window, cx| {
+                    window.dispatch_action(Box::new(OpenCommandPreview(url.clone())), cx)
+                }),
+            );
+        }
+        controls = controls.child(
+            command_button(
+                theme,
+                ButtonKind::Secondary,
+                ControlSize::Sm,
+                !self.busy,
+                SharedString::from(format!("run-command-{}", action.id)),
+                format!("Run {}", action.name),
+            )
+            .when(cfg!(test), |el| {
+                el.debug_selector(move || format!("qa-command-run-{selector_id}"))
+            })
+            .child(button::glyph(crate::icons::PLAY, ControlSize::Sm))
+            .child("Run")
+            .when(!self.busy, |el| {
+                el.on_click(cx.listener(move |view, _, _, cx| {
+                    if !origin.is_current(view.state.read(cx)) {
+                        return;
+                    }
+                    view.execute(
+                        methods::RUN_PROJECT_COMMAND,
+                        action_id.clone(),
+                        String::new(),
+                        cx,
+                    )
+                }))
+            }),
+        );
+        div()
+            .w_full()
+            .min_h(ui_rems(28.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(ui_rems(8.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(ui_rems(120.0))
+                    .type_style(TextStyle::Footnote)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(SharedString::from(action.name)),
+            )
+            .child(controls)
+    }
+
+    /// One run receipt: name, status badge and attempt, then Output, the
+    /// captured-command disclosure and Stop/Retry at the right. The disclosed
+    /// command and any detail sit under the row.
+    fn run_row(&self, run: ProjectCommandRun, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let id = run.id.clone();
+        let origin = self.scope.clone();
+        let active = run.status.is_active();
+        let disclosed = self.expanded_command_run.as_deref() == Some(run.id.as_str());
+        let disclosure_id = run.id.clone();
+        let disclosure_origin = self.scope.clone();
+        let control_enabled = !self.busy || (active && !self.write_pending);
+        let disclose_selector = run.id.clone();
+        let control_selector = run.id.clone();
+        let mut controls = div()
+            .flex_none()
+            .ml_auto()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(ui_rems(6.0));
+        if let Some(terminal_id) = run.terminal_id.clone() {
+            let chat = run.chat_id.clone();
+            let scope = self.scope.clone();
+            let same_chat = self.scope.chat.as_deref() == Some(chat.as_str());
+            controls = controls.child(
+                command_button(
+                    theme,
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    true,
+                    SharedString::from(format!("output-command-{}", run.id)),
+                    if same_chat {
+                        "Show output"
+                    } else {
+                        "Show output in the original task"
+                    },
+                )
+                .child(button::glyph(crate::icons::TERMINAL, ControlSize::Sm))
+                .child(if same_chat {
+                    "Output"
+                } else {
+                    "Output in original task"
+                })
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    if scope.is_current(view.state.read(cx)) {
+                        cx.emit(ProjectCommandEvent::Output {
+                            scope: scope.clone(),
+                            chat_id: chat.clone(),
+                            terminal_id: terminal_id.clone(),
+                        });
+                    }
+                })),
+            );
+        }
+        controls = controls
+            .child(
+                command_button(
+                    theme,
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    true,
+                    SharedString::from(format!("disclose-command-{}", run.id)),
+                    if disclosed {
+                        "Hide captured command"
+                    } else {
+                        "Show captured command"
+                    },
+                )
+                .aria_expanded(disclosed)
+                .when(cfg!(test), |el| {
+                    el.debug_selector(move || format!("qa-command-disclose-{disclose_selector}"))
+                })
+                .child(button::glyph(
+                    if disclosed {
+                        crate::icons::ALT_ARROW_UP
+                    } else {
+                        crate::icons::ALT_ARROW_DOWN
+                    },
+                    ControlSize::Sm,
+                ))
+                .child(if disclosed {
+                    "Hide command"
+                } else {
+                    "Show command"
+                })
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    if !disclosure_origin.is_current(view.state.read(cx))
+                        || !view.snapshot.as_ref().is_some_and(|snapshot| {
+                            snapshot.runs.iter().any(|run| run.id == disclosure_id)
+                        })
+                    {
+                        return;
+                    }
+                    view.expanded_command_run =
+                        if view.expanded_command_run.as_deref() == Some(disclosure_id.as_str()) {
+                            None
+                        } else {
+                            Some(disclosure_id.clone())
+                        };
+                    cx.notify();
+                })),
+            )
+            .child(
+                command_button(
+                    theme,
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    control_enabled,
+                    SharedString::from(format!("control-command-{}", run.id)),
+                    if active {
+                        format!("Stop {}", run.action.name)
+                    } else {
+                        format!("Retry {}", run.action.name)
+                    },
+                )
+                .when(cfg!(test), |el| {
+                    el.debug_selector(move || format!("qa-command-control-{control_selector}"))
+                })
+                .child(button::glyph(
+                    if active {
+                        crate::icons::STOP
+                    } else {
+                        crate::icons::RESTART
+                    },
+                    ControlSize::Sm,
+                ))
+                .child(if active { "Stop" } else { "Retry" })
+                .when(control_enabled, |el| {
+                    el.on_click(cx.listener(move |view, _, _, cx| {
+                        if !origin.is_current(view.state.read(cx)) {
+                            return;
+                        }
+                        view.execute(
+                            if active {
+                                methods::STOP_PROJECT_COMMAND
+                            } else {
+                                methods::RETRY_PROJECT_COMMAND
+                            },
+                            String::new(),
+                            id.clone(),
+                            cx,
+                        )
+                    }))
+                }),
+            );
+        let summary = div()
+            .flex_1()
+            .min_w(ui_rems(140.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap(ui_rems(6.0))
+            .child(
+                div()
+                    .min_w_0()
+                    .type_style(TextStyle::Footnote)
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .child(SharedString::from(format!(
+                        "{}{}",
+                        if run.setup { "Setup: " } else { "" },
+                        run.action.name
+                    ))),
+            )
+            .child(status_badge(theme, run.status))
+            .child(
+                div()
+                    .type_style(TextStyle::Caption)
+                    .text_color(theme.readable_muted(0.8))
+                    .child(SharedString::from(format!("Attempt {}", run.attempt))),
+            );
+        let mut row = div().w_full().flex().flex_col().gap(ui_rems(4.0)).child(
+            div()
+                .w_full()
+                .min_h(ui_rems(28.0))
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .items_center()
+                .gap(ui_rems(8.0))
+                .child(summary)
+                .child(controls),
+        );
+        if disclosed {
+            let mut command_lines = code_text(theme, cx).flex().flex_col();
+            for line in run.action.command.split('\n') {
+                command_lines = command_lines.child(div().whitespace_nowrap().child(
+                    SharedString::from(if line.is_empty() {
+                        " ".to_string()
+                    } else {
+                        line.to_string()
+                    }),
+                ));
+            }
+            row = row.child(
+                div()
+                    .min_w_0()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.code_wash)
+                    .px(ui_rems(10.0))
+                    .py(ui_rems(8.0))
+                    .gap(ui_rems(4.0))
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .type_style(TextStyle::Caption)
+                            .text_color(theme.readable_muted(0.8))
+                            .child(SharedString::from(format!(
+                                "Captured for attempt {}",
+                                run.attempt
+                            ))),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("checkout-command-{}", run.id)))
+                            .when(cfg!(test), |el| {
+                                el.debug_selector(|| {
+                                    format!("qa-command-checkout-{}-{}", run.id, run.cwd)
+                                })
+                            })
+                            .min_w_0()
+                            .whitespace_normal()
+                            .type_style(TextStyle::Caption)
+                            .text_color(theme.readable_muted(0.8))
+                            .child(SharedString::from(format!("Checkout: {}", run.cwd))),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("captured-command-{}", run.id)))
+                            .when(cfg!(test), |el| {
+                                el.debug_selector(|| {
+                                    format!("qa-command-captured-{}-{}", run.id, run.action.command)
+                                })
+                            })
+                            .w_full()
+                            .min_w_0()
+                            .overflow_x_scroll()
+                            .child(command_lines),
+                    ),
+            );
+        }
+        if let Some(detail) = run.detail {
+            row = row.child(widgets::row_description(theme, detail));
+        }
+        row
+    }
 }
 impl Render for ProjectCommandPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -558,18 +1155,31 @@ impl Render for ProjectCommandPanel {
             .flex_none()
             .flex()
             .flex_col()
-            .px(px(12.0))
-            .py(px(4.0))
-            .gap(px(4.0))
+            .px(ui_rems(12.0))
+            .py(ui_rems(4.0))
+            .gap(ui_rems(4.0))
             .border_b_1()
             .border_color(theme.border)
             .child(
-                command_action(&theme, true, "toggle-project-commands")
-                    .child(if self.expanded {
-                        "▾ Commands"
-                    } else {
-                        "▸ Commands"
-                    })
+                div().flex().flex_row().child(
+                    command_button(
+                        &theme,
+                        ButtonKind::Ghost,
+                        ControlSize::Sm,
+                        true,
+                        "toggle-project-commands",
+                        "Commands",
+                    )
+                    .aria_expanded(self.expanded)
+                    .child(button::glyph(
+                        if self.expanded {
+                            crate::icons::ALT_ARROW_DOWN
+                        } else {
+                            crate::icons::ALT_ARROW_RIGHT
+                        },
+                        ControlSize::Sm,
+                    ))
+                    .child("Commands")
                     .on_click(cx.listener(|view, _, _, cx| {
                         view.expanded = !view.expanded;
                         if view.expanded {
@@ -577,276 +1187,53 @@ impl Render for ProjectCommandPanel {
                         }
                         cx.notify();
                     })),
+                ),
             );
         if !self.expanded {
             return panel.into_any_element();
         }
         let mut rows = div()
             .id("project-command-list")
-            .max_h(px(180.0))
+            .max_h(ui_rems(180.0))
             .overflow_y_scroll()
             .flex()
             .flex_col()
-            .gap(px(4.0));
+            .gap(ui_rems(4.0))
+            .pb(ui_rems(4.0));
         if let Some(snapshot) = self.snapshot.clone() {
+            // User data that may be long: it wraps rather than truncating.
             rows = rows.child(
                 div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .child(SharedString::from(snapshot.cwd)),
+                    .min_w_0()
+                    .flex()
+                    .flex_row()
+                    .items_start()
+                    .gap(ui_rems(6.0))
+                    .type_style(TextStyle::Caption)
+                    .text_color(theme.readable_muted(0.8))
+                    .child(
+                        div().flex_none().mt(ui_rems(1.0)).child(
+                            button::glyph(crate::icons::FOLDER, ControlSize::Sm)
+                                .text_color(theme.readable_muted(0.8)),
+                        ),
+                    )
+                    .child(div().min_w_0().child(SharedString::from(snapshot.cwd))),
             );
             if snapshot.actions.is_empty() {
-                rows = rows.child(widgets::page_subtitle(
+                rows = rows.child(widgets::row_description(
                     &theme,
-                    "Add saved commands in Settings → Projects.",
+                    "No saved commands. Add them in Settings → Projects.",
                 ));
             }
             for action in snapshot.actions {
-                let action_id = action.id.clone();
-                let origin = self.scope.clone();
-                let mut row = div().flex().items_center().gap(px(8.0)).child(
-                    command_action(
-                        &theme,
-                        !self.busy,
-                        SharedString::from(format!("run-command-{}", action.id)),
-                    )
-                    .when(cfg!(test), |el| {
-                        el.debug_selector(|| format!("qa-command-run-{}", action.id))
-                    })
-                    .child(SharedString::from(action.name))
-                    .when(!self.busy, |el| {
-                        el.on_click(cx.listener(move |view, _, _, cx| {
-                            if !origin.is_current(view.state.read(cx)) {
-                                return;
-                            }
-                            view.execute(
-                                methods::RUN_PROJECT_COMMAND,
-                                action_id.clone(),
-                                String::new(),
-                                cx,
-                            )
-                        }))
-                    }),
-                );
-                if let Some(url) = action.preview_url {
-                    row = row.child(
-                        command_action(
-                            &theme,
-                            true,
-                            SharedString::from(format!("preview-command-{}", action.id)),
-                        )
-                        .child("Preview")
-                        .on_click(move |_, window, cx| {
-                            window.dispatch_action(Box::new(OpenCommandPreview(url.clone())), cx)
-                        }),
-                    );
-                }
-                rows = rows.child(row);
+                rows = rows.child(self.action_row(action, &theme, cx));
             }
             for run in snapshot.runs.into_iter().take(12) {
-                let id = run.id.clone();
-                let origin = self.scope.clone();
-                let active = run.status.is_active();
-                let disclosed = self.expanded_command_run.as_deref() == Some(run.id.as_str());
-                let disclosure_id = run.id.clone();
-                let disclosure_origin = self.scope.clone();
-                let accent = theme.accent;
-                let mut row = div().flex().flex_col().gap(px(2.0)).child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(theme.text_muted)
-                                .child(SharedString::from(format!(
-                                    "{}{} · {} · attempt {}",
-                                    if run.setup { "Setup: " } else { "" },
-                                    run.action.name,
-                                    run.status.label(),
-                                    run.attempt
-                                ))),
-                        )
-                        .child(
-                            command_action(
-                                &theme,
-                                true,
-                                SharedString::from(format!("disclose-command-{}", run.id)),
-                            )
-                            .role(gpui::Role::Button)
-                            .aria_label(if disclosed {
-                                "Hide captured command"
-                            } else {
-                                "Show captured command"
-                            })
-                            .tab_index(0)
-                            .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                            .when(cfg!(test), |el| {
-                                el.debug_selector(|| format!("qa-command-disclose-{}", run.id))
-                            })
-                            .child(if disclosed {
-                                "Hide command"
-                            } else {
-                                "Show command"
-                            })
-                            .on_click(cx.listener(
-                                move |view, _, _, cx| {
-                                    if !disclosure_origin.is_current(view.state.read(cx))
-                                        || !view.snapshot.as_ref().is_some_and(|snapshot| {
-                                            snapshot.runs.iter().any(|run| run.id == disclosure_id)
-                                        })
-                                    {
-                                        return;
-                                    }
-                                    view.expanded_command_run =
-                                        if view.expanded_command_run.as_deref()
-                                            == Some(disclosure_id.as_str())
-                                        {
-                                            None
-                                        } else {
-                                            Some(disclosure_id.clone())
-                                        };
-                                    cx.notify();
-                                },
-                            )),
-                        )
-                        .child(
-                            command_action(
-                                &theme,
-                                !self.busy || (active && !self.write_pending),
-                                SharedString::from(format!("control-command-{}", run.id)),
-                            )
-                            .when(cfg!(test), |el| {
-                                el.debug_selector(|| format!("qa-command-control-{}", run.id))
-                            })
-                            .child(if active { "Stop" } else { "Retry" })
-                            .when(
-                                !self.busy || (active && !self.write_pending),
-                                |el| {
-                                    el.on_click(cx.listener(move |view, _, _, cx| {
-                                        if !origin.is_current(view.state.read(cx)) {
-                                            return;
-                                        }
-                                        view.execute(
-                                            if active {
-                                                methods::STOP_PROJECT_COMMAND
-                                            } else {
-                                                methods::RETRY_PROJECT_COMMAND
-                                            },
-                                            String::new(),
-                                            id.clone(),
-                                            cx,
-                                        )
-                                    }))
-                                },
-                            ),
-                        ),
-                );
-                if disclosed {
-                    let mut command_lines = div()
-                        .flex()
-                        .flex_col()
-                        .font_family(theme.font_mono.clone())
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.code_text);
-                    for line in run.action.command.split('\n') {
-                        command_lines = command_lines.child(div().whitespace_nowrap().child(
-                            SharedString::from(if line.is_empty() {
-                                " ".to_string()
-                            } else {
-                                line.to_string()
-                            }),
-                        ));
-                    }
-                    row = row.child(
-                        div()
-                            .min_w_0()
-                            .rounded_md()
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.code_wash)
-                            .p(px(8.0))
-                            .gap(px(4.0))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
-                                    .child(SharedString::from(format!(
-                                        "Captured for attempt {}",
-                                        run.attempt
-                                    ))),
-                            )
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("checkout-command-{}", run.id)))
-                                    .when(cfg!(test), |el| {
-                                        el.debug_selector(|| {
-                                            format!("qa-command-checkout-{}-{}", run.id, run.cwd)
-                                        })
-                                    })
-                                    .min_w_0()
-                                    .whitespace_normal()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
-                                    .child(SharedString::from(format!("Checkout: {}", run.cwd))),
-                            )
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("captured-command-{}", run.id)))
-                                    .when(cfg!(test), |el| {
-                                        el.debug_selector(|| {
-                                            format!(
-                                                "qa-command-captured-{}-{}",
-                                                run.id, run.action.command
-                                            )
-                                        })
-                                    })
-                                    .w_full()
-                                    .min_w_0()
-                                    .overflow_x_scroll()
-                                    .child(command_lines),
-                            ),
-                    );
-                }
-                if let Some(id) = run.terminal_id {
-                    let chat = run.chat_id;
-                    let scope = self.scope.clone();
-                    row = row.child(
-                        command_action(
-                            &theme,
-                            true,
-                            SharedString::from(format!("output-command-{}", run.id)),
-                        )
-                        .child(if self.scope.chat.as_deref() == Some(chat.as_str()) {
-                            "Output"
-                        } else {
-                            "Output in original task"
-                        })
-                        .on_click(cx.listener(move |view, _, _, cx| {
-                            if scope.is_current(view.state.read(cx)) {
-                                cx.emit(ProjectCommandEvent::Output {
-                                    scope: scope.clone(),
-                                    chat_id: chat.clone(),
-                                    terminal_id: id.clone(),
-                                });
-                            }
-                        })),
-                    );
-                }
-                if let Some(detail) = run.detail {
-                    row = row.child(widgets::page_subtitle(&theme, detail));
-                }
-                rows = rows.child(row);
+                rows = rows.child(self.run_row(run, &theme, cx));
             }
         }
         if let Some(error) = &self.error {
-            rows = rows.child(widgets::error_strip(&theme, error.clone()));
+            rows = rows.child(widgets::error_strip(&theme, error.clone()).mt(ui_rems(4.0)));
         }
         panel = panel.child(rows);
         panel.into_any_element()
