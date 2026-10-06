@@ -425,7 +425,7 @@ pub(super) fn sidebar_disclosure_header(
         .flex_row()
         .items_center()
         .gap(px(8.0))
-        .h(px(SIDEBAR_DISCLOSURE_HEADER_HEIGHT))
+        .h(px(SIDEBAR_DISCLOSURE_HEADER_HEIGHT * theme.ui_scale()))
         .px(px(Theme::SPACE_SM))
         .rounded(px(crate::theme::radius::SM))
         .cursor_pointer()
@@ -1857,7 +1857,7 @@ impl Shell {
                     .sidebar_show_harness
                     .then(|| chat.config.as_ref().map(|c| c.harness))
                     .flatten();
-                let height = super::chat_row_height(branch.is_some(), change_request.is_some());
+                let height = super::chat_row_height(theme.ui_scale());
                 // Only rows a jump slot can reach wear a chip; row 10 onward
                 // keeps its time-ago.
                 let jump_label: Option<SharedString> = if jump_hints {
@@ -1985,7 +1985,7 @@ impl Shell {
             let motion_key = format!("group:{collapse_key}");
             let collapsed = self.sidebar_collapsed_groups.contains(&collapse_key);
             let row_count = rendered_rows.len();
-            let body_height = SIDEBAR_DISCLOSURE_BODY_INSET
+            let body_height = SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()
                 + rendered_rows
                     .iter()
                     .map(|(_, height, _)| *height)
@@ -1995,7 +1995,7 @@ impl Shell {
                 .w_full()
                 .flex()
                 .flex_col()
-                .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET))
+                .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
                 .gap(px(SIDEBAR_LIST_GAP))
                 .children(rendered_rows.into_iter().map(|(_, _, row)| row));
             let visible_label: SharedString = if collapsed {
@@ -2032,13 +2032,13 @@ impl Shell {
                 body_height,
                 body.into_any_element(),
             );
-            let height =
-                SIDEBAR_DISCLOSURE_SECTION_HEIGHT + if collapsed { 0.0 } else { body_height };
+            let height = SIDEBAR_DISCLOSURE_SECTION_HEIGHT * theme.ui_scale()
+                + if collapsed { 0.0 } else { body_height };
             let element = div()
                 .w_full()
                 .flex()
                 .flex_col()
-                .pt(px(SIDEBAR_SECTION_GAP))
+                .pt(px(SIDEBAR_SECTION_GAP * theme.ui_scale()))
                 .child(header)
                 .child(body)
                 .into_any_element();
@@ -2046,12 +2046,16 @@ impl Shell {
             if key == "__luna_pinned__" && has_unpinned_rows && !collapsed {
                 let divider = div()
                     .w_full()
-                    .pt(px(8.0))
-                    .pb(px(8.0))
+                    .pt(px(8.0 * theme.ui_scale()))
+                    .pb(px(8.0 * theme.ui_scale()))
                     .px(px(Theme::SPACE_SM))
                     .child(sidebar_separator(theme))
                     .into_any_element();
-                rendered.push(("divider:pinned".into(), 17.0, divider));
+                rendered.push((
+                    "divider:pinned".into(),
+                    16.0 * theme.ui_scale() + 1.0,
+                    divider,
+                ));
             }
         }
         self.sidebar_drag_rows = drag_rows;
@@ -2059,8 +2063,8 @@ impl Shell {
             let remaining = self.sidebar_hidden_active_count.min(ACTIVE_PAGE);
             let more = div()
                 .id("active-more")
-                .mt(px(SIDEBAR_SECTION_GAP))
-                .h(px(36.0))
+                .mt(px(SIDEBAR_SECTION_GAP * theme.ui_scale()))
+                .h(px(36.0 * theme.ui_scale()))
                 .px(px(Theme::SPACE_SM))
                 .flex()
                 .flex_row()
@@ -2085,7 +2089,11 @@ impl Shell {
                 .child(icon(icons::PLUS).size(px(14.0)))
                 .child(SharedString::from(format!("Show {remaining} more")))
                 .into_any_element();
-            rendered.push(("more:active".into(), 36.0 + SIDEBAR_SECTION_GAP, more));
+            rendered.push((
+                "more:active".into(),
+                (36.0 + SIDEBAR_SECTION_GAP) * theme.ui_scale(),
+                more,
+            ));
         }
         rendered
     }
@@ -2148,11 +2156,14 @@ impl Shell {
         let shown = self.settled_shown.max(SETTLED_INITIAL);
         let visible_count = total.min(shown);
         let has_more = total > shown;
-        let body_height = SIDEBAR_DISCLOSURE_BODY_INSET
-            + visible_count as f32 * 36.0
+        // Shelf rows are 36 pt at the default Interface size and scale with
+        // it; the collapse motion's height must match what renders.
+        let scale = theme.ui_scale();
+        let body_height = SIDEBAR_DISCLOSURE_BODY_INSET * scale
+            + visible_count as f32 * 36.0 * scale
             + visible_count.saturating_sub(1) as f32 * SIDEBAR_LIST_GAP
             + if has_more {
-                36.0 + SIDEBAR_LIST_GAP
+                36.0 * scale + SIDEBAR_LIST_GAP
             } else {
                 0.0
             };
@@ -2182,7 +2193,7 @@ impl Shell {
         let mut list = div()
             .flex()
             .flex_col()
-            .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET))
+            .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
             .gap(px(SIDEBAR_LIST_GAP));
         let parents = self.shelf_parent_titles(rows.iter().take(shown), cx);
         for chat in rows.into_iter().take(shown) {
@@ -2225,15 +2236,15 @@ impl Shell {
                     }),
                 )
             };
-            let tooltip_height = details.estimated_height();
+            let tooltip_height = details.estimated_height(theme.ui_scale());
             list = list.child(
                 div()
                     .id(SharedString::from(format!("settled-{id}")))
-                    .h(px(36.0))
+                    .h(px(36.0 * theme.ui_scale()))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(SIDEBAR_MARK_GAP))
+                    .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
                     .px(px(Theme::SPACE_SM))
                     .rounded(px(8.0))
                     .cursor_pointer()
@@ -2279,14 +2290,16 @@ impl Shell {
                     // the same column as active and archived ones.
                     .child(
                         div()
-                            .w(px(SIDEBAR_MARK_SLOT))
+                            .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
                             .flex_none()
                             .flex()
                             .justify_center()
                             .when_some(settled_brand, |el, (mark, tint)| {
                                 el.child(
                                     crate::icons::icon(mark)
-                                        .size(px(SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE))
+                                        .size(crate::typography::ui_rems(
+                                            SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE,
+                                        ))
                                         .flex_none()
                                         .text_color(tint.unwrap_or(theme.text_muted).opacity(0.7)),
                                 )
@@ -2321,7 +2334,7 @@ impl Shell {
                 div()
                     .id("settled-more")
                     .mt(px(SIDEBAR_LIST_GAP))
-                    .h(px(36.0))
+                    .h(px(36.0 * theme.ui_scale()))
                     .px(px(Theme::SPACE_SM))
                     .flex()
                     .flex_row()
@@ -2356,7 +2369,7 @@ impl Shell {
                 .w_full()
                 .flex()
                 .flex_col()
-                .pt(px(SIDEBAR_SECTION_GAP))
+                .pt(px(SIDEBAR_SECTION_GAP * theme.ui_scale()))
                 .child(header)
                 .child(body)
                 .into_any_element(),
@@ -2416,11 +2429,14 @@ impl Shell {
         let shown = self.archived_shown.max(INITIAL);
         let visible_count = total.min(shown);
         let has_more = total > shown;
-        let body_height = SIDEBAR_DISCLOSURE_BODY_INSET
-            + visible_count as f32 * 36.0
+        // Shelf rows are 36 pt at the default Interface size and scale with
+        // it; the collapse motion's height must match what renders.
+        let scale = theme.ui_scale();
+        let body_height = SIDEBAR_DISCLOSURE_BODY_INSET * scale
+            + visible_count as f32 * 36.0 * scale
             + visible_count.saturating_sub(1) as f32 * SIDEBAR_LIST_GAP
             + if has_more {
-                36.0 + SIDEBAR_LIST_GAP
+                36.0 * scale + SIDEBAR_LIST_GAP
             } else {
                 0.0
             };
@@ -2452,7 +2468,7 @@ impl Shell {
             let mut list = div()
                 .flex()
                 .flex_col()
-                .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET))
+                .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
                 .gap(px(SIDEBAR_LIST_GAP));
             let parents = self.shelf_parent_titles(rows.iter().take(shown), cx);
             for chat in rows.into_iter().take(shown) {
@@ -2543,15 +2559,15 @@ impl Shell {
                 let open_id = id.clone();
                 let menu_id = id.clone();
                 let fade_key: SharedString = format!("archived-{id}").into();
-                let tooltip_height = details.estimated_height();
+                let tooltip_height = details.estimated_height(theme.ui_scale());
                 list = list.child(
                     div()
                         .id(SharedString::from(format!("archived-{id}")))
-                        .h(px(36.0))
+                        .h(px(36.0 * theme.ui_scale()))
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(SIDEBAR_MARK_GAP))
+                        .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
                         .px(px(Theme::SPACE_SM))
                         .rounded(px(8.0))
                         .cursor_pointer()
@@ -2614,14 +2630,16 @@ impl Shell {
                         // shares one title column (audit SH-14).
                         .child(
                             div()
-                                .w(px(SIDEBAR_MARK_SLOT))
+                                .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
                                 .flex_none()
                                 .flex()
                                 .justify_center()
                                 .when_some(brand, |el, (mark, tint)| {
                                     el.child(
                                         crate::icons::icon(mark)
-                                            .size(px(SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE))
+                                            .size(crate::typography::ui_rems(
+                                                SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE,
+                                            ))
                                             .flex_none()
                                             .text_color(if hovered || is_selected {
                                                 tint.unwrap_or(theme.text_muted)
@@ -2664,7 +2682,7 @@ impl Shell {
                         // Sits outside the rows' gapped column — match the
                         // list's 2px row gap or it fuses with the last row.
                         .mt(px(2.0))
-                        .h(px(36.0))
+                        .h(px(36.0 * theme.ui_scale()))
                         .flex()
                         .flex_row()
                         .items_center()
@@ -2695,7 +2713,9 @@ impl Shell {
             body.into_any_element()
         };
         let body = self.render_sidebar_disclosure_body("archived", open, body_height, body);
-        let section = section.pt(px(SIDEBAR_SECTION_GAP)).child(body);
+        let section = section
+            .pt(px(SIDEBAR_SECTION_GAP * theme.ui_scale()))
+            .child(body);
         Some(section.into_any_element())
     }
 

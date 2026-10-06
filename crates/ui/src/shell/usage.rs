@@ -3237,7 +3237,7 @@ impl Shell {
             .role(gpui::Role::Button)
             .aria_label("Toggle usage")
             .aria_expanded(open)
-            .size(px(super::SIDEBAR_FOOTER_BUTTON))
+            .size(crate::typography::ui_rems(super::SIDEBAR_FOOTER_BUTTON))
             .track_focus(&self.usage_action_focus)
             .cursor_pointer()
             .rounded(px(crate::surface_chrome::RADIUS_L))
@@ -3263,7 +3263,7 @@ impl Shell {
             .on_key_down(crate::swallow_activation_key)
             .child(
                 icon(icons::CHART)
-                    .size(px(super::SIDEBAR_FOOTER_ICON))
+                    .size(crate::typography::ui_rems(super::SIDEBAR_FOOTER_ICON))
                     .text_color(if open { theme.text } else { theme.text_muted }),
             );
         action.into_any_element()

@@ -829,8 +829,10 @@ fn sidebar_key_order_changed(old: &[(String, f32)], new: &[(String, f32)]) -> bo
 /// branch or pull request: a title line and one meta line on the 8 pt rhythm
 /// (audit SH-13). Keep this value shared by the renderer and sidebar reorder
 /// geometry.
-pub(super) fn chat_row_height(_shows_branch: bool, _shows_pull_request: bool) -> f32 {
-    52.0
+pub(super) fn chat_row_height(ui_scale: f32) -> f32 {
+    // 52 pt at the default Interface size; it scales with Interface size so
+    // the reorder (FLIP) geometry always matches the rows that render.
+    52.0 * ui_scale
 }
 /// Keep adjacent task hitboxes contiguous so vertical pointer movement never
 /// crosses an arrow-cursor strip between clickable rows.
@@ -1094,7 +1096,7 @@ impl Render for SidebarChatGhost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         let card = div()
-            .h(px(chat_row_height(false, false)))
+            .h(px(chat_row_height(theme.ui_scale())))
             .w(px(self.width))
             .px(px(Theme::SPACE_SM))
             .flex()
@@ -1112,10 +1114,10 @@ impl Render for SidebarChatGhost {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(SIDEBAR_MARK_GAP))
+                    .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
                     .child(
                         div()
-                            .w(px(SIDEBAR_MARK_SLOT))
+                            .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
                             .flex_none()
                             .flex()
                             .justify_center()
@@ -1124,7 +1126,9 @@ impl Render for SidebarChatGhost {
                                 |el, (path, tint)| {
                                     el.child(
                                         icon(path)
-                                            .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
+                                            .size(crate::typography::ui_rems(
+                                                SIDEBAR_ACTIVE_HARNESS_ICON_SIZE,
+                                            ))
                                             .flex_none()
                                             .text_color(tint.unwrap_or(theme.text_muted)),
                                     )
@@ -1144,7 +1148,9 @@ impl Render for SidebarChatGhost {
             )
             .child(
                 div()
-                    .pl(px(SIDEBAR_MARK_SLOT + SIDEBAR_MARK_GAP))
+                    .pl(crate::typography::ui_rems(
+                        SIDEBAR_MARK_SLOT + SIDEBAR_MARK_GAP,
+                    ))
                     .truncate()
                     .text_size(crate::typography::ui_rems(11.0))
                     .line_height(crate::typography::ui_rems(14.0))
@@ -1170,23 +1176,25 @@ pub(super) struct SidebarThreadTooltip {
 }
 
 impl SidebarThreadTooltip {
-    fn estimated_height(&self) -> f32 {
+    /// The card's height for anchor clamping; it scales with Interface size
+    /// like the card itself.
+    fn estimated_height(&self, ui_scale: f32) -> f32 {
         let rows = 2
             + usize::from(self.model.is_some())
             + usize::from(self.branch.is_some())
             + usize::from(self.status.is_some());
-        56.0 + rows as f32 * 25.0
+        (56.0 + rows as f32 * 25.0) * ui_scale
     }
 
     fn detail(theme: &Theme, glyph: &'static str, label: SharedString) -> gpui::Div {
         div()
             .flex()
             .items_center()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .min_w_0()
             .child(
                 icon(glyph)
-                    .size(px(13.0))
+                    .size(crate::typography::ui_rems(13.0))
                     .flex_none()
                     .text_color(theme.text_muted),
             )
@@ -1197,18 +1205,21 @@ impl SidebarThreadTooltip {
 impl Render for SidebarThreadTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
+        // Tooltips render outside the window's element tree, so the card sets
+        // the Interface font itself; every size follows Interface size.
         let card = div()
-            .w(px(244.0))
-            .px(px(12.0))
-            .py(px(11.0))
+            .w(crate::typography::ui_rems(244.0))
+            .px(crate::typography::ui_rems(12.0))
+            .py(crate::typography::ui_rems(11.0))
             .flex()
             .flex_col()
-            .gap(px(7.0))
+            .gap(crate::typography::ui_rems(7.0))
             .rounded(px(9.0))
             .border_1()
             .border_color(theme.border_strong)
             .bg(theme.tooltip_surface())
-            .shadow_md()
+            .shadow(crate::theme::tooltip_shadows())
+            .font_family(theme.font_sans.clone())
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .child(
@@ -9019,7 +9030,7 @@ impl Shell {
                 None
             };
             div()
-                .w(px(SIDEBAR_MARK_SLOT))
+                .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
                 .h(px(14.0))
                 .flex_none()
                 .flex()
@@ -9132,10 +9143,7 @@ impl Shell {
         let hover_progress = motion::hover_t_or(&fade_key, if corner_hovered { 1.0 } else { 0.0 });
         div()
             .id(SharedString::from(row_id.clone()))
-            .h(px(chat_row_height(
-                branch.is_some(),
-                change_request.is_some(),
-            )))
+            .h(px(chat_row_height(theme.ui_scale())))
             .flex()
             .flex_col()
             .justify_center()
@@ -9216,7 +9224,7 @@ impl Shell {
                 },
             )
             .when_some(details, |row, details| {
-                let height = details.estimated_height();
+                let height = details.estimated_height(theme.ui_scale());
                 // Exclude the actual control cluster, not the full status
                 // reservation: an empty gap before Pin still belongs to the
                 // thread's detail-hover region.
@@ -9243,11 +9251,11 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(SIDEBAR_MARK_GAP))
+                    .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
                     // Harness identity belongs directly with the title.
                     .child(
                         div()
-                            .w(px(SIDEBAR_MARK_SLOT))
+                            .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -9257,7 +9265,9 @@ impl Shell {
                                 |el, (path, tint)| {
                                     el.child(
                                         icon(path)
-                                            .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
+                                            .size(crate::typography::ui_rems(
+                                                SIDEBAR_ACTIVE_HARNESS_ICON_SIZE,
+                                            ))
                                             .flex_none()
                                             .text_color(if theme.appearance.is_light() {
                                                 theme.text_muted
@@ -9323,7 +9333,7 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(SIDEBAR_MARK_GAP))
+                    .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
                     .child(status_slot)
                     .child(
                         div()
@@ -9934,7 +9944,7 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label("Open settings")
                             // One footer button recipe (audit SH-11).
-                            .size(px(SIDEBAR_FOOTER_BUTTON))
+                            .size(crate::typography::ui_rems(SIDEBAR_FOOTER_BUTTON))
                             .rounded(px(crate::surface_chrome::RADIUS_L))
                             .cursor_pointer()
                             .hover_wash("sidebar-settings-action")
@@ -9953,7 +9963,7 @@ impl Shell {
                             }))
                             .child(
                                 icon(icons::SETTINGS_GEAR)
-                                    .size(px(SIDEBAR_FOOTER_ICON))
+                                    .size(crate::typography::ui_rems(SIDEBAR_FOOTER_ICON))
                                     .text_color(theme.text_muted),
                             ),
                     )
@@ -9963,7 +9973,7 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label("Open devices")
                             // One footer button recipe (audit SH-11).
-                            .size(px(SIDEBAR_FOOTER_BUTTON))
+                            .size(crate::typography::ui_rems(SIDEBAR_FOOTER_BUTTON))
                             .rounded(px(crate::surface_chrome::RADIUS_L))
                             .cursor_pointer()
                             .hover_wash("sidebar-devices-action")
@@ -9982,7 +9992,7 @@ impl Shell {
                             }))
                             .child(
                                 icon(icons::SMARTPHONE)
-                                    .size(px(SIDEBAR_FOOTER_ICON))
+                                    .size(crate::typography::ui_rems(SIDEBAR_FOOTER_ICON))
                                     .text_color(theme.text_muted),
                             ),
                     )
@@ -16918,10 +16928,10 @@ mod tests {
 
     #[test]
     fn sidebar_chat_height_is_uniform() {
-        assert_eq!(chat_row_height(false, false), 52.0);
-        assert_eq!(chat_row_height(true, false), 52.0);
-        assert_eq!(chat_row_height(false, true), 52.0);
-        assert_eq!(chat_row_height(true, true), 52.0);
+        // Uniform for every row kind; 52 pt at the default Interface size,
+        // scaling with it.
+        assert_eq!(chat_row_height(1.0), 52.0);
+        assert_eq!(chat_row_height(1.25), 65.0);
     }
 
     #[test]
