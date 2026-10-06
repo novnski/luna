@@ -3,7 +3,9 @@
 //! turn fence and the durable backend. The deterministic fake CLI
 //! (`harness/tests/fixtures/fake-claude-luna.py`) is the MCP client, as the
 //! real 2.1.286 CLI is. Built-in reads, create_thread and same-project messages
-//! complete without an extra approval; a cross-project send is refused.
+//! complete without an extra approval; a cross-project send is refused. The
+//! resumed run calls the remaining LUNA tools (workspace, models, wait, archive,
+//! automations), so every tool Codex exercises is also proven on Claude.
 
 #![cfg(unix)]
 
@@ -355,14 +357,26 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
     // archived with closeTabs:true and no layout revision, retried verbatim.
     let archive = serde_json::json!({"action": "archiveThreads", "taskIds": [child],
         "closeTabs": true, "idempotencyKey": "claude-archive-no-revision"});
+    let in_an_hour = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
+        + 3_600_000;
+    let reminder = serde_json::json!({"automationId": "claude-e2e-reminder", "expectedRevision": 0,
+        "idempotencyKey": "claude-automation-1", "operation": {"kind": "save", "definition": {
+            "name": "Claude E2E reminder", "prompt": "Check the build", "timezone": "UTC",
+            "target": {"kind": "existing", "taskId": source},
+            "trigger": {"kind": "once", "atMs": in_an_hour}, "maxLatenessMs": 300000}}});
     std::fs::write(
         project_a.join(".luna-claude-plan-run2.json"),
         serde_json::to_vec(&serde_json::json!([
             {"tool": "luna_status", "arguments": {}},
             {"tool": "get_workspace", "arguments": {}},
             {"tool": "list_child_models", "arguments": {"query": "astra"}},
+            {"tool": "wait_threads", "arguments": {"targets": [{"taskId": child}], "timeoutMs": 1000}},
             {"tool": "manage_workspace", "arguments": archive},
             {"tool": "manage_workspace", "arguments": archive},
+            {"tool": "automation_update", "arguments": reminder},
             {"tool": "list_automations", "arguments": {}},
         ]))
         .unwrap(),
@@ -377,6 +391,35 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
         )
         .await
         .unwrap();
+    // This chat is in Ask mode, so only the automation asks; answer it.
+    let (cards, status) = tokio::time::timeout(Duration::from_secs(60), async {
+        let mut cards = Vec::new();
+        loop {
+            match events.recv().await.unwrap().event {
+                AgentEvent::InputRequested {
+                    request_id,
+                    questions,
+                } => {
+                    cards.push(questions);
+                    core.sessions.respond_luna_local_ui_approval(
+                        &source,
+                        &request_id,
+                        luna_proto::ApprovalDecision::AllowOnce,
+                    );
+                }
+                AgentEvent::Done { status, .. } => break (cards, status),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("Claude run 2 settled");
+    assert_eq!(status, DoneStatus::Completed);
+    assert_eq!(
+        cards.len(),
+        1,
+        "only the Ask-mode automation asks: {cards:#?}"
+    );
     let run2 = read_results(&project_a, "run2").await;
     if let Ok(dir) = std::env::var("CC07_EVIDENCE_DIR") {
         let _ = std::fs::write(
@@ -408,6 +451,8 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
     assert_eq!(models["provider"], "claude-code");
     let (failed, text) = step(&run2, 3);
     assert!(!failed, "{text}");
+    let (failed, text) = step(&run2, 4);
+    assert!(!failed, "{text}");
     let archived: serde_json::Value = serde_json::from_str(text).unwrap();
     assert_eq!(archived["allArchived"], true, "{archived:#}");
     assert!(archived["layout"]["error"].is_null(), "{archived:#}");
@@ -415,14 +460,16 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
     let layout: luna_proto::ChatWorkbenchSnapshot =
         serde_json::from_value(archived["layout"]["snapshot"].clone()).unwrap();
     assert!(!layout.contains_chat(&child));
-    let (failed, text) = step(&run2, 4);
+    let (failed, text) = step(&run2, 5);
     assert!(!failed, "exact retry replays: {text}");
     let replayed: serde_json::Value = serde_json::from_str(text).unwrap();
     assert_eq!(
         replayed["layout"]["snapshot"],
         archived["layout"]["snapshot"]
     );
-    let (failed, text) = step(&run2, 5);
+    let (failed, text) = step(&run2, 6);
     assert!(!failed, "{text}");
+    let (failed, text) = step(&run2, 7);
+    assert!(!failed && text.contains("claude-e2e-reminder"), "{text}");
     core.shutdown().await;
 }
