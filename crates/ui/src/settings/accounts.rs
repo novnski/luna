@@ -1,12 +1,21 @@
-//! Settings → Providers: per-device CLI enablement and provider-owned accounts.
-//! Claude Code and Codex have account rows — email, plan badge, Active, usage
-//! meters (indigo → amber ≥80% → red ≥95%, reset time), lifecycle controls — plus
-//! the add-account dialogs (paste-code and browser-poll flows) and
-//! account-shaped loading skeletons. Luna retargets devices from the settings
-//! sidebar (`targetDeviceId` passthrough kept plumbed, unused single-device).
+//! Settings → Providers: per-device CLI enablement, provider-owned accounts
+//! and each provider's defaults for new chats.
 //!
-//! The accounts RPC surface is being implemented engine-side in parallel —
-//! every call here surfaces failures as inline UI states.
+//! Layout (design spec `docs/design/settings-polish-2026-10-06/spec.md` §8):
+//! a title bar with the device picker and Refresh; a "New chats" section
+//! (which provider a new chat starts with); then one card per provider whose
+//! header carries the brand mark, name, CLI version, Update, Sign in and the
+//! enable switch, and whose rows are its accounts (email, plan badge, Active,
+//! usage meters — indigo → amber ≥80% → red ≥95%, reset time — and lifecycle
+//! controls) followed by its defaults ([`ProviderDefaultsPanel`]). A turned-off
+//! provider collapses to its header. "Advanced provider options" is a
+//! disclosure row below. The add-account dialogs (paste-code and browser-poll
+//! flows) open over the page.
+//!
+//! The device picker retargets every accounts RPC at another device
+//! (`targetDeviceId` passthrough); defaults stay with this device, so they
+//! show only while it is selected. Every call surfaces failures as inline
+//! strips inside the section they concern.
 
 use chrono::{DateTime, Utc};
 use gpui::{
@@ -23,14 +32,17 @@ use luna_proto::{
 };
 use luna_rpc::methods;
 
-use crate::AccessibleButton as _;
+use crate::button::{self, ButtonKind, ControlSize, Segment};
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::interaction::HoverFill as _;
+use crate::motion::{self, AnimationExt as _};
 use crate::popover::{self, Loadable};
 use crate::settings::harnesses::HarnessesPage;
+use crate::settings::provider_defaults::ProviderDefaultsPanel;
 use crate::settings::widgets;
 use crate::state::AppState;
-use crate::theme::Theme;
+use crate::theme::{FillTier, Theme};
+use crate::typography::{TextStyle, TypeStyleExt as _, ui_rems};
 
 // ---------------------------------------------------------------------------
 // Pure: usage meters + labels
@@ -144,6 +156,22 @@ pub const PROVIDERS: [(HarnessId, &str, &str); 3] = [
     (HarnessId::Opencode, "OpenCode", "opencode"),
 ];
 
+/// A stable id fragment for a provider (its CLI name).
+fn provider_key(harness: HarnessId) -> &'static str {
+    PROVIDERS
+        .iter()
+        .find(|(id, _, _)| *id == harness)
+        .map_or("provider", |(_, _, cli)| *cli)
+}
+
+/// A message shown in a strip inside the provider card it concerns, or under
+/// the page title when it concerns no single provider (`harness: None`).
+#[derive(Clone)]
+struct Notice {
+    harness: Option<HarnessId>,
+    message: SharedString,
+}
+
 /// Accounts of one provider, in the engine's order (slot creation). No
 /// active-first re-sort: switching accounts must not move the switched-to
 /// card — the Active badge already says which one is live, and a list that
@@ -208,7 +236,11 @@ impl LoginFlow {
 }
 
 pub struct AccountsPage {
-    defaults_panel: Entity<super::provider_defaults::ProviderDefaultsPanel>,
+    /// One defaults panel per provider card, in [`PROVIDERS`] order.
+    defaults_panels: Vec<Entity<ProviderDefaultsPanel>>,
+    /// The provider new chats start with (the composer's remembered pick),
+    /// reread on every visit.
+    new_chat_provider: Option<HarnessId>,
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
     /// Which device's logins are shown; `None` = this device (no passthrough).
@@ -220,14 +252,17 @@ pub struct AccountsPage {
     harnesses: Loadable<Vec<HarnessDescriptor>>,
     opencode_usage: Loadable<UsageSnapshot>,
     provider_updates: Loadable<Vec<ProviderUpdateStatus>>,
-    harness_error: Option<String>,
-    update_message: Option<String>,
+    /// A failed enable/disable, shown in that provider's card.
+    harness_error: Option<(HarnessId, String)>,
+    /// The last CLI update's outcome: provider, message, and whether it
+    /// fully succeeded (a quiet note) or needs attention (a warning strip).
+    update_message: Option<(HarnessId, String, bool)>,
     updating_provider: Option<HarnessId>,
     /// Account id with an in-flight Switch/Forget.
     busy_account: Option<String>,
     login: Option<LoginFlow>,
     rename: Option<RenameFlow>,
-    error: Option<SharedString>,
+    error: Option<Notice>,
     code_input: Entity<ComposerInput>,
     label_input: Entity<ComposerInput>,
     load_task: Option<Task<()>>,
@@ -247,9 +282,10 @@ pub struct AccountsPage {
 
 impl AccountsPage {
     pub fn refresh_on_visit(&mut self, cx: &mut Context<Self>) {
+        self.reload_new_chat_provider(cx);
+        // `load` marks every provider's defaults stale; they reread once the
+        // harness list says which cards show them.
         self.load(true, cx);
-        self.defaults_panel
-            .update(cx, |panel, cx| panel.refresh(cx));
     }
 
     pub fn provider_update_statuses(&self) -> Option<Vec<ProviderUpdateStatus>> {
@@ -350,6 +386,9 @@ impl AccountsPage {
             }],
             live_sessions: Vec::new(),
         });
+        // The defaults rows load as on a real visit once the harness list
+        // says which cards show them.
+        page.sync_defaults_panels(cx);
         page
     }
 
@@ -371,9 +410,21 @@ impl AccountsPage {
                 this.submit_rename(cx);
             }
         });
+        let defaults_panels = PROVIDERS
+            .into_iter()
+            .map(|(harness, name, cli)| {
+                let state = state.clone();
+                cx.new(|cx| ProviderDefaultsPanel::new(state, harness, name, cli, cx))
+            })
+            .collect();
+        let new_chat_provider = state
+            .read(cx)
+            .data_dir
+            .as_deref()
+            .and_then(super::provider_defaults::new_chat_provider);
         Self {
-            defaults_panel: cx
-                .new(|cx| super::provider_defaults::ProviderDefaultsPanel::new(state.clone(), cx)),
+            defaults_panels,
+            new_chat_provider,
             state,
             scroll: widgets::PageScroll::default(),
             target_device: None,
@@ -435,8 +486,76 @@ impl AccountsPage {
         self.rename = None;
         self.busy_account = None;
         self.error = None;
+        self.harness_error = None;
         self.update_message = None;
         self.load(force_usage_for(LoadTrigger::Mount), cx);
+    }
+
+    /// Whether the page shows this device (defaults and the new-chat
+    /// provider belong to it; another device's are not editable here).
+    fn targets_local_device(&self, cx: &Context<Self>) -> bool {
+        self.target_device
+            .as_deref()
+            .is_none_or(|id| self.state.read(cx).local_device_id.as_deref() == Some(id))
+    }
+
+    fn reload_new_chat_provider(&mut self, cx: &mut Context<Self>) {
+        self.new_chat_provider = self
+            .state
+            .read(cx)
+            .data_dir
+            .as_deref()
+            .and_then(super::provider_defaults::new_chat_provider);
+    }
+
+    fn set_new_chat_provider(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
+        let Some(dir) = self.state.read(cx).data_dir.clone() else {
+            return;
+        };
+        match super::provider_defaults::save_new_chat_provider(&dir, harness, cx) {
+            Ok(()) => self.new_chat_provider = Some(harness),
+            Err(error) => {
+                self.error = Some(Notice {
+                    harness: None,
+                    message: format!("The default provider could not be saved: {error}").into(),
+                });
+            }
+        }
+        cx.notify();
+    }
+
+    /// Reread every provider's catalog and saved defaults when its card next
+    /// shows them.
+    fn mark_defaults_stale(&mut self, cx: &mut Context<Self>) {
+        for panel in &self.defaults_panels {
+            panel.update(cx, |panel, _| panel.mark_stale());
+        }
+    }
+
+    /// Load the defaults of the providers whose cards show them: this device
+    /// only, and providers that are on (or whose state is unknown because the
+    /// harness list failed, so the card can still show the failure).
+    fn sync_defaults_panels(&mut self, cx: &mut Context<Self>) {
+        if !self.targets_local_device(cx) {
+            return;
+        }
+        let shown: Vec<HarnessId> = match &self.harnesses {
+            Loadable::Ready(list) => PROVIDERS
+                .iter()
+                .map(|(harness, _, _)| *harness)
+                .filter(|harness| {
+                    list.iter()
+                        .any(|d| d.id == *harness && d.installed && descriptor_enabled(d))
+                })
+                .collect(),
+            Loadable::Error(_) => PROVIDERS.iter().map(|(harness, _, _)| *harness).collect(),
+            Loadable::Idle | Loadable::Loading => return,
+        };
+        for panel in &self.defaults_panels {
+            if shown.contains(&panel.read(cx).provider()) {
+                panel.update(cx, |panel, cx| panel.ensure_loaded(cx));
+            }
+        }
     }
 
     /// Params with the `targetDeviceId` passthrough merged in.
@@ -454,9 +573,10 @@ impl AccountsPage {
         }
     }
 
-    /// The page-header device switcher (luna device-switcher.tsx): a quiet
-    /// trigger — platform glyph · name · presence dot · sort glyph — opening a
-    /// dropdown of every registered device. Selecting one retargets the page.
+    /// The title bar's device picker (luna device-switcher.tsx), on the kit's
+    /// pop-up button: platform glyph · name · this-device dot · chevron,
+    /// opening a menu of every registered device. Selecting one retargets
+    /// the page.
     fn render_device_switcher(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         use crate::icons::{self, icon};
         let (mut devices, local_id) = {
@@ -491,76 +611,57 @@ impl AccountsPage {
             .map(|d| d.name.clone().into())
             .unwrap_or_else(|| SharedString::from("This device"));
         let emerald = theme.success;
+        let idle_dot = theme.readable_muted(0.35);
         let open = self.device_menu.is_open();
-
-        let mut trigger =
+        let dot = move |on: bool| {
             div()
-                .id("accounts-device-switcher")
                 .flex_none()
-                .h(px(28.0))
-                .px(px(8.0))
-                .rounded(px(6.0))
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(6.0))
-                .cursor_pointer()
-                .hover_fill(
-                    "accounts-device-switcher",
-                    if open {
-                        theme.fill(crate::theme::FillTier::Tertiary)
-                    } else {
-                        gpui::transparent_black()
-                    },
-                    theme.fill(crate::theme::FillTier::Tertiary),
-                )
-                .on_mouse_down(
-                    gpui::MouseButton::Left,
-                    cx.listener(|this, _, _, _| this.device_menu.note_trigger_press()),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    // A press that found the menu open closes it (the card's
-                    // mouse-down-out already began the close) — never reopen.
-                    if this.device_menu.take_press_was_open() {
-                        this.close_device_menu(cx);
-                    } else {
-                        this.device_menu.open(());
-                    }
-                    cx.notify();
-                }))
-                .child(
-                    icon(trigger_glyph)
-                        .size(px(16.0))
-                        .flex_none()
-                        .text_color(theme.text_muted),
-                )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(crate::typography::ui_rems(12.5))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(trigger_label),
-                )
-                .child(div().size(px(6.0)).rounded_full().flex_none().bg(
-                    if effective == local_id {
-                        emerald
-                    } else {
-                        crate::theme::ink(0.2)
-                    },
-                ))
-                .child(
-                    icon(icons::SORT_VERTICAL)
-                        .size(px(14.0))
-                        .flex_none()
-                        .text_color(theme.readable_muted(if open { 0.9 } else { 0.4 })),
-                );
+                .size(ui_rems(6.0))
+                .rounded_full()
+                .bg(if on { emerald } else { idle_dot })
+        };
+
+        let mut trigger = button::select_frame(
+            "accounts-device-switcher",
+            ControlSize::Md,
+            open,
+            true,
+            theme,
+        )
+        .relative()
+        .max_w(ui_rems(240.0))
+        .aria_label(format!("Device: {trigger_label}"))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, _| this.device_menu.note_trigger_press()),
+        )
+        .on_click(cx.listener(|this, event: &gpui::ClickEvent, _, cx| {
+            // A press that found the menu open closes it (the card's
+            // mouse-down-out already began the close) — never reopen. A
+            // keyboard click has no press note, so it toggles.
+            if event.is_keyboard() {
+                if this.device_menu.is_open() {
+                    this.close_device_menu(cx);
+                } else {
+                    this.device_menu.open(());
+                }
+            } else if this.device_menu.take_press_was_open() {
+                this.close_device_menu(cx);
+            } else {
+                this.device_menu.open(());
+            }
+            cx.notify();
+        }))
+        .on_key_down(crate::swallow_activation_key)
+        .child(button::glyph(trigger_glyph, ControlSize::Md).text_color(theme.readable_muted(0.9)))
+        .child(div().min_w_0().truncate().child(trigger_label))
+        .child(dot(effective == local_id))
+        .child(button::select_chevron(theme));
 
         if self.device_menu.get().is_some() {
             let closing = self.device_menu.closing_since();
             let menu = popover::popover_card(theme)
-                .w(px(220.0))
+                .w(ui_rems(240.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.close_device_menu(cx);
                 }))
@@ -577,14 +678,23 @@ impl AccountsPage {
                     let pick_id = d.id.clone();
                     popover::menu_row(theme, is_active, format!("accounts-device-row-{ix}"))
                         .id(("accounts-device-row", ix))
+                        .role(gpui::Role::Button)
+                        .aria_label(name.clone())
+                        .aria_toggled(if is_active {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
+                        .tab_index(0)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             // Local device = no passthrough (calls stay direct).
                             let target = (!pick_local).then(|| pick_id.clone());
                             this.set_target_device(target, cx);
                         }))
+                        .on_key_down(crate::swallow_activation_key)
                         .child(
                             icon(glyph)
-                                .size(px(16.0))
+                                .size(ui_rems(16.0))
                                 .flex_none()
                                 .text_color(theme.text_muted),
                         )
@@ -593,25 +703,15 @@ impl AccountsPage {
                             el.child(
                                 div()
                                     .flex_none()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.readable_muted(0.35))
+                                    .type_style(TextStyle::Caption)
+                                    .text_color(theme.readable_muted(0.6))
                                     .child(SharedString::from("You")),
                             )
                         })
-                        .child(
-                            div()
-                                .size(px(6.0))
-                                .rounded_full()
-                                .flex_none()
-                                .bg(if is_local {
-                                    emerald
-                                } else {
-                                    crate::theme::ink(0.2)
-                                }),
-                        )
+                        .child(dot(is_local))
                 }))
                 .into_any_element();
-            trigger = trigger.child(popover::anchored_menu(
+            trigger = trigger.child(popover::anchored_menu_below_end(
                 "accounts-device-menu",
                 menu,
                 closing,
@@ -626,6 +726,8 @@ impl AccountsPage {
             return;
         };
         self.snapshot = Loadable::Loading;
+        // Catalogs can change with the device, a login or an account switch.
+        self.mark_defaults_stale(cx);
         self.load_harnesses(cx);
         self.load_opencode_usage(cx);
         self.load_provider_updates(force_usage, cx);
@@ -666,6 +768,7 @@ impl AccountsPage {
                         .unwrap_or_else(|error| Loadable::Error(error.to_string())),
                     Err(error) => Loadable::Error(error.to_string()),
                 };
+                page.sync_defaults_panels(cx);
                 cx.notify();
             })
             .ok();
@@ -718,10 +821,11 @@ impl AccountsPage {
                             page.harnesses = Loadable::Ready(list);
                             crate::pickers::bump_harness_catalog(cx);
                             page.load_opencode_usage(cx);
+                            page.sync_defaults_panels(cx);
                         }
-                        Err(error) => page.harness_error = Some(error.to_string()),
+                        Err(error) => page.harness_error = Some((harness, error.to_string())),
                     },
-                    Err(error) => page.harness_error = Some(error.to_string()),
+                    Err(error) => page.harness_error = Some((harness, error.to_string())),
                 }
                 cx.notify();
             })
@@ -768,17 +872,21 @@ impl AccountsPage {
             let result = engine.client().call(methods::UPDATE_PROVIDER, params).await;
             this.update(cx, |page, cx| {
                 page.updating_provider = None;
-                page.update_message = Some(match result {
+                let (message, ok) = match result {
                     Ok(value) => match serde_json::from_value::<ProviderUpdateResult>(value) {
                         Ok(updated) => {
                             crate::pickers::bump_harness_catalog(cx);
+                            // The new CLI may offer different models.
+                            page.mark_defaults_stale(cx);
                             page.load_harnesses(cx);
                             page.load_provider_updates(true, cx);
+                            let ok = updated.runtime_reload_error.is_none()
+                                && updated.model_refresh_error.is_none();
                             let runtime = updated.runtime_reload_error.map_or_else(
                                 || "Idle provider runtimes reloaded.".to_owned(),
                                 |error| format!("Runtime reload deferred: {error}"),
                             );
-                            match updated.model_refresh_error {
+                            let message = match updated.model_refresh_error {
                                 Some(error) => format!(
                                     "CLI updated to {}. {runtime} Model refresh failed: {error}",
                                     updated.installed_version
@@ -787,12 +895,14 @@ impl AccountsPage {
                                     "CLI updated to {}. {runtime} Models refreshed.",
                                     updated.installed_version
                                 ),
-                            }
+                            };
+                            (message, ok)
                         }
-                        Err(error) => error.to_string(),
+                        Err(error) => (error.to_string(), false),
                     },
-                    Err(error) => error.to_string(),
-                });
+                    Err(error) => (error.to_string(), false),
+                };
+                page.update_message = Some((harness, message, ok));
                 cx.notify();
             })
             .ok();
@@ -826,6 +936,7 @@ impl AccountsPage {
         };
         self.busy_account = Some(account.id.clone());
         self.error = None;
+        let harness = account.harness;
         // Tolerant param shape: both `id` and `accountId` plus the harness.
         let params = self.params(serde_json::json!({
             "id": account.id,
@@ -838,7 +949,12 @@ impl AccountsPage {
                 page.busy_account = None;
                 match result {
                     Ok(_) => page.load(force_usage_for(LoadTrigger::PostAction), cx),
-                    Err(err) => page.error = Some(format!("{err}").into()),
+                    Err(err) => {
+                        page.error = Some(Notice {
+                            harness: Some(harness),
+                            message: format!("{err}").into(),
+                        })
+                    }
                 }
                 cx.notify();
             })
@@ -985,7 +1101,10 @@ impl AccountsPage {
                     }
                     Err(err) => {
                         page.login = None;
-                        page.error = Some(format!("Login failed to start: {err}").into());
+                        page.error = Some(Notice {
+                            harness: Some(harness),
+                            message: format!("Login failed to start: {err}").into(),
+                        });
                     }
                 }
                 cx.notify();
@@ -1138,45 +1257,48 @@ impl AccountsPage {
 
     // ---- render pieces ----
 
-    /// One usage window (luna settings.agents.tsx `UsageMeter`): label ·
-    /// 5px rounded-full bar (indigo → amber ≥80% → red ≥95%) · "NN% used" ·
-    /// quiet reset time.
-    fn render_usage_meter(
-        &self,
-        window: &luna_proto::AgentUsageWindow,
+    /// One usage window (luna settings.agents.tsx `UsageMeter`): label · bar
+    /// (indigo → amber ≥80% → red ≥95%) · "NN% used" · quiet reset time. The
+    /// label and percentage columns hold fixed widths so stacked meters line
+    /// up.
+    fn usage_meter(
+        label: &str,
+        fraction: f32,
+        resets_at: Option<DateTime<Utc>>,
         theme: &Theme,
         now: DateTime<Utc>,
     ) -> AnyElement {
-        let fraction = window.used_fraction.clamp(0.0, 1.0);
+        let fraction = fraction.clamp(0.0, 1.0);
         let level = usage_level(fraction);
         let fill = usage_color(level, theme).opacity(match level {
             UsageLevel::Normal => 0.8,
             _ => 0.85,
         });
-        let reset = format_reset(window.resets_at, now);
+        let reset = format_reset(resets_at, now);
         div()
+            .w_full()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(8.0))
-            .text_size(crate::typography::ui_rems(11.5))
-            .text_color(theme.readable_muted(0.7))
+            .gap(ui_rems(8.0))
+            .type_style(TextStyle::Caption)
+            .text_color(theme.readable_muted(0.85))
             .child(
                 div()
-                    .w(px(48.0))
+                    .w(ui_rems(48.0))
                     .flex_none()
                     .truncate()
-                    .child(SharedString::from(window.label.clone())),
+                    .child(SharedString::from(label.to_string())),
             )
             .child(
                 div()
                     .flex_1()
-                    .min_w(px(56.0))
-                    .max_w(px(230.0))
-                    .h(px(5.0))
+                    .min_w(ui_rems(40.0))
+                    .max_w(ui_rems(240.0))
+                    .h(ui_rems(5.0))
                     .rounded_full()
                     .overflow_hidden()
-                    .bg(crate::theme::ink(0.07))
+                    .bg(theme.fill(FillTier::Secondary))
                     .when(fraction > 0.0, |el| {
                         el.child(
                             div()
@@ -1191,7 +1313,7 @@ impl AccountsPage {
             )
             .child(
                 div()
-                    .w(px(64.0))
+                    .w(ui_rems(64.0))
                     .flex_none()
                     .text_right()
                     .child(SharedString::from(format!(
@@ -1202,27 +1324,52 @@ impl AccountsPage {
             .when_some(reset, |el, reset| {
                 el.child(
                     div()
-                        .flex_none()
+                        .min_w_0()
                         .truncate()
-                        .text_color(theme.readable_muted(0.45))
+                        .text_color(theme.readable_muted(0.65))
                         .child(SharedString::from(reset)),
                 )
             })
             .into_any_element()
     }
 
+    /// A row's identity text — an email, a label — truncated to its column
+    /// with the full value in a tooltip: in the row-title style, or the
+    /// secondary description style.
+    fn identity_text(id: String, text: SharedString, title: bool, theme: &Theme) -> AnyElement {
+        div()
+            .id(SharedString::from(id))
+            .map(|el| {
+                if title {
+                    el.text_size(ui_rems(widgets::ROW_TITLE_SIZE))
+                        .line_height(ui_rems(18.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                } else {
+                    el.type_style(TextStyle::Footnote)
+                        .text_color(theme.readable_muted(0.85))
+                }
+            })
+            .min_w_0()
+            .truncate()
+            .tooltip(popover::text_tooltip(text.clone()))
+            .tooltip_show_delay(popover::TOOLTIP_DELAY)
+            .child(text)
+            .into_any_element()
+    }
+
     /// One account row (luna settings.agents.tsx `AccountRow`): initial
-    /// avatar, email + usage meters left; badges over the Switch/Forget
-    /// actions right-anchored.
+    /// avatar · email with its badges · usage meters, and the trailing
+    /// lifecycle actions.
     fn render_account_row(
         &self,
         account: &AgentAccount,
         ix: usize,
-        first: bool,
         theme: &Theme,
         now: DateTime<Utc>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let key = provider_key(account.harness);
         let is_busy = self.busy_account.as_deref() == Some(account.id.as_str());
         let identity: SharedString = account
             .email
@@ -1245,10 +1392,12 @@ impl AccountsPage {
         let rename_account = account.clone();
 
         let badges = div()
+            .flex_none()
             .flex()
             .flex_row()
+            .flex_wrap()
             .items_center()
-            .gap(px(6.0))
+            .gap(ui_rems(6.0))
             .when(account.active, |el| {
                 el.child(widgets::badge_active(theme, "Active"))
             })
@@ -1308,131 +1457,137 @@ impl AccountsPage {
             )),
             None => None,
         };
+        // Disconnect only clears LUNA's use of the login (Reconnect or
+        // Connect restores it; provider credentials are untouched), so it is
+        // a quiet Secondary button, never the loudest thing in the row.
         let lifecycle_action = action.map(|(method, label, id)| {
-            div().child(
-                crate::popover::btn_primary(theme, label)
-                    .id((id, ix))
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .rounded(px(6.0))
-                    .text_size(crate::typography::ui_rems(11.5))
-                    .when(is_busy, |el| el.opacity(0.5))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.account_action(method, &action_account, cx);
-                    })),
+            button::button(
+                format!("{id}-{key}-{ix}"),
+                ButtonKind::Secondary,
+                ControlSize::Sm,
+                self.busy_account.is_none(),
+                theme,
             )
+            .aria_label(format!("{label} {title}"))
+            .child(label)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.busy_account.is_some() {
+                    return;
+                }
+                this.account_action(method, &action_account, cx);
+            }))
         });
         let rename_action = (account.harness == HarnessId::Codex && account.id != "codex-native")
             .then(|| {
-                crate::popover::btn_ghost(theme, "Rename", "account-rename")
-                    .id(("account-rename", ix))
-                    .px(px(8.0))
-                    .py(px(4.0))
-                    .rounded(px(6.0))
-                    .text_size(crate::typography::ui_rems(11.5))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.begin_rename(rename_account.clone(), cx);
-                    }))
+                button::button(
+                    format!("account-rename-{key}-{ix}"),
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .aria_label(format!("Rename {title}"))
+                .child("Rename")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.begin_rename(rename_account.clone(), cx);
+                }))
             });
 
-        div()
-            .px(px(20.0))
-            .py(px(14.0))
-            .when(!first, |el| el.border_t_1().border_color(theme.border))
+        let avatar = div()
+            .flex_none()
+            .size(ui_rems(32.0))
+            .rounded_full()
+            .border_1()
+            .border_color(theme.border)
+            .bg(theme.fill(FillTier::Quaternary))
             .flex()
-            .flex_row()
-            .items_stretch()
-            .gap(px(12.0))
-            .child(
-                // Initial avatar: size-8 rounded-full border bg-white/[0.03].
-                div()
-                    .flex_none()
-                    .self_center()
-                    .size(px(32.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(crate::theme::ink(0.03))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text_muted)
-                    .child(initial),
-            )
+            .items_center()
+            .justify_center()
+            .type_style(TextStyle::Footnote)
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(theme.readable_muted(0.9))
+            .child(initial);
+
+        let usage: AnyElement = if account.usage_windows.is_empty() {
+            // Meters XOR the quiet fallback line — never both (luna:
+            // `usage ? meters : "Usage unavailable"…`).
+            widgets::row_description(theme, "Usage unavailable").into_any_element()
+        } else {
+            div()
+                .mt(ui_rems(4.0))
+                .w_full()
+                .flex()
+                .flex_col()
+                .gap(ui_rems(4.0))
+                .children(account.usage_windows.iter().map(|window| {
+                    Self::usage_meter(
+                        &window.label,
+                        window.used_fraction,
+                        window.resets_at,
+                        theme,
+                        now,
+                    )
+                }))
+                .into_any_element()
+        };
+
+        widgets::card_row(theme, false)
+            .child(avatar)
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
+                    .min_w(ui_rems(widgets::ROW_TEXT_MIN))
                     .flex()
                     .flex_col()
-                    .child(widgets::row_title(theme, title))
-                    .when(account.label.is_some(), |el| {
-                        el.child(
-                            div()
-                                .mt(px(2.0))
-                                .truncate()
-                                .text_size(crate::typography::ui_rems(11.5))
-                                .text_color(theme.readable_muted(0.7))
-                                .child(identity),
-                        )
-                    })
-                    .map(|el| {
-                        // Meters XOR the quiet fallback line — never both
-                        // (luna: `usage ? meters : "Usage unavailable"…`).
-                        if account.usage_windows.is_empty() {
-                            el.child(
-                                div()
-                                    .mt(px(6.0))
-                                    .truncate()
-                                    .text_size(crate::typography::ui_rems(11.5))
-                                    .text_color(theme.readable_muted(0.6))
-                                    .child(SharedString::from("Usage unavailable")),
-                            )
-                        } else {
-                            el.child(
-                                div().mt(px(6.0)).flex().flex_col().gap(px(4.0)).children(
-                                    account
-                                        .usage_windows
-                                        .iter()
-                                        .map(|w| self.render_usage_meter(w, theme, now)),
-                                ),
-                            )
-                        }
-                    }),
-            )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .items_end()
-                    .justify_between()
-                    .gap(px(8.0))
-                    .child(badges)
+                    .gap(ui_rems(2.0))
                     .child(
                         div()
+                            .w_full()
                             .flex()
                             .flex_row()
+                            .flex_wrap()
                             .items_center()
-                            .gap(px(6.0))
+                            .gap_x(ui_rems(8.0))
+                            .gap_y(ui_rems(4.0))
+                            .child(Self::identity_text(
+                                format!("account-title-{key}-{ix}"),
+                                title.clone(),
+                                true,
+                                theme,
+                            ))
+                            .child(badges),
+                    )
+                    .when(account.label.is_some(), |el| {
+                        el.child(Self::identity_text(
+                            format!("account-identity-{key}-{ix}"),
+                            identity.clone(),
+                            false,
+                            theme,
+                        ))
+                    })
+                    .child(usage),
+            )
+            .when(
+                rename_action.is_some() || lifecycle_action.is_some(),
+                |row| {
+                    row.child(
+                        widgets::row_controls()
                             .children(rename_action)
                             .children(lifecycle_action),
-                    ),
+                    )
+                },
             )
             .into_any_element()
     }
 
-    fn render_opencode_usage(&self, theme: &Theme) -> AnyElement {
-        let mut body = div()
-            .px(px(20.0))
-            .py(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
-            .text_color(theme.text_muted);
+    /// OpenCode has no account rows: its Go subscription usage, when the CLI
+    /// exposes one, in the same row anatomy.
+    fn render_opencode_usage(
+        &self,
+        theme: &Theme,
+        now: DateTime<Utc>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         match &self.opencode_usage {
             Loadable::Ready(snapshot) => {
                 let limits: Vec<_> = snapshot
@@ -1441,67 +1596,675 @@ impl AccountsPage {
                     .filter(|limit| limit.provider == UsageProvider::OpenCodeGo)
                     .collect();
                 if limits.is_empty() {
-                    body = body.child(
-                        "OpenCode uses its CLI connection. No subscription usage is available.",
-                    );
-                }
-                for limit in limits {
-                    if let Some(plan) = &limit.plan {
-                        body = body.child(format!("OpenCode Go · {plan}"));
-                    }
-                    if limit.availability != LimitAvailability::Ready {
-                        body = body.child(
-                            limit
-                                .detail
-                                .clone()
-                                .unwrap_or_else(|| "Usage unavailable".into()),
-                        );
-                    }
-                    for window in &limit.windows {
-                        let fraction = (window.used_percent / 100.0).clamp(0.0, 1.0);
-                        let color = usage_color(usage_level(fraction), theme);
-                        body = body.child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(5.0))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .justify_between()
-                                        .child(window.label.clone())
-                                        .child(format!(
-                                            "{}% used",
-                                            window.used_percent.round() as u32
-                                        )),
-                                )
-                                .child(
-                                    div()
-                                        .h(px(5.0))
-                                        .rounded_full()
-                                        .overflow_hidden()
-                                        .bg(crate::theme::ink(0.07))
-                                        .child(
-                                            div()
-                                                .h_full()
-                                                .w(gpui::relative(fraction))
-                                                .rounded_full()
-                                                .bg(color),
-                                        ),
+                    return vec![
+                        widgets::card_row(theme, false)
+                            .child(widgets::row_text(
+                                theme,
+                                "Usage",
+                                Some(
+                                    "OpenCode uses its CLI connection. No subscription usage is \
+                                     available."
+                                        .into(),
                                 ),
-                        );
-                    }
+                            ))
+                            .into_any_element(),
+                    ];
                 }
+                limits
+                    .into_iter()
+                    .map(|limit| {
+                        let title: SharedString = match &limit.plan {
+                            Some(plan) => format!("OpenCode Go · {plan}").into(),
+                            None => "OpenCode Go".into(),
+                        };
+                        let detail = (limit.availability != LimitAvailability::Ready).then(|| {
+                            SharedString::from(
+                                limit
+                                    .detail
+                                    .clone()
+                                    .unwrap_or_else(|| "Usage unavailable".into()),
+                            )
+                        });
+                        widgets::card_row(theme, false)
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(ui_rems(widgets::ROW_TEXT_MIN))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(ui_rems(2.0))
+                                    .child(widgets::row_title(theme, title))
+                                    .when_some(detail, |el, detail| {
+                                        el.child(widgets::row_description(theme, detail))
+                                    })
+                                    .when(!limit.windows.is_empty(), |el| {
+                                        el.child(
+                                            div()
+                                                .mt(ui_rems(4.0))
+                                                .w_full()
+                                                .flex()
+                                                .flex_col()
+                                                .gap(ui_rems(4.0))
+                                                .children(limit.windows.iter().map(|window| {
+                                                    Self::usage_meter(
+                                                        &window.label,
+                                                        window.used_percent / 100.0,
+                                                        window.resets_at_ms.and_then(
+                                                            DateTime::from_timestamp_millis,
+                                                        ),
+                                                        theme,
+                                                        now,
+                                                    )
+                                                })),
+                                        )
+                                    }),
+                            )
+                            .into_any_element()
+                    })
+                    .collect()
             }
             Loadable::Loading | Loadable::Idle => {
-                body = body.child("Loading OpenCode usage…");
+                vec![self.render_skeleton_row(false, theme, cx)]
             }
-            Loadable::Error(message) => {
-                body = body.child(format!("OpenCode usage unavailable: {message}"));
+            Loadable::Error(message) => vec![
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
+                        theme,
+                        "Usage",
+                        Some(format!("OpenCode usage unavailable: {message}").into()),
+                    ))
+                    .into_any_element(),
+            ],
+        }
+    }
+
+    /// A strip inside a provider card, under its header.
+    fn card_strip(strip: gpui::Div) -> AnyElement {
+        div()
+            .w_full()
+            .px(ui_rems(widgets::ROW_PAD_X))
+            .pb(ui_rems(12.0))
+            .child(strip.mt(ui_rems(0.0)))
+            .into_any_element()
+    }
+
+    /// An error strip with a trailing kit Dismiss button.
+    fn dismissible_error(
+        &self,
+        id: &'static str,
+        message: SharedString,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        widgets::error_strip(theme, message)
+            .child(div().flex_1())
+            .child(
+                button::icon_button(id, crate::icons::CLOSE, ControlSize::Sm, true, theme)
+                    .mt(ui_rems(-4.0))
+                    .aria_label("Dismiss")
+                    .tooltip(popover::text_tooltip("Dismiss"))
+                    .tooltip_show_delay(popover::TOOLTIP_DELAY)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.error = None;
+                        cx.notify();
+                    })),
+            )
+    }
+
+    /// One provider's section card: the header (brand mark, name, CLI
+    /// version, Update, Sign in, the enable switch), its strips, then its
+    /// accounts and defaults. A provider that is off collapses to its header.
+    #[allow(clippy::too_many_arguments)]
+    fn render_provider_card(
+        &self,
+        harness: HarnessId,
+        name: &'static str,
+        cli: &'static str,
+        panel: Option<Entity<ProviderDefaultsPanel>>,
+        theme: &Theme,
+        now: DateTime<Utc>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let descriptor = self
+            .harnesses
+            .ready()
+            .and_then(|list| list.iter().find(|d| d.id == harness))
+            .cloned();
+        let catalog_known = self.harnesses.ready().is_some();
+        let installed = descriptor.as_ref().is_some_and(|d| d.installed);
+        let enabled = descriptor.as_ref().is_some_and(descriptor_enabled);
+        // Collapse only on a known "off": while the harness list loads (or
+        // failed) the card keeps its rows so nothing jumps.
+        let collapsed = catalog_known && !(installed && enabled);
+        let update = self
+            .provider_updates
+            .ready()
+            .and_then(|updates| updates.iter().find(|status| status.harness == harness))
+            .cloned();
+        let is_updating = self.updating_provider == Some(harness);
+        let update_available = update
+            .as_ref()
+            .is_some_and(|status| status.update_available);
+        let update_command = update
+            .as_ref()
+            .and_then(|status| status.update_command.clone());
+        let installed_version = update
+            .as_ref()
+            .and_then(|status| status.installed_version.clone());
+        let latest_version = update
+            .as_ref()
+            .and_then(|status| status.latest_version.clone());
+        let accounts: Vec<AgentAccount> = self
+            .snapshot
+            .ready()
+            .map(|snapshot| {
+                provider_accounts(snapshot, harness)
+                    .into_iter()
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        let replacing_existing = !accounts.is_empty();
+        let sign_in_label = match (harness, replacing_existing) {
+            (HarnessId::ClaudeCode, true) => "Sign in another",
+            (HarnessId::Codex, true) => "Add account",
+            _ => "Sign in",
+        };
+
+        // ---- header ----
+        let (mark, tint) = match harness {
+            HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
+            HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
+            _ => (
+                crate::icons::CLAUDE_MARK,
+                Some(crate::icons::claude_brand()),
+            ),
+        };
+        let caption = |text: String, color: gpui::Hsla| {
+            div()
+                .flex_none()
+                .type_style(TextStyle::Caption)
+                .text_color(color)
+                .child(SharedString::from(text))
+        };
+        let title_line = div()
+            .w_full()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_x(ui_rems(8.0))
+            .gap_y(ui_rems(2.0))
+            .child(
+                div()
+                    .flex_none()
+                    .size(ui_rems(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when(collapsed, |el| el.opacity(0.55))
+                    .child(
+                        crate::icons::icon(mark)
+                            .size(ui_rems(16.0))
+                            .text_color(tint.unwrap_or(theme.text_muted)),
+                    ),
+            )
+            .child(
+                div()
+                    .type_style(TextStyle::Title3)
+                    .text_color(if collapsed {
+                        theme.readable_muted(0.85)
+                    } else {
+                        theme.text
+                    })
+                    .child(SharedString::from(name)),
+            )
+            .when_some(installed_version.clone(), |el, version| {
+                el.child(caption(format!("CLI {version}"), theme.readable_muted(0.8)))
+            })
+            .when(update_available, |el| {
+                let latest = latest_version
+                    .clone()
+                    .unwrap_or_else(|| "A newer version".into());
+                el.child(caption(
+                    if update_command.is_none() {
+                        format!("{latest} available · update manually")
+                    } else {
+                        format!("{latest} available")
+                    },
+                    theme.readable_tone(theme.accent, 1.0),
+                ))
+            });
+        let description: Option<SharedString> = if catalog_known && !installed {
+            Some(format!("Not installed. Install the {cli} CLI to enable {name}.").into())
+        } else if collapsed {
+            Some("Turned off on this device.".into())
+        } else {
+            None
+        };
+
+        let mut actions: Vec<AnyElement> = Vec::new();
+        if update_available && update_command.is_some() {
+            actions.push(
+                button::button(
+                    format!("provider-update-{name}"),
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    self.updating_provider.is_none(),
+                    theme,
+                )
+                .aria_label(format!("Update {name}"))
+                .child(button::glyph(crate::icons::ARROW_DOWN, ControlSize::Sm))
+                .child(if is_updating { "Updating…" } else { "Update" })
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.update_provider(harness, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        if harness != HarnessId::Opencode && !collapsed {
+            // Whether a sign-in replaces an existing login (Claude's shared
+            // native login needs the disclosure first) is only known once the
+            // accounts list has loaded, so the button waits for it.
+            let accounts_known = self.snapshot.ready().is_some();
+            actions.push(
+                button::button(
+                    format!("add-account-{name}"),
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    self.login.is_none() && accounts_known,
+                    theme,
+                )
+                .aria_label(format!("{name}: {sign_in_label}"))
+                .child(button::glyph(crate::icons::ADD_CIRCLE, ControlSize::Sm))
+                .child(sign_in_label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.login.is_some() || this.snapshot.ready().is_none() {
+                        return;
+                    }
+                    this.request_login(harness, replacing_existing, cx);
+                }))
+                .into_any_element(),
+            );
+        }
+        actions.push(if installed {
+            widgets::switch_control(
+                SharedString::from(format!("provider-toggle-{name}")),
+                format!("Enable {name}"),
+                enabled,
+                theme,
+                cx,
+                move |this, cx| {
+                    this.toggle_harness(harness, !enabled, cx);
+                },
+            )
+            .into_any_element()
+        } else {
+            // Not installed (or not known yet): shown, but not a control.
+            widgets::toggle_switch(theme, enabled, &format!("provider-toggle-{name}"))
+                .opacity(0.35)
+                .into_any_element()
+        });
+
+        let header = div()
+            .w_full()
+            .px(ui_rems(widgets::ROW_PAD_X))
+            .pt(ui_rems(14.0))
+            .pb(ui_rems(12.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_x(ui_rems(12.0))
+            .gap_y(ui_rems(8.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(ui_rems(widgets::ROW_TEXT_MIN))
+                    .flex()
+                    .flex_col()
+                    .gap(ui_rems(3.0))
+                    .child(title_line)
+                    .when_some(description, |column, description| {
+                        column.child(widgets::row_description(theme, description))
+                    }),
+            )
+            .child(widgets::row_controls().children(actions));
+
+        // ---- strips: this provider's errors and notes ----
+        let mut strips: Vec<AnyElement> = Vec::new();
+        if let Some(notice) = self
+            .error
+            .clone()
+            .filter(|notice| notice.harness == Some(harness))
+        {
+            strips.push(Self::card_strip(self.dismissible_error(
+                "accounts-action-error-dismiss",
+                notice.message,
+                theme,
+                cx,
+            )));
+        }
+        if let Some((_, message)) = self
+            .harness_error
+            .clone()
+            .filter(|(owner, _)| *owner == harness)
+        {
+            strips.push(Self::card_strip(widgets::error_strip(theme, message)));
+        }
+        if let Some((_, message, ok)) = self
+            .update_message
+            .clone()
+            .filter(|(owner, _, _)| *owner == harness)
+        {
+            strips.push(if ok {
+                Self::card_strip(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_start()
+                        .gap(ui_rems(6.0))
+                        .child(
+                            crate::icons::icon(crate::icons::CHECK)
+                                .mt(ui_rems(1.0))
+                                .size(ui_rems(14.0))
+                                .flex_none()
+                                .text_color(theme.readable_tone(theme.success, 1.0)),
+                        )
+                        .child(widgets::row_description(theme, message)),
+                )
+            } else {
+                Self::card_strip(widgets::warning_strip(theme, message))
+            });
+        }
+        if let Some(snapshot) = self.snapshot.ready() {
+            // EVERY warning renders its own strip (luna maps them).
+            for warning in snapshot.warnings.iter().filter(|w| w.harness == harness) {
+                strips.push(Self::card_strip(widgets::warning_strip(
+                    theme,
+                    warning.message.clone(),
+                )));
             }
         }
-        body.into_any_element()
+
+        let card = widgets::section_card(theme).child(header).children(strips);
+        if collapsed {
+            return card.into_any_element();
+        }
+
+        // ---- rows: accounts (or usage), then defaults ----
+        let rows: Vec<AnyElement> = if harness == HarnessId::Opencode {
+            self.render_opencode_usage(theme, now, cx)
+        } else {
+            match &self.snapshot {
+                // Ghost rows shaped like real ones (row two dimmed) so the
+                // card keeps its size while data develops.
+                Loadable::Idle | Loadable::Loading => vec![
+                    self.render_skeleton_row(false, theme, cx),
+                    self.render_skeleton_row(true, theme, cx),
+                ],
+                // The page-level strip under the title owns the retry.
+                Loadable::Error(_) => Vec::new(),
+                Loadable::Ready(_) if accounts.is_empty() => vec![
+                    widgets::card_row(theme, false)
+                        .child(widgets::row_description(
+                            theme,
+                            format!(
+                                "No {name} login detected on this device. Sign in with \
+                                 \u{201C}{cli}\u{201D}, or use {sign_in_label} above."
+                            ),
+                        ))
+                        .into_any_element(),
+                ],
+                Loadable::Ready(_) => accounts
+                    .iter()
+                    .enumerate()
+                    .map(|(ix, account)| self.render_account_row(account, ix, theme, now, cx))
+                    .collect(),
+            }
+        };
+        card.children(rows)
+            .children(panel.map(|panel| panel.into_any_element()))
+            .into_any_element()
+    }
+
+    /// "New chats": which provider a new chat starts with. That is the
+    /// composer's remembered provider on this device, so another device's
+    /// page explains where to change it instead.
+    fn render_new_chats(&self, theme: &Theme, local: bool, cx: &mut Context<Self>) -> AnyElement {
+        let card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            "New chats",
+            None,
+            Vec::new(),
+        ));
+        if !local {
+            let local_name = {
+                let state = self.state.read(cx);
+                state
+                    .local_device_id
+                    .as_deref()
+                    .and_then(|id| state.devices.iter().find(|d| d.id == id))
+                    .map(|d| d.name.clone())
+                    .unwrap_or_else(|| "this device".into())
+            };
+            return card
+                .child(
+                    widgets::card_row(theme, false).child(widgets::row_text(
+                        theme,
+                        "Default provider",
+                        Some(
+                            format!(
+                                "The default provider and each provider's defaults belong to the \
+                             device you start chats from. Switch to {local_name} to change them."
+                            )
+                            .into(),
+                        ),
+                    )),
+                )
+                .into_any_element();
+        }
+        let description: SharedString = "New chats start with this provider unless their project \
+                                          sets one. Picking a provider in the composer changes it \
+                                          too."
+            .into();
+        let control: Option<AnyElement> = match &self.harnesses {
+            Loadable::Ready(list) => {
+                let offered = crate::pickers::offered_harnesses(list);
+                // The cards' order first, then anything else offered.
+                let mut ordered: Vec<(HarnessId, SharedString)> = PROVIDERS
+                    .iter()
+                    .filter(|(harness, _, _)| offered.iter().any(|d| d.id == *harness))
+                    .map(|(harness, name, _)| (*harness, SharedString::from(*name)))
+                    .collect();
+                ordered.extend(
+                    offered
+                        .iter()
+                        .filter(|d| !PROVIDERS.iter().any(|(harness, _, _)| *harness == d.id))
+                        .map(|d| (d.id, SharedString::from(d.name.clone()))),
+                );
+                if ordered.is_empty() {
+                    None
+                } else {
+                    // What a new chat would really use: the remembered
+                    // provider while it is offered, else the first offered
+                    // (the composer's own fallback).
+                    let effective = self
+                        .new_chat_provider
+                        .filter(|harness| offered.iter().any(|d| d.id == *harness))
+                        .or_else(|| offered.first().map(|d| d.id));
+                    let selected = ordered
+                        .iter()
+                        .position(|(harness, _)| Some(*harness) == effective)
+                        .unwrap_or(0);
+                    let labels: Vec<SharedString> =
+                        ordered.iter().map(|(_, label)| label.clone()).collect();
+                    let width = super::provider_defaults::segmented_width(&labels);
+                    let ids: Vec<HarnessId> = ordered.iter().map(|(harness, _)| *harness).collect();
+                    Some(
+                        button::segmented(
+                            "new-chat-provider",
+                            ordered
+                                .iter()
+                                .map(|(harness, label)| {
+                                    Segment::new(provider_key(*harness), label.clone())
+                                })
+                                .collect(),
+                            selected,
+                            width,
+                            ControlSize::Md,
+                            theme,
+                            cx.listener(move |this, ix: &usize, _, cx| {
+                                if let Some(harness) = ids.get(*ix) {
+                                    this.set_new_chat_provider(*harness, cx);
+                                }
+                            }),
+                        )
+                        .into_any_element(),
+                    )
+                }
+            }
+            Loadable::Idle | Loadable::Loading => {
+                Some(popover::skeleton_bar(200.0, cx.entity_id(), cx))
+            }
+            Loadable::Error(_) => None,
+        };
+        let description = match (&self.harnesses, &control) {
+            (Loadable::Ready(_), None) => "Turn on a provider below to start new chats.".into(),
+            (Loadable::Error(message), _) => {
+                SharedString::from(format!("Providers could not load: {message}"))
+            }
+            _ => description,
+        };
+        card.child(
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    "Default provider",
+                    Some(description),
+                ))
+                .children(control.map(|control| widgets::row_controls().child(control))),
+        )
+        .into_any_element()
+    }
+
+    /// "Advanced provider options": a disclosure row in its own section — a
+    /// chevron that turns with the open state, a title and one line of
+    /// description. The options render below the card when open.
+    fn render_advanced_disclosure(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.advanced_open;
+        let ring = theme.focus_ring();
+        let turn = motion::follow(
+            "providers-advanced-chevron",
+            if open { 1.0 } else { 0.0 },
+            motion::DISCLOSURE,
+        );
+        widgets::section_card(theme)
+            .child(
+                widgets::card_row(theme, true)
+                    .id("providers-advanced-disclosure")
+                    .role(gpui::Role::Button)
+                    .aria_label("Advanced provider options")
+                    .aria_expanded(open)
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .flex_nowrap()
+                    .hover_fill(
+                        "providers-advanced-disclosure",
+                        gpui::transparent_black(),
+                        theme.fill(FillTier::Quaternary),
+                    )
+                    .focus_visible(move |style| crate::theme::focus_ring(style, ring))
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_advanced(cx)))
+                    .on_key_down(crate::swallow_activation_key)
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(ui_rems(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
+                                    .size(ui_rems(14.0))
+                                    .text_color(theme.readable_muted(0.85))
+                                    .with_transformation(gpui::Transformation::rotate(
+                                        gpui::percentage(turn * 0.25),
+                                    )),
+                            ),
+                    )
+                    .child(
+                        widgets::row_text(
+                            theme,
+                            "Advanced provider options",
+                            Some(
+                                "Model catalogs, instructions, integrations, execution and chat \
+                                 titles."
+                                    .into(),
+                            ),
+                        )
+                        .min_w_0(),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    /// The title bar's Refresh: an icon button, or while a refresh runs the
+    /// same-sized glyph turning in place (not a control, so it can't be
+    /// pressed twice).
+    fn render_refresh(
+        &self,
+        refreshing: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        const LABEL: &str = "Refresh accounts and usage";
+        if refreshing {
+            let glyph = button::glyph(crate::icons::REFRESH, ControlSize::Md)
+                .text_color(theme.readable_muted(0.95));
+            let glyph: AnyElement = if motion::reduced_motion(cx) {
+                glyph.into_any_element()
+            } else {
+                glyph
+                    .with_animation(
+                        "accounts-refresh-spin",
+                        gpui::Animation::new(Duration::from_millis(900)).repeat(),
+                        |glyph, t| {
+                            glyph.with_transformation(gpui::Transformation::rotate(
+                                gpui::percentage(t),
+                            ))
+                        },
+                    )
+                    .into_any_element()
+            };
+            return div()
+                .id("accounts-refresh")
+                .role(gpui::Role::Status)
+                .aria_label("Refreshing accounts and usage")
+                .flex_none()
+                .size(ui_rems(ControlSize::Md.height()))
+                .flex()
+                .items_center()
+                .justify_center()
+                .opacity(0.7)
+                .child(glyph)
+                .into_any_element();
+        }
+        button::icon_button(
+            "accounts-refresh",
+            crate::icons::REFRESH,
+            ControlSize::Md,
+            true,
+            theme,
+        )
+        .aria_label(LABEL)
+        .tooltip(popover::text_tooltip(LABEL))
+        .tooltip_show_delay(popover::TOOLTIP_DELAY)
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.reload_new_chat_provider(cx);
+            this.load(force_usage_for(LoadTrigger::Refresh), cx)
+        }))
+        .into_any_element()
     }
 
     fn render_login_dialog(
@@ -1786,22 +2549,15 @@ impl AccountsPage {
     }
 
     /// A ghost account row (luna settings.agents.tsx `SkeletonRow`): avatar,
-    /// email line, two usage-meter ghosts, a badge — same geometry as the real
-    /// row so loaded data lands without a layout jump. `dim` fades row two.
-    fn render_skeleton_row(
-        &self,
-        _id: (&'static str, usize),
-        dim: bool,
-        first: bool,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        use crate::motion;
+    /// title line, two usage-meter ghosts, a badge — the real row's geometry,
+    /// so loaded data lands without a layout jump. `dim` fades row two.
+    fn render_skeleton_row(&self, dim: bool, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let delta = motion::pulse_delta(&motion::LUNA_PULSE, cx.entity_id(), cx);
-        let ghost = |w: gpui::Length, h: f32, round_full: bool| {
+        let wash = theme.fill(FillTier::Tertiary);
+        let ghost = move |w: gpui::Length, h: f32, round_full: bool| {
             div()
                 .w(w)
-                .h(px(h))
+                .h(ui_rems(h))
                 .flex_none()
                 .map(|el| {
                     if round_full {
@@ -1810,62 +2566,56 @@ impl AccountsPage {
                         el.rounded(px(4.0))
                     }
                 })
-                .bg(crate::theme::ink(0.05))
+                .bg(wash)
         };
         let meters = div()
-            .mt(px(8.0))
+            .mt(ui_rems(6.0))
+            .w_full()
             .flex()
             .flex_col()
-            .gap(px(7.0))
+            .gap(ui_rems(7.0))
             .children((0..2).map(|_| {
                 div()
+                    .w_full()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(8.0))
-                    .child(ghost(px(48.0).into(), 9.0, false))
+                    .gap(ui_rems(8.0))
+                    .child(ghost(ui_rems(48.0).into(), 9.0, false))
                     .child(
                         div()
                             .flex_1()
-                            .min_w(px(56.0))
-                            .max_w(px(230.0))
-                            .h(px(5.0))
+                            .min_w(ui_rems(40.0))
+                            .max_w(ui_rems(240.0))
+                            .h(ui_rems(5.0))
                             .rounded_full()
-                            .bg(crate::theme::ink(0.04)),
+                            .bg(theme.fill(FillTier::Quaternary)),
                     )
-                    .child(ghost(px(64.0).into(), 9.0, false))
+                    .child(ghost(ui_rems(64.0).into(), 9.0, false))
             }));
-        let inner = div()
-            .flex()
-            .flex_row()
-            .items_stretch()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .flex_none()
-                    .self_center()
-                    .size(px(32.0))
-                    .rounded_full()
-                    .bg(crate::theme::ink(0.05)),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .child(ghost(px(176.0).into(), 13.0, false).max_w(gpui::relative(0.6)))
-                    .child(meters),
-            )
-            .child(div().flex_none().flex().flex_col().items_end().child(ghost(
-                px(64.0).into(),
-                21.0,
-                true,
-            )));
-        div()
-            .px(px(20.0))
-            .py(px(14.0))
-            .when(!first, |el| el.border_t_1().border_color(theme.border))
+        widgets::card_row(theme, false)
             .when(dim, |el| el.opacity(0.6))
-            .child(inner.opacity(0.55 + 0.35 * motion::pulse_wave(delta)))
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(ui_rems(12.0))
+                    .opacity(0.55 + 0.35 * motion::pulse_wave(delta))
+                    .child(ghost(ui_rems(32.0).into(), 32.0, true))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                ghost(ui_rems(176.0).into(), 13.0, false)
+                                    .max_w(gpui::relative(0.6)),
+                            )
+                            .child(meters),
+                    )
+                    .child(ghost(ui_rems(64.0).into(), 20.0, true)),
+            )
             .into_any_element()
     }
 }
@@ -1890,7 +2640,7 @@ impl Render for AccountsPage {
             self.render_rename_dialog(window.viewport_size(), cx)
         };
         let refreshing = matches!(self.snapshot, Loadable::Loading);
-        let account_count = None;
+        let local = self.targets_local_device(cx);
         let advanced_sections = self
             .advanced_open
             .then(|| {
@@ -1900,302 +2650,63 @@ impl Render for AccountsPage {
             })
             .flatten();
 
-        let provider_icon = |harness: HarnessId| match harness {
-            HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
-            HarnessId::Opencode => (crate::icons::OPENCODE_MARK, None),
-            _ => (
-                crate::icons::CLAUDE_MARK,
-                Some(crate::icons::claude_brand()),
-            ),
-        };
-        // Brand mark inside a 24px centered box (luna: `grid size-6
-        // place-items-center [&_svg]:size-4`).
-        let provider_mark = |harness: HarnessId, theme: &Theme| {
-            let (mark, tint) = provider_icon(harness);
-            div()
-                .flex_none()
-                .size(px(24.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(
-                    crate::icons::icon(mark)
-                        .size(px(16.0))
-                        .text_color(tint.unwrap_or(theme.text_muted)),
-                )
-        };
+        let device_switcher = self.render_device_switcher(&theme, cx);
+        let refresh = self.render_refresh(refreshing, &theme, cx);
 
-        // One section per provider: brand header, controls, then account or
-        // usage rows.
-        let sections: Vec<AnyElement> = match &self.snapshot {
-            Loadable::Idle | Loadable::Loading => PROVIDERS
-                .into_iter()
-                .map(|(harness, name, _cli)| {
-                    let skeleton_id = match harness {
-                        HarnessId::Codex => "accounts-skeleton-codex",
-                        HarnessId::Opencode => "accounts-skeleton-opencode",
-                        _ => "accounts-skeleton-claude",
-                    };
-                    div()
-                        .mt(px(24.0))
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_row()
-                                .items_center()
-                                .gap(px(8.0))
-                                .child(provider_mark(harness, &theme))
-                                .child(
-                                    div()
-                                        .text_size(crate::typography::ui_rems(14.0))
-                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                        .text_color(theme.text)
-                                        .child(SharedString::from(name)),
-                                ),
+        // Strips that concern no single provider sit under the title.
+        let mut page_strips: Vec<AnyElement> = Vec::new();
+        if let Some(notice) = self.error.clone().filter(|notice| notice.harness.is_none()) {
+            page_strips.push(
+                self.dismissible_error("accounts-page-error-dismiss", notice.message, &theme, cx)
+                    .id("accounts-action-error")
+                    .into_any_element(),
+            );
+        }
+        if let Loadable::Error(message) = &self.snapshot {
+            page_strips.push(
+                widgets::error_strip(&theme, message.clone())
+                    .id("accounts-load-error")
+                    .child(div().flex_1())
+                    .child(
+                        button::button(
+                            "accounts-load-retry",
+                            ButtonKind::Secondary,
+                            ControlSize::Sm,
+                            true,
+                            &theme,
                         )
-                        .child(
-                            // Ghost rows shaped like real ones (row two dimmed)
-                            // so the card keeps its size while data develops.
-                            widgets::section_card(&theme)
-                                .mt(px(8.0))
-                                .child(self.render_skeleton_row(
-                                    (skeleton_id, 0),
-                                    false,
-                                    true,
-                                    &theme,
-                                    cx,
-                                ))
-                                .child(self.render_skeleton_row(
-                                    (skeleton_id, 1),
-                                    true,
-                                    false,
-                                    &theme,
-                                    cx,
-                                )),
-                        )
-                        .into_any_element()
-                })
-                .collect(),
-            Loadable::Error(message) => {
-                let message = message.clone();
-                vec![
-                    widgets::error_strip(&theme, message)
-                        .id("accounts-load-error")
-                        .accessible_button("Retry loading accounts", theme.accent)
-                        .cursor_pointer()
+                        .mt(ui_rems(-2.0))
+                        .aria_label("Retry loading accounts")
+                        .child("Retry")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            // Retry IS the visit's first successful list — force usage.
+                            // Retry IS the visit's first successful list —
+                            // force usage.
                             this.load(force_usage_for(LoadTrigger::Retry), cx)
-                        }))
-                        .child(
-                            div()
-                                .mt(px(4.0))
-                                .text_size(crate::typography::ui_rems(11.5))
-                                .text_color(theme.text_muted)
-                                .child(SharedString::from("Click to retry")),
-                        )
-                        .into_any_element(),
-                ]
-            }
-            Loadable::Ready(snapshot) => {
-                let snapshot = snapshot.clone();
-                let descriptors = self.harnesses.ready().cloned().unwrap_or_default();
-                let updates = self.provider_updates.ready().cloned().unwrap_or_default();
-                PROVIDERS
-                    .into_iter()
-                    .map(|(harness, name, cli)| {
-                        let descriptor = descriptors.iter().find(|d| d.id == harness);
-                        let update = updates.iter().find(|status| status.harness == harness);
-                        let is_updating = self.updating_provider == Some(harness);
-                        let update_available = update.is_some_and(|status| status.update_available);
-                        let update_command =
-                            update.and_then(|status| status.update_command.as_deref());
-                        let version_label = update
-                            .and_then(|status| status.installed_version.as_deref())
-                            .map_or_else(
-                                || "Version unavailable".to_owned(),
-                                |version| format!("CLI {version}"),
-                            );
-                        let installed = descriptor.is_some_and(|d| d.installed);
-                        let enabled = descriptor.is_some_and(descriptor_enabled);
-                        let accounts = provider_accounts(&snapshot, harness);
-                        // EVERY warning renders its own strip (luna maps them).
-                        let warnings: Vec<String> = snapshot
-                            .warnings
+                        })),
+                    )
+                    .into_any_element(),
+            );
+        }
+
+        let new_chats = self.render_new_chats(&theme, local, cx);
+        let panels = self.defaults_panels.clone();
+        let cards: Vec<AnyElement> = PROVIDERS
+            .into_iter()
+            .map(|(harness, name, cli)| {
+                // Defaults belong to this device; another device's page
+                // shows its accounts only.
+                let panel = local
+                    .then(|| {
+                        panels
                             .iter()
-                            .filter(|w| w.harness == harness)
-                            .map(|w| w.message.clone())
-                            .collect();
-                        let rows: Vec<AnyElement> = accounts
-                            .iter()
-                            .enumerate()
-                            .map(|(ix, account)| {
-                                self.render_account_row(account, ix, ix == 0, &theme, now, cx)
-                            })
-                            .collect();
-                        let add_id: SharedString = format!("add-account-{name}").into();
-                        let replacing_existing = !accounts.is_empty();
-                        let sign_in_label = match (harness, replacing_existing) {
-                            (HarnessId::ClaudeCode, true) => "Sign in another",
-                            (HarnessId::Codex, true) => "Add account",
-                            _ => "Sign in",
-                        };
-                        let card = widgets::section_card(&theme).mt(px(8.0));
-                        let empty_copy = format!(
-                            "No {name} login detected on this device — sign in with \
-                             \u{201C}{cli}\u{201D} or use Sign in."
-                        );
-                        let card = if harness == HarnessId::Opencode {
-                            card.child(self.render_opencode_usage(&theme))
-                        } else if rows.is_empty() {
-                            card.child(
-                                div()
-                                    .px(px(20.0))
-                                    .py(px(32.0))
-                                    .text_center()
-                                    .text_size(crate::typography::ui_rems(14.0))
-                                    .text_color(theme.readable_muted(0.6))
-                                    .child(SharedString::from(empty_copy)),
-                            )
-                        } else {
-                            card.children(rows)
-                        };
-                        div()
-                            .mt(px(24.0))
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(provider_mark(harness, &theme))
-                                    .child(
-                                        div()
-                                            .text_size(crate::typography::ui_rems(14.0))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(SharedString::from(name)),
-                                    )
-                                    .child(div().flex_1())
-                                    .when(update_available && update_command.is_some(), |el| {
-                                        el.child(
-                                            widgets::ghost_action(
-                                                format!("provider-update-{name}"),
-                                                !is_updating,
-                                                &theme,
-                                            )
-                                            .accessible_button(
-                                                format!("Update {name}"),
-                                                theme.accent,
-                                            )
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.update_provider(harness, cx);
-                                            }))
-                                            .child(
-                                                crate::button::glyph(
-                                                    crate::icons::ARROW_DOWN,
-                                                    crate::button::ControlSize::Md,
-                                                )
-                                                .text_color(theme.readable_icon(theme.accent)),
-                                            )
-                                            .child(
-                                                if is_updating { "Updating…" } else { "Update" },
-                                            ),
-                                        )
-                                    })
-                                    .when(harness != HarnessId::Opencode, |el| {
-                                        el.child(
-                                            widgets::ghost_action(add_id, true, &theme)
-                                                .accessible_button(
-                                                    sign_in_label.to_string(),
-                                                    theme.accent,
-                                                )
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.request_login(
-                                                        harness,
-                                                        replacing_existing,
-                                                        cx,
-                                                    );
-                                                }))
-                                                .child(
-                                                    crate::icons::icon(crate::icons::ADD_CIRCLE)
-                                                        .size(px(16.0))
-                                                        .text_color(theme.text_muted),
-                                                )
-                                                .child(SharedString::from(sign_in_label)),
-                                        )
-                                    })
-                                    .child(if installed {
-                                        widgets::switch_control(
-                                            SharedString::from(format!("provider-toggle-{name}")),
-                                            format!("Enable {name}"),
-                                            enabled,
-                                            &theme,
-                                            cx,
-                                            move |this, cx| {
-                                                this.toggle_harness(harness, !enabled, cx);
-                                            },
-                                        )
-                                        .when(descriptor.is_none(), |el| el.opacity(0.35))
-                                        .into_any_element()
-                                    } else {
-                                        // Not installed: shown, but not a control.
-                                        widgets::toggle_switch(
-                                            &theme,
-                                            enabled,
-                                            &format!("provider-toggle-{name}"),
-                                        )
-                                        .opacity(0.35)
-                                        .into_any_element()
-                                    }),
-                            )
-                            .when(!installed, |el| {
-                                el.child(widgets::warning_strip(
-                                    &theme,
-                                    format!("Install the {cli} CLI to enable {name}"),
-                                ))
-                            })
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .ml(px(28.0))
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(if update_available {
-                                        theme.accent
-                                    } else {
-                                        theme.text_muted
-                                    })
-                                    .child(if update_available {
-                                        format!(
-                                            "{version_label} · {} available{}",
-                                            update
-                                                .and_then(|status| status.latest_version.as_deref())
-                                                .unwrap_or("newer version"),
-                                            if update_command.is_none() {
-                                                " · update manually"
-                                            } else {
-                                                ""
-                                            }
-                                        )
-                                    } else {
-                                        version_label
-                                    }),
-                            )
-                            .children(
-                                warnings
-                                    .into_iter()
-                                    .map(|warning| widgets::warning_strip(&theme, warning)),
-                            )
-                            .child(card)
-                            .into_any_element()
+                            .find(|panel| panel.read(cx).provider() == harness)
+                            .cloned()
                     })
-                    .collect()
-            }
-        };
+                    .flatten();
+                self.render_provider_card(harness, name, cli, panel, &theme, now, cx)
+            })
+            .collect();
+        let advanced = self.render_advanced_disclosure(&theme, cx);
 
         let scrollbar = popover::rail(self, "accounts-page-scrollbar", &theme, cx);
         div()
@@ -2211,104 +2722,31 @@ impl Render for AccountsPage {
                     .track_scroll(&self.scroll.scroll)
                     .child(
                         widgets::page_column()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(10.0))
-                                    .child(widgets::page_header(&theme, "Providers", account_count))
-                                    .child(div().flex_1())
-                                    .child(
-                                        // `text-[12.5px]` + leading 16px Refresh icon,
-                                        // dimmed while a refresh is in flight (luna
-                                        // `disabled:opacity-50`).
-                                        widgets::ghost_action(
-                                            "accounts-refresh",
-                                            !refreshing,
-                                            &theme,
-                                        )
-                                        .accessible_button(
-                                            "Refresh provider accounts",
-                                            theme.accent,
-                                        )
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.load(force_usage_for(LoadTrigger::Refresh), cx)
-                                        }))
-                                        .child(crate::button::glyph(
-                                            crate::icons::REFRESH,
-                                            crate::button::ControlSize::Md,
-                                        ))
-                                        .child(SharedString::from("Refresh")),
-                                    )
-                                    .child(self.render_device_switcher(&theme, cx)),
-                            )
+                            .child(widgets::page_title_bar(
+                                &theme,
+                                "Providers",
+                                None,
+                                vec![device_switcher, refresh],
+                            ))
                             .child(widgets::page_subtitle(
                                 &theme,
                                 "Enable the CLIs you use on this device. Claude Code and Codex \
                                  accounts are managed by their own CLIs; OpenCode connects through \
-                                 its CLI and shows available usage here.",
+                                 its CLI and shows available usage here. Each provider keeps its \
+                                 own defaults for new chats.",
                             ))
-                            .when_some(self.error.clone(), |el, message| {
-                                el.child(
-                                    widgets::error_strip(&theme, message)
-                                        .id("accounts-action-error")
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.error = None;
-                                            cx.notify();
-                                        })),
-                                )
-                            })
-                            .when_some(self.harness_error.clone(), |el, message| {
-                                el.child(widgets::error_strip(&theme, message))
-                            })
-                            .when_some(self.update_message.clone(), |el, message| {
-                                el.child(widgets::warning_strip(&theme, message))
-                            })
-                            .when(
-                                self.target_device.as_deref().is_none_or(|id| {
-                                    self.state.read(cx).local_device_id.as_deref() == Some(id)
-                                }),
-                                |element| element.child(self.defaults_panel.clone()),
-                            )
-                            .children(sections)
-                            .child(
-                                widgets::ghost_action(
-                                    "providers-advanced-disclosure",
-                                    true,
-                                    &theme,
-                                )
-                                .accessible_button(
-                                    if self.advanced_open {
-                                        "Hide provider options"
-                                    } else {
-                                        "Advanced provider options"
-                                    },
-                                    theme.accent,
-                                )
-                                .mt(px(24.0))
-                                .on_click(cx.listener(|this, _, _, cx| this.toggle_advanced(cx)))
-                                .child(if self.advanced_open {
-                                    "Hide provider options"
-                                } else {
-                                    "Advanced provider options"
-                                }),
-                            )
-                            .children(advanced_sections)
-                            // Footer note (luna: `mt-6 text-[12px] leading-relaxed
-                            // text-muted-foreground/60`).
-                            .child(
-                                div()
-                                    .mt(px(24.0))
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .line_height(crate::typography::ui_rems(19.0))
-                                    .text_color(theme.readable_muted(0.6))
-                                    .child(SharedString::from(
-                                        "Provider sign-in updates the CLI's native login on this \
-                                         device. Existing CLI sessions stay with their provider.",
-                                    )),
-                            ),
+                            .children(page_strips)
+                            .child(new_chats)
+                            .children(cards)
+                            // Fine print under the provider cards (luna:
+                            // `mt-6 text-[12px] text-muted-foreground/60`).
+                            .child(widgets::section_footer(
+                                &theme,
+                                "Provider sign-in updates the CLI's native login on this \
+                                 device. Existing CLI sessions stay with their provider.",
+                            ))
+                            .child(advanced)
+                            .children(advanced_sections),
                     ),
             )
             .children(scrollbar)
