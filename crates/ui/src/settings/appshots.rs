@@ -1,120 +1,92 @@
 //! Appshots settings share the shortcut recorder and persistence events with
 //! keyboard settings, while keeping capture setup on its own route.
+//!
+//! Two section cards (spec `docs/design/settings-polish-2026-10-06`): Capture
+//! (the enable and sound switches, the capture shortcut's recorder and the
+//! destination `segmented`) and Permissions (each capability's status badge
+//! and its kit action, with "Check again" in the section header).
 use super::*;
 use crate::appshots::{AppshotPlatform, CapabilityState};
 use crate::settings::widgets;
 
-fn row(
-    theme: &Theme,
-    first: bool,
-    title: &str,
-    description: &str,
-    control: gpui::AnyElement,
-) -> gpui::Div {
-    widgets::card_row(theme, first)
-        .flex_wrap()
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(160.0))
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(widgets::row_title(theme, title.to_string()))
-                .child(
-                    div()
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .line_height(crate::typography::ui_rems(18.0))
-                        .text_color(theme.text_muted)
-                        .child(SharedString::from(description.to_string())),
-                ),
-        )
-        .child(control)
+/// A capability's status: the success pill when it is usable, the neutral
+/// pill otherwise (the row's action, when there is one, says what to do).
+fn capability_badge(theme: &Theme, state: CapabilityState) -> gpui::Div {
+    if state.is_ready() {
+        widgets::badge_active(theme, state.badge())
+    } else {
+        widgets::badge(theme, state.badge())
+    }
+}
+
+/// The persisted key of a destination's segment (its element id suffix).
+fn destination_key(destination: AppshotDestination) -> &'static str {
+    match destination {
+        AppshotDestination::Automatic => "automatic",
+        AppshotDestination::LastSession => "last-session",
+        AppshotDestination::NewSession => "new-session",
+    }
 }
 
 impl ShortcutsPage {
     pub(super) fn render_appshots(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         let theme = Theme::of(cx).clone();
-        let accent = theme.accent;
         let capabilities = self.appshot_capabilities;
-        let toggle = |id: &'static str, label: &'static str, enabled: bool| {
-            widgets::toggle_switch(&theme, enabled, id)
-                .id(id)
-                .role(gpui::Role::Switch)
-                .aria_label(label)
-                .aria_toggled(if enabled {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-        };
-        let capture = toggle(
+
+        let capture = widgets::switch_control(
             "appshots-enabled",
             "Capture Appshots",
             self.appshots_enabled,
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.appshots_enabled = !this.appshots_enabled;
-            this.commit_appshots(cx);
-            cx.notify();
-        }));
-        let sound = toggle(
+            &theme,
+            cx,
+            |this, cx| {
+                this.appshots_enabled = !this.appshots_enabled;
+                this.commit_appshots(cx);
+                cx.notify();
+            },
+        );
+        let sound = widgets::switch_control(
             "appshot-sound-enabled",
             "Capture sound",
             self.appshot_sound_enabled,
-        )
-        .on_click(cx.listener(|this, _, _, cx| {
-            this.appshot_sound_enabled = !this.appshot_sound_enabled;
-            this.commit_appshots(cx);
-            cx.notify();
-        }));
-        let destinations = AppshotDestination::ALL
-            .into_iter()
-            .enumerate()
-            .map(|(ix, destination)| {
-                let selected = self.appshot_destination == destination;
-                div()
-                    .id(("appshot-destination", ix))
-                    .role(gpui::Role::Button)
-                    .aria_label(destination.label())
-                    .aria_toggled(if selected {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .tab_index(0)
-                    .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                    .px(px(10.0))
-                    .py(px(7.0))
-                    .rounded(px(7.0))
-                    .border_1()
-                    .border_color(if selected {
-                        theme.text.opacity(0.24)
-                    } else {
-                        theme.border
-                    })
-                    .bg(if selected {
-                        crate::theme::ink(0.09)
-                    } else {
-                        gpui::transparent_black()
-                    })
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(if selected {
-                        theme.text
-                    } else {
-                        theme.text_muted
-                    })
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.appshot_destination = destination;
-                        this.commit_appshots(cx);
-                        cx.notify();
-                    }))
-                    .child(destination.label())
-            })
-            .collect::<Vec<_>>();
+            &theme,
+            cx,
+            |this, cx| {
+                this.appshot_sound_enabled = !this.appshot_sound_enabled;
+                this.commit_appshots(cx);
+                cx.notify();
+            },
+        );
+
+        let shortcut_ix = ShortcutId::ALL
+            .iter()
+            .position(|&id| id == ShortcutId::CaptureAppshot)
+            .unwrap_or(0);
+        let shortcut_title = if capabilities.platform == AppshotPlatform::LinuxWayland {
+            "Preferred shortcut"
+        } else {
+            "Global shortcut"
+        };
+        let shortcut_row = widgets::card_row(&theme, false)
+            .child(self.shortcut_text(
+                ShortcutId::CaptureAppshot,
+                shortcut_title,
+                Some(capabilities.shortcut_description().into()),
+                &theme,
+            ))
+            .child(
+                widgets::row_controls()
+                    .child(capability_badge(&theme, capabilities.global_shortcut))
+                    .child(self.render_binding_control(
+                        ShortcutId::CaptureAppshot,
+                        shortcut_ix,
+                        self.recording,
+                        &theme,
+                        cx,
+                    )),
+            )
+            .children(self.row_notice(ShortcutId::CaptureAppshot, &theme));
+
         let destination_description = match self.appshot_destination {
             AppshotDestination::Automatic => {
                 "Use the open session, or the new-session composer when no session is open."
@@ -126,38 +98,83 @@ impl ShortcutsPage {
                 "Stage captures in a new-session composer, keeping existing drafts intact."
             }
         };
-        let shortcut = div()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .child(widgets::badge(&theme, capabilities.global_shortcut.badge()))
-            .child(self.render_binding_control(
-                ShortcutId::CaptureAppshot,
-                0,
-                self.recording,
-                &theme,
-                cx,
-            ));
-        let action = |id: &'static str, label: &'static str| {
-            widgets::ghost_action(id, true, &theme)
+        let destination = button::segmented(
+            "appshot-destination",
+            AppshotDestination::ALL
+                .into_iter()
+                .map(|destination| {
+                    button::Segment::new(destination_key(destination), destination.label())
+                })
+                .collect(),
+            AppshotDestination::ALL
+                .iter()
+                .position(|&destination| destination == self.appshot_destination)
+                .unwrap_or(0),
+            288.0,
+            ControlSize::Md,
+            &theme,
+            cx.listener(|this, ix: &usize, _, cx| {
+                if let Some(&destination) = AppshotDestination::ALL.get(*ix)
+                    && this.appshot_destination != destination
+                {
+                    this.appshot_destination = destination;
+                    this.commit_appshots(cx);
+                    cx.notify();
+                }
+            }),
+        );
+
+        let capture_card = widgets::section_card(&theme)
+            .child(widgets::section_header(&theme, "Capture", None, Vec::new()))
+            .child(
+                widgets::card_row(&theme, false)
+                    .child(widgets::row_text(
+                        &theme,
+                        "Capture Appshots",
+                        Some("Captures are staged for review and never sent automatically.".into()),
+                    ))
+                    .child(widgets::row_controls().child(capture)),
+            )
+            .child(
+                widgets::card_row(&theme, false)
+                    .child(widgets::row_text(
+                        &theme,
+                        "Capture sound",
+                        Some("Play a sound when an Appshot is ready.".into()),
+                    ))
+                    .child(widgets::row_controls().child(sound)),
+            )
+            .child(shortcut_row)
+            .child(
+                widgets::card_row(&theme, false)
+                    .child(widgets::row_text(
+                        &theme,
+                        "Destination",
+                        Some(destination_description.into()),
+                    ))
+                    .child(widgets::row_controls().child(destination)),
+            );
+
+        // A permission's kit action: "Allow …" asks the system once; after
+        // that the same slot opens the system's settings pane.
+        let action = |id: &'static str, prompted: bool, label: &'static str| {
+            let label = if prompted { "Open System Settings" } else { label };
+            button::button(id, ButtonKind::Secondary, ControlSize::Md, true, &theme)
                 .aria_label(label)
-                .child(label)
+                .child(SharedString::from(label))
+                .when(prompted, |el| {
+                    el.child(button::glyph(crate::icons::ARROW_UP_RIGHT, ControlSize::Md))
+                })
         };
-        let mut window_access = div()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .child(widgets::badge(&theme, capabilities.window_capture.badge()));
-        if self.appshots_enabled
-            && capabilities.window_capture == CapabilityState::PermissionRequired
-        {
-            let label = if self.capture_access_prompted {
-                "Open System Settings"
-            } else {
-                "Allow window capture"
-            };
-            window_access = window_access.child(action("appshots-capture-access", label).on_click(
-                cx.listener(|this, _, _, cx| {
+        let window_action = (self.appshots_enabled
+            && capabilities.window_capture == CapabilityState::PermissionRequired)
+            .then(|| {
+                action(
+                    "appshots-capture-access",
+                    self.capture_access_prompted,
+                    "Allow window capture",
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
                     if this.capture_access_prompted {
                         if let Some(url) = crate::appshots::capture_settings_url() {
                             cx.open_url(url);
@@ -168,104 +185,79 @@ impl ShortcutsPage {
                     }
                     this.appshot_capabilities = crate::appshots::capabilities();
                     cx.notify();
-                }),
-            ));
-        }
-        let mut text_access = div()
-            .flex()
-            .items_center()
-            .gap(px(10.0))
-            .child(widgets::badge(
-                &theme,
-                capabilities.application_text.badge(),
-            ));
-        if self.appshots_enabled
+                }))
+            });
+        let text_action = (self.appshots_enabled
             && capabilities.application_text == CapabilityState::PermissionRequired
-            && crate::appshots::semantic_settings_url().is_some()
-        {
-            let label = if self.semantic_access_prompted {
-                "Open System Settings"
-            } else {
-                "Enable text capture"
-            };
-            text_access = text_access.child(action("appshots-semantic-access", label).on_click(
-                cx.listener(|this, _, _, cx| {
-                    if this.semantic_access_prompted {
-                        if let Some(url) = crate::appshots::semantic_settings_url() {
-                            cx.open_url(url);
-                        }
-                    } else {
-                        this.semantic_access_prompted = true;
-                        crate::appshots::request_semantic_access();
-                    }
-                    this.appshot_capabilities = crate::appshots::capabilities();
-                    cx.notify();
-                }),
-            ));
-        }
-        let card = widgets::section_card(&theme)
-            .child(row(
-                &theme,
-                true,
-                "Capture Appshots",
-                "Captures are staged for review and never sent automatically.",
-                capture.into_any_element(),
-            ))
-            .child(row(
-                &theme,
-                false,
-                "Capture sound",
-                "Play a sound when an Appshot is ready.",
-                sound.into_any_element(),
-            ))
-            .child(row(
-                &theme,
-                false,
-                if capabilities.platform == AppshotPlatform::LinuxWayland {
-                    "Preferred shortcut"
-                } else {
-                    "Global shortcut"
-                },
-                capabilities.shortcut_description(),
-                shortcut.into_any_element(),
-            ))
-            .child(row(
-                &theme,
-                false,
-                "Destination",
-                destination_description,
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(6.0))
-                    .children(destinations)
-                    .into_any_element(),
-            ))
-            .child(row(
-                &theme,
-                false,
-                "Window capture",
-                capabilities.capture_description(),
-                window_access.into_any_element(),
-            ))
-            .child(row(
-                &theme,
-                false,
-                "Application text",
-                capabilities.semantic_description(),
-                text_access.into_any_element(),
-            ));
-        let helper: SharedString = if self.recording.is_some() {
-            "Press Escape to cancel.".into()
-        } else {
-            self.conflict_notice.clone().unwrap_or_default()
-        };
-        let refresh = action("appshots-refresh-permissions", "Check again")
-            .aria_label("Check permissions again")
+            && crate::appshots::semantic_settings_url().is_some())
+        .then(|| {
+            action(
+                "appshots-semantic-access",
+                self.semantic_access_prompted,
+                "Enable text capture",
+            )
             .on_click(cx.listener(|this, _, _, cx| {
+                if this.semantic_access_prompted {
+                    if let Some(url) = crate::appshots::semantic_settings_url() {
+                        cx.open_url(url);
+                    }
+                } else {
+                    this.semantic_access_prompted = true;
+                    crate::appshots::request_semantic_access();
+                }
                 this.appshot_capabilities = crate::appshots::capabilities();
                 cx.notify();
-            }));
+            }))
+        });
+        let check_again = button::button(
+            "appshots-refresh-permissions",
+            ButtonKind::Secondary,
+            ControlSize::Md,
+            true,
+            &theme,
+        )
+        .aria_label("Check permissions again")
+        .child(button::glyph(crate::icons::REFRESH, ControlSize::Md))
+        .child(SharedString::from("Check again"))
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.appshot_capabilities = crate::appshots::capabilities();
+            cx.notify();
+        }));
+        let permissions_card = widgets::section_card(&theme)
+            .child(widgets::section_header(
+                &theme,
+                "Permissions",
+                Some("Changed a permission? Check again after returning to LUNA.".into()),
+                vec![check_again.into_any_element()],
+            ))
+            .child(
+                widgets::card_row(&theme, false)
+                    .child(widgets::row_text(
+                        &theme,
+                        "Window capture",
+                        Some(capabilities.capture_description().into()),
+                    ))
+                    .child(
+                        widgets::row_controls()
+                            .child(capability_badge(&theme, capabilities.window_capture))
+                            .children(window_action),
+                    ),
+            )
+            .child(
+                widgets::card_row(&theme, false)
+                    .child(widgets::row_text(
+                        &theme,
+                        "Application text",
+                        Some(capabilities.semantic_description().into()),
+                    ))
+                    .child(
+                        widgets::row_controls()
+                            .child(capability_badge(&theme, capabilities.application_text))
+                            .children(text_action),
+                    ),
+            );
+
+        let orphan_notice = self.orphan_notice();
         let scrollbar = self.render_scrollbar(&theme, cx);
         div()
             .id("appshots-settings-page-host")
@@ -300,38 +292,18 @@ impl ShortcutsPage {
                     })
                     .child(
                         widgets::page_column()
-                            .child(widgets::page_header(&theme, "Appshots", None))
-                            .child(
-                                widgets::page_subtitle(&theme, capabilities.setup_description())
-                                    .line_height(crate::typography::ui_rems(20.0)),
-                            )
-                            .child(card)
-                            .child(
-                                div()
-                                    .min_h(px(20.0))
-                                    .mt(px(8.0))
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.text_muted)
-                                    .child(helper),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(12.0))
-                                    .flex()
-                                    .flex_wrap()
-                                    .items_center()
-                                    .gap(px(12.0))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .text_size(crate::typography::ui_rems(12.0))
-                                            .text_color(theme.text_muted)
-                                            .child(
-                                                "Changed a permission? Check again after returning to LUNA.",
-                                            ),
-                                    )
-                                    .child(refresh),
-                            ),
+                            .child(widgets::page_title_bar(&theme, "Appshots", None, Vec::new()))
+                            .child(widgets::page_subtitle(
+                                &theme,
+                                capabilities.setup_description(),
+                            ))
+                            .when_some(orphan_notice, |column, notice| {
+                                column.child(
+                                    widgets::warning_strip(&theme, notice).mt(ui_rems(16.0)),
+                                )
+                            })
+                            .child(capture_card)
+                            .child(permissions_card),
                     ),
             )
             .children(scrollbar)

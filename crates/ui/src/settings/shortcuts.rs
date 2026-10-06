@@ -1,7 +1,14 @@
-//! Settings → Shortcuts (feature-inventory §1.4): a table of the rebindable
-//! bindings — click a combo to record (Esc cancels), live conflict detection,
-//! per-row Reset and Restore defaults. Changes emit [`ShortcutsEvent`]; the
-//! shell persists them and re-applies the app keymap.
+//! Settings → Shortcuts (feature-inventory §1.4): the rebindable bindings,
+//! grouped into section cards — click a key combo to record (Esc cancels),
+//! conflicts are refused at record time and named inline on the row, per-row
+//! Reset and a page-level Restore defaults. Changes emit [`ShortcutsEvent`];
+//! the shell persists them and re-applies the app keymap.
+//!
+//! Layout follows `docs/design/settings-polish-2026-10-06/spec.md`: a page
+//! title bar, section cards with their titles inside, and rows whose trailing
+//! control is the key-combo recorder ([`ShortcutsPage::render_binding_control`]).
+//! Every dimension next to text is an interface rem, so the keycaps follow
+//! Appearance → Interface size.
 
 use gpui::{
     Context, Entity, EventEmitter, FocusHandle, Keystroke, SharedString, Window, div, prelude::*,
@@ -9,18 +16,23 @@ use gpui::{
 };
 
 use crate::appshots::{AppshotCapabilities, AppshotDestination};
+use crate::button::{self, ButtonKind, ControlSize};
 use crate::popover::{self, ScrollRailHost};
 
 #[path = "appshots.rs"]
 mod appshots_page;
-use crate::AccessibleButton as _;
-use crate::interaction::HoverFill as _;
 use crate::settings::widgets;
 use crate::settings::{
     ComposerSendBehavior, KeymapConfig, ShortcutId, combo_from_keystroke, display_combo,
 };
 use crate::state::AppState;
-use crate::theme::Theme;
+use crate::theme::{FillTier, Theme};
+use crate::typography::ui_rems;
+
+/// Shown in place of a row's description while its combo is recording.
+const RECORDING_HINT: &str = "Press the new key combination, or Escape to cancel.";
+/// Narrowest key-combo control, so short combos line up in one column.
+const COMBO_MIN_WIDTH: f32 = 88.0;
 
 /// Outcome of one keystroke while recording. Pure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +84,9 @@ pub struct ShortcutsPage {
     /// A rejected record attempt ("{Combo} is already assigned to {label}.") —
     /// conflicts never persist; they're refused at record time, as in luna.
     conflict_notice: Option<SharedString>,
+    /// The row the notice belongs to, so it renders on that row (with the
+    /// chip's warning edge) instead of in a helper line far below it.
+    notice_row: Option<ShortcutId>,
     focus: FocusHandle,
     appshots_enabled: bool,
     appshot_sound_enabled: bool,
@@ -110,6 +125,7 @@ impl ShortcutsPage {
             recording_blur: None,
             recording_interceptor: None,
             conflict_notice: None,
+            notice_row: None,
             focus: cx.focus_handle(),
             appshots_enabled,
             appshot_sound_enabled,
@@ -165,6 +181,27 @@ impl ShortcutsPage {
     fn commit(&mut self, cx: &mut Context<Self>) {
         cx.emit(ShortcutsEvent::KeymapChanged(self.keymap.clone()));
         cx.notify();
+    }
+
+    /// Refuse an assignment on `row`: the notice renders on that row.
+    fn set_notice(&mut self, row: ShortcutId, notice: impl Into<SharedString>) {
+        self.conflict_notice = Some(notice.into());
+        self.notice_row = Some(row);
+    }
+
+    /// The notice owned by `id`'s row, if any.
+    fn notice_for(&self, id: ShortcutId) -> Option<SharedString> {
+        self.conflict_notice
+            .clone()
+            .filter(|_| self.notice_row == Some(id))
+    }
+
+    /// A notice whose row the current page does not render (it has no row
+    /// to sit on, so the page shows it under its subtitle instead).
+    fn orphan_notice(&self) -> Option<SharedString> {
+        let capture_row = self.notice_row == Some(ShortcutId::CaptureAppshot);
+        let on_this_page = self.notice_row.is_some() && capture_row == self.appshots_page;
+        self.conflict_notice.clone().filter(|_| !on_this_page)
     }
 
     fn set_escape_stops_active_agent(&mut self, enabled: bool, cx: &mut Context<Self>) {
@@ -249,7 +286,7 @@ impl ShortcutsPage {
         self.stop_recording();
         let default = id.default_combo();
         if let Some(refusal) = self.assignment_refusal(id, default) {
-            self.conflict_notice = Some(format!("Can't reset: {refusal}").into());
+            self.set_notice(id, format!("Can't reset: {refusal}"));
             cx.notify();
             return;
         }
@@ -279,7 +316,8 @@ impl ShortcutsPage {
                 if recording == ShortcutId::CaptureAppshot
                     && crate::appshots::validate_shortcut(&combo).is_err()
                 {
-                    self.conflict_notice = Some(
+                    self.set_notice(
+                        recording,
                         format!(
                             "Use {} with a letter, number, function key or navigation key.",
                             if cfg!(target_os = "macos") {
@@ -287,8 +325,7 @@ impl ShortcutsPage {
                             } else {
                                 "Control or Alt"
                             }
-                        )
-                        .into(),
+                        ),
                     );
                     self.stop_recording();
                     cx.notify();
@@ -296,7 +333,7 @@ impl ShortcutsPage {
                     return;
                 }
                 if let Some(refusal) = self.assignment_refusal(recording, &combo) {
-                    self.conflict_notice = Some(refusal.into());
+                    self.set_notice(recording, refusal);
                     self.stop_recording();
                     cx.notify();
                     cx.stop_propagation();
@@ -311,53 +348,70 @@ impl ShortcutsPage {
         cx.stop_propagation();
     }
 
-    /// One shortcut row: label + description left, Reset when customized, and
-    /// the click-to-record combo chip (recording inverts it to
-    /// white-on-black). `ix` is the id's position in [`ShortcutId::ALL`]
-    /// (unique element ids across the group cards); `gx` is the row's place
-    /// in its own card (separator rule).
+    /// One shortcut row: the action and its purpose on the left, the
+    /// key-combo control at the right, and — when this row's last attempt
+    /// was refused — the notice under it. `ix` is the id's position in
+    /// [`ShortcutId::ALL`] (unique element ids across the group cards).
     fn render_row(
         &self,
         id: ShortcutId,
         ix: usize,
-        gx: usize,
         recording: Option<ShortcutId>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        // luna settings.shortcuts.tsx row: min-h-[72px] px-5 gap-5.
-        div()
-            .min_h(px(72.0))
-            .px(px(20.0))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(20.0))
-            .when(gx > 0, |el| el.border_t_1().border_color(theme.border))
+        // The nine jump slots share one purpose, carried by their section
+        // header; repeating it per row read as a wall of identical copy.
+        let description = match id {
+            ShortcutId::JumpSession(_) => None,
+            _ => Some(SharedString::from(description(id))),
+        };
+        widgets::card_row(theme, false)
+            .child(self.shortcut_text(id, id.label(), description, theme))
             .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(SharedString::from(id.label())),
-                    )
-                    .child(
-                        div()
-                            .mt(px(2.0))
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.text_muted)
-                            .child(SharedString::from(description(id))),
-                    ),
+                widgets::row_controls()
+                    .child(self.render_binding_control(id, ix, recording, theme, cx)),
             )
-            .child(self.render_binding_control(id, ix, recording, theme, cx))
+            .children(self.row_notice(id, theme))
     }
 
+    /// A shortcut row's text column. While `id` records, its description
+    /// gives way to the recording hint, in the accent tone, so the state is
+    /// told where the user is looking.
+    fn shortcut_text(
+        &self,
+        id: ShortcutId,
+        title: impl Into<SharedString>,
+        description: Option<SharedString>,
+        theme: &Theme,
+    ) -> gpui::Div {
+        let recording = self.recording == Some(id);
+        widgets::row_text(theme, title, description.filter(|_| !recording)).when(
+            recording,
+            |column| {
+                column.child(
+                    widgets::row_description(theme, RECORDING_HINT)
+                        .text_color(theme.readable_tone(theme.accent, 1.0)),
+                )
+            },
+        )
+    }
+
+    /// The refusal notice for `id`'s row, full width under its text.
+    fn row_notice(&self, id: ShortcutId, theme: &Theme) -> Option<gpui::Div> {
+        let notice = self.notice_for(id)?;
+        Some(
+            div()
+                .w_full()
+                .child(widgets::warning_strip(theme, notice).mt_0()),
+        )
+    }
+
+    /// The key-combo control: a secondary push button showing the combo as
+    /// mono keycaps (click to record), with the row's ghost Reset beside it
+    /// when the binding is customized. Recording turns the button into the
+    /// kit's selected chip ("Press keys…") and puts Cancel in Reset's place;
+    /// a refused attempt gives it a warning edge.
     fn render_binding_control(
         &self,
         id: ShortcutId,
@@ -366,86 +420,104 @@ impl ShortcutsPage {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let accent = theme.accent;
         let combo = self.keymap.get(id).to_string();
+        let default = id.default_combo();
         let is_recording = recording == Some(id);
-        let non_default = combo != id.default_combo();
-        let chip_text: SharedString = if is_recording {
-            "Press keys…".into()
+        let non_default = combo != default;
+        let notice = self.notice_for(id);
+        let spoken = if combo.is_empty() {
+            "not set".to_string()
         } else {
-            display_combo(&combo).into()
+            display_combo(&combo)
         };
-        div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .gap(px(20.0))
-            .when(non_default && !is_recording, |el| {
-                el.child(
-                    div()
-                        .id(("shortcut-reset", ix))
-                        .role(gpui::Role::Button)
-                        .aria_label(format!("Reset {} shortcut", id.label()))
-                        .min_h(px(24.0))
-                        .tab_index(0)
-                        .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .cursor_pointer()
-                        .hover_fg(
-                            format!("shortcut-reset-{ix}"),
-                            theme.readable_muted(0.7),
-                            theme.text,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.reset_shortcut(id, cx);
-                        }))
-                        .child(SharedString::from("Reset")),
+
+        let side = if is_recording {
+            Some(
+                button::icon_button(
+                    format!("shortcut-cancel-{ix}"),
+                    crate::icons::CLOSE,
+                    ControlSize::Md,
+                    true,
+                    theme,
                 )
-            })
-            .child(
-                div()
-                    .id(("shortcut-combo", ix))
-                    .role(gpui::Role::Button)
-                    .aria_label(format!(
-                        "Change {} shortcut: {}",
-                        id.label(),
-                        display_combo(&combo)
-                    ))
-                    .tab_index(0)
-                    .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                    .min_w(px(96.0))
-                    .px(px(12.0))
-                    .py(px(6.0))
-                    .rounded(px(8.0))
-                    .border_1()
-                    .flex()
-                    .justify_center()
-                    .font_family(theme.font_mono.clone())
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .cursor_pointer()
-                    .map(|el| {
-                        if is_recording {
-                            el.border_color(theme.text.opacity(0.3))
-                                .bg(theme.text)
-                                .text_color(theme.on_solid)
-                        } else {
-                            el.border_color(theme.border)
-                                .text_color(theme.text)
-                                .hover_fill(
-                                    format!("shortcut-combo-{ix}"),
-                                    theme.bg,
-                                    crate::theme::flatten(
-                                        theme.fill(crate::theme::FillTier::Tertiary),
-                                        theme.bg,
-                                    ),
-                                )
-                        }
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.start_recording(id, window, cx);
-                    }))
-                    .child(chip_text),
+                .aria_label(format!("Cancel recording the {} shortcut", id.label()))
+                .tooltip(popover::text_tooltip("Cancel (Escape)"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.stop_recording();
+                    cx.notify();
+                })),
             )
+        } else if non_default {
+            let tip = if default.is_empty() {
+                "Reset to no shortcut".to_string()
+            } else {
+                format!("Reset to {}", display_combo(default))
+            };
+            Some(
+                button::icon_button(
+                    format!("shortcut-reset-{ix}"),
+                    crate::icons::RESTART,
+                    ControlSize::Md,
+                    true,
+                    theme,
+                )
+                .aria_label(format!("Reset {} shortcut", id.label()))
+                .tooltip(popover::text_tooltip(tip))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.reset_shortcut(id, cx);
+                })),
+            )
+        } else {
+            None
+        };
+
+        let chip_id = format!("shortcut-combo-{ix}");
+        let chip = if is_recording {
+            button::chip(chip_id, true, ControlSize::Md, true, theme)
+                .child(button::glyph(crate::icons::KEYBOARD, ControlSize::Md))
+                .child(SharedString::from("Press keys…"))
+                .aria_description(RECORDING_HINT)
+        } else {
+            let frame = button::button(chip_id, ButtonKind::Secondary, ControlSize::Md, true, theme)
+                .px(ui_rems(6.0))
+                .gap(ui_rems(3.0))
+                .aria_toggled(gpui::Toggled::False)
+                .when_some(notice, |frame, notice| {
+                    frame
+                        .border_color(theme.warning.opacity(0.7))
+                        .aria_description(notice)
+                });
+            if combo.is_empty() {
+                frame.child(
+                    div()
+                        .px(ui_rems(4.0))
+                        .font_weight(gpui::FontWeight::NORMAL)
+                        .text_color(theme.readable_muted(0.85))
+                        .child(SharedString::from("Not set")),
+                )
+            } else {
+                frame.children(
+                    keycaps_on(cfg!(target_os = "macos"), &combo)
+                        .into_iter()
+                        .map(|cap| keycap(theme, cap)),
+                )
+            }
+        };
+        let chip = chip
+            .min_w(ui_rems(COMBO_MIN_WIDTH))
+            .aria_label(format!("Change {} shortcut: {spoken}", id.label()))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.start_recording(id, window, cx);
+            }));
+
+        div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(ui_rems(6.0))
+            .children(side)
+            .child(chip)
     }
 
     fn on_scroll_hovered(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
@@ -508,18 +580,18 @@ pub fn modifier_send_label(is_macos: bool) -> &'static str {
     if is_macos { "⌘ Enter" } else { "Ctrl Enter" }
 }
 
-/// The page's sections, in display order. [`group`] is a total match, so every
-/// [`ShortcutId::ALL`] entry lands in exactly one — a shortcut added later
-/// extends the match and appears on the page by construction
+/// The page's shortcut sections, in display order. [`group`] is a total
+/// match, so every [`ShortcutId::ALL`] entry lands in exactly one — a shortcut
+/// added later extends the match and appears on the page by construction
 /// (`every_shortcut_lands_in_a_rendered_group` holds the other half: its group
-/// name must be listed here).
-const GROUP_ORDER: [&str; 8] = [
-    "Files",
-    "Browser",
+/// name must be listed here). One card per topic: the single-row Files,
+/// Browser and Projects cards are folded into their neighbours. "Appshots"
+/// renders on the Appshots page, beside its capture settings.
+const GROUP_ORDER: [&str; 6] = [
+    "Sessions and projects",
     "Panels",
-    "Sessions",
     "Tabs and splits",
-    "Projects",
+    "Files and browser",
     "Jump to session",
     "Appshots",
 ];
@@ -528,18 +600,17 @@ const GROUP_ORDER: [&str; 8] = [
 fn group(id: ShortcutId) -> &'static str {
     match id {
         ShortcutId::CaptureAppshot => "Appshots",
-        ShortcutId::SaveFile => "Files",
-        ShortcutId::BrowserReload => "Browser",
+        ShortcutId::SaveFile | ShortcutId::BrowserReload => "Files and browser",
         ShortcutId::ToggleSidebar | ShortcutId::ToggleChanges | ShortcutId::ToggleTerminal => {
             "Panels"
         }
-        ShortcutId::NewProject => "Projects",
-        ShortcutId::OpenModelPicker
-        | ShortcutId::NewSession
+        ShortcutId::NewSession
+        | ShortcutId::NewProject
+        | ShortcutId::OpenModelPicker
+        | ShortcutId::OpenActivity
         | ShortcutId::NextSession
         | ShortcutId::PrevSession
-        | ShortcutId::ArchiveSession => "Sessions",
-        ShortcutId::OpenActivity => "Sessions",
+        | ShortcutId::ArchiveSession => "Sessions and projects",
         ShortcutId::NewThreadChooser
         | ShortcutId::NewThreadSplit
         | ShortcutId::PreviousTab
@@ -549,6 +620,135 @@ fn group(id: ShortcutId) -> &'static str {
         | ShortcutId::ReopenTab => "Tabs and splits",
         ShortcutId::JumpSession(_) => "Jump to session",
     }
+}
+
+/// A section's header description, when its rows share one purpose.
+fn group_description(name: &str) -> Option<SharedString> {
+    match name {
+        "Jump to session" => Some("Open the session at each place in the sidebar list.".into()),
+        _ => None,
+    }
+}
+
+/// Application shortcuts that can't be rebound, listed read-only at the end.
+const FIXED_SHORTCUTS: [(&str, &str); 3] = [
+    ("Search conversations and commands", "mod-k"),
+    ("Open Settings", "mod-,"),
+    ("Close the focused tab, pane or window", "mod-w"),
+];
+
+/// The keycaps a stored combo reads as: the modifiers in the platform's order
+/// and spelling (⌃ ⌥ ⇧ ⌘ on macOS; Ctrl, Alt, Shift elsewhere), then the
+/// key. Parsed by known modifier prefixes rather than a blind split on `-`,
+/// so the minus key ("mod--") and brace chords ("mod-{") keep their key.
+/// Pure.
+fn keycaps_on(mac: bool, combo: &str) -> Vec<SharedString> {
+    let (mut primary, mut ctrl, mut alt, mut shift) = (false, false, false, false);
+    let mut rest = combo;
+    while let Some((head, tail)) = rest.split_once('-') {
+        if tail.is_empty() {
+            break;
+        }
+        match head {
+            "mod" => primary = true,
+            "ctrl" => ctrl = true,
+            "alt" => alt = true,
+            "shift" => shift = true,
+            _ => break,
+        }
+        rest = tail;
+    }
+    let mut caps: Vec<SharedString> = Vec::new();
+    if mac {
+        for (on, glyph) in [(ctrl, "⌃"), (alt, "⌥"), (shift, "⇧"), (primary, "⌘")] {
+            if on {
+                caps.push(glyph.into());
+            }
+        }
+    } else {
+        // Off macOS ctrl IS the primary: a legacy "ctrl-" spelling and
+        // "mod-" are one key.
+        for (on, label) in [(primary || ctrl, "Ctrl"), (alt, "Alt"), (shift, "Shift")] {
+            if on {
+                caps.push(label.into());
+            }
+        }
+    }
+    if !rest.is_empty() {
+        caps.push(key_label(mac, rest).into());
+    }
+    caps
+}
+
+/// A combo's final key as a keycap label. Pure.
+fn key_label(mac: bool, key: &str) -> String {
+    let named = match key {
+        "up" => Some("↑"),
+        "down" => Some("↓"),
+        "left" => Some("←"),
+        "right" => Some("→"),
+        "enter" if mac => Some("↩"),
+        "tab" if mac => Some("⇥"),
+        "backspace" if mac => Some("⌫"),
+        "delete" if mac => Some("⌦"),
+        "escape" => Some("Esc"),
+        "pageup" => Some("Page Up"),
+        "pagedown" => Some("Page Down"),
+        _ => None,
+    };
+    if let Some(named) = named {
+        return named.to_string();
+    }
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+/// One mono keycap. Interface rems throughout, so it scales with Interface
+/// size beside the row text; it inherits its host's text colour.
+fn keycap(theme: &Theme, label: SharedString) -> gpui::Div {
+    div()
+        .flex_none()
+        .min_w(ui_rems(18.0))
+        .min_h(ui_rems(18.0))
+        .px(ui_rems(4.0))
+        .rounded(px(crate::theme::radius::XS))
+        .border_1()
+        .border_color(theme.separator(false))
+        .bg(theme.fill(FillTier::Quaternary))
+        .flex()
+        .items_center()
+        .justify_center()
+        .font_family(theme.font_mono.clone())
+        .text_size(ui_rems(11.0))
+        .line_height(ui_rems(14.0))
+        .font_weight(gpui::FontWeight::NORMAL)
+        .child(label)
+}
+
+/// A read-only combo: its keycaps without a control frame, announced as text.
+fn static_keycaps(
+    theme: &Theme,
+    id: impl Into<gpui::ElementId>,
+    combo: &str,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .role(gpui::Role::Label)
+        .aria_label(display_combo(combo))
+        .flex_none()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(ui_rems(3.0))
+        .text_color(theme.readable_muted(0.9))
+        .children(
+            keycaps_on(cfg!(target_os = "macos"), combo)
+                .into_iter()
+                .map(|cap| keycap(theme, cap)),
+        )
 }
 
 /// One-line purpose copy per shortcut (luna lib/shortcuts.ts
@@ -616,6 +816,158 @@ impl ShortcutsPage {
     }
 }
 
+impl ShortcutsPage {
+    /// The page action: restores every shortcut, the send key and the Escape
+    /// setting. Disabled — with a tooltip saying why — while nothing is
+    /// customized or a combo is recording.
+    fn render_restore_defaults(
+        &self,
+        customized: bool,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let recording = self.recording.is_some();
+        let enabled = customized && !recording;
+        let tip = if recording {
+            "Finish or cancel recording first."
+        } else if !customized {
+            "Everything on this page is already at its default."
+        } else {
+            "Restore every shortcut, the send key and the Escape setting."
+        };
+        button::button(
+            "shortcuts-restore-defaults",
+            ButtonKind::Secondary,
+            ControlSize::Md,
+            enabled,
+            theme,
+        )
+        .aria_label("Restore default shortcuts")
+        .tooltip(popover::text_tooltip(tip))
+        .child(button::glyph(crate::icons::RESTART, ControlSize::Md))
+        .child(SharedString::from("Restore defaults"))
+        .when(enabled, |el| {
+            el.on_click(cx.listener(|this, _, _, cx| {
+                this.keymap = KeymapConfig::default();
+                this.stop_recording();
+                this.conflict_notice = None;
+                this.commit(cx);
+                this.set_escape_stops_active_agent(false, cx);
+                this.set_composer_send_behavior(ComposerSendBehavior::Enter, cx);
+            }))
+        })
+        .into_any_element()
+    }
+
+    /// The Chat section: the composer's send key and Escape's stop fallback.
+    fn render_chat_section(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let escape_stops_active_agent = self.escape_stops_active_agent;
+        let send_behavior = self.composer_send_behavior;
+        let send_copy = format!(
+            "Choose whether Enter sends immediately or starts a new paragraph. {} always \
+             submits; with an empty composer it sends the most recently queued message. \
+             {} always inserts a line break.",
+            display_combo("mod-enter"),
+            display_combo("shift-enter"),
+        );
+        let send_row = widgets::card_row(theme, false)
+            .child(widgets::row_text(
+                theme,
+                "Send messages with",
+                Some(send_copy.into()),
+            ))
+            .child(
+                widgets::row_controls()
+                    .when(send_behavior != ComposerSendBehavior::Enter, |el| {
+                        el.child(
+                            button::icon_button(
+                                "composer-send-reset",
+                                crate::icons::RESTART,
+                                ControlSize::Md,
+                                true,
+                                theme,
+                            )
+                            .aria_label("Reset send shortcut")
+                            .tooltip(popover::text_tooltip("Reset to Enter"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.set_composer_send_behavior(ComposerSendBehavior::Enter, cx)
+                            })),
+                        )
+                    })
+                    .child(button::segmented(
+                        "composer-send-behavior",
+                        vec![
+                            button::Segment::new("enter", "Enter"),
+                            button::Segment::new(
+                                "mod-enter",
+                                modifier_send_label(cfg!(target_os = "macos")),
+                            ),
+                        ],
+                        usize::from(send_behavior == ComposerSendBehavior::ModEnter),
+                        184.0,
+                        ControlSize::Md,
+                        theme,
+                        cx.listener(|this, ix: &usize, _, cx| {
+                            this.set_composer_send_behavior(
+                                if *ix == 1 {
+                                    ComposerSendBehavior::ModEnter
+                                } else {
+                                    ComposerSendBehavior::Enter
+                                },
+                                cx,
+                            )
+                        }),
+                    )),
+            );
+        let escape_row = widgets::card_row(theme, false)
+            .child(widgets::row_text(
+                theme,
+                "Stop active agent with Escape",
+                Some(
+                    "When no dialog, menu, picker, or terminal handles Escape, stop the agent \
+                     in the active session."
+                        .into(),
+                ),
+            ))
+            .child(widgets::row_controls().child(widgets::switch_control(
+                "escape-stops-active-agent-toggle",
+                "Stop active agent with Escape",
+                escape_stops_active_agent,
+                theme,
+                cx,
+                move |this, cx| {
+                    this.set_escape_stops_active_agent(!escape_stops_active_agent, cx);
+                },
+            )));
+        widgets::section_card(theme)
+            .child(widgets::section_header(theme, "Chat", None, Vec::new()))
+            .child(send_row)
+            .child(escape_row)
+    }
+
+    /// The read-only application shortcuts.
+    fn render_fixed_section(theme: &Theme) -> gpui::Div {
+        FIXED_SHORTCUTS.into_iter().enumerate().fold(
+            widgets::section_card(theme).child(widgets::section_header(
+                theme,
+                "Fixed shortcuts",
+                Some("Built into LUNA; these can't be changed.".into()),
+                Vec::new(),
+            )),
+            |card, (ix, (title, combo))| {
+                card.child(
+                    widgets::card_row(theme, false)
+                        .child(widgets::row_text(theme, title, None))
+                        .child(
+                            widgets::row_controls()
+                                .child(static_keycaps(theme, ("fixed-shortcut", ix), combo)),
+                        ),
+                )
+            },
+        )
+    }
+}
+
 impl Render for ShortcutsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.appshot_capabilities = crate::appshots::capabilities();
@@ -627,154 +979,33 @@ impl Render for ShortcutsPage {
         }
         let theme = Theme::of(cx).clone();
         let recording = self.recording;
-        let escape_stops_active_agent = self.escape_stops_active_agent;
-        let send_behavior = self.composer_send_behavior;
         let customized = self.keymap != KeymapConfig::default()
-            || escape_stops_active_agent
-            || send_behavior != ComposerSendBehavior::default();
-        let modifier_label = modifier_send_label(cfg!(target_os = "macos"));
+            || self.escape_stops_active_agent
+            || self.composer_send_behavior != ComposerSendBehavior::default();
 
-        let escape_behavior_row = widgets::section_card(&theme).child(
-            widgets::card_row(&theme, true)
-                .min_h(px(84.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(widgets::row_title(&theme, "Stop active agent with Escape"))
-                        .child(
-                            div()
-                                .mt(px(4.0))
-                                .max_w(px(430.0))
-                                .text_size(crate::typography::ui_rems(11.5))
-                                .line_height(crate::typography::ui_rems(17.0))
-                                .text_color(theme.readable_muted(0.65))
-                                .child(SharedString::from(
-                                    "When no dialog, menu, picker, or terminal handles Escape, stop the agent in the active session.",
-                                )),
-                        ),
-                )
-                .child(widgets::switch_control(
-                    "escape-stops-active-agent-toggle",
-                    "Stop active agent with Escape",
-                    escape_stops_active_agent,
-                    &theme,
-                    cx,
-                    move |this, cx| {
-                        this.set_escape_stops_active_agent(!escape_stops_active_agent, cx);
-                    },
-                )),
-        );
-
-        let send_behavior_control = div()
-            .flex_none()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(10.0))
-            .when(send_behavior != ComposerSendBehavior::Enter, |el| {
-                el.child(
-                    crate::button::icon_button(
-                        "composer-send-reset",
-                        crate::icons::RESTART,
-                        crate::button::ControlSize::Md,
-                        true,
-                        &theme,
-                    )
-                    .aria_label("Reset send shortcut")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.set_composer_send_behavior(ComposerSendBehavior::Enter, cx)
-                    })),
-                )
-            })
-            .child(crate::button::segmented(
-                "composer-send-behavior",
-                vec![
-                    crate::button::Segment::new("enter", "Enter"),
-                    crate::button::Segment::new("mod-enter", modifier_label),
-                ],
-                usize::from(send_behavior == ComposerSendBehavior::ModEnter),
-                184.0,
-                crate::button::ControlSize::Md,
-                &theme,
-                cx.listener(|this, ix: &usize, _, cx| {
-                    this.set_composer_send_behavior(
-                        if *ix == 1 {
-                            ComposerSendBehavior::ModEnter
-                        } else {
-                            ComposerSendBehavior::Enter
-                        },
-                        cx,
-                    )
-                }),
-            ));
-
-        let send_behavior_row = widgets::section_card(&theme)
-            .child(
-                widgets::card_row(&theme, true)
-                    .min_h(px(84.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, "Send messages with"))
-                            .child(
-                                div()
-                                    .mt(px(4.0))
-                                    .max_w(px(430.0))
-                                    .text_size(crate::typography::ui_rems(11.5))
-                                    .line_height(crate::typography::ui_rems(17.0))
-                                    .text_color(theme.readable_muted(0.65))
-                                    .child(SharedString::from(
-                                        "Choose whether Enter sends immediately or starts a new paragraph. Cmd/Ctrl+Enter always submits; with an empty composer it sends the most recently queued message. Shift+Enter always inserts a line break.",
-                                    )),
-                            ),
-                    )
-                    .child(send_behavior_control),
-            );
-
-        // One card per group, each under its small section label — the flat
-        // 16-row table read as one undifferentiated wall. `ix` (the id's
-        // position in ALL) keys the interactive elements, so ids stay unique
-        // across cards. The label nests tight to its card (8px); the card's
-        // own `section_card` top margin is zeroed here or it stacks on the
-        // wrapper gap and reads as a separate, floating block — group
-        // separation comes from the 28px between wrappers instead.
-        let mut groups: Vec<gpui::AnyElement> = Vec::new();
+        let restore = self.render_restore_defaults(customized, &theme, cx);
+        let mut sections: Vec<gpui::AnyElement> =
+            vec![self.render_chat_section(&theme, cx).into_any_element()];
+        // One card per group, its title inside. `ix` (the id's position in
+        // ALL) keys the interactive elements, so ids stay unique across cards.
         for name in GROUP_ORDER {
             if name == "Appshots" {
                 continue;
             }
-            let mut card = widgets::section_card(&theme).mt(px(0.0));
-            let ids = ShortcutId::ALL.into_iter().filter(|&id| group(id) == name);
-            for (gx, id) in ids.enumerate() {
+            let mut card = widgets::section_card(&theme).child(widgets::section_header(
+                &theme,
+                name,
+                group_description(name),
+                Vec::new(),
+            ));
+            for id in ShortcutId::ALL.into_iter().filter(|&id| group(id) == name) {
                 let ix = ShortcutId::ALL.iter().position(|&a| a == id).unwrap_or(0);
-                card = card.child(self.render_row(id, ix, gx, recording, &theme, cx));
+                card = card.child(self.render_row(id, ix, recording, &theme, cx));
             }
-            groups.push(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .child(widgets::field_label(&theme, name))
-                    .child(card)
-                    .into_any_element(),
-            );
+            sections.push(card.into_any_element());
         }
-
-        // Helper line stays in the muted tone even for a rejected conflict —
-        // the message names the specific clash (luna settings.shortcuts.tsx).
-        let helper: SharedString = if recording.is_some() {
-            "Press Escape to cancel.".into()
-        } else if let Some(notice) = self.conflict_notice.clone() {
-            notice
-        } else {
-            "Shortcuts must be unique.".into()
-        };
+        sections.push(Self::render_fixed_section(&theme).into_any_element());
+        let orphan_notice = self.orphan_notice();
 
         let scrollbar = self.render_scrollbar(&theme, cx);
         div()
@@ -791,100 +1022,24 @@ impl Render for ShortcutsPage {
                     .track_focus(&self.focus)
                     .child(
                         widgets::page_column()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_start()
-                                    .justify_between()
-                                    .gap(px(24.0))
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .flex_col()
-                                            .child(widgets::page_header(
-                                                &theme,
-                                                "Keyboard shortcuts",
-                                                None,
-                                            ))
-                                            .child(
-                                                widgets::page_subtitle(
-                                                    &theme,
-                                                    "Click a binding, then press the key combination you \
-                                                     want to use. Changes apply immediately and stay on \
-                                                     this device.",
-                                                )
-                                                .max_w(px(512.0))
-                                                .line_height(crate::typography::ui_rems(20.0)),
-                                            )
-                                            .child(
-                                                widgets::page_subtitle(
-                                                    &theme,
-                                                    format!(
-                                                        "Fixed application shortcuts: {} searches conversations and opens commands; {} opens Settings; {} closes the focused tab, pane or window.",
-                                                        display_combo("mod-k"),
-                                                        display_combo("mod-,"),
-                                                        display_combo("mod-w"),
-                                                    ),
-                                                )
-                                                .mt(px(12.0))
-                                                .max_w(px(512.0))
-                                                .line_height(crate::typography::ui_rems(20.0)),
-                                            ),
-                                    )
-                                    .child({
-                                        // `disabled:opacity-35` when nothing is
-                                        // customized or while recording.
-                                        let disabled = !customized || recording.is_some();
-                                        widgets::ghost_action("shortcuts-restore-defaults", !disabled, &theme)
-                                            .when(!disabled, |el| el.accessible_button("Restore default shortcuts", theme.accent))
-                                            .flex_none()
-                                            .when(!disabled, |el| {
-                                                el.on_click(
-                                                    cx.listener(|this, _, _, cx| {
-                                                        this.keymap = KeymapConfig::default();
-                                                        this.stop_recording();
-                                                        this.conflict_notice = None;
-                                                        this.commit(cx);
-                                                        this.set_escape_stops_active_agent(
-                                                            false, cx,
-                                                        );
-                                                        this.set_composer_send_behavior(
-                                                            ComposerSendBehavior::Enter,
-                                                            cx,
-                                                        );
-                                                    }),
-                                                )
-                                            })
-                                            .child(
-                                                crate::icons::icon(crate::icons::RESTART)
-                                                    .size(px(14.0))
-                                                    .text_color(theme.text_muted),
-                                            )
-                                            .child(SharedString::from("Restore defaults"))
-                                    }),
-                            )
-                            .child(send_behavior_row.mt(px(32.0)))
-                            .child(
-                                div()
-                                    .mt(px(28.0))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(28.0))
-                                    .children(groups),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(12.0))
-                                    .px(px(4.0))
-                                    .min_h(px(20.0))
-                                    .flex()
-                                    .justify_center()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.text_muted)
-                                    .child(helper),
-                            )
-                            .child(escape_behavior_row),
+                            .child(widgets::page_title_bar(
+                                &theme,
+                                "Keyboard shortcuts",
+                                None,
+                                vec![restore],
+                            ))
+                            .child(widgets::page_subtitle(
+                                &theme,
+                                "Click a shortcut, then press the key combination you want to \
+                                 use. Each shortcut must be unique. Changes apply immediately \
+                                 and stay on this device.",
+                            ))
+                            .when_some(orphan_notice, |column, notice| {
+                                column.child(
+                                    widgets::warning_strip(&theme, notice).mt(ui_rems(16.0)),
+                                )
+                            })
+                            .children(sections),
                     ),
             )
             .children(scrollbar)
