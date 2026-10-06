@@ -678,7 +678,7 @@ impl Render for FileEditorTooltip {
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .child(self.text.clone());
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card).elevated()
     }
 }
 
@@ -3055,7 +3055,7 @@ impl FilesSurface {
                     .text_color(theme.text_dim)
                     .child(SharedString::from(comment.body)),
             );
-        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card).elevated()
             .into_any_element()
     }
 
@@ -3131,7 +3131,7 @@ impl FilesSurface {
                         .on_click(cx.listener(|this, _, _, cx| this.commit_editor_comment(cx))),
                     ),
             );
-        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card).elevated()
             .into_any_element()
     }
 

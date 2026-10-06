@@ -44,7 +44,7 @@ Update this file as each finding lands so work can resume after compaction.
 | CP-13 | P2 | Two highlighted rows at once; the default cursor lands on a disabled row | partial | Hover wash one step lighter than selection (menu_hover_bg); shared pointer/keyboard cursor not yet unified |
 | CP-14 | P2 | Seven type sizes and two heading styles across sibling menus | done (milestone C) | menu_heading 11 pt semibold (no sub-11 menu text) |
 | CP-15 | P2 | The composer pill has no focused state | done (milestone C) | Composer pill: border_strong + inset accent ring when focused |
-| CP-16 | P2 | Floating menus cast no shadow while tooltips do (elevation inverted) | partial | menu_shadows/tooltip_shadows tokens on opaque cards; frosted menus keep no shadow (GPUI shadows fill beneath translucent glass) |
+| CP-16 | P2 | Floating menus cast no shadow while tooltips do (elevation inverted) | done (milestone H) | Frosted cards get `Frosted::elevated()`: a contact rim and soft downward rings painted outside the card after its blur (no box shadow, so the glass interior never stains); menus, nested menus, dialogs, the palette, hover cards and the outline popover opt in; opaque cards keep `menu_shadows`/`tooltip_shadows` |
 | CP-17 | P2 | Unknown context usage renders as "○ —" | done (milestone C) | Unknown usage shows the bare ring; tabular share label |
 | CP-18 | P2 | The text column and the control column start at different x | done (milestone C) | ACTIONS_ROW_INSET 12 → 10 |
 | CP-19 | P2 | Attachment remove control: 18pt, hover-only, double ring; thumbnail radii drift | done (milestone C) | 20 pt raised remove disc with plain ×, visible on hover and focus, Role::Button |

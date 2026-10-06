@@ -101,7 +101,7 @@ impl Render for ChangeRequestTooltip {
                     .text_color(theme.text_muted)
                     .child(self.model.title.clone()),
             );
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card).elevated()
     }
 }
 

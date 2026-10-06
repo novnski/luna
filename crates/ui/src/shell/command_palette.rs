@@ -1143,7 +1143,7 @@ impl Shell {
                     .child(command_key_hint(&theme, "Esc", "Close")),
             );
         // Match the composer's 16px backdrop blur, including its opaque fallback.
-        let card = crate::frost::frosted(16.0, crate::frost::MENU_BLUR, card);
+        let card = crate::frost::frosted(16.0, crate::frost::MENU_BLUR, card).elevated();
         // Arrive as one object: a short fade and 6 pt rise (audit SH-04).
         let card = gpui::AnimationExt::with_animation(
             div().relative().child(card),

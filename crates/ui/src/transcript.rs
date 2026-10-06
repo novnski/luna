@@ -9517,7 +9517,7 @@ impl gpui::Render for ChildInspectionTooltip {
                     .text_color(theme.text)
                     .child(line.clone())
             }));
-        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card).elevated()
     }
 }
 

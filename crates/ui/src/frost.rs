@@ -9,8 +9,8 @@
 //! is structural: blur first, then shadow, tint, border, rows, text.
 
 use gpui::{
-    AnyElement, App, Bounds, Corners, Element, GlobalElementId, InspectorElementId, IntoElement,
-    LayoutId, Pixels, Window, px,
+    AnyElement, App, BorderStyle, Bounds, Corners, Element, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, Window, hsla, point, px,
 };
 
 use crate::theme::Theme;
@@ -26,6 +26,7 @@ pub fn frosted(corner_radius: f32, blur_radius: f32, child: impl IntoElement) ->
         corner_radius,
         blur_radius,
         child: child.into_any_element(),
+        elevated: false,
     }
 }
 
@@ -33,6 +34,55 @@ pub struct Frosted {
     corner_radius: f32,
     blur_radius: f32,
     child: AnyElement,
+    elevated: bool,
+}
+
+impl Frosted {
+    /// Give a floating card its elevation on glass (audit CP-16). A box
+    /// shadow can't be used: GPUI fills it beneath the element and the
+    /// translucent card shows it as a stain. Instead soft rings are painted
+    /// OUTSIDE the card, after its blur, so the glass interior stays clean.
+    /// Opaque themes keep their cards' own [`crate::theme::menu_shadows`].
+    pub fn elevated(mut self) -> Self {
+        self.elevated = true;
+        self
+    }
+}
+
+/// Rings outside a frosted card: a crisp contact rim against its hairline,
+/// then a soft falloff that drifts downward like an ambient drop shadow.
+/// Painted with the window's element opacity, so they fade with the card.
+fn paint_elevation(window: &mut Window, bounds: Bounds<Pixels>, corner_radius: f32) {
+    const RINGS: usize = 8;
+    let (contact, ambient) = match crate::theme::current_appearance() {
+        crate::theme::Appearance::Dark => (0.42, 0.20),
+        crate::theme::Appearance::Light => (0.10, 0.055),
+    };
+    for ring in 1..=RINGS {
+        let distance = ring as f32;
+        let alpha = if ring == 1 {
+            contact
+        } else {
+            let falloff = 1.0 - (distance - 1.0) / RINGS as f32;
+            ambient * falloff * falloff
+        };
+        // Each ring sits strictly outside the card: its downward drift stays
+        // under its distance.
+        let drift = (distance - 1.0) * 0.45;
+        let ring_bounds = bounds.dilate(px(distance));
+        let ring_bounds = Bounds {
+            origin: point(ring_bounds.origin.x, ring_bounds.origin.y + px(drift)),
+            size: ring_bounds.size,
+        };
+        window.paint_quad(gpui::quad(
+            ring_bounds,
+            Corners::all(px(corner_radius + distance)),
+            gpui::transparent_black(),
+            px(1.0),
+            hsla(0.0, 0.0, 0.0, alpha),
+            BorderStyle::Solid,
+        ));
+    }
 }
 
 impl Element for Frosted {
@@ -88,6 +138,9 @@ impl Element for Frosted {
                 );
                 self.child.paint(window, cx);
             });
+            if self.elevated {
+                paint_elevation(window, bounds, self.corner_radius);
+            }
         } else {
             self.child.paint(window, cx);
         }

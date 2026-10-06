@@ -3992,7 +3992,7 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(crate::frost::frosted(14.0, crate::frost::MENU_BLUR, card)),
+                            .child(crate::frost::frosted(14.0, crate::frost::MENU_BLUR, card).elevated()),
                     ),
             )
             .priority(2)

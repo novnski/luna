@@ -181,7 +181,7 @@ impl Render for BadgeCard {
         // scene layer. Sharing the transcript's layer let the bubble's text
         // paint over the card, since equal draw orders render quads before
         // text.
-        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card).elevated()
     }
 }
 

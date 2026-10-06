@@ -236,7 +236,7 @@ impl Render for UsageCard {
                     .text_color(theme.text_faint)
                     .child(SharedString::from(detail))
             });
-        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card).elevated()
     }
 }
 

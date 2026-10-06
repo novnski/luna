@@ -513,9 +513,9 @@ fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
     )
     .absolute()
     .inset_0();
-    // No drop shadow under frost: GPUI paints a shadow as a filled shape
-    // beneath its element, and the translucent card would show it as a dark
-    // stain. Opaque cards carry [`crate::theme::menu_shadows`] instead.
+    // No box shadow under frost (GPUI fills it beneath the translucent card,
+    // a dark stain); the frost's outside rings carry the elevation instead.
+    // Opaque cards carry [`crate::theme::menu_shadows`].
     crate::frost::frosted(
         CARD_RADIUS,
         blur,
@@ -525,6 +525,7 @@ fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
             .child(content)
             .into_any_element(),
     )
+    .elevated()
     .into_any_element()
 }
 
@@ -642,8 +643,9 @@ pub fn nested_menu(id: impl Into<SharedString>, content: AnyElement, left: bool)
     // A nested menu shares the parent's interaction surface. Its outside
     // clicks must reach sibling controls and its trigger; the top-level menu
     // still consumes dismissal clicks before they reach the app underneath.
-    let content =
-        crate::frost::frosted(CARD_RADIUS, crate::frost::MENU_BLUR, content).into_any_element();
+    let content = crate::frost::frosted(CARD_RADIUS, crate::frost::MENU_BLUR, content)
+        .elevated()
+        .into_any_element();
     div()
         .absolute()
         .top_0()
@@ -922,8 +924,9 @@ fn modal_with(
     corner_radius: f32,
     scrim: f32,
 ) -> AnyElement {
-    let card =
-        crate::frost::frosted(corner_radius, crate::frost::MENU_BLUR, card).into_any_element();
+    let card = crate::frost::frosted(corner_radius, crate::frost::MENU_BLUR, card)
+        .elevated()
+        .into_any_element();
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.0), px(0.0)))
