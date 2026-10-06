@@ -21,8 +21,11 @@ use luna_proto::{
 };
 use luna_rpc::{RpcError, methods};
 
-use crate::AccessibleButton as _;
+use crate::button::{ButtonKind, ControlSize};
 use crate::composer::ComposerInput;
+use crate::icons;
+use crate::popover::{self, ScrollRailHost};
+use crate::settings::widgets;
 use crate::state::{AppState, EngineHandle};
 use crate::theme::Theme;
 
@@ -293,6 +296,8 @@ pub struct AutomationsPanel {
     more_task: Option<Task<()>>,
     runs_tasks: HashMap<String, Task<()>>,
     flow_task: Option<Task<()>>,
+    /// The panel's scroller and its floating rail (page and pane alike).
+    scroll: widgets::PageScroll,
     _poll: Task<()>,
     /// QA: report the next mutation's answer as lost.
     #[cfg(feature = "appshots-fixture")]
@@ -421,6 +426,7 @@ impl AutomationsPanel {
             more_task: None,
             runs_tasks: HashMap::new(),
             flow_task: None,
+            scroll: widgets::PageScroll::default(),
             _poll: poll,
             #[cfg(feature = "appshots-fixture")]
             lose_next_mutation: false,
@@ -1408,6 +1414,16 @@ impl AutomationsPanel {
     }
 }
 
+impl ScrollRailHost for AutomationsPanel {
+    fn rail_bar(&mut self) -> &mut popover::MenuScrollbarState {
+        self.scroll.rail_bar()
+    }
+
+    fn rail_scroll(&self) -> Option<gpui::ScrollHandle> {
+        self.scroll.rail_scroll()
+    }
+}
+
 impl Render for AutomationsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.last_render.set(Some(Instant::now()));
@@ -1416,142 +1432,330 @@ impl Render for AutomationsPanel {
             self.refresh(true, cx);
         }
         let theme = Theme::of(cx).clone();
-        let muted = theme.readable_muted(0.7);
-        let small = |text: String, color: gpui::Hsla| {
-            div()
-                .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
-                .text_color(color)
-                .child(SharedString::from(text))
-        };
-        let link = |id: SharedString, label: &'static str| {
-            div()
-                .id(id)
-                .accessible_button(label, theme.accent)
-                .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.accent)
-                .cursor_pointer()
-                .child(label)
-        };
+        // Settings → Automations is a settings page; the right pane keeps
+        // its surface toolbar. Both share the list, rows and editor below.
+        if matches!(self.scope, AutomationScope::All) {
+            self.render_page(&theme, cx)
+        } else {
+            self.render_pane(&theme, cx)
+        }
+    }
+}
+
+/// Text input frame for the editor: the shared dialog field on interface
+/// rems and theme fills, so it sits in a section card beside kit controls.
+fn input_frame(input: &Entity<ComposerInput>, theme: &Theme) -> gpui::Div {
+    crate::popover::dialog_field(input.clone().into_any_element())
+        .px(crate::typography::ui_rems(10.0))
+        .py(crate::typography::ui_rems(6.0))
+        .rounded(px(8.0))
+        .border_color(theme.separator(true))
+        .bg(theme.fill(crate::theme::FillTier::Quaternary))
+        .text_size(crate::typography::ui_rems(13.0))
+}
+
+/// An inline notice inside a card, on the rows' text edge.
+fn card_notice(strip: gpui::Div) -> gpui::Div {
+    div()
+        .w_full()
+        .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+        .pb(crate::typography::ui_rems(widgets::ROW_PAD_Y))
+        .child(strip.mt(px(0.0)))
+}
+
+impl AutomationsPanel {
+    /// Settings → Automations: the page frame (title bar with the page's
+    /// actions, subtitle), the editor when one is open, then the list card,
+    /// in the page's own scroller with the floating rail.
+    fn render_page(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let actions = self.header_actions(ControlSize::Md, theme, cx);
+        let editor = self.editor.is_some().then(|| self.render_editor(theme, cx));
+        let list = self.render_list("On this device", theme, cx);
+        let scrollbar = popover::rail(self, "automations-page-scrollbar", theme, cx);
+        div()
+            .id("automations-page-host")
+            .relative()
+            .size_full()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.scroll.set_list_hovered(*hovered) {
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .id("automations-list")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll.scroll)
+                    .child(
+                        widgets::page_column()
+                            .child(widgets::page_title_bar(theme, "Automations", None, actions))
+                            .child(widgets::page_subtitle(
+                                theme,
+                                "Runs on this device while LUNA is open. Claude's own scheduled \
+                                 prompts are listed in the Goal popover, not here.",
+                            ))
+                            .children(editor)
+                            .child(list),
+                    ),
+            )
+            .children(scrollbar)
+            .into_any_element()
+    }
+
+    /// The right pane's surface for the focused conversation: the surface
+    /// toolbar (title, then the same actions at `Sm`) over a scrolling body
+    /// holding the editor and the list card.
+    fn render_pane(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let title = match &self.scope {
             AutomationScope::Conversation(chat) => {
                 format!("Automations · {}", self.chat_title(chat, cx))
             }
             AutomationScope::All => "Automations on this device".into(),
         };
+        let foreign = self.foreign_host(cx);
+        let actions = if foreign.is_some() {
+            Vec::new()
+        } else {
+            self.header_actions(ControlSize::Sm, theme, cx)
+        };
+        let toolbar = crate::surface_chrome::toolbar(theme)
+            .child(
+                // The chat title is user data: it ellipsizes before the
+                // actions are pushed out of the pane.
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(title)),
+            )
+            .children(actions);
         let mut body = div()
             .id("automations-list")
             .flex_1()
             .min_h_0()
+            .w_full()
             .overflow_y_scroll()
-            .p(px(12.0))
+            .track_scroll(&self.scroll.scroll)
+            .px(crate::typography::ui_rems(12.0))
+            .pt(crate::typography::ui_rems(4.0))
+            .pb(crate::typography::ui_rems(16.0))
             .flex()
             .flex_col()
-            .gap(px(10.0))
-            .child(small(
-                "Runs on this device while LUNA is open. Claude's own scheduled prompts are listed in the Goal popover, not here.".into(),
-                muted,
+            .gap(crate::typography::ui_rems(12.0))
+            .child(widgets::row_description(
+                theme,
+                "Runs on this device while LUNA is open. Claude's own scheduled prompts are \
+                 listed in the Goal popover, not here.",
             ));
-        if let Some(host) = self.foreign_host(cx) {
-            body = body.child(small(
-                format!("This conversation's automations are managed on {host}; LUNA must be open there. They can't be viewed or changed from this device."),
-                theme.text,
-            ));
-            return div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .child(crate::surface_chrome::toolbar(&theme).child(SharedString::from(title)))
-                .child(body)
-                .into_any_element();
-        }
-        if let Some(error) = &self.error {
-            body = body.child(small(
-                error.clone(),
-                theme.readable_tone(theme.danger_muted, 1.0),
-            ));
-        }
-        // Toolbar actions.
-        let mut tools = div().flex().flex_row().gap(px(12.0));
-        if self.scope_chat().is_some() && self.editor.is_none() {
-            tools = tools.child(
-                link("automation-new".into(), "New automation")
-                    .on_click(cx.listener(|this, _, _, cx| this.open_editor(None, cx))),
-            );
-        }
-        tools = tools
-            .child(
-                link("automation-reload".into(), "Reload")
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx))),
-            )
-            .child(
-                link(
-                    "automation-deleted".into(),
-                    if self.show_deleted {
-                        "Hide deleted"
-                    } else {
-                        "Show deleted"
-                    },
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.show_deleted = !this.show_deleted;
-                    this.refresh(true, cx);
-                })),
-            );
-        body = body.child(tools);
-        if self.editor.is_some() {
-            body = body.child(self.render_editor(&theme, cx));
-        }
-        if self.loading && self.first.is_empty() {
-            body = body.child(small("Loading…".into(), muted));
-        } else if self.rows().next().is_none() {
-            body = body.child(small("No automations yet.".into(), muted));
-        }
-        let rows: Vec<AutomationRecord> = self.rows().cloned().collect();
-        for record in rows {
-            body = body.child(self.render_record(&record, &theme, cx));
-        }
-        if self.rows_next().is_some() {
+        if let Some(host) = foreign {
             body = body.child(
-                link("automation-more".into(), "Load more")
-                    .on_click(cx.listener(|this, _, _, cx| this.load_more(cx))),
+                widgets::section_card(theme).mt(px(0.0)).child(
+                    widgets::card_row(theme, true)
+                        .child(widgets::row_tile(theme, icons::MONITOR))
+                        .child(widgets::row_text(
+                            theme,
+                            format!("Managed on {host}"),
+                            Some(
+                                format!(
+                                    "This conversation's automations are managed on {host}; LUNA \
+                                     must be open there. They can't be viewed or changed from \
+                                     this device."
+                                )
+                                .into(),
+                            ),
+                        )),
+                ),
             );
+        } else {
+            if self.editor.is_some() {
+                body = body.child(self.render_editor(theme, cx).mt(px(0.0)));
+            }
+            body = body.child(self.render_list("This conversation", theme, cx).mt(px(0.0)));
         }
+        let scrollbar = popover::rail(self, "automations-pane-scrollbar", theme, cx);
         div()
             .size_full()
             .flex()
             .flex_col()
             .text_size(crate::typography::ui_rems(12.0))
-            .child(crate::surface_chrome::toolbar(&theme).child(SharedString::from(title)))
-            .child(body)
+            .child(toolbar)
+            .child(
+                div()
+                    .id("automations-pane-host")
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .flex()
+                    .flex_col()
+                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                        if this.scroll.set_list_hovered(*hovered) {
+                            cx.notify();
+                        }
+                    }))
+                    .child(body)
+                    .children(scrollbar),
+            )
             .into_any_element()
     }
-}
 
-impl AutomationsPanel {
+    /// The panel's own actions, in the page title bar (`Md`) or the pane
+    /// toolbar (`Sm`): New automation (only where a conversation can own
+    /// one), the Show deleted filter and Reload.
+    fn header_actions(
+        &self,
+        size: ControlSize,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut actions = Vec::new();
+        if self.scope_chat().is_some() && self.editor.is_none() {
+            actions.push(
+                crate::button::button("automation-new", ButtonKind::Secondary, size, true, theme)
+                    .aria_label("New automation")
+                    .child(crate::button::glyph(icons::PLUS, size))
+                    .child("New")
+                    .on_click(cx.listener(|this, _, _, cx| this.open_editor(None, cx)))
+                    .into_any_element(),
+            );
+        }
+        actions.push(
+            crate::button::chip("automation-deleted", self.show_deleted, size, true, theme)
+                .aria_label("Show deleted automations")
+                .child("Show deleted")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.show_deleted = !this.show_deleted;
+                    this.refresh(true, cx);
+                }))
+                .into_any_element(),
+        );
+        actions.push(
+            crate::button::icon_button("automation-reload", icons::REFRESH, size, true, theme)
+                .aria_label("Reload automations")
+                .tooltip(popover::text_tooltip("Reload automations"))
+                .tooltip_show_delay(popover::TOOLTIP_DELAY)
+                .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx)))
+                .into_any_element(),
+        );
+        actions
+    }
+
+    /// The list card: a header naming the scope and the count, the error
+    /// strip, then loading skeletons, the empty row or one row per
+    /// automation, and Load more as the last row.
+    fn render_list(&self, title: &'static str, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+        let rows: Vec<AutomationRecord> = self.rows().cloned().collect();
+        let more = self.rows_next().is_some();
+        let summary = match rows.len() {
+            0 => None,
+            1 => Some("1 automation".to_string()),
+            n => Some(format!("{n} automations")),
+        }
+        .map(|count| {
+            if more {
+                format!("{count} · more available")
+            } else {
+                count
+            }
+        });
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            title,
+            summary.map(SharedString::from),
+            Vec::new(),
+        ));
+        if let Some(error) = &self.error {
+            card = card.child(card_notice(widgets::error_strip(theme, error.clone())));
+        }
+        if self.loading && self.first.is_empty() {
+            card = card.child(
+                div()
+                    .w_full()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                    .py(crate::typography::ui_rems(widgets::ROW_PAD_Y))
+                    .child(popover::skeleton_rows(
+                        "automations-loading",
+                        theme,
+                        3,
+                        cx.entity_id(),
+                        cx,
+                    )),
+            );
+        } else if rows.is_empty() {
+            let creatable = self.scope_chat().is_some() && self.editor.is_none();
+            card = card.child(
+                widgets::card_row(theme, false)
+                    .child(widgets::row_tile(theme, icons::CLOCK_CIRCLE))
+                    .child(widgets::row_text(
+                        theme,
+                        "No automations yet",
+                        Some(
+                            if creatable {
+                                "Send this conversation a message on a schedule, or wake it when \
+                                 a pull request changes."
+                            } else {
+                                "Create one from a conversation's Automations pane."
+                            }
+                            .into(),
+                        ),
+                    ))
+                    .when(creatable, |row| {
+                        row.child(
+                            widgets::row_controls().child(
+                                crate::button::button(
+                                    "automation-new-empty",
+                                    ButtonKind::Secondary,
+                                    ControlSize::Sm,
+                                    true,
+                                    theme,
+                                )
+                                .aria_label("New automation")
+                                .child(crate::button::glyph(icons::PLUS, ControlSize::Sm))
+                                .child("New automation")
+                                .on_click(cx.listener(|this, _, _, cx| this.open_editor(None, cx))),
+                            ),
+                        )
+                    }),
+            );
+        }
+        for record in rows {
+            card = card.child(self.render_record(&record, theme, cx));
+        }
+        if more {
+            let enabled = !self.loading_more;
+            card = card.child(
+                widgets::card_row(theme, false).child(
+                    widgets::row_controls().child(
+                        crate::button::button(
+                            "automation-more",
+                            ButtonKind::Ghost,
+                            ControlSize::Sm,
+                            enabled,
+                            theme,
+                        )
+                        .aria_label("Load more automations")
+                        .child(if enabled { "Load more" } else { "Loading…" })
+                        .when(enabled, |button| {
+                            button.on_click(cx.listener(|this, _, _, cx| this.load_more(cx)))
+                        }),
+                    ),
+                ),
+            );
+        }
+        card
+    }
+
+    /// One automation as a list row: name and status badge, the schedule,
+    /// target and host lines, and the trailing kit actions; its confirm
+    /// flow and run history open as full-width blocks under it.
     fn render_record(
         &self,
         record: &AutomationRecord,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let muted = theme.readable_muted(0.7);
-        let small = |text: String, color: gpui::Hsla| {
-            div()
-                .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
-                .text_color(color)
-                .child(SharedString::from(text))
-        };
-        let link = |id: String, label: &'static str| {
-            div()
-                .id(SharedString::from(id))
-                .accessible_button(label, theme.accent)
-                .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.accent)
-                .cursor_pointer()
-                .child(label)
-        };
         let definition = &record.definition;
         let target = match &definition.target {
             AutomationTarget::Existing { task_id } => {
@@ -1562,118 +1766,192 @@ impl AutomationsPanel {
                 self.chat_title(origin_task_id, cx)
             ),
         };
-        let mut card = div()
-            .id(SharedString::from(format!("automation-{}", record.id)))
-            .p(px(10.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(theme.border)
+        let status_badge = if record.deleted {
+            widgets::badge(theme, "Deleted")
+        } else if !record.enabled {
+            widgets::badge(theme, "Paused")
+        } else {
+            widgets::badge_active(theme, "Active")
+        };
+        let mut text = div()
+            .flex_1()
+            .min_w(crate::typography::ui_rems(widgets::ROW_TEXT_MIN))
             .flex()
             .flex_col()
-            .gap(px(3.0))
+            .gap(crate::typography::ui_rems(2.0))
             .child(
                 div()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(SharedString::from(definition.name.clone())),
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_x(crate::typography::ui_rems(8.0))
+                    .gap_y(crate::typography::ui_rems(4.0))
+                    .child(widgets::row_title(theme, definition.name.clone()))
+                    .child(status_badge),
             )
-            .child(small(describe_trigger(definition), theme.text))
-            .child(small(format!("Time zone: {}", definition.timezone), muted))
-            .child(small(target, muted))
-            .child(small(Self::status_line(record), theme.text))
-            .child(small(
+            .child(
+                widgets::row_description(theme, Self::status_line(record)).text_color(theme.text),
+            )
+            .child(widgets::row_description(
+                theme,
+                format!(
+                    "{} · time zone {}",
+                    describe_trigger(definition),
+                    definition.timezone
+                ),
+            ))
+            .child(widgets::row_description(theme, target))
+            .child(widgets::row_description(
+                theme,
                 format!(
                     "Runs on {} while LUNA is open · access up to {} · revision {}",
                     self.host_name(&record.owner_host_id, cx),
                     crate::execution_view::permission_title(record.authority.permission_ceiling),
                     record.revision
                 ),
-                muted,
             ));
         if let Some(watch) = &record.watch
             && let AutomationTrigger::PrWatch { wake_budget, .. } = &definition.trigger
         {
-            card = card.child(small(
+            text = text.child(widgets::row_description(
+                theme,
                 format!(
                     "{} of {} wakes used · {} · LUNA never posts GitHub comments",
                     watch.wakes_used,
                     wake_budget,
                     plural(u64::from(watch.failures), "read failure", "read failures"),
                 ),
-                muted,
             ));
             if let Some(error) = &watch.last_error {
-                card = card.child(small(format!("Last error: {error}"), theme.warning));
+                text = text.child(
+                    widgets::row_description(theme, format!("Last error: {error}"))
+                        .text_color(theme.readable_tone(theme.warning, 1.0)),
+                );
             }
         }
-        // Row actions.
+        let mut row = widgets::card_row(theme, false)
+            .id(SharedString::from(format!("automation-{}", record.id)))
+            .child(text);
+        // Row actions: History (a disclosure), Edit, the enable toggle, and
+        // Delete (Secondary: it opens a confirm, never deletes on click).
         if !record.deleted {
-            let mut actions = div().flex().flex_row().gap(px(12.0)).pt(px(2.0));
-            let edit = record.clone();
-            actions = actions.child(
-                link(format!("automation-edit-{}", record.id), "Edit").on_click(
-                    cx.listener(move |this, _, _, cx| this.open_editor(Some(edit.clone()), cx)),
-                ),
-            );
-            let toggled = record.clone();
-            actions = actions.child(
-                link(
-                    format!("automation-toggle-{}", record.id),
-                    RowToggle::for_record(record, now_ms()).label(),
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.activate_toggle(&toggled, cx);
-                })),
-            );
-            let deleted = record.clone();
-            actions = actions.child(
-                link(format!("automation-delete-{}", record.id), "Delete").on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.begin_action(&deleted, AutomationOperation::Delete, cx)
-                    },
-                )),
-            );
+            let history_open = self.runs.contains_key(&record.id);
             let id = record.id.clone();
-            actions = actions.child(
-                link(
-                    format!("automation-history-{}", record.id),
-                    if self.runs.contains_key(&record.id) {
-                        "Hide history"
-                    } else {
-                        "History"
-                    },
-                )
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_runs(id.clone(), cx))),
+            let edit = record.clone();
+            let toggled = record.clone();
+            let deleted = record.clone();
+            let toggle = RowToggle::for_record(record, now_ms());
+            row = row.child(
+                widgets::row_controls()
+                    .child(
+                        crate::button::button(
+                            format!("automation-history-{}", record.id),
+                            ButtonKind::Ghost,
+                            ControlSize::Sm,
+                            true,
+                            theme,
+                        )
+                        .aria_label(if history_open {
+                            "Hide history"
+                        } else {
+                            "History"
+                        })
+                        .aria_expanded(history_open)
+                        .child(if history_open {
+                            "Hide history"
+                        } else {
+                            "History"
+                        })
+                        .child(crate::button::glyph(
+                            if history_open {
+                                icons::ALT_ARROW_UP
+                            } else {
+                                icons::ALT_ARROW_DOWN
+                            },
+                            ControlSize::Sm,
+                        ))
+                        .on_click(
+                            cx.listener(move |this, _, _, cx| this.toggle_runs(id.clone(), cx)),
+                        ),
+                    )
+                    .child(
+                        crate::button::button(
+                            format!("automation-edit-{}", record.id),
+                            ButtonKind::Secondary,
+                            ControlSize::Sm,
+                            true,
+                            theme,
+                        )
+                        .aria_label("Edit")
+                        .child("Edit")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_editor(Some(edit.clone()), cx)
+                        })),
+                    )
+                    .child(
+                        crate::button::button(
+                            format!("automation-toggle-{}", record.id),
+                            ButtonKind::Secondary,
+                            ControlSize::Sm,
+                            true,
+                            theme,
+                        )
+                        .aria_label(toggle.label())
+                        .child(crate::button::glyph(
+                            match toggle {
+                                RowToggle::Pause => icons::PAUSE,
+                                RowToggle::Resume => icons::PLAY,
+                                RowToggle::EditTime => icons::CALENDAR,
+                            },
+                            ControlSize::Sm,
+                        ))
+                        .child(toggle.label())
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.activate_toggle(&toggled, cx);
+                        })),
+                    )
+                    .child(
+                        crate::button::button(
+                            format!("automation-delete-{}", record.id),
+                            ButtonKind::Secondary,
+                            ControlSize::Sm,
+                            true,
+                            theme,
+                        )
+                        .aria_label("Delete")
+                        .child("Delete")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.begin_action(&deleted, AutomationOperation::Delete, cx)
+                        })),
+                    ),
             );
-            card = card.child(actions);
         }
         if let Some(action) = self
             .action
             .as_ref()
             .filter(|action| action.automation_id == record.id)
         {
-            card = card.child(self.render_action(action, theme, cx));
+            row = row.child(widgets::row_block().child(self.render_action(action, theme, cx)));
         }
         if let Some(runs) = self.runs.get(&record.id) {
-            card = card.child(self.render_runs(record, runs, theme, cx));
+            row = row.child(widgets::row_block().child(self.render_runs(record, runs, theme, cx)));
         }
-        card.into_any_element()
+        row.into_any_element()
     }
 
+    /// The confirm flow for Pause / Resume / Delete / Cancel occurrence: a
+    /// recessed well under its row with what will happen, the host's review,
+    /// and the actions right-aligned (Confirm last; Delete confirms in the
+    /// danger kind).
     fn render_action(
         &self,
         action: &ActionFlow,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let muted = theme.readable_muted(0.7);
-        let small = |text: String, color: gpui::Hsla| {
-            div()
-                .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
-                .text_color(color)
-                .child(SharedString::from(text))
-        };
+        let warning = theme.readable_tone(theme.warning, 1.0);
+        let danger = theme.readable_tone(theme.danger_muted, 1.0);
         let what = match &action.request.operation {
             AutomationOperation::Pause => format!(
                 "Pause \"{}\". No new runs start; work a provider already accepted continues under its normal task controls.",
@@ -1698,17 +1976,19 @@ impl AutomationsPanel {
                     cx.notify();
                 }
             }))
-            .mt(px(6.0))
-            .p(px(8.0))
-            .rounded(px(6.0))
-            .bg(theme.ink(0.04))
+            .w_full()
+            .p(crate::typography::ui_rems(12.0))
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.separator(false))
+            .bg(theme.fill(crate::theme::FillTier::Quaternary))
             .flex()
             .flex_col()
-            .gap(px(4.0))
-            .child(small(what, theme.text));
+            .gap(crate::typography::ui_rems(6.0))
+            .child(widgets::row_title(theme, what));
         let (label, enabled) = match &action.phase {
             Phase::Previewing => {
-                panel = panel.child(small("Checking with the host…".into(), muted));
+                panel = panel.child(widgets::row_description(theme, "Checking with the host…"));
                 ("Confirm", false)
             }
             Phase::Reviewed => {
@@ -1717,13 +1997,14 @@ impl AutomationsPanel {
                     .as_ref()
                     .is_none_or(|preview| preview.expires_at_ms <= now_ms());
                 if let Some(preview) = &action.preview {
-                    panel = panel.child(small(preview.description.clone(), muted));
+                    panel =
+                        panel.child(widgets::row_description(theme, preview.description.clone()));
                 }
                 if expired {
-                    panel = panel.child(small(
-                        "This review expired. Review it again.".into(),
-                        theme.warning,
-                    ));
+                    panel = panel.child(
+                        widgets::row_description(theme, "This review expired. Review it again.")
+                            .text_color(warning),
+                    );
                     ("Review again", true)
                 } else {
                     ("Confirm", true)
@@ -1731,92 +2012,112 @@ impl AutomationsPanel {
             }
             Phase::Applying => ("Saving…", false),
             Phase::Unknown { checking } => {
-                panel = panel.child(small(
-                    "LUNA couldn't confirm this change. Check its status; it was not sent again."
-                        .into(),
-                    theme.warning,
-                ));
+                panel = panel.child(
+                    widgets::row_description(
+                        theme,
+                        "LUNA couldn't confirm this change. Check its status; it was not sent again.",
+                    )
+                    .text_color(warning),
+                );
                 ("Check status", !checking)
             }
             Phase::Error(error) => {
-                panel = panel.child(small(
-                    error.clone(),
-                    theme.readable_tone(theme.danger_muted, 1.0),
-                ));
+                panel =
+                    panel.child(widgets::row_description(theme, error.clone()).text_color(danger));
                 ("Confirm", false)
             }
             Phase::Editing => ("Confirm", false),
         };
         let unknown = matches!(action.phase, Phase::Unknown { .. });
         let error = matches!(action.phase, Phase::Error(_));
-        let mut buttons = div().flex().flex_row().gap(px(12.0));
-        buttons = buttons.child(
-            div()
-                .id("automation-action-cancel")
-                .accessible_button("Close", theme.accent)
-                .text_size(crate::typography::ui_rems(11.0))
-                .cursor_pointer()
+        let destructive =
+            matches!(action.request.operation, AutomationOperation::Delete) && label == "Confirm";
+        let mut buttons = div()
+            .w_full()
+            .mt(crate::typography::ui_rems(4.0))
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .justify_end()
+            .gap(crate::typography::ui_rems(8.0))
+            .child(
+                crate::button::button(
+                    "automation-action-cancel",
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .aria_label("Close")
+                .child("Close")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.action = None;
                     cx.notify();
-                }))
-                .child("Close"),
-        );
+                })),
+            );
         if error {
             buttons = buttons.child(
-                div()
-                    .id("automation-action-reload")
-                    .accessible_button("Reload", theme.accent)
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.accent)
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.action = None;
-                        this.refresh(true, cx);
-                    }))
-                    .child("Reload"),
+                crate::button::button(
+                    "automation-action-reload",
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .aria_label("Reload")
+                .child("Reload")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.action = None;
+                    this.refresh(true, cx);
+                })),
             );
         }
         if unknown {
             buttons = buttons.child(
-                div()
-                    .id("automation-action-resend")
-                    .accessible_button("Send the same change again", theme.accent)
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.accent)
-                    .cursor_pointer()
-                    .on_click(cx.listener(|this, _, _, cx| this.confirm_action(cx)))
-                    .child("Send the same change again"),
+                crate::button::button(
+                    "automation-action-resend",
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .aria_label("Send the same change again")
+                .child("Send the same change again")
+                .on_click(cx.listener(|this, _, _, cx| this.confirm_action(cx))),
             );
         }
-        buttons = buttons.child({
-            let button = div()
-                .id("automation-action-confirm")
-                .accessible_button(label, theme.accent)
-                .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.accent)
-                .when(!enabled, |el| el.opacity(0.5))
-                .child(label);
-            if enabled {
-                button
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if unknown {
-                            this.check_action(cx)
-                        } else if label == "Review again" {
-                            this.review_action(cx)
-                        } else {
-                            this.confirm_action(cx)
-                        }
-                    }))
-                    .into_any_element()
-            } else {
-                button.into_any_element()
-            }
-        });
+        buttons = buttons.child(
+            crate::button::button(
+                "automation-action-confirm",
+                if destructive {
+                    ButtonKind::Danger
+                } else {
+                    ButtonKind::Primary
+                },
+                ControlSize::Sm,
+                enabled,
+                theme,
+            )
+            .aria_label(label)
+            .child(label)
+            .when(enabled, |button| {
+                button.on_click(cx.listener(move |this, _, _, cx| {
+                    if unknown {
+                        this.check_action(cx)
+                    } else if label == "Review again" {
+                        this.review_action(cx)
+                    } else {
+                        this.confirm_action(cx)
+                    }
+                }))
+            }),
+        );
         panel.child(buttons).into_any_element()
     }
 
+    /// An automation's run history: a bordered list (scrolling past its
+    /// cap) of runs, each with its state badge and meaning, timing, the
+    /// conversation and ids, and its actions; Load more runs closes it.
     fn render_runs(
         &self,
         record: &AutomationRecord,
@@ -1824,41 +2125,64 @@ impl AutomationsPanel {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let muted = theme.readable_muted(0.7);
         let zone = record.definition.timezone.clone();
-        let small = |text: String, color: gpui::Hsla| {
-            div()
-                .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
-                .text_color(color)
-                .child(SharedString::from(text))
-        };
         let mut list = div()
             .id(SharedString::from(format!("automation-runs-{}", record.id)))
-            .mt(px(6.0))
-            .max_h(px(320.0))
+            .w_full()
+            .max_h(crate::typography::ui_rems(320.0))
             .overflow_y_scroll()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme.separator(false))
             .flex()
-            .flex_col()
-            .gap(px(6.0));
+            .flex_col();
+        let entry = |first: bool| {
+            div()
+                .w_full()
+                .px(crate::typography::ui_rems(12.0))
+                .py(crate::typography::ui_rems(10.0))
+                .when(!first, |el| {
+                    el.border_t_1().border_color(theme.separator(false))
+                })
+                .flex()
+                .flex_col()
+                .gap(crate::typography::ui_rems(2.0))
+        };
+        let mut first = true;
         if let Some(error) = &runs.error {
-            list = list.child(small(
-                error.clone(),
-                theme.readable_tone(theme.danger_muted, 1.0),
-            ));
+            list = list.child(
+                entry(first).child(
+                    widgets::row_description(theme, error.clone())
+                        .text_color(theme.readable_tone(theme.danger_muted, 1.0)),
+                ),
+            );
+            first = false;
         }
         let items: Vec<AutomationRun> = runs.items().cloned().collect();
         if items.is_empty() {
-            list = list.child(small("No runs yet.".into(), muted));
+            list = list.child(entry(first).child(widgets::row_description(theme, "No runs yet.")));
+            first = false;
         }
         for run in items {
             let (state, meaning) = run_state_label(run.state);
-            let mut row = div()
-                .flex()
-                .flex_col()
-                .gap(px(1.0))
-                .child(small(format!("{state} · {meaning}"), theme.text))
-                .child(small(
+            let mut row = entry(first)
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_x(crate::typography::ui_rems(8.0))
+                        .gap_y(crate::typography::ui_rems(2.0))
+                        .child(if run.state == AutomationRunState::Completed {
+                            widgets::badge_active(theme, state)
+                        } else {
+                            widgets::badge(theme, state)
+                        })
+                        .child(widgets::row_description(theme, meaning).text_color(theme.text)),
+                )
+                .child(widgets::row_description(
+                    theme,
                     format!(
                         "Scheduled {} · claimed {}{}",
                         when(run.scheduled_at_ms, &zone),
@@ -1869,12 +2193,13 @@ impl AutomationsPanel {
                             String::new()
                         }
                     ),
-                    muted,
                 ));
+            first = false;
             if !run.detail.trim().is_empty() {
-                row = row.child(small(run.detail.clone(), muted));
+                row = row.child(widgets::row_description(theme, run.detail.clone()));
             }
-            row = row.child(small(
+            row = row.child(widgets::row_description(
+                theme,
                 format!(
                     "Conversation {} · command {} · message {}",
                     if run.task_id.is_empty() {
@@ -1893,115 +2218,137 @@ impl AutomationsPanel {
                         run.message_id.as_str()
                     },
                 ),
-                muted,
             ));
-            let mut links = div().flex().flex_row().gap(px(12.0));
-            if !run.task_id.is_empty() {
-                let task = run.task_id.clone();
-                links = links.child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "automation-run-open-{}",
-                            run.id
-                        )))
-                        .accessible_button("Open conversation", theme.accent)
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.accent)
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(AutomationsEvent::OpenChat(task.clone()))
-                        }))
-                        .child("Open conversation"),
-                );
-            }
-            if run.state == AutomationRunState::Claimed {
+            let open =
+                (!run.task_id.is_empty()).then(|| {
+                    let task = run.task_id.clone();
+                    crate::button::button(
+                        format!("automation-run-open-{}", run.id),
+                        ButtonKind::Ghost,
+                        ControlSize::Sm,
+                        true,
+                        theme,
+                    )
+                    .aria_label("Open conversation")
+                    .child("Open conversation")
+                    .child(crate::button::glyph(icons::ARROW_UP_RIGHT, ControlSize::Sm))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(AutomationsEvent::OpenChat(task.clone()))
+                    }))
+                });
+            let cancel = (run.state == AutomationRunState::Claimed).then(|| {
                 let record = record.clone();
                 let occurrence = run.id.clone();
-                links = links.child(
+                crate::button::button(
+                    format!("automation-run-cancel-{}", run.id),
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .aria_label("Cancel this run and pause the automation")
+                .child("Cancel run and pause")
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.begin_action(
+                        &record,
+                        AutomationOperation::CancelOccurrence {
+                            occurrence_id: occurrence.clone(),
+                        },
+                        cx,
+                    )
+                }))
+            });
+            if open.is_some() || cancel.is_some() {
+                row = row.child(
                     div()
-                        .id(SharedString::from(format!(
-                            "automation-run-cancel-{}",
-                            run.id
-                        )))
-                        .accessible_button("Cancel this run and pause the automation", theme.accent)
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.accent)
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.begin_action(
-                                &record,
-                                AutomationOperation::CancelOccurrence {
-                                    occurrence_id: occurrence.clone(),
-                                },
-                                cx,
-                            )
-                        }))
-                        .child("Cancel this run and pause the automation"),
+                        .mt(crate::typography::ui_rems(6.0))
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(crate::typography::ui_rems(8.0))
+                        .children(open)
+                        .children(cancel),
                 );
             }
-            list = list.child(row.child(links));
+            list = list.child(row);
         }
         if runs.next().is_some() {
             let id = record.id.clone();
+            let enabled = !runs.loading_more;
             list = list.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "automation-runs-more-{}",
-                        record.id
-                    )))
-                    .accessible_button("Load more runs", theme.accent)
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.accent)
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| this.load_runs(&id, true, cx)))
-                    .child("Load more runs"),
+                entry(first).items_start().child(
+                    crate::button::button(
+                        format!("automation-runs-more-{}", record.id),
+                        ButtonKind::Ghost,
+                        ControlSize::Sm,
+                        enabled,
+                        theme,
+                    )
+                    .aria_label("Load more runs")
+                    .child(if enabled {
+                        "Load more runs"
+                    } else {
+                        "Loading…"
+                    })
+                    .when(enabled, |button| {
+                        button.on_click(
+                            cx.listener(move |this, _, _, cx| this.load_runs(&id, true, cx)),
+                        )
+                    }),
+                ),
             );
         }
         list.into_any_element()
     }
 
-    fn render_editor(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+    /// The create/edit form as a section card: a header (title, the source
+    /// conversation, Close), one row per field group with its inputs in a
+    /// full-width block, the host's review, and Review / Apply at the end.
+    fn render_editor(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
         let Some(editor) = self.editor.as_ref() else {
-            return div().into_any_element();
+            return div().id("automation-editor");
         };
-        let muted = theme.readable_muted(0.7);
-        let small = |text: String, color: gpui::Hsla| {
-            div()
-                .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
-                .text_color(color)
-                .child(SharedString::from(text))
-        };
+        let warning = theme.readable_tone(theme.warning, 1.0);
+        let danger = theme.readable_tone(theme.danger_muted, 1.0);
+        // A labelled input: a caption over the field; fields share a row
+        // and wrap below their minimum width.
         let field = |label: &'static str, input: &Entity<ComposerInput>| {
             div()
+                .flex_1()
+                .min_w(crate::typography::ui_rems(160.0))
                 .flex()
                 .flex_col()
-                .gap(px(2.0))
-                .child(small(label.into(), muted))
-                .child(crate::popover::dialog_field(
-                    input.clone().into_any_element(),
-                ))
+                .gap(crate::typography::ui_rems(4.0))
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(11.0))
+                        .line_height(crate::typography::ui_rems(14.0))
+                        .text_color(theme.readable_muted(0.85))
+                        .child(label),
+                )
+                .child(input_frame(input, theme))
         };
-        let choice = |id: String, label: &'static str, on: bool| {
-            div()
-                .id(SharedString::from(id))
-                .role(gpui::Role::RadioButton)
+        let choice = |id: String, label: &'static str, on: bool, role: gpui::Role| {
+            crate::button::chip(id, on, ControlSize::Sm, true, theme)
+                .role(role)
                 .aria_label(label)
-                .aria_toggled(if on {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .px(px(8.0))
-                .py(px(3.0))
-                .rounded(px(6.0))
-                .border_1()
-                .border_color(if on { theme.focus_ring() } else { theme.border })
-                .cursor_pointer()
-                .text_size(crate::typography::ui_rems(11.0))
                 .child(label)
         };
-        let mut form = div()
+        let close = crate::button::button(
+            "automation-editor-close",
+            ButtonKind::Ghost,
+            ControlSize::Sm,
+            true,
+            theme,
+        )
+        .aria_label("Close")
+        .child("Close")
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.editor = None;
+            this.flow_task = None;
+            cx.notify();
+        }));
+        let mut form = widgets::section_card(theme)
             .id("automation-editor")
             // Escape closes the editor here; it never reaches the composer
             // or a stop path behind it.
@@ -2013,27 +2360,33 @@ impl AutomationsPanel {
                     cx.notify();
                 }
             }))
-            .p(px(10.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(theme.focus_ring())
-            .bg(theme.tooltip_surface())
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
+            .child(widgets::section_header(
+                theme,
+                if editor.existing {
+                    "Edit automation"
+                } else {
+                    "New automation"
+                },
+                Some(
+                    format!(
+                        "From {} (its project, folder, provider and access are captured when saved).",
+                        self.chat_title(&editor.origin, cx)
+                    )
+                    .into(),
+                ),
+                vec![close.into_any_element()],
+            ))
             .child(
-                div()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(if editor.existing {
-                        "Edit automation"
-                    } else {
-                        "New automation"
-                    }),
-            )
-            .child(field("Name", &editor.name))
-            .child(field("What to send", &editor.prompt));
+                widgets::card_row(theme, false)
+                    .child(widgets::row_block().mt(px(0.0)).child(field("Name", &editor.name)))
+                    .child(
+                        widgets::row_block()
+                            .mt(px(0.0))
+                            .child(field("What to send", &editor.prompt)),
+                    ),
+            );
         // Target.
-        let mut targets = div().flex().flex_row().gap(px(8.0));
+        let mut targets = widgets::row_block();
         for (id, label, new_conversation) in [
             ("automation-target-existing", "This conversation", false),
             ("automation-target-new", "A new conversation each run", true),
@@ -2043,6 +2396,7 @@ impl AutomationsPanel {
                     id.into(),
                     label,
                     editor.new_conversation == new_conversation,
+                    gpui::Role::RadioButton,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(editor) = this.editor.as_mut() {
@@ -2052,15 +2406,13 @@ impl AutomationsPanel {
                 })),
             );
         }
-        form = form.child(targets).child(small(
-            format!(
-                "From {} (its project, folder, provider and access are captured when saved).",
-                self.chat_title(&editor.origin, cx)
-            ),
-            muted,
-        ));
-        // Trigger kind.
-        let mut kinds = div().flex().flex_row().gap(px(8.0));
+        form = form.child(
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(theme, "Sends to", None))
+                .child(targets),
+        );
+        // Trigger kind and its fields.
+        let mut kinds = widgets::row_block();
         for kind in [
             TriggerKind::Once,
             TriggerKind::Interval,
@@ -2072,6 +2424,7 @@ impl AutomationsPanel {
                     format!("automation-kind-{}", kind.label()),
                     kind.label(),
                     editor.kind == kind,
+                    gpui::Role::RadioButton,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(editor) = this.editor.as_mut() {
@@ -2081,25 +2434,40 @@ impl AutomationsPanel {
                 })),
             );
         }
-        form = form.child(kinds);
+        let mut schedule = widgets::card_row(theme, false)
+            .child(widgets::row_text(theme, "Schedule", None))
+            .child(kinds);
         match editor.kind {
             TriggerKind::Once => {
-                form = form
-                    .child(field("Date (YYYY-MM-DD)", &editor.date))
-                    .child(field("Time (HH:MM)", &editor.time))
-                    .child(field("Time zone", &editor.timezone));
+                schedule = schedule.child(
+                    widgets::row_block()
+                        .child(field("Date (YYYY-MM-DD)", &editor.date))
+                        .child(field("Time (HH:MM)", &editor.time))
+                        .child(field("Time zone", &editor.timezone)),
+                );
             }
             TriggerKind::Interval => {
-                form = form.child(field("Every (minutes)", &editor.every));
+                schedule = schedule
+                    .child(widgets::row_block().child(field("Every (minutes)", &editor.every)));
             }
             TriggerKind::Calendar => {
-                let mut days = div().flex().flex_row().gap(px(4.0));
+                let mut days = widgets::row_block()
+                    .gap(crate::typography::ui_rems(6.0))
+                    .child(
+                        div()
+                            .w_full()
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .line_height(crate::typography::ui_rems(14.0))
+                            .text_color(theme.readable_muted(0.85))
+                            .child("Days (none chosen: every day)"),
+                    );
                 for (index, day) in WEEKDAYS.into_iter().enumerate() {
                     days = days.child(
                         choice(
                             format!("automation-day-{index}"),
                             day,
                             editor.weekdays[index],
+                            gpui::Role::CheckBox,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(editor) = this.editor.as_mut() {
@@ -2109,169 +2477,198 @@ impl AutomationsPanel {
                         })),
                     );
                 }
-                form = form
-                    .child(field("Time (HH:MM)", &editor.time))
-                    .child(small("Days (none chosen: every day)".into(), muted))
-                    .child(days)
-                    .child(field("Time zone", &editor.timezone));
+                schedule = schedule
+                    .child(
+                        widgets::row_block()
+                            .child(field("Time (HH:MM)", &editor.time))
+                            .child(field("Time zone", &editor.timezone)),
+                    )
+                    .child(days);
             }
             TriggerKind::PrWatch => {
-                form = form
-                    .child(field("Repository (owner/repository)", &editor.repository))
-                    .child(field("Pull request number", &editor.number))
-                    .child(field("Check every (minutes, 1-1440)", &editor.poll))
-                    .child(field("Wake budget (1-100)", &editor.budget))
-                    .child(small(
-                        "Wakes only on meaningful changes. LUNA never posts GitHub comments."
-                            .into(),
-                        muted,
-                    ));
+                schedule = schedule
+                    .child(
+                        widgets::row_block()
+                            .child(field("Repository (owner/repository)", &editor.repository))
+                            .child(field("Pull request number", &editor.number)),
+                    )
+                    .child(
+                        widgets::row_block()
+                            .child(field("Check every (minutes, 1-1440)", &editor.poll))
+                            .child(field("Wake budget (1-100)", &editor.budget)),
+                    )
+                    .child(widgets::row_block().child(widgets::row_description(
+                        theme,
+                        "Wakes only on meaningful changes. LUNA never posts GitHub comments.",
+                    )));
             }
         }
-        form = form.child(field(
-            "Skip runs more than this many minutes late (0-1440)",
-            &editor.lateness,
-        ));
+        form =
+            form.child(schedule)
+                .child(widgets::card_row(theme, false).child(
+                    widgets::row_block().mt(px(0.0)).child(field(
+                        "Skip runs more than this many minutes late (0-1440)",
+                        &editor.lateness,
+                    )),
+                ));
+        // Review: the host's answer for the exact request, then the actions.
+        let mut review = div()
+            .flex_1()
+            .min_w(crate::typography::ui_rems(widgets::ROW_TEXT_MIN))
+            .flex()
+            .flex_col()
+            .gap(crate::typography::ui_rems(2.0));
         if editor.resumes {
-            form = form.child(small(
-                "This automation is paused. Applying saves the change and resumes it.".into(),
-                muted,
+            review = review.child(widgets::row_description(
+                theme,
+                "This automation is paused. Applying saves the change and resumes it.",
             ));
         }
-        // Preview and phase.
         let current = self.editor_preview_current(cx);
         match &editor.phase {
             Phase::Previewing => {
-                form = form.child(small("Asking the host to review…".into(), muted))
+                review = review.child(widgets::row_description(
+                    theme,
+                    "Asking the host to review…",
+                ))
             }
             Phase::Reviewed if current && self.editor_preview_expired() => {
-                form = form.child(small(
-                    "This review expired. Review it again before applying.".into(),
-                    theme.warning,
-                ));
+                review = review.child(
+                    widgets::row_description(
+                        theme,
+                        "This review expired. Review it again before applying.",
+                    )
+                    .text_color(warning),
+                );
             }
             Phase::Reviewed if current => {
                 if let Some((_, preview)) = &editor.preview {
                     let zone = editor.timezone.read(cx).text().trim().to_string();
-                    form = form.child(small(preview.description.clone(), muted));
+                    review =
+                        review.child(widgets::row_description(theme, preview.description.clone()));
                     for at in &preview.next_occurrences_ms {
-                        form = form.child(small(format!("Next: {}", when(*at, &zone)), theme.text));
+                        review = review.child(
+                            widgets::row_description(theme, format!("Next: {}", when(*at, &zone)))
+                                .text_color(theme.text),
+                        );
                     }
-                    form = form.child(small(
+                    review = review.child(widgets::row_description(
+                        theme,
                         format!(
                             "Runs on {} with access up to {}.",
                             self.host_name(&preview.owner_host_id, cx),
                             crate::execution_view::permission_title(preview.permission_ceiling)
                         ),
-                        muted,
                     ));
                 }
             }
             Phase::Reviewed => {
-                form = form.child(small(
-                    "You changed the form after review. Review it again.".into(),
-                    theme.warning,
-                ));
+                review = review.child(
+                    widgets::row_description(
+                        theme,
+                        "You changed the form after review. Review it again.",
+                    )
+                    .text_color(warning),
+                );
             }
-            Phase::Applying => form = form.child(small("Saving…".into(), muted)),
+            Phase::Applying => review = review.child(widgets::row_description(theme, "Saving…")),
             Phase::Unknown { checking } => {
-                form = form.child(small(
-                    if *checking {
-                        "Checking its status…".into()
-                    } else {
-                        "LUNA couldn't confirm this change. Check its status; it was not sent again.".into()
-                    },
-                    theme.warning,
-                ));
+                review = review.child(
+                    widgets::row_description(
+                        theme,
+                        if *checking {
+                            "Checking its status…"
+                        } else {
+                            "LUNA couldn't confirm this change. Check its status; it was not sent again."
+                        },
+                    )
+                    .text_color(warning),
+                );
             }
             Phase::Error(error) => {
-                form = form.child(small(
-                    error.clone(),
-                    theme.readable_tone(theme.danger_muted, 1.0),
+                review =
+                    review.child(widgets::row_description(theme, error.clone()).text_color(danger));
+            }
+            Phase::Editing => {
+                review = review.child(widgets::row_description(
+                    theme,
+                    "Review asks the host to check the change before you apply it.",
                 ));
             }
-            Phase::Editing => {}
         }
         let unknown = matches!(editor.phase, Phase::Unknown { .. });
         let checking = matches!(editor.phase, Phase::Unknown { checking: true });
         let busy = matches!(editor.phase, Phase::Previewing | Phase::Applying) || unknown;
-        let mut buttons = div().flex().flex_row().gap(px(12.0));
-        let button = |id: &'static str, label: &'static str, enabled: bool| {
-            div()
-                .id(id)
-                .accessible_button(label, theme.accent)
-                .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.accent)
-                .when(enabled, |el| el.cursor_pointer())
-                .when(!enabled, |el| el.opacity(0.5))
+        let button = |id: &'static str, label: &'static str, kind: ButtonKind, enabled: bool| {
+            crate::button::button(id, kind, ControlSize::Md, enabled, theme)
+                .aria_label(label)
                 .child(label)
         };
-        buttons = buttons.child(button("automation-editor-close", "Close", true).on_click(
-            cx.listener(|this, _, _, cx| {
-                this.editor = None;
-                this.flow_task = None;
-                cx.notify();
-            }),
-        ));
+        let mut buttons = widgets::row_controls();
         if matches!(editor.phase, Phase::Error(_)) {
             buttons = buttons.child(
-                button("automation-editor-reload", "Reload", true)
-                    .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx))),
+                button(
+                    "automation-editor-reload",
+                    "Reload",
+                    ButtonKind::Ghost,
+                    true,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.refresh(true, cx))),
             );
         }
         let review_enabled = !busy;
-        buttons = buttons.child({
-            let review = button("automation-editor-review", "Review", review_enabled);
-            if review_enabled {
-                review
-                    .on_click(cx.listener(|this, _, _, cx| this.review_editor(cx)))
-                    .into_any_element()
-            } else {
-                review.into_any_element()
-            }
-        });
+        buttons = buttons.child(
+            button(
+                "automation-editor-review",
+                "Review",
+                ButtonKind::Secondary,
+                review_enabled,
+            )
+            .when(review_enabled, |review| {
+                review.on_click(cx.listener(|this, _, _, cx| this.review_editor(cx)))
+            }),
+        );
         if unknown {
             buttons = buttons
-                .child({
-                    let check = button("automation-editor-check", "Check status", !checking);
-                    if checking {
-                        check.into_any_element()
-                    } else {
-                        check
-                            .on_click(cx.listener(|this, _, _, cx| this.check_editor(cx)))
-                            .into_any_element()
-                    }
-                })
-                .child({
-                    let again = button(
+                .child(
+                    button(
+                        "automation-editor-check",
+                        "Check status",
+                        ButtonKind::Secondary,
+                        !checking,
+                    )
+                    .when(!checking, |check| {
+                        check.on_click(cx.listener(|this, _, _, cx| this.check_editor(cx)))
+                    }),
+                )
+                .child(
+                    button(
                         "automation-editor-resend",
                         "Send the same change again",
+                        ButtonKind::Primary,
                         !checking,
-                    );
-                    if checking {
-                        again.into_any_element()
-                    } else {
-                        again
-                            .on_click(cx.listener(|this, _, _, cx| this.apply_editor(cx)))
-                            .into_any_element()
-                    }
-                });
+                    )
+                    .when(!checking, |again| {
+                        again.on_click(cx.listener(|this, _, _, cx| this.apply_editor(cx)))
+                    }),
+                );
         } else {
             let apply_enabled = matches!(editor.phase, Phase::Reviewed)
                 && current
                 && !self.editor_preview_expired();
-            buttons = buttons.child({
-                let apply = button("automation-editor-apply", "Apply", apply_enabled);
-                if apply_enabled {
-                    apply
-                        .on_click(cx.listener(|this, _, _, cx| this.apply_editor(cx)))
-                        .into_any_element()
-                } else {
-                    apply.into_any_element()
-                }
-            });
+            buttons = buttons.child(
+                button(
+                    "automation-editor-apply",
+                    "Apply",
+                    ButtonKind::Primary,
+                    apply_enabled,
+                )
+                .when(apply_enabled, |apply| {
+                    apply.on_click(cx.listener(|this, _, _, cx| this.apply_editor(cx)))
+                }),
+            );
         }
-        form.child(buttons).into_any_element()
+        form.child(widgets::card_row(theme, false).child(review).child(buttons))
     }
 }
 

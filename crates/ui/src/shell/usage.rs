@@ -18,6 +18,13 @@ use super::{SettingsSection, Shell};
 use crate::icons::{self, icon};
 use crate::interaction::HoverFill;
 use crate::theme::Theme;
+use crate::typography::TypeStyleExt as _;
+
+/// The Usage chart's plot height and value-axis gutter, in points at the
+/// default Interface size (interface rems at render).
+const CHART_HEIGHT: f32 = 200.0;
+const CHART_AXIS_WIDTH: f32 = 56.0;
+const CHART_AXIS_GAP: f32 = 8.0;
 
 /// CC-06 live provider sessions section.
 #[path = "usage_live.rs"]
@@ -36,11 +43,6 @@ fn provider_mark(provider: UsageProvider) -> &'static str {
 /// 6 pt capsule; nothing drawn below 0.5% (no false stub). Provider identity
 /// lives in the mark, not the bar colour.
 fn usage_meter(used_percent: f32, theme: &Theme) -> gpui::Div {
-    let track = if theme.appearance.is_dark() {
-        crate::theme::ink(0.08)
-    } else {
-        crate::theme::ink(0.10)
-    };
     usage_meter_with(
         used_percent,
         [
@@ -48,8 +50,31 @@ fn usage_meter(used_percent: f32, theme: &Theme) -> gpui::Div {
             theme.readable_tone(theme.warning, 1.0),
             theme.readable_tone(theme.danger, 1.0),
         ],
-        track,
+        theme.fill(crate::theme::FillTier::Secondary),
     )
+    // The page's meters scale with Interface size beside their labels.
+    .h(crate::typography::ui_rems(6.0))
+}
+
+/// A provider's identity tile on a Usage row: the brand mark in the shared
+/// 28 pt row tile frame ([`crate::settings::widgets::row_tile`]'s metrics),
+/// at full text strength so the mark reads as identity, not decoration.
+fn provider_tile(provider: UsageProvider, theme: &Theme) -> gpui::Div {
+    div()
+        .flex_none()
+        .size(crate::typography::ui_rems(28.0))
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.fill(crate::theme::FillTier::Quaternary))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            icon(provider_mark(provider))
+                .size(crate::typography::ui_rems(16.0))
+                .text_color(theme.text),
+        )
 }
 
 /// [`usage_meter`] with explicit `[neutral, warning, danger]` fills.
@@ -275,8 +300,14 @@ fn usage_table_row(
     unpriced: bool,
     provider: Option<UsageProvider>,
 ) -> AnyElement {
+    // A table row inside a section card: the header row is a caption, body
+    // rows sit under a hairline (so the table never ends on a stray rule).
+    // Heights, gaps and the mark are interface rems; the first column
+    // truncates (model and chat names are user data, with the row's
+    // tooltip or the conversation behind them).
+    let muted = theme.readable_muted(0.85);
     let color = if header || unpriced {
-        theme.text_muted
+        muted
     } else {
         theme.text
     };
@@ -284,21 +315,23 @@ fn usage_table_row(
         .w_full()
         .flex()
         .items_center()
-        .min_h(px(if header { 31.0 } else { 38.0 }))
-        .border_b_1()
-        .border_color(theme.border.opacity(if header { 1.0 } else { 0.55 }))
+        .gap(crate::typography::ui_rems(8.0))
+        .min_h(crate::typography::ui_rems(if header { 30.0 } else { 36.0 }))
+        .when(!header, |row| row.border_t_1().border_color(theme.border))
         .text_size(crate::typography::ui_rems(if header { 11.0 } else { 13.0 }))
+        .line_height(crate::typography::ui_rems(if header { 14.0 } else { 18.0 }))
         .child(
             div()
                 .w(gpui::relative(0.40))
                 .min_w_0()
                 .flex()
                 .items_center()
-                .gap(px(7.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .when_some(provider, |row, provider| {
                     row.child(
                         icon(provider_mark(provider))
-                            .size(px(14.0))
+                            .size(crate::typography::ui_rems(14.0))
+                            .flex_none()
                             .text_color(theme.text),
                     )
                 })
@@ -313,6 +346,8 @@ fn usage_table_row(
         .child(
             div()
                 .w(gpui::relative(0.20))
+                .min_w_0()
+                .truncate()
                 .text_align(gpui::TextAlign::Right)
                 .text_color(color)
                 .child(columns[1].clone()),
@@ -320,15 +355,19 @@ fn usage_table_row(
         .child(
             div()
                 .w(gpui::relative(0.20))
+                .min_w_0()
+                .truncate()
                 .text_align(gpui::TextAlign::Right)
-                .text_color(theme.text_muted)
+                .text_color(muted)
                 .child(columns[2].clone()),
         )
         .child(
             div()
                 .w(gpui::relative(0.20))
+                .min_w_0()
+                .truncate()
                 .text_align(gpui::TextAlign::Right)
-                .text_color(theme.text_muted)
+                .text_color(muted)
                 .child(columns[3].clone()),
         )
         .into_any_element()
@@ -544,7 +583,7 @@ fn usage_chart(
         },
     )
     .w_full()
-    .h(px(224.0));
+    .h(crate::typography::ui_rems(CHART_HEIGHT));
     let x_labels = if periods.is_empty() {
         [String::new(), String::new(), String::new()]
     } else {
@@ -591,34 +630,41 @@ fn usage_chart(
                 })
         })
         .collect();
+    // Axis labels are captions in the secondary tone; the label gutter and
+    // the plot height are interface rems so labels keep their room at every
+    // Interface size, and the plot takes whatever width the card gives it.
+    let label_tone = theme.readable_muted(0.85);
     div()
         .w_full()
+        .min_w_0()
         .flex()
         .flex_col()
-        .gap(px(5.0))
+        .gap(crate::typography::ui_rems(6.0))
         .child(
             div()
                 .w_full()
                 .flex()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(CHART_AXIS_GAP))
                 .child(
                     div()
-                        .w(px(64.0))
-                        .h(px(224.0))
+                        .w(crate::typography::ui_rems(CHART_AXIS_WIDTH))
+                        .h(crate::typography::ui_rems(CHART_HEIGHT))
                         .flex_none()
                         .flex()
                         .flex_col()
                         .justify_between()
                         .text_align(gpui::TextAlign::Right)
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
+                        .line_height(crate::typography::ui_rems(14.0))
+                        .text_color(label_tone)
                         .children(labels),
                 )
                 .child(
                     div()
                         .relative()
                         .flex_1()
-                        .h(px(224.0))
+                        .min_w_0()
+                        .h(crate::typography::ui_rems(CHART_HEIGHT))
                         .child(plot)
                         .child(div().absolute().inset_0().flex().children(hover_cells)),
                 ),
@@ -626,37 +672,47 @@ fn usage_chart(
         .child(
             div()
                 .w_full()
-                .pl(px(72.0))
+                .pl(crate::typography::ui_rems(
+                    CHART_AXIS_WIDTH + CHART_AXIS_GAP,
+                ))
                 .flex()
                 .justify_between()
                 .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.text_muted)
+                .line_height(crate::typography::ui_rems(14.0))
+                .text_color(label_tone)
                 .children(x_labels),
         )
         .into_any_element()
 }
 
+/// One figure in the Usage page's Totals grid: a caption label over the
+/// value, on the shared resting plate. Cells share a row and wrap to a new
+/// line below their minimum width.
 fn metric_cell(theme: &Theme, label: &'static str, value: String) -> AnyElement {
     div()
-        .min_w(px(112.0))
+        // Five cells share one line in the default column; narrower
+        // columns wrap them rather than squeezing the figures.
+        .min_w(crate::typography::ui_rems(96.0))
         .flex_1()
-        .rounded(px(Theme::CONTROL_RADIUS))
+        .rounded(px(8.0))
         .border_1()
-        .border_color(theme.border)
-        .bg(theme.glass_hover().opacity(0.18))
-        .p(px(9.0))
+        .border_color(theme.separator(false))
+        .bg(theme.fill(crate::theme::FillTier::Quaternary))
+        .px(crate::typography::ui_rems(12.0))
+        .py(crate::typography::ui_rems(10.0))
         .flex()
         .flex_col()
-        .gap(px(3.0))
+        .gap(crate::typography::ui_rems(4.0))
         .child(
             div()
                 .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.text_muted)
+                .line_height(crate::typography::ui_rems(14.0))
+                .text_color(theme.readable_muted(0.85))
                 .child(label),
         )
         .child(
             div()
-                .text_size(crate::typography::ui_rems(12.0))
+                .type_style(crate::typography::TextStyle::Title3)
                 .text_color(theme.text)
                 .child(value),
         )
@@ -860,11 +916,14 @@ fn limits_status(limit: &UsageLimitSnapshot, now_ms: i64) -> String {
     }
 }
 
-/// T3's Limits hierarchy: provider sections, one pool card per quota window,
-/// and equal-width account segments. An unverified account keeps its own
-/// segment; only verified identities were de-duplicated by the snapshot merge.
+/// T3's Limits hierarchy on the settings anatomy: one section card per
+/// provider (its mark and name in the header), one row per quota window with
+/// the remaining share at the right and the equal-width account segments in
+/// a full-width block under it. An unverified account keeps its own segment;
+/// only verified identities were de-duplicated by the snapshot merge.
 fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i64) -> AnyElement {
-    let mut sections = div().w_full().flex().flex_col().gap(px(28.0));
+    use crate::settings::widgets;
+    let mut sections = div().w_full().flex().flex_col();
     let mut has_section = false;
     for provider in [
         UsageProvider::Codex,
@@ -879,20 +938,6 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
             continue;
         }
         has_section = true;
-        let mut section = div().w_full().flex().flex_col().gap(px(12.0)).child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(7.0))
-                .text_color(theme.text)
-                .text_size(crate::typography::ui_rems(14.0))
-                .child(
-                    icon(provider_mark(provider))
-                        .size(px(17.0))
-                        .text_color(theme.text),
-                )
-                .child(provider.label()),
-        );
         let ready: Vec<_> = accounts
             .iter()
             .copied()
@@ -900,6 +945,45 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                 limit.availability == LimitAvailability::Ready && !limit.windows.is_empty()
             })
             .collect();
+        // The header carries the brand mark beside the kit header, on the
+        // title's line; the header keeps its own text edge after the mark.
+        let mut section = widgets::section_card(theme).child(
+            div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_start()
+                .pl(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                .child(
+                    icon(provider_mark(provider))
+                        .flex_none()
+                        .mt(crate::typography::ui_rems(16.0))
+                        .size(crate::typography::ui_rems(16.0))
+                        .text_color(theme.text),
+                )
+                .child(
+                    widgets::section_header(
+                        theme,
+                        provider.label(),
+                        Some(
+                            format!(
+                                "{} {}",
+                                accounts.len(),
+                                if accounts.len() == 1 {
+                                    "account"
+                                } else {
+                                    "accounts"
+                                }
+                            )
+                            .into(),
+                        ),
+                        Vec::new(),
+                    )
+                    .flex_1()
+                    .min_w_0()
+                    .pl(crate::typography::ui_rems(10.0)),
+                ),
+        );
         let mut windows: Vec<(String, String, Option<u64>)> = ready
             .iter()
             .flat_map(|limit| {
@@ -964,7 +1048,11 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                     }
                 })
                 .unwrap_or_else(|| "Reset time unavailable".into());
-            let mut segments = div().w_full().flex().gap(px(4.0));
+            let mut segments = div()
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(crate::typography::ui_rems(4.0));
             for limit in &ready {
                 if let Some(window) = limit.windows.iter().find(|window| window.id == window_id) {
                     let left = (100.0 - window.used_percent).clamp(0.0, 100.0);
@@ -978,7 +1066,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                         reset_label(limit.reset_state(window, now_ms), now_ms)
                     );
                     segments = segments.child(
-                        usage_meter(window.used_percent, &theme)
+                        usage_meter(window.used_percent, theme)
                             .id(SharedString::from(format!(
                                 "usage-limit-{}-{window_id}-{}",
                                 provider.label(),
@@ -987,7 +1075,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                             .tooltip(crate::popover::text_tooltip(detail)),
                     );
                 } else {
-                    segments = segments.child(usage_meter(0.0, &theme));
+                    segments = segments.child(usage_meter(0.0, theme));
                 }
             }
             let status = if ready.iter().all(|limit| limit.is_fresh(now_ms)) {
@@ -1002,85 +1090,63 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                 status
             };
             section = section.child(
-                div()
-                    .w_full()
-                    .rounded(px(10.0))
-                    .border_1()
-                    .border_color(theme.border.opacity(0.6))
-                    .p(px(15.0))
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(22.0))
-                    .child(
-                        div()
-                            .w(px(176.0))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(
-                                div()
-                                    .text_color(theme.text)
-                                    .text_size(crate::typography::ui_rems(13.0))
-                                    .child(label),
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
+                        theme,
+                        label,
+                        Some(
+                            format!(
+                                "{} · {} {}",
+                                status,
+                                ready.len(),
+                                if ready.len() == 1 {
+                                    "account"
+                                } else {
+                                    "accounts"
+                                }
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_baseline()
-                                    .gap(px(6.0))
-                                    .child(
-                                        div()
-                                            .text_color(theme.text)
-                                            .text_size(crate::typography::ui_rems(29.0))
-                                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .child(format!("{remaining:.0}%")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_color(theme.text_muted)
-                                            .text_size(crate::typography::ui_rems(12.0))
-                                            .child("left"),
-                                    ),
-                            ),
-                    )
+                            .into(),
+                        ),
+                    ))
                     .child(
-                        div()
-                            .min_w(px(220.0))
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(8.0))
-                            .child(segments)
-                            .child(
-                                div()
-                                    .text_color(theme.text_muted)
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .child(format!(
-                                        "{} · {} {}",
-                                        status,
-                                        ready.len(),
-                                        if ready.len() == 1 {
-                                            "account"
-                                        } else {
-                                            "accounts"
-                                        }
-                                    )),
-                            ),
-                    ),
+                        widgets::row_controls().child(
+                            div()
+                                .flex()
+                                .flex_row()
+                                .items_baseline()
+                                .gap(crate::typography::ui_rems(4.0))
+                                .child(
+                                    div()
+                                        .type_style(crate::typography::TextStyle::Title2)
+                                        .text_color(theme.text)
+                                        .child(format!("{remaining:.0}%")),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .line_height(crate::typography::ui_rems(16.0))
+                                        .text_color(theme.readable_muted(0.85))
+                                        .child("left"),
+                                ),
+                        ),
+                    )
+                    .child(widgets::row_block().child(segments)),
             );
         }
         let credits: u64 = ready.iter().filter_map(|limit| limit.reset_credits).sum();
         if credits > 0 {
             section = section.child(
-                div()
-                    .text_color(theme.text_muted)
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .child(format!(
-                        "{credits} reset {} banked · redemption unavailable in this build",
-                        if credits == 1 { "credit" } else { "credits" }
-                    )),
+                widgets::card_row(theme, false).child(widgets::row_text(
+                    theme,
+                    "Reset credits",
+                    Some(
+                        format!(
+                            "{credits} reset {} banked · redemption unavailable in this build",
+                            if credits == 1 { "credit" } else { "credits" }
+                        )
+                        .into(),
+                    ),
+                )),
             );
         }
         for limit in accounts.into_iter().filter(|limit| {
@@ -1091,23 +1157,33 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                 .clone()
                 .unwrap_or_else(|| limits_status(limit, now_ms));
             section = section.child(
-                div()
-                    .rounded(px(8.0))
-                    .border_1()
-                    .border_color(theme.border.opacity(0.6))
-                    .p(px(12.0))
-                    .text_color(theme.text_muted)
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .child(format!("{}: {detail}", provider.label())),
+                widgets::card_row(theme, false).child(widgets::row_text(
+                    theme,
+                    limit
+                        .account_label
+                        .clone()
+                        .unwrap_or_else(|| provider.label().to_string()),
+                    Some(detail.into()),
+                )),
             );
         }
         sections = sections.child(section);
     }
     if !has_section {
         sections = sections.child(
-            div()
-                .text_color(theme.text_muted)
-                .child("No provider on the selected environments reports subscription limits."),
+            widgets::section_card(theme).child(
+                widgets::card_row(theme, true)
+                    .child(widgets::row_tile(theme, icons::CHART))
+                    .child(widgets::row_text(
+                        theme,
+                        "No limits reported",
+                        Some(
+                            "No provider on the selected environments reports subscription \
+                             limits."
+                                .into(),
+                        ),
+                    )),
+            ),
         );
     }
     sections.into_any_element()
@@ -1334,7 +1410,12 @@ impl Shell {
         self.refresh_usage(cx);
     }
 
+    /// The Usage page's "Model prices" section: exact-model rate overrides as
+    /// form rows (model, then the four rates), a Save action, and one list
+    /// row per saved override with its Remove action.
     fn render_usage_price_editor(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        use crate::button::{ButtonKind, ControlSize};
+        use crate::settings::widgets;
         let mut saved: Vec<_> = self.settings.usage_price_overrides.iter().collect();
         saved.sort_by(|left, right| left.0.cmp(right.0));
         let [
@@ -1344,94 +1425,123 @@ impl Shell {
             creation_rate,
             output_rate,
         ] = self.usage_price_inputs.clone();
-        let mut card = div()
-            .w_full()
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.glass_hover().opacity(0.35))
-            .p(px(14.0))
-            .flex()
-            .flex_col()
-            .gap(px(9.0))
+        // The shared dialog field frame, on interface rems and theme fills so
+        // it sits in a section card like the other settings controls.
+        let field = |input: AnyElement| {
+            crate::popover::dialog_field(input)
+                .px(crate::typography::ui_rems(10.0))
+                .py(crate::typography::ui_rems(6.0))
+                .rounded(px(8.0))
+                .border_color(theme.separator(true))
+                .bg(theme.fill(crate::theme::FillTier::Quaternary))
+                .text_size(crate::typography::ui_rems(13.0))
+        };
+        let hide = crate::button::button(
+            "usage-model-prices-close",
+            ButtonKind::Ghost,
+            ControlSize::Md,
+            true,
+            theme,
+        )
+        .aria_label("Hide model prices")
+        .child("Hide")
+        .on_click(cx.listener(|this, _, _, cx| {
+            this.usage_page_price_editor_open = false;
+            cx.notify();
+        }));
+        let save = crate::button::button(
+            "usage-price-save",
+            ButtonKind::Secondary,
+            ControlSize::Md,
+            true,
+            theme,
+        )
+        .aria_label("Save exact-model rate")
+        .child(crate::button::glyph(icons::FLOPPY_DISK, ControlSize::Md))
+        .child("Save rate")
+        .on_click(cx.listener(|this, _, _, cx| this.save_usage_price_override(cx)));
+        let mut card = widgets::section_card(theme)
+            .child(widgets::section_header(
+                theme,
+                "Model prices",
+                Some(
+                    "Your USD per million token rates estimate API-equivalent cost for an exact \
+                     model name. Provider-reported costs take precedence; unknown models stay \
+                     unpriced."
+                        .into(),
+                ),
+                vec![hide.into_any_element()],
+            ))
             .child(
-                div()
-                    .text_size(crate::typography::ui_rems(14.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child("Exact-model price overrides"),
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
+                        theme,
+                        "Model",
+                        Some("The exact model name a provider reports.".into()),
+                    ))
+                    .child(widgets::row_block().child(field(model_input.into_any_element()))),
             )
             .child(
-                div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .child("Your USD per million token rates estimate API-equivalent cost for an exact model name. Provider-reported costs take precedence; unknown models stay unpriced."),
-            )
-            .child(
-                div()
-                    .w_full()
-                    .child(crate::popover::dialog_field(
-                        model_input.into_any_element(),
-                    )),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap(px(7.0))
-                    .children(
-                        [input_rate, cached_rate, creation_rate, output_rate]
-                            .into_iter()
-                            .map(|input| {
-                                div()
-                                    .w(px(160.0))
-                                    .child(crate::popover::dialog_field(input.into_any_element()))
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .id("usage-price-save")
-                    .cursor_pointer()
-                    .text_color(theme.readable_tone(theme.accent, 1.0))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .on_click(cx.listener(|this, _, _, cx| this.save_usage_price_override(cx)))
-                    .child("Save exact-model rate"),
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
+                        theme,
+                        "Rates per 1M tokens",
+                        Some("Input, cached input, cache creation and output, in USD.".into()),
+                    ))
+                    .child(
+                        widgets::row_block().children(
+                            [input_rate, cached_rate, creation_rate, output_rate]
+                                .into_iter()
+                                .map(|input| {
+                                    div()
+                                        .flex_1()
+                                        .min_w(crate::typography::ui_rems(120.0))
+                                        .child(field(input.into_any_element()))
+                                }),
+                        ),
+                    )
+                    .child(widgets::row_block().justify_end().child(save)),
             );
         if let Some(error) = &self.usage_price_error {
             card = card.child(
                 div()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.readable_tone(theme.warning, 1.0))
-                    .child(error.clone()),
+                    .w_full()
+                    .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                    .pb(crate::typography::ui_rems(widgets::ROW_PAD_Y))
+                    .child(widgets::warning_strip(theme, error.clone()).mt(px(0.0))),
             );
         }
         for (index, (model, rate)) in saved.into_iter().enumerate() {
             let model = model.clone();
+            let description = format!(
+                "Input ${} · cached ${} · creation ${} · output ${} per 1M",
+                rate.input_per_million,
+                rate.cached_per_million,
+                rate.creation_per_million,
+                rate.output_per_million
+            );
             card = card.child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .justify_between()
-                    .gap(px(8.0))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .child(format!(
-                        "{model} · input ${} · cached ${} · creation ${} · output ${} / 1M",
-                        rate.input_per_million,
-                        rate.cached_per_million,
-                        rate.creation_per_million,
-                        rate.output_per_million
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
+                        theme,
+                        model.clone(),
+                        Some(description.into()),
                     ))
                     .child(
-                        div()
-                            .id(SharedString::from(format!("usage-price-remove-{index}")))
-                            .cursor_pointer()
-                            .text_color(theme.readable_tone(theme.warning, 1.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.remove_usage_price_override(&model, cx)
-                            }))
-                            .child("Remove"),
+                        widgets::row_controls().child(
+                            crate::button::button(
+                                format!("usage-price-remove-{index}"),
+                                ButtonKind::Secondary,
+                                ControlSize::Sm,
+                                true,
+                                theme,
+                            )
+                            .aria_label(SharedString::from(format!("Remove the {model} rate")))
+                            .child("Remove")
+                            .on_click(cx.listener(
+                                move |this, _, _, cx| this.remove_usage_price_override(&model, cx),
+                            )),
+                        ),
                     ),
             );
         }
@@ -1865,13 +1975,14 @@ impl Shell {
     }
 
     pub(super) fn render_usage_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::button::{ControlSize, Segment};
+        use crate::settings::widgets;
         let theme = Theme::of(cx).clone();
         let now_ms = Utc::now().timestamp_millis();
         let metric = self.settings.usage_metric.clone();
         let limits_view = metric == "limits";
         let tokens_view = metric == "tokens";
         let hourly = self.settings.usage_days == 1;
-        let compact = self.viewport_width < 1000.0;
         let snapshot = self.page_usage_snapshot();
         let environment_label = match &self.usage_page_environment_ids {
             None => "All environments".to_string(),
@@ -1880,39 +1991,43 @@ impl Shell {
             }
             Some(ids) => format!("{} environments", ids.len()),
         };
-        let mut environment_menu = div()
-            .w(px(300.0))
-            .rounded(px(10.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.bg)
-            .p(px(5.0))
-            .flex()
-            .flex_col()
-            .gap(px(2.0));
-        if self.usage_environment_menu_open {
-            environment_menu = environment_menu.child(
+
+        // ---- title bar: the environment pop-up and Refresh ----
+        let environment_menu = self.usage_environment_menu_open.then(|| {
+            let menu_theme = theme.for_popup();
+            let check = |on: bool| {
                 div()
-                    .id("usage-environment-all")
-                    .cursor_pointer()
-                    .rounded(px(6.0))
-                    .px(px(8.0))
-                    .py(px(6.0))
-                    .text_color(theme.text)
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.usage_page_environment_ids = None;
-                        cx.notify();
-                    }))
-                    .child(format!(
-                        "{}  All environments",
-                        if self.usage_page_environment_ids.is_none() {
-                            "✓"
+                    .flex_none()
+                    .size(crate::typography::ui_rems(14.0))
+                    .when(on, |slot| {
+                        slot.child(
+                            icon(icons::CHECK)
+                                .size(crate::typography::ui_rems(14.0))
+                                .text_color(menu_theme.text),
+                        )
+                    })
+            };
+            let mut menu = crate::popover::popover_card(&menu_theme)
+                .w(crate::typography::ui_rems(280.0))
+                .flex()
+                .flex_col()
+                .child(
+                    crate::popover::menu_row(&menu_theme, false, "usage-environment-all")
+                        .id("usage-environment-all")
+                        .role(gpui::Role::MenuItemCheckBox)
+                        .aria_label("All environments")
+                        .aria_toggled(if self.usage_page_environment_ids.is_none() {
+                            gpui::Toggled::True
                         } else {
-                            " "
-                        }
-                    )),
-            );
+                            gpui::Toggled::False
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.usage_page_environment_ids = None;
+                            cx.notify();
+                        }))
+                        .child(check(self.usage_page_environment_ids.is_none()))
+                        .child(div().flex_1().min_w_0().child("All environments")),
+                );
             for (device, source) in &self.usage_environment_snapshots {
                 let id = device.clone();
                 let checked = self
@@ -1925,196 +2040,210 @@ impl Shell {
                 } else {
                     "Ready"
                 };
-                environment_menu = environment_menu.child(
-                    div()
-                        .id(SharedString::from(format!("usage-environment-{id}")))
-                        .cursor_pointer()
-                        .rounded(px(6.0))
-                        .px(px(8.0))
-                        .py(px(6.0))
-                        .flex()
-                        .justify_between()
-                        .text_size(crate::typography::ui_rems(12.0))
+                let key = format!("usage-environment-{id}");
+                menu = menu.child(
+                    crate::popover::menu_row(&menu_theme, false, key.clone())
+                        .id(SharedString::from(key))
+                        .role(gpui::Role::MenuItemCheckBox)
+                        .aria_label(SharedString::from(label.clone()))
+                        .aria_toggled(if checked {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.toggle_page_usage_environment(&id, cx)
                         }))
+                        .child(check(checked))
+                        .child(div().flex_1().min_w_0().truncate().child(label))
                         .child(
                             div()
-                                .text_color(theme.text)
-                                .child(format!("{}  {label}", if checked { "✓" } else { " " })),
-                        )
-                        .child(div().text_color(theme.text_muted).child(status)),
+                                .flex_none()
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .text_color(menu_theme.text_muted)
+                                .child(status),
+                        ),
                 );
             }
             if self.usage_environment_snapshots.is_empty() {
-                environment_menu = environment_menu.child(
+                menu = menu.child(
                     div()
-                        .px(px(8.0))
-                        .py(px(6.0))
-                        .text_color(theme.text_muted)
+                        .px(crate::typography::ui_rems(8.0))
+                        .py(crate::typography::ui_rems(6.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(menu_theme.text_muted)
                         .child("No environments connected."),
                 );
             }
-            environment_menu = environment_menu.child(
-                div()
-                    .id("usage-prices-menu")
-                    .cursor_pointer()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .px(px(8.0))
-                    .py(px(7.0))
-                    .text_color(theme.text_muted)
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.usage_page_price_editor_open = true;
-                        this.usage_environment_menu_open = false;
-                        cx.notify();
-                    }))
-                    .child("Model prices"),
-            );
-        }
-
-        let metric_control = div()
-            .flex()
-            .items_center()
-            .rounded(px(10.0))
-            .bg(theme.glass_hover().opacity(0.25))
-            .p(px(2.0))
-            .children(
-                [("cost", "Cost"), ("tokens", "Tokens"), ("limits", "Limits")]
-                    .into_iter()
-                    .map(|(key, label)| {
-                        div()
-                            .id(SharedString::from(format!("usage-metric-{key}")))
-                            .px(px(12.0))
-                            .py(px(5.0))
-                            .rounded(px(8.0))
-                            .bg(if metric == key {
-                                theme.glass_hover()
-                            } else {
-                                theme.glass_hover().opacity(0.0)
-                            })
-                            .text_color(if metric == key {
-                                theme.text
-                            } else {
-                                theme.text_muted
-                            })
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .cursor_pointer()
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.set_usage_metric(key, cx)),
-                            )
-                            .child(label)
-                    }),
-            );
-        let period_control = div()
-            .flex()
-            .items_center()
-            .rounded(px(10.0))
-            .bg(theme.glass_hover().opacity(0.25))
-            .p(px(2.0))
-            .children(
-                [
-                    (1, "Past 24h"),
-                    (7, "7 days"),
-                    (30, "30 days"),
-                    (90, "90 days"),
-                ]
-                .into_iter()
-                .map(|(days, label)| {
-                    div()
-                        .id(SharedString::from(format!("usage-days-{days}")))
-                        .px(px(if compact { 7.0 } else { 11.0 }))
-                        .py(px(5.0))
-                        .rounded(px(8.0))
-                        .bg(if self.settings.usage_days == days {
-                            theme.glass_hover()
-                        } else {
-                            theme.glass_hover().opacity(0.0)
-                        })
-                        .text_color(if limits_view {
-                            theme.text_faint
-                        } else if self.settings.usage_days == days {
-                            theme.text
-                        } else {
-                            theme.text_muted
-                        })
-                        .text_size(crate::typography::ui_rems(13.0))
-                        .when(!limits_view, |element| {
-                            element.cursor_pointer().on_click(
-                                cx.listener(move |this, _, _, cx| this.set_usage_days(days, cx)),
-                            )
-                        })
-                        .child(label)
-                }),
-            );
-        let header = div()
-            .w_full()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .justify_between()
-            .gap(px(10.0))
+            menu.child(crate::popover::menu_separator())
+                .child(
+                    crate::popover::menu_row(&menu_theme, false, "usage-prices-menu")
+                        .id("usage-prices-menu")
+                        .role(gpui::Role::MenuItem)
+                        .aria_label("Model prices")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.usage_page_price_editor_open = true;
+                            this.usage_environment_menu_open = false;
+                            cx.notify();
+                        }))
+                        .child(check(false))
+                        .child(div().flex_1().min_w_0().child("Model prices")),
+                )
+                .into_any_element()
+        });
+        let environment_trigger = div()
+            .relative()
+            .flex_none()
             .child(
-                div()
-                    .id("usage-environment")
-                    .size(px(crate::surface_chrome::CONTROL_M))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .text_color(theme.text_muted)
-                    .tooltip(move |_, cx| {
-                        cx.new(|_| super::SurfaceTabTooltip {
-                            text: environment_label.clone().into(),
-                        })
-                        .into()
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.usage_environment_menu_open = !this.usage_environment_menu_open;
-                        cx.notify();
-                    }))
+                crate::button::select_frame(
+                    "usage-environment",
+                    ControlSize::Md,
+                    self.usage_environment_menu_open,
+                    true,
+                    &theme,
+                )
+                .aria_label(SharedString::from(format!(
+                    "Environments: {environment_label}"
+                )))
+                .child(crate::button::glyph(icons::GLOBE, ControlSize::Md))
+                .child(
+                    div()
+                        .min_w_0()
+                        .max_w(crate::typography::ui_rems(180.0))
+                        .truncate()
+                        .child(environment_label),
+                )
+                .child(crate::button::select_chevron(&theme))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.usage_environment_menu_open = !this.usage_environment_menu_open;
+                    cx.notify();
+                })),
+            )
+            .when_some(environment_menu, |trigger, menu| {
+                trigger.child(crate::popover::anchored_menu_below_end(
+                    "usage-environment-menu",
+                    menu,
+                    None,
+                ))
+            });
+        let refresh = crate::button::icon_button(
+            "usage-refresh",
+            icons::REFRESH,
+            ControlSize::Md,
+            true,
+            &theme,
+        )
+        .aria_label("Refresh usage")
+        .tooltip(crate::popover::text_tooltip("Refresh usage"))
+        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+        .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)));
+
+        // ---- the view: what to measure and over which period ----
+        const METRICS: [(&str, &str); 3] =
+            [("cost", "Cost"), ("tokens", "Tokens"), ("limits", "Limits")];
+        const PERIODS: [(u32, &str); 4] = [
+            (1, "Past 24h"),
+            (7, "7 days"),
+            (30, "30 days"),
+            (90, "90 days"),
+        ];
+        let metric_index = METRICS
+            .iter()
+            .position(|(key, _)| *key == metric)
+            .unwrap_or(0);
+        let view_card = widgets::section_card(&theme)
+            .child(
+                widgets::card_row(&theme, true)
+                    .child(widgets::row_text(
+                        &theme,
+                        "Show",
+                        Some(
+                            "Estimated API cost, processed tokens, or the subscription limits \
+                             your providers report."
+                                .into(),
+                        ),
+                    ))
                     .child(
-                        icon(icons::GLOBE)
-                            .size(px(16.0))
-                            .text_color(theme.text_muted),
+                        widgets::row_controls().child(crate::button::segmented(
+                            "usage-metric",
+                            METRICS
+                                .iter()
+                                .map(|(key, label)| Segment::new(*key, *label))
+                                .collect(),
+                            metric_index,
+                            216.0,
+                            ControlSize::Md,
+                            &theme,
+                            cx.listener(|this, ix: &usize, _, cx| {
+                                if let Some((key, _)) = METRICS.get(*ix) {
+                                    this.set_usage_metric(key, cx);
+                                }
+                            }),
+                        )),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(metric_control)
-                    .child(period_control)
-                    .child(
-                        div()
-                            .id("usage-refresh")
-                            .size(px(crate::surface_chrome::CONTROL_M))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(crate::surface_chrome::RADIUS_M))
-                            .cursor_pointer()
-                            .text_color(theme.text_muted)
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
-                            .tooltip(|_, cx| {
-                                cx.new(|_| super::SurfaceTabTooltip {
-                                    text: "Refresh usage".into(),
-                                })
-                                .into()
-                            })
-                            .child(
-                                icon(icons::REFRESH)
-                                    .size(px(16.0))
-                                    .text_color(theme.text_muted),
+            .when(!limits_view, |card| {
+                let period_index = PERIODS
+                    .iter()
+                    .position(|(days, _)| *days == self.settings.usage_days)
+                    .unwrap_or(1);
+                card.child(
+                    widgets::card_row(&theme, false)
+                        .child(widgets::row_text(
+                            &theme,
+                            "Period",
+                            Some(
+                                if hourly {
+                                    "One point per hour."
+                                } else {
+                                    "One point per day."
+                                }
+                                .into(),
                             ),
-                    ),
-            );
+                        ))
+                        .child(
+                            widgets::row_controls().child(crate::button::segmented(
+                                "usage-days",
+                                PERIODS
+                                    .iter()
+                                    .map(|(days, label)| Segment::new(days.to_string(), *label))
+                                    .collect(),
+                                period_index,
+                                300.0,
+                                ControlSize::Md,
+                                &theme,
+                                cx.listener(|this, ix: &usize, _, cx| {
+                                    if let Some((days, _)) = PERIODS.get(*ix) {
+                                        this.set_usage_days(*days, cx);
+                                    }
+                                }),
+                            )),
+                        ),
+                )
+            });
 
-        let mut content = div().w_full().flex().flex_col().gap(px(26.0));
+        // An inline notice inside a card, on the rows' text edge.
+        let notice = |strip: gpui::Div| {
+            div()
+                .w_full()
+                .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                .pb(crate::typography::ui_rems(widgets::ROW_PAD_Y))
+                .child(strip.mt(px(0.0)))
+        };
+        // A table inside a card: inset to the rows' edge, below a hairline.
+        let table = |theme: &Theme| {
+            div()
+                .w_full()
+                .border_t_1()
+                .border_color(theme.border)
+                .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                .pt(crate::typography::ui_rems(4.0))
+                .pb(crate::typography::ui_rems(8.0))
+                .flex()
+                .flex_col()
+        };
+
+        let mut sections: Vec<AnyElement> = Vec::new();
         if let Some(snapshot) = snapshot {
             let chats = &self.state.read(cx).chats;
             let title_of = |task: &str| {
@@ -2138,10 +2267,10 @@ impl Shell {
                 &theme,
                 now_ms,
             ) {
-                content = content.child(section);
+                sections.push(section);
             }
             if limits_view {
-                content = content.child(pooled_limit_sections(&snapshot.limits, &theme, now_ms));
+                sections.push(pooled_limit_sections(&snapshot.limits, &theme, now_ms));
             } else {
                 let buckets: Vec<&UsageBucket> = snapshot.summary.buckets.iter().collect();
                 let mut mix = luna_proto::UsageTokens::default();
@@ -2219,15 +2348,24 @@ impl Shell {
                     UsageProvider::OpenCodeGo,
                     UsageProvider::Claude,
                 ];
-                let mut left = div().min_w_0().flex().flex_col().gap(px(18.0));
-                left = left.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
-                        .child(
+
+                // Summary: the total, one row per provider, then the chart.
+                let mut summary = widgets::section_card(&theme)
+                    .child(widgets::section_header(
+                        &theme,
+                        if tokens_view {
+                            "Processed tokens"
+                        } else {
+                            "Estimated cost"
+                        },
+                        Some(caption.into()),
+                        Vec::new(),
+                    ))
+                    .child(
+                        widgets::card_row(&theme, false).child(
                             div()
-                                .text_size(crate::typography::ui_rems(36.0))
+                                .min_w_0()
+                                .type_style(crate::typography::TextStyle::Display)
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(theme.text)
                                 .child(if tokens_view {
@@ -2237,14 +2375,8 @@ impl Shell {
                                 } else {
                                     money(total_cost)
                                 }),
-                        )
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
-                                .child(caption),
                         ),
-                );
+                    );
                 for (index, provider) in providers.into_iter().enumerate() {
                     if provider_tokens[index] == 0 && provider_cost[index] == 0.0 {
                         continue;
@@ -2280,81 +2412,65 @@ impl Shell {
                     } else {
                         provider_cost[index] / total_cost
                     };
-                    left = left.child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.0))
+                    let detail = if tokens_view {
+                        format!(
+                            "{} of tokens · {}",
+                            usage_percent(share),
+                            money(provider_cost[index])
+                        )
+                    } else if provider_cost[index] == 0.0 && provider_unpriced[index] > 0 {
+                        format!(
+                            "— of cost · {} tokens",
+                            compact_tokens(provider_tokens[index])
+                        )
+                    } else {
+                        format!(
+                            "{} of cost · {} tokens",
+                            usage_percent(share),
+                            compact_tokens(provider_tokens[index])
+                        )
+                    };
+                    summary = summary.child(
+                        widgets::card_row(&theme, false)
+                            .child(provider_tile(provider, &theme))
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w(crate::typography::ui_rems(widgets::ROW_TEXT_MIN))
                                     .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .gap(px(9.0))
+                                    .flex_col()
+                                    .gap(crate::typography::ui_rems(2.0))
                                     .child(
+                                        // The dot is the provider's series
+                                        // colour in the chart below.
                                         div()
-                                            .min_w_0()
                                             .flex()
+                                            .flex_row()
                                             .items_center()
-                                            .gap(px(7.0))
+                                            .gap(crate::typography::ui_rems(6.0))
                                             .child(
                                                 div()
-                                                    .size(px(8.0))
+                                                    .flex_none()
+                                                    .size(crate::typography::ui_rems(8.0))
                                                     .rounded_full()
                                                     .bg(provider_tone(provider, &theme)),
                                             )
-                                            .child(
-                                                icon(provider_mark(provider))
-                                                    .size(px(16.0))
-                                                    .text_color(theme.text),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_color(theme.text)
-                                                    .text_size(crate::typography::ui_rems(13.0))
-                                                    .child(provider.label()),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_color(theme.text_muted)
-                                                    .text_size(crate::typography::ui_rems(11.0))
-                                                    .child(format!(
-                                                        "{} sessions",
-                                                        count(provider_sessions)
-                                                    )),
-                                            ),
+                                            .child(widgets::row_title(&theme, provider.label())),
                                     )
-                                    .child(
-                                        div()
-                                            .text_color(theme.text)
-                                            .text_size(crate::typography::ui_rems(13.0))
-                                            .child(amount),
-                                    ),
+                                    .child(widgets::row_description(
+                                        &theme,
+                                        format!("{} sessions · {detail}", count(provider_sessions)),
+                                    )),
                             )
                             .child(
-                                div()
-                                    .text_color(theme.text_muted)
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .child(if tokens_view {
-                                        format!(
-                                            "{} of tokens · {}",
-                                            usage_percent(share),
-                                            money(provider_cost[index])
-                                        )
-                                    } else if provider_cost[index] == 0.0
-                                        && provider_unpriced[index] > 0
-                                    {
-                                        format!(
-                                            "— of cost · {} tokens",
-                                            compact_tokens(provider_tokens[index])
-                                        )
-                                    } else {
-                                        format!(
-                                            "{} of cost · {} tokens",
-                                            usage_percent(share),
-                                            compact_tokens(provider_tokens[index])
-                                        )
-                                    }),
+                                widgets::row_controls().child(
+                                    div()
+                                        .text_size(crate::typography::ui_rems(13.0))
+                                        .line_height(crate::typography::ui_rems(18.0))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(theme.text)
+                                        .child(amount),
+                                ),
                             ),
                     );
                 }
@@ -2410,123 +2526,95 @@ impl Shell {
                         }
                     })
                 });
-                let chart = div()
-                    .min_w_0()
-                    .flex_1()
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.0))
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .justify_between()
-                            .gap(px(8.0))
-                            .child(
-                                div()
-                                    .text_color(theme.text)
-                                    .text_size(crate::typography::ui_rems(14.0))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .child(format!(
-                                        "{} {}",
-                                        if hourly { "Hourly" } else { "Daily" },
-                                        if tokens_view {
-                                            "processed tokens"
-                                        } else {
-                                            "cost"
-                                        }
-                                    )),
-                            )
-                            .when_some(hover_readout, |row, readout| {
-                                row.child(
-                                    div()
-                                        .text_color(theme.text_muted)
-                                        .text_size(crate::typography::ui_rems(11.0))
-                                        .child(readout),
-                                )
-                            }),
-                    )
-                    .child(usage_chart(
-                        &theme,
-                        chart_periods,
-                        tokens_view,
-                        hourly,
-                        self.usage_hover_period_start,
-                        cx,
-                    ))
-                    .child(
-                        div()
-                            .text_color(theme.text_muted)
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .child(hover_detail.unwrap_or_else(|| {
-                                if hourly {
-                                    "Each point covers one hour. Hover for provider values.".into()
+                summary = summary.child(
+                    widgets::card_row(&theme, false)
+                        .child(widgets::row_text(
+                            &theme,
+                            format!(
+                                "{} {}",
+                                if hourly { "Hourly" } else { "Daily" },
+                                if tokens_view {
+                                    "processed tokens"
                                 } else {
-                                    "Each point covers one day. Hover for provider values.".into()
+                                    "cost"
                                 }
-                            })),
-                    );
-                content = content.child(if compact {
-                    div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .gap(px(22.0))
-                        .child(left)
-                        .child(chart)
-                        .into_any_element()
-                } else {
-                    div()
-                        .w_full()
-                        .flex()
-                        .gap(px(24.0))
-                        .child(div().w(px(288.0)).flex_none().child(left))
-                        .child(chart)
-                        .into_any_element()
-                });
-                let metric = |label, value: String| {
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.0))
+                            ),
+                            Some(
+                                hover_detail
+                                    .unwrap_or_else(|| {
+                                        if hourly {
+                                            "Each point covers one hour. Hover for provider values."
+                                                .into()
+                                        } else {
+                                            "Each point covers one day. Hover for provider values."
+                                                .into()
+                                        }
+                                    })
+                                    .into(),
+                            ),
+                        ))
+                        .when_some(hover_readout, |row, readout| {
+                            row.child(
+                                widgets::row_controls().child(
+                                    div()
+                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .line_height(crate::typography::ui_rems(14.0))
+                                        .text_color(theme.readable_muted(0.85))
+                                        .child(readout),
+                                ),
+                            )
+                        })
+                        .child(widgets::row_block().child(usage_chart(
+                            &theme,
+                            chart_periods,
+                            tokens_view,
+                            hourly,
+                            self.usage_hover_period_start,
+                            cx,
+                        ))),
+                );
+                if snapshot.summary.partial || !snapshot.summary.warnings.is_empty() {
+                    for warning in
+                        snapshot
+                            .summary
+                            .warnings
+                            .iter()
+                            .cloned()
+                            .chain(snapshot.summary.partial.then(|| {
+                            "Some environments reported partial history; totals may be incomplete."
+                                .to_string()
+                        }))
+                    {
+                        summary = summary.child(notice(widgets::warning_strip(&theme, warning)));
+                    }
+                }
+                sections.push(summary.into_any_element());
+
+                // Totals: the token mix as a wrapping grid of metric cells.
+                sections.push(
+                    widgets::section_card(&theme)
+                        .child(widgets::section_header(&theme, "Totals", None, Vec::new()))
                         .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
-                                .child(label),
-                        )
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(15.0))
-                                .text_color(theme.text)
-                                .child(value),
-                        )
-                };
-                content = content.child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .flex_col()
-                        .gap(px(14.0))
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(14.0))
-                                .text_color(theme.text)
-                                .child("Totals"),
-                        )
-                        .child(
-                            div()
-                                .w_full()
-                                .flex()
-                                .flex_wrap()
-                                .gap(px(14.0))
-                                .child(metric("Processed tokens", compact_tokens(total_tokens)))
-                                .child(metric("Cached input", compact_tokens(mix.cached_input)))
-                                .child(metric("Uncached input", compact_tokens(mix.uncached_input)))
-                                .child(metric("Output", compact_tokens(mix.output)))
-                                .child(metric(
+                            widgets::card_row(&theme, false)
+                                .items_stretch()
+                                .child(metric_cell(
+                                    &theme,
+                                    "Processed tokens",
+                                    compact_tokens(total_tokens),
+                                ))
+                                .child(metric_cell(
+                                    &theme,
+                                    "Cached input",
+                                    compact_tokens(mix.cached_input),
+                                ))
+                                .child(metric_cell(
+                                    &theme,
+                                    "Uncached input",
+                                    compact_tokens(mix.uncached_input),
+                                ))
+                                .child(metric_cell(&theme, "Output", compact_tokens(mix.output)))
+                                .child(metric_cell(
+                                    &theme,
                                     "Cache savings",
                                     if cache_savings_unknown {
                                         format!("{} known", money(cache_savings))
@@ -2534,62 +2622,28 @@ impl Shell {
                                         money(cache_savings)
                                     },
                                 )),
-                        ),
-                );
-                let by_time = self.usage_breakdown_by_time;
-                let breakdown_control = div()
-                    .flex()
-                    .rounded(px(10.0))
-                    .bg(theme.glass_hover().opacity(0.25))
-                    .p(px(2.0))
-                    .children(
-                        [
-                            (false, "Model"),
-                            (true, if hourly { "Hour" } else { "Day" }),
-                        ]
-                        .into_iter()
-                        .map(|(time, label)| {
-                            div()
-                                .id(SharedString::from(format!(
-                                    "usage-breakdown-{}",
-                                    if time { "time" } else { "model" }
-                                )))
-                                .rounded(px(8.0))
-                                .px(px(12.0))
-                                .py(px(5.0))
-                                .bg(if by_time == time {
-                                    theme.glass_hover()
-                                } else {
-                                    theme.glass_hover().opacity(0.0)
-                                })
-                                .text_color(if by_time == time {
-                                    theme.text
-                                } else {
-                                    theme.text_muted
-                                })
-                                .text_size(crate::typography::ui_rems(13.0))
-                                .cursor_pointer()
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.usage_breakdown_by_time = time;
-                                    cx.notify();
-                                }))
-                                .child(label)
-                        }),
-                    );
-                let mut breakdown = div().w_full().flex().flex_col().gap(px(12.0)).child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(14.0))
-                                .text_color(theme.text)
-                                .child("Breakdown"),
                         )
-                        .child(breakdown_control),
+                        .into_any_element(),
                 );
+
+                // Breakdown: by model or by period, as a table in the card.
+                let by_time = self.usage_breakdown_by_time;
+                let breakdown_control = crate::button::segmented(
+                    "usage-breakdown",
+                    vec![
+                        Segment::new("model", "Model"),
+                        Segment::new("time", if hourly { "Hour" } else { "Day" }),
+                    ],
+                    usize::from(by_time),
+                    150.0,
+                    ControlSize::Md,
+                    &theme,
+                    cx.listener(|this, ix: &usize, _, cx| {
+                        this.usage_breakdown_by_time = *ix == 1;
+                        cx.notify();
+                    }),
+                );
+                let mut rows = table(&theme);
                 if by_time {
                     let active: Vec<_> = [
                         UsageProvider::Codex,
@@ -2608,41 +2662,56 @@ impl Shell {
                                header: bool| {
                         div()
                             .w_full()
-                            .min_h(px(if header { 31.0 } else { 38.0 }))
+                            .min_h(crate::typography::ui_rems(if header { 30.0 } else { 36.0 }))
                             .flex()
                             .items_center()
-                            .border_b_1()
-                            .border_color(theme.border.opacity(if header { 1.0 } else { 0.55 }))
+                            .when(!header, |row| row.border_t_1().border_color(theme.border))
                             .text_size(crate::typography::ui_rems(if header { 11.0 } else { 13.0 }))
                             .child(
                                 div()
                                     .w(gpui::relative(0.40))
-                                    .text_color(if header { theme.text_muted } else { theme.text })
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_color(if header {
+                                        theme.readable_muted(0.85)
+                                    } else {
+                                        theme.text
+                                    })
                                     .child(label),
                             )
                             .children(provider_values.into_iter().map(|value| {
                                 div()
                                     .w(gpui::relative(column_width))
+                                    .min_w_0()
+                                    .truncate()
                                     .text_align(gpui::TextAlign::Right)
-                                    .text_color(theme.text_muted)
+                                    .text_color(theme.readable_muted(0.85))
                                     .child(value)
                             }))
                             .child(
                                 div()
                                     .w(gpui::relative(column_width))
+                                    .min_w_0()
+                                    .truncate()
                                     .text_align(gpui::TextAlign::Right)
-                                    .text_color(if header { theme.text_muted } else { theme.text })
+                                    .text_color(if header {
+                                        theme.readable_muted(0.85)
+                                    } else {
+                                        theme.text
+                                    })
                                     .child(total),
                             )
                             .child(
                                 div()
                                     .w(gpui::relative(column_width))
+                                    .min_w_0()
+                                    .truncate()
                                     .text_align(gpui::TextAlign::Right)
-                                    .text_color(theme.text_muted)
+                                    .text_color(theme.readable_muted(0.85))
                                     .child(tokens),
                             )
                     };
-                    breakdown = breakdown.child(row(
+                    rows = rows.child(row(
                         if hourly { "Hour" } else { "Day" }.into(),
                         active
                             .iter()
@@ -2655,7 +2724,7 @@ impl Shell {
                     for start in periods.keys().rev() {
                         let token_count = period_tokens.get(start).copied().unwrap_or(0);
                         let costs = period_costs.get(start).copied().unwrap_or_default();
-                        breakdown = breakdown.child(row(
+                        rows = rows.child(row(
                             short_period_label(*start, hourly),
                             active
                                 .iter()
@@ -2666,8 +2735,16 @@ impl Shell {
                             false,
                         ));
                     }
+                    if periods.is_empty() {
+                        rows = rows.child(
+                            widgets::row_description(&theme, "No activity in this window.")
+                                .border_t_1()
+                                .border_color(theme.border)
+                                .py(crate::typography::ui_rems(12.0)),
+                        );
+                    }
                 } else {
-                    breakdown = breakdown.child(usage_table_row(
+                    rows = rows.child(usage_table_row(
                         &theme,
                         [
                             "Model".into(),
@@ -2696,92 +2773,166 @@ impl Shell {
                         }
                     });
                     if models.is_empty() {
-                        breakdown = breakdown.child(
-                            div()
-                                .w_full()
-                                .py(px(20.0))
-                                .text_align(gpui::TextAlign::Center)
-                                .text_color(theme.text_muted)
-                                .child("No activity in this window."),
+                        rows = rows.child(
+                            widgets::row_description(&theme, "No activity in this window.")
+                                .border_t_1()
+                                .border_color(theme.border)
+                                .py(crate::typography::ui_rems(12.0)),
                         );
                     }
                     for ((_, name), (provider, cost, tokens, records, missing)) in models {
                         let unknown = records > 0 && missing >= records;
-                        breakdown = breakdown.child(div().id(SharedString::from(format!("usage-model-{}-{name}", provider.label())))
-                            .tooltip(move |_, cx| cx.new(|_| super::SurfaceTabTooltip {
-                                text: if missing > 0 { format!("{missing} unpriced records; priced cost shown where available").into() }
-                                    else { "API-equivalent estimate".into() },
-                            }).into())
-                            .child(usage_table_row(&theme,
-                                [name, if unknown { "Unpriced".into() } else { money(cost) },
-                                 if unknown { "—".into() } else { usage_percent(if total_cost > 0.0 { cost / total_cost } else { 0.0 }) }, compact_tokens(tokens)], false, unknown, Some(provider))));
+                        rows = rows.child(
+                            div()
+                                .id(SharedString::from(format!(
+                                    "usage-model-{}-{name}",
+                                    provider.label()
+                                )))
+                                .tooltip(move |_, cx| {
+                                    cx.new(|_| super::SurfaceTabTooltip {
+                                        text: if missing > 0 {
+                                            format!(
+                                                "{missing} unpriced records; priced cost shown where available"
+                                            )
+                                            .into()
+                                        } else {
+                                            "API-equivalent estimate".into()
+                                        },
+                                    })
+                                    .into()
+                                })
+                                .child(usage_table_row(
+                                    &theme,
+                                    [
+                                        name,
+                                        if unknown {
+                                            "Unpriced".into()
+                                        } else {
+                                            money(cost)
+                                        },
+                                        if unknown {
+                                            "—".into()
+                                        } else {
+                                            usage_percent(if total_cost > 0.0 {
+                                                cost / total_cost
+                                            } else {
+                                                0.0
+                                            })
+                                        },
+                                        compact_tokens(tokens),
+                                    ],
+                                    false,
+                                    unknown,
+                                    Some(provider),
+                                )),
+                        );
                     }
                 }
-                content = content.child(breakdown);
-                if snapshot.summary.partial || !snapshot.summary.warnings.is_empty() {
-                    content = content.child(div().w_full().flex().flex_col().gap(px(4.0))
-                        .children(snapshot.summary.warnings.iter().cloned().chain(
-                            snapshot.summary.partial.then(|| "Some environments reported partial history; totals may be incomplete.".to_string())
-                        ).map(|warning| div().text_size(crate::typography::ui_rems(11.0)).text_color(theme.readable_tone(theme.warning, 1.0)).child(warning))));
-                }
+                sections.push(
+                    widgets::section_card(&theme)
+                        .child(widgets::section_header(
+                            &theme,
+                            "Breakdown",
+                            Some(
+                                if by_time {
+                                    "Cost and tokens per period, newest first."
+                                } else {
+                                    "Cost and tokens per model, largest first."
+                                }
+                                .into(),
+                            ),
+                            vec![breakdown_control.into_any_element()],
+                        ))
+                        .child(rows)
+                        .into_any_element(),
+                );
             }
+        } else if self.usage_refreshing {
+            // Loading: skeleton rows in place of the content.
+            sections.push(
+                widgets::section_card(&theme)
+                    .child(
+                        div()
+                            .w_full()
+                            .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                            .py(crate::typography::ui_rems(widgets::ROW_PAD_Y))
+                            .child(crate::popover::skeleton_rows(
+                                "usage-loading",
+                                &theme,
+                                4,
+                                cx.entity_id(),
+                                cx,
+                            )),
+                    )
+                    .into_any_element(),
+            );
         } else {
-            content = content.child(div().text_color(theme.text_muted).child(
-                if self.usage_refreshing {
-                    "Loading usage…"
-                } else {
-                    "Connect an environment to see usage and limits."
-                },
-            ));
-        }
-        if let Some(error) = &self.usage_error {
-            content = content.child(
-                div()
-                    .text_color(theme.readable_tone(theme.warning, 1.0))
-                    .child(error.clone()),
+            sections.push(
+                widgets::section_card(&theme)
+                    .child(
+                        widgets::card_row(&theme, true)
+                            .child(widgets::row_tile(&theme, icons::CHART))
+                            .child(widgets::row_text(
+                                &theme,
+                                "No usage yet",
+                                Some("Connect an environment to see usage and limits.".into()),
+                            )),
+                    )
+                    .into_any_element(),
             );
         }
-        let price_open = self.usage_page_price_editor_open;
-        let content = content.when(price_open, |page| {
-            page.child(
-                div()
-                    .id("usage-model-prices-close")
-                    .cursor_pointer()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.usage_page_price_editor_open = false;
-                        cx.notify();
-                    }))
-                    .child("Hide model prices"),
-            )
-            .child(self.render_usage_price_editor(&theme, cx))
-        });
+        if self.usage_page_price_editor_open {
+            sections.push(self.render_usage_price_editor(&theme, cx));
+        }
+        let error = self
+            .usage_error
+            .clone()
+            .map(|error| widgets::error_strip(&theme, error).mt(crate::typography::ui_rems(20.0)));
+
+        let scrollbar = widgets::rail(
+            &mut self.usage_page_scroll,
+            "usage-page-scrollbar",
+            &theme,
+            cx,
+            |shell: &mut Shell| &mut shell.usage_page_scroll,
+        );
         div()
-            .id("usage-page")
-            .size_full()
+            .id("usage-page-host")
             .relative()
-            .overflow_y_scroll()
-            .child(div().w_full().px(px(22.0)).py(px(12.0)).child(header))
+            .size_full()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.usage_page_scroll.set_list_hovered(*hovered) {
+                    cx.notify();
+                }
+            }))
             .child(
                 div()
-                    .w_full()
-                    .max_w(px(1024.0))
-                    .mx_auto()
-                    .px(px(24.0))
-                    .pt(px(22.0))
-                    .pb(px(48.0))
-                    .child(content),
+                    .id("usage-page")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.usage_page_scroll.scroll)
+                    .child(
+                        widgets::page_column()
+                            .child(widgets::page_title_bar(
+                                &theme,
+                                "Usage",
+                                None,
+                                vec![
+                                    environment_trigger.into_any_element(),
+                                    refresh.into_any_element(),
+                                ],
+                            ))
+                            .child(widgets::page_subtitle(
+                                &theme,
+                                "What your providers report for the selected environments: \
+                                 spend, tokens and subscription limits.",
+                            ))
+                            .children(error)
+                            .child(view_card)
+                            .children(sections),
+                    ),
             )
-            .when(self.usage_environment_menu_open, |page| {
-                page.child(
-                    div()
-                        .absolute()
-                        .left(px(22.0))
-                        .top(px(48.0))
-                        .child(environment_menu),
-                )
-            })
+            .children(scrollbar)
             .into_any_element()
     }
 

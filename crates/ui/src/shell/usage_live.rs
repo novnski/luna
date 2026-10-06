@@ -104,6 +104,10 @@ fn notes(row: &LiveSessionUsage, now_ms: i64) -> Vec<(String, bool)> {
 }
 
 /// The section, or `None` when no live provider session reported anything.
+/// One section card: the header names what the figures are, a provenance
+/// note (when Claude limits came from a session stream) sits in a warning
+/// strip inside the card, and the sessions are a table inset to the rows'
+/// edge, each followed by its status notes.
 pub(super) fn live_sessions_section(
     rows: &[LiveSessionUsage],
     title_of: impl Fn(&str) -> Option<String>,
@@ -111,45 +115,19 @@ pub(super) fn live_sessions_section(
     theme: &Theme,
     now_ms: i64,
 ) -> Option<AnyElement> {
+    use crate::settings::widgets;
     if rows.is_empty() {
         return None;
     }
-    let mut section = div()
-        .id("usage-live-sessions")
+    let mut table = div()
         .w_full()
+        .border_t_1()
+        .border_color(theme.border)
+        .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+        .pt(crate::typography::ui_rems(4.0))
+        .pb(crate::typography::ui_rems(8.0))
         .flex()
         .flex_col()
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .pb(px(6.0))
-                .child(
-                    div()
-                        .text_size(crate::typography::ui_rems(13.0))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
-                        .child("Live sessions"),
-                )
-                .child(
-                    div()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .child(
-                            "Reported by each running provider session · latest running \
-                             totals, not added to the history below",
-                        ),
-                )
-                .when_some(limit_note, |header, note| {
-                    header.child(
-                        div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.readable_tone(theme.warning, 1.0))
-                            .child(format!("Claude limits on this page: {note}")),
-                    )
-                }),
-        )
         .child(usage_table_row(
             theme,
             [
@@ -168,7 +146,7 @@ pub(super) fn live_sessions_section(
             Some(runtime) => format!("{title} · {runtime}"),
             None => title,
         };
-        section = section.child(usage_table_row(
+        table = table.child(usage_table_row(
             theme,
             [
                 name,
@@ -181,21 +159,51 @@ pub(super) fn live_sessions_section(
             Some(row.provider),
         ));
         for (note, warning) in notes(row, now_ms) {
-            section = section.child(
+            table = table.child(
                 div()
                     .w_full()
-                    .pl(px(21.0))
-                    .py(px(3.0))
+                    // On the session name's edge, past the provider mark.
+                    .pl(crate::typography::ui_rems(22.0))
+                    .pb(crate::typography::ui_rems(6.0))
                     .text_size(crate::typography::ui_rems(11.0))
+                    .line_height(crate::typography::ui_rems(14.0))
                     .text_color(if warning {
-                        theme.warning
+                        theme.readable_tone(theme.warning, 1.0)
                     } else {
-                        theme.text_muted
+                        theme.readable_muted(0.85)
                     })
                     .child(note),
             );
         }
     }
+    let section = widgets::section_card(theme)
+        .id("usage-live-sessions")
+        .child(widgets::section_header(
+            theme,
+            "Live sessions",
+            Some(
+                "Reported by each running provider session · latest running totals, not added \
+                 to the history below"
+                    .into(),
+            ),
+            Vec::new(),
+        ))
+        .when_some(limit_note, |section, note| {
+            section.child(
+                div()
+                    .w_full()
+                    .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                    .pb(crate::typography::ui_rems(widgets::ROW_PAD_Y))
+                    .child(
+                        widgets::warning_strip(
+                            theme,
+                            format!("Claude limits on this page: {note}"),
+                        )
+                        .mt(px(0.0)),
+                    ),
+            )
+        })
+        .child(table);
     Some(section.into_any_element())
 }
 

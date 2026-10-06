@@ -2361,6 +2361,9 @@ pub struct Shell {
     sidebar_scroll: gpui::ScrollHandle,
     activity_sidebar_scroll: gpui::ScrollHandle,
     settings_nav_scroll: gpui::ScrollHandle,
+    /// Scrollers + floating rails of the Shell-hosted settings pages.
+    usage_page_scroll: widgets::PageScroll,
+    updates_page_scroll: widgets::PageScroll,
     /// L14 session-history query state. Cmd+K owns the only query input;
     /// results are derived/index-only rows and navigate back to the
     /// authoritative transcript.
@@ -2872,6 +2875,8 @@ impl Shell {
             sidebar_scroll: gpui::ScrollHandle::new(),
             activity_sidebar_scroll: gpui::ScrollHandle::new(),
             settings_nav_scroll: gpui::ScrollHandle::new(),
+            usage_page_scroll: widgets::PageScroll::default(),
+            updates_page_scroll: widgets::PageScroll::default(),
             history_search_global: false,
             history_search_results: Vec::new(),
             history_search_loading: false,
@@ -5576,15 +5581,11 @@ impl Shell {
                     None => Empty.into_any_element(),
                 }
             }
-            SettingsSection::Automations => {
-                let panel =
-                    self.automations_panel(crate::automations::AutomationScope::All, true, cx);
-                div()
-                    .size_full()
-                    .max_w(px(760.0))
-                    .child(panel)
-                    .into_any_element()
-            }
+            // The app-wide panel renders as a full settings page (title bar,
+            // section cards, its own scroller and rail) in `All` scope.
+            SettingsSection::Automations => self
+                .automations_panel(crate::automations::AutomationScope::All, true, cx)
+                .into_any_element(),
             SettingsSection::Usage => self.render_usage_page(cx),
             SettingsSection::Updates => {
                 if !self.update_check_attempted
@@ -8436,16 +8437,19 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Settings-mode sidebar (luna settings-sidebar.tsx): window-control
-    /// strip, "Settings" heading, icon section rows styled like session rows,
-    /// and a Back row pinned to the bottom.
+    /// Settings-mode sidebar (luna settings-sidebar.tsx): the "Settings"
+    /// heading, the section rows in three groups (General…Shortcuts,
+    /// Files…Backups, Archived) and the account action + Back pinned to the
+    /// bottom. Every row shares one anatomy ([`Self::settings_nav_row`]) and
+    /// every dimension next to text is an interface rem, so the nav follows
+    /// Appearance → Interface size; only the dragged sidebar width is pixels.
     fn render_settings_nav(
         &mut self,
         section: SettingsSection,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let focus_border = theme.border_strong;
+        use crate::typography::TypeStyleExt as _;
         let account_row = account_action_for_scope(
             self.state.read(cx).workspace_scope,
             self.sync_flow,
@@ -8458,33 +8462,11 @@ impl Shell {
                 AccountAction::SyncInProgress => return None,
             };
             Some(
-                div()
-                    .id("settings-account-action")
-                    .role(gpui::Role::Button)
+                Self::settings_nav_row("settings-account-action", mark, label, false, theme)
                     .aria_label(label)
-                    .tab_index(0)
-                    .focus_visible(move |style| crate::theme::focus_ring(style, focus_border))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .rounded(px(8.0))
-                    .px(px(Theme::SPACE_SM))
-                    .py(px(6.0))
-                    .text_size(crate::typography::ui_rems(13.0))
-                    .cursor_pointer()
-                    .hover_fill_fg(
-                        "settings-account-action",
-                        gpui::transparent_black(),
-                        theme.glass_hover(),
-                        theme.text_muted,
-                        theme.text,
-                    )
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.activate_account_action(action, cx)),
                     )
-                    .on_key_down(crate::swallow_activation_key)
-                    .child(icon(mark).size(px(16.0)).text_color(theme.text_muted))
-                    .child(SharedString::from(label))
                     .into_any_element(),
             )
         });
@@ -8505,10 +8487,30 @@ impl Shell {
             SettingsSection::Usage => icons::CHART,
             SettingsSection::Updates => icons::RESTART,
         };
+        // Groups read as groups through space, not rules: a group opens with
+        // a 16 pt gap above its first row, rows inside it sit 2 pt apart.
+        let starts_group = |item: SettingsSection| {
+            matches!(item, SettingsSection::Files | SettingsSection::Archived)
+        };
+        let rows = SettingsSection::ALL
+            .into_iter()
+            .filter(|item| *item != SettingsSection::Appshots || crate::appshots::is_desktop())
+            .map(|item| {
+                let selected = item == section;
+                let id = format!("settings-nav-{}", item.label());
+                Self::settings_nav_row(id, section_icon(item), item.label(), selected, theme)
+                    .aria_label(format!("{} settings", item.label()))
+                    .aria_selected(selected)
+                    .when(starts_group(item), |row| {
+                        row.mt(crate::typography::ui_rems(16.0))
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| this.open_settings(item, cx)))
+            });
         // Match the user's dragged sidebar width — the pane container clips to
         // it, so a hardcoded default here left hover washes stopping short of
         // the sidebar's right edge (user-reported). Device identity lives on
         // the Accounts page now — the one surface where the device matters.
+        let gutter = crate::typography::ui_rems(8.0);
         div()
             .w(px(self.settings.sidebar_width))
             .h_full()
@@ -8518,15 +8520,18 @@ impl Shell {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .px(px(Theme::SPACE_SM))
+                    .px(gutter)
                     .flex()
                     .flex_col()
                     .child(
+                        // The heading shares the rows' text edge (gutter +
+                        // row inset), so the column reads as one grid.
                         div()
-                            .px(px(Theme::SPACE_SM))
-                            .pt(px(12.0))
-                            .pb(px(4.0))
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .flex_none()
+                            .px(crate::typography::ui_rems(8.0))
+                            .pt(crate::typography::ui_rems(12.0))
+                            .pb(crate::typography::ui_rems(6.0))
+                            .type_style(crate::typography::TextStyle::Caption)
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.readable_muted(0.6))
                             .child(SharedString::from("Settings")),
@@ -8539,136 +8544,128 @@ impl Shell {
                             .overflow_y_scroll()
                             .track_scroll(&self.settings_nav_scroll)
                             .child(
-                                div().flex().flex_col().gap(px(2.0)).children(
-                                    SettingsSection::ALL
-                                        .into_iter()
-                                        .filter(|item| {
-                                            *item != SettingsSection::Appshots
-                                                || crate::appshots::is_desktop()
-                                        })
-                                        .map(|item| {
-                                            let selected = item == section;
-                                            div()
-                                                .id(SharedString::from(format!(
-                                                    "settings-nav-{}",
-                                                    item.label()
-                                                )))
-                                                .role(gpui::Role::Button)
-                                                .aria_label(format!("{} settings", item.label()))
-                                                .aria_selected(selected)
-                                                .tab_index(0)
-                                                .focus_visible(move |style| {
-                                                    crate::theme::focus_ring(style, focus_border)
-                                                })
-                                                .when(
-                                                    matches!(
-                                                        item,
-                                                        SettingsSection::Files
-                                                            | SettingsSection::Archived
-                                                    ),
-                                                    |el| el.mt(px(Theme::SPACE_LG)),
-                                                )
-                                                .flex()
-                                                .flex_row()
-                                                .items_center()
-                                                .gap(px(8.0))
-                                                .rounded(px(8.0))
-                                                .px(px(Theme::SPACE_SM))
-                                                .py(px(6.0))
-                                                .text_size(crate::typography::ui_rems(13.0))
-                                                .when(selected, |el| {
-                                                    el.font_weight(gpui::FontWeight::MEDIUM)
-                                                })
-                                                .cursor_pointer()
-                                                // Same tokens as the main sidebar's session
-                                                // rows — the two sidebars must feel alike.
-                                                .hover_fill_fg(
-                                                    format!("settings-nav-{}", item.label()),
-                                                    if selected {
-                                                        crate::theme::glass_selected_bg()
-                                                    } else {
-                                                        gpui::transparent_black()
-                                                    },
-                                                    if selected {
-                                                        crate::theme::glass_selected_bg()
-                                                    } else {
-                                                        theme.glass_hover()
-                                                    },
-                                                    if selected {
-                                                        theme.text
-                                                    } else {
-                                                        theme.text_muted
-                                                    },
-                                                    theme.text,
-                                                )
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.open_settings(item, cx)
-                                                }))
-                                                .on_key_down(crate::swallow_activation_key)
-                                                .child(
-                                                    icon(section_icon(item))
-                                                        .size(px(16.0))
-                                                        .text_color(theme.text_muted),
-                                                )
-                                                .child(SharedString::from(item.label()))
-                                        }),
-                                ),
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(crate::typography::ui_rems(2.0))
+                                    .pb(crate::typography::ui_rems(8.0))
+                                    .children(rows),
                             ),
                     ),
             )
-            .when_some(account_row, |el, row| {
-                el.child(
-                    div()
-                        .flex_none()
-                        .px(px(Theme::SPACE_SM))
-                        .pb(px(4.0))
-                        .child(row),
-                )
-            })
-            // Back pinned to the bottom (luna settings-sidebar.tsx).
+            // Footer actions: the same row anatomy on the same grid, set off
+            // from the sections by a hairline inset to the rows' edge.
             .child(
                 div()
                     .flex_none()
-                    .px(px(Theme::SPACE_SM))
-                    .pb(px(12.0))
+                    .px(gutter)
+                    .pb(crate::typography::ui_rems(12.0))
+                    .flex()
+                    .flex_col()
+                    .gap(crate::typography::ui_rems(2.0))
                     .child(
                         div()
-                            .id("settings-back")
-                            .role(gpui::Role::Button)
-                            .aria_label("Back to chat")
-                            .tab_index(0)
-                            .focus_visible(move |style| {
-                                crate::theme::focus_ring(style, focus_border)
-                            })
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.0))
-                            .rounded(px(8.0))
-                            .px(px(Theme::SPACE_SM))
-                            .py(px(6.0))
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .cursor_pointer()
-                            .hover_fill_fg(
-                                "settings-back",
-                                gpui::transparent_black(),
-                                theme.glass_hover(),
-                                theme.text_muted,
-                                theme.text,
-                            )
-                            .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
-                            .on_key_down(crate::swallow_activation_key)
-                            .child(
-                                // AltArrowLeft chevron (luna settings-sidebar.tsx),
-                                // not the straight history arrow.
-                                icon(icons::ALT_ARROW_LEFT)
-                                    .size(px(16.0))
-                                    .text_color(theme.text_muted),
-                            )
-                            .child(SharedString::from("Back")),
+                            .h(px(1.0))
+                            .mx(crate::typography::ui_rems(8.0))
+                            .mb(crate::typography::ui_rems(6.0))
+                            .bg(theme.separator(false)),
+                    )
+                    .children(account_row)
+                    .child(
+                        // AltArrowLeft chevron (luna settings-sidebar.tsx),
+                        // not the straight history arrow.
+                        Self::settings_nav_row(
+                            "settings-back",
+                            icons::ALT_ARROW_LEFT,
+                            "Back",
+                            false,
+                            theme,
+                        )
+                        .aria_label("Back to chat")
+                        .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx))),
                     ),
             )
             .into_any_element()
+    }
+
+    /// One Settings nav row: a 16 pt glyph and a 13/18 label on a row at
+    /// least 30 pt tall, 8 pt inset, 8 pt corners. Selected rows take the
+    /// shared selected fill and full-strength text; others rest transparent
+    /// and ease to the shared hover fill — the same tokens as the main
+    /// sidebar's session rows, so the two sidebars feel alike. Focus draws
+    /// the shared ring. The caller adds the accessible name and the click.
+    fn settings_nav_row(
+        id: impl Into<SharedString>,
+        glyph: &'static str,
+        label: &'static str,
+        selected: bool,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        let id: SharedString = id.into();
+        let ring = theme.focus_ring();
+        let selected_fill = crate::theme::glass_selected_bg();
+        div()
+            .id(id.clone())
+            .role(gpui::Role::Button)
+            .tab_index(0)
+            .focus_visible(move |style| crate::theme::focus_ring(style, ring))
+            .w_full()
+            .min_h(crate::typography::ui_rems(30.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(crate::typography::ui_rems(8.0))
+            .rounded(px(8.0))
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(5.0))
+            .text_size(crate::typography::ui_rems(13.0))
+            .line_height(crate::typography::ui_rems(18.0))
+            .font_weight(if selected {
+                gpui::FontWeight::MEDIUM
+            } else {
+                gpui::FontWeight::NORMAL
+            })
+            .cursor_pointer()
+            .hover_fill_fg(
+                id,
+                if selected {
+                    selected_fill
+                } else {
+                    gpui::transparent_black()
+                },
+                if selected {
+                    selected_fill
+                } else {
+                    crate::theme::sidebar_hover_bg()
+                },
+                if selected {
+                    theme.text
+                } else {
+                    theme.readable_muted(0.95)
+                },
+                theme.text,
+            )
+            .on_key_down(crate::swallow_activation_key)
+            .child(
+                icon(glyph)
+                    .size(crate::typography::ui_rems(16.0))
+                    .flex_none()
+                    .text_color(if selected {
+                        theme.text
+                    } else {
+                        theme.text_muted
+                    }),
+            )
+            // Section names are short; at the narrowest sidebar and the
+            // largest Interface size a label ellipsizes instead of wrapping
+            // the row or pushing past the sidebar's edge.
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(SharedString::from(label)),
+            )
     }
 
     fn activate_account_action(&mut self, action: AccountAction, cx: &mut Context<Self>) {
@@ -10139,6 +10136,7 @@ impl Shell {
     }
 
     fn render_updates_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::button::{ButtonKind, ControlSize};
         let theme = Theme::of(cx).clone();
         let status = self.update_status(cx);
         let current = status
@@ -10151,7 +10149,11 @@ impl Shell {
         let available = status
             .as_ref()
             .is_some_and(|status| status.update_available && latest.is_some());
+        let checked = status
+            .as_ref()
+            .is_some_and(|status| status.checked_at.is_some());
         let desktop_update = self.install.supports_desktop_update();
+        let downloading = matches!(self.update_flow, UpdateFlow::Downloading);
         let check_error = self
             .update_check_error
             .as_ref()
@@ -10169,10 +10171,7 @@ impl Shell {
             "Couldn't check GitHub Releases.".to_owned()
         } else if available {
             format!("Version v{} is available.", latest.unwrap())
-        } else if status
-            .as_ref()
-            .is_some_and(|status| status.checked_at.is_some())
-        {
+        } else if checked {
             "You're up to date.".to_owned()
         } else {
             "Check for the latest GitHub release.".to_owned()
@@ -10182,94 +10181,83 @@ impl Shell {
             .and_then(|status| status.checked_at)
             .and_then(chrono::DateTime::<Utc>::from_timestamp_millis)
             .map(|checked| format!("Last checked {} UTC", checked.format("%b %-d, %Y at %H:%M")));
-        let mut release_row = widgets::card_row(&theme, false)
-            .min_h(px(88.0))
-            .child(widgets::row_tile(&theme, icons::RESTART))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(widgets::row_title(&theme, "Release status"))
-                    .child(widgets::meta_line(
-                        &theme,
-                        vec![div().child(status_text).into_any_element()],
-                    ))
-                    .when_some(checked_at, |row, checked_at| {
-                        row.child(
-                            div()
-                                .mt(px(4.0))
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
-                                .child(checked_at),
-                        )
-                    }),
-            );
-        if available {
-            release_row = release_row.child(widgets::badge_active(&theme, "Available"));
-        }
 
-        let mut actions = div()
-            .mt(px(20.0))
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap(px(10.0));
-        if !self.update_checking && !matches!(self.update_flow, UpdateFlow::Downloading) {
-            actions = actions.child(
-                popover::btn_ghost(&theme, "Check for updates", "updates-check")
-                    .id("updates-check")
-                    .role(gpui::Role::Button)
-                    .aria_label("Check GitHub Releases for updates")
-                    .tab_index(0)
-                    .focus_visible({
-                        let ring = theme.focus_ring();
-                        move |style| crate::theme::focus_ring(style, ring)
-                    })
-                    .on_click(cx.listener(|this, _, _, cx| this.begin_update_check(cx))),
-            );
-        }
-        if available && !self.update_checking {
+        // Page action: the check sits in the title bar. While a check or a
+        // download runs it stays in place, disabled, so nothing shifts.
+        let check_enabled = !self.update_checking && !downloading;
+        let check_button = crate::button::button(
+            "updates-check",
+            ButtonKind::Secondary,
+            ControlSize::Md,
+            check_enabled,
+            &theme,
+        )
+        .aria_label("Check GitHub Releases for updates")
+        .child(crate::button::glyph(icons::REFRESH, ControlSize::Md))
+        .child(if self.update_checking {
+            "Checking…"
+        } else {
+            "Check for updates"
+        })
+        .when(check_enabled, |button| {
+            button.on_click(cx.listener(|this, _, _, cx| this.begin_update_check(cx)))
+        });
+
+        // The release row's one action: apply (desktop installs) or open the
+        // release (managed installs). A download in flight keeps a disabled
+        // placeholder so the row doesn't jump when it finishes.
+        let release_action: Option<AnyElement> = if available && !self.update_checking {
             if desktop_update {
-                let action = match &self.update_flow {
-                    UpdateFlow::Idle => Some("Update and restart"),
-                    UpdateFlow::Downloading => None,
-                    UpdateFlow::Ready(_) => Some("Restart to update"),
-                    UpdateFlow::Failed(_) => Some("Retry download"),
+                let label = match &self.update_flow {
+                    UpdateFlow::Idle => "Update and restart",
+                    UpdateFlow::Downloading => "Downloading…",
+                    UpdateFlow::Ready(_) => "Restart to update",
+                    UpdateFlow::Failed(_) => "Retry download",
                 };
-                if let Some(label) = action {
-                    actions = actions.child(
-                        popover::btn_primary(&theme, label)
-                            .id("updates-apply")
-                            .role(gpui::Role::Button)
-                            .aria_label(label)
-                            .tab_index(0)
-                            .focus_visible({
-                                let ring = theme.focus_ring();
-                                move |style| crate::theme::focus_ring(style, ring)
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| this.on_update_page_action(cx))),
-                    );
-                }
+                Some(
+                    crate::button::button(
+                        "updates-apply",
+                        ButtonKind::Primary,
+                        ControlSize::Md,
+                        !downloading,
+                        &theme,
+                    )
+                    .aria_label(label)
+                    .child(label)
+                    .when(!downloading, |button| {
+                        button
+                            .on_click(cx.listener(|this, _, _, cx| this.on_update_page_action(cx)))
+                    })
+                    .into_any_element(),
+                )
             } else {
-                actions = actions.child(
-                    popover::btn_primary(&theme, "View release on GitHub")
-                        .id("updates-open-github")
-                        .role(gpui::Role::Button)
-                        .aria_label("View latest LUNA release on GitHub")
-                        .tab_index(0)
-                        .focus_visible({
-                            let ring = theme.focus_ring();
-                            move |style| crate::theme::focus_ring(style, ring)
-                        })
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.open_url("https://github.com/novnski/luna/releases/latest");
-                        })),
-                );
+                Some(
+                    crate::button::button(
+                        "updates-open-github",
+                        ButtonKind::Primary,
+                        ControlSize::Md,
+                        true,
+                        &theme,
+                    )
+                    .aria_label("View latest LUNA release on GitHub")
+                    .child(crate::button::glyph(icons::ARROW_UP_RIGHT, ControlSize::Md))
+                    .child("View release on GitHub")
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.open_url("https://github.com/novnski/luna/releases/latest");
+                    }))
+                    .into_any_element(),
+                )
             }
-        }
+        } else {
+            None
+        };
+        let status_badge = if available {
+            Some(widgets::badge_active(&theme, "Available").into_any_element())
+        } else if checked && check_error.is_none() && !self.update_checking {
+            Some(widgets::badge(&theme, "Up to date").into_any_element())
+        } else {
+            None
+        };
 
         let flow_message = match &self.update_flow {
             UpdateFlow::Downloading => Some("Downloading and verifying the release…".to_owned()),
@@ -10279,69 +10267,129 @@ impl Shell {
             UpdateFlow::Failed(error) if available => Some(format!("Update failed: {error}")),
             _ => None,
         };
+        // Progress reads as part of the release row; only a failure gets
+        // the error strip.
+        let (flow_progress, flow_failure) = if matches!(self.update_flow, UpdateFlow::Failed(_)) {
+            (None, flow_message)
+        } else {
+            (flow_message, None)
+        };
         let install_note = if desktop_update {
             "When an update is available, press Update once. LUNA downloads and verifies it, then restarts after open work is saved."
         } else {
             "This installation cannot be replaced automatically. Install the GitHub release to enable in-app updates."
         };
-        div()
-            .id("settings-updates-scroll")
-            .size_full()
-            .overflow_y_scroll()
+
+        let installed_row = widgets::card_row(&theme, false)
+            .child(widgets::row_tile(&theme, icons::MONITOR))
+            .child(widgets::row_text(
+                &theme,
+                "Installed version",
+                Some(
+                    if desktop_update {
+                        "This copy of LUNA updates itself from GitHub Releases."
+                    } else {
+                        "Managed or source install; updates come from its installer."
+                    }
+                    .into(),
+                ),
+            ))
             .child(
-                widgets::page_column()
-                    .child(widgets::page_header(&theme, "Updates", None))
-                    .child(widgets::page_subtitle(
-                        &theme,
-                        "Get new versions directly from this project's GitHub Releases.",
-                    ))
-                    .child(
-                        widgets::section_card(&theme)
-                            .child(
-                                widgets::card_row(&theme, true)
-                                    .min_h(px(76.0))
-                                    .child(widgets::row_tile(&theme, icons::MONITOR))
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .child(widgets::row_title(&theme, "Installed version"))
-                                            .child(widgets::meta_line(
-                                                &theme,
-                                                vec![
-                                                    div()
-                                                        .child(format!("v{current}"))
-                                                        .into_any_element(),
-                                                ],
-                                            )),
-                                    ),
-                            )
-                            .child(release_row),
-                    )
-                    .child(actions)
-                    .when_some(flow_message, |page, message| {
-                        page.child(
-                            div()
-                                .mt(px(12.0))
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(theme.text_muted)
-                                .child(message),
+                widgets::row_controls().child(
+                    div()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .line_height(crate::typography::ui_rems(18.0))
+                        .text_color(theme.readable_muted(0.95))
+                        .child(SharedString::from(format!("v{current}"))),
+                ),
+            );
+        let release_row = widgets::card_row(&theme, false)
+            .child(widgets::row_tile(&theme, icons::RESTART))
+            .child(
+                widgets::row_text(&theme, "Latest release", Some(status_text.into()))
+                    .when_some(checked_at, |text, checked_at| {
+                        text.child(widgets::row_description(&theme, checked_at))
+                    })
+                    .when_some(flow_progress, |text, progress| {
+                        text.child(
+                            widgets::row_description(&theme, progress).text_color(theme.text),
                         )
-                    })
-                    .when_some(check_error, |page, error| {
-                        page.child(widgets::error_strip(
-                            &theme,
-                            format!("Update check failed: {error}"),
-                        ))
-                    })
+                    }),
+            )
+            .when(status_badge.is_some() || release_action.is_some(), |row| {
+                row.child(
+                    widgets::row_controls()
+                        .children(status_badge)
+                        .children(release_action),
+                )
+            });
+        // Errors and progress belong to the release they describe: inside
+        // the card, under its row, on the row's text edge.
+        let notice = |strip: gpui::Div| {
+            div()
+                .w_full()
+                .px(crate::typography::ui_rems(widgets::ROW_PAD_X))
+                .pb(crate::typography::ui_rems(widgets::ROW_PAD_Y))
+                .child(strip.mt(px(0.0)))
+        };
+        let card = widgets::section_card(&theme)
+            .child(widgets::section_header(
+                &theme,
+                "Version",
+                Some("LUNA checks this project's GitHub Releases for new versions.".into()),
+                Vec::new(),
+            ))
+            .child(installed_row)
+            .child(release_row)
+            .when_some(flow_failure, |card, message| {
+                card.child(notice(widgets::error_strip(&theme, message)))
+            })
+            .when_some(check_error, |card, error| {
+                card.child(notice(widgets::error_strip(
+                    &theme,
+                    format!("Update check failed: {error}"),
+                )))
+            });
+
+        let scrollbar = widgets::rail(
+            &mut self.updates_page_scroll,
+            "settings-updates-scrollbar",
+            &theme,
+            cx,
+            |shell: &mut Shell| &mut shell.updates_page_scroll,
+        );
+        div()
+            .id("settings-updates-host")
+            .relative()
+            .size_full()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if this.updates_page_scroll.set_list_hovered(*hovered) {
+                    cx.notify();
+                }
+            }))
+            .child(
+                div()
+                    .id("settings-updates-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.updates_page_scroll.scroll)
                     .child(
-                        div()
-                            .mt(px(24.0))
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.text_muted)
-                            .child(install_note),
+                        widgets::page_column()
+                            .child(widgets::page_title_bar(
+                                &theme,
+                                "Updates",
+                                None,
+                                vec![check_button.into_any_element()],
+                            ))
+                            .child(widgets::page_subtitle(
+                                &theme,
+                                "Get new versions directly from this project's GitHub Releases.",
+                            ))
+                            .child(card)
+                            .child(widgets::section_footer(&theme, install_note)),
                     ),
             )
+            .children(scrollbar)
             .into_any_element()
     }
 
@@ -12490,12 +12538,24 @@ impl Shell {
         // Settings sits in the same contained content plane as chat: inset
         // from the chrome (its navigation stays in the sidebar), rounded,
         // darker, one frame (its section cards are content groups in it).
+        // The host only sizes the page: every page owns its scroller, its
+        // floating rail and its centred `widgets::page_column`, so the host
+        // fills the plane and may shrink in both axes (no min-content squish
+        // from a wide page pushing the plane past a narrow window).
         if let Route::Settings(section) = self.route {
             let outlet = self.settings_outlet(section, window, cx);
             return workbench::render::contained_plane(
                 theme,
                 "settings-plane",
-                div().flex_1().min_h_0().child(outlet).into_any_element(),
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(outlet)
+                    .into_any_element(),
             )
             .into_any_element();
         }
