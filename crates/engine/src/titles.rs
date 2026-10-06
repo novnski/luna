@@ -422,6 +422,7 @@ mod tests {
             description: None,
             reasoning_levels: vec![],
             options: vec![],
+            first_seen_at_ms: None,
         }
     }
 

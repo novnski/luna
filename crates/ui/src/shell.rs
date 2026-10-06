@@ -2284,7 +2284,6 @@ pub struct Shell {
     /// One normalized service response shared by the full page and sidebar.
     usage_snapshot: Option<UsageSnapshot>,
     usage_environment_snapshots: Vec<(String, UsageSnapshot)>,
-    usage_environment_filter: Option<String>,
     usage_page_environment_ids: Option<std::collections::HashSet<String>>,
     usage_environment_menu_open: bool,
     usage_error: Option<String>,
@@ -2814,7 +2813,6 @@ impl Shell {
             route,
             usage_snapshot: None,
             usage_environment_snapshots: Vec::new(),
-            usage_environment_filter: None,
             usage_page_environment_ids: None,
             usage_environment_menu_open: false,
             usage_error: None,
@@ -3103,7 +3101,6 @@ impl Shell {
             self.usage_snapshot = None;
             self.usage_environment_snapshots.clear();
             self.usage_alerted.clear();
-            self.usage_environment_filter = None;
             self.usage_error = Some("Engine changed · refresh usage for this environment".into());
         }
         self.reconcile_session_history_scope(engine_changed, cx);
@@ -20931,7 +20928,6 @@ impl Shell {
         };
         self.usage_snapshot = Some(snapshot.clone());
         self.usage_environment_snapshots = vec![(environment_id.clone(), snapshot)];
-        self.usage_environment_filter = Some(environment_id);
         self.usage_provider_filter = Some(luna_proto::UsageProvider::Codex);
         self.provider_updates = vec![ProviderUpdateStatus {
             harness: HarnessId::Codex,
@@ -20946,7 +20942,7 @@ impl Shell {
 
     pub fn fixture_add_compact_usage_providers(&mut self, cx: &mut Context<Self>) {
         let now = chrono::Utc::now().timestamp_millis();
-        let Some(environment_id) = self.usage_environment_filter.clone() else {
+        let Some(environment_id) = self.local_usage_device(cx) else {
             return;
         };
         let source = luna_proto::UsageSource {

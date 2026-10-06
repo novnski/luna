@@ -163,6 +163,7 @@ fn model(
         description: (!description.is_empty()).then(|| description.into()),
         reasoning_levels: ladder.to_vec(),
         options,
+        first_seen_at_ms: None,
     }
 }
 
@@ -177,6 +178,20 @@ fn model(
 /// still read with their version numbers ("Opus 5", not "Opus").
 pub fn static_models() -> Vec<Model> {
     vec![
+        model(
+            "claude-opus-5-5",
+            "Opus 5.5",
+            "Best for everyday, complex tasks",
+            FULL_LADDER,
+            vec![context_window(), speed()],
+        ),
+        model(
+            "claude-sonnet-5-5",
+            "Sonnet 5.5",
+            "Efficient for routine tasks",
+            XHIGH_LADDER,
+            vec![context_window()],
+        ),
         model(
             "claude-fable-5-1",
             "Fable 5.1",
@@ -337,6 +352,7 @@ pub(crate) fn models_from_initialize(response: &Value) -> Vec<Model> {
                 .or_else(|| template.and_then(|model| model.description.clone())),
             reasoning_levels,
             options,
+            first_seen_at_ms: None,
         });
     }
     if models.is_empty() {

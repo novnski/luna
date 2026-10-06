@@ -444,6 +444,12 @@ pub struct Model {
     pub reasoning_levels: Vec<ReasoningLevel>,
     #[serde(default)]
     pub options: Vec<ModelOption>,
+    /// When this device's model catalog first listed the model (the engine's
+    /// model cache, milliseconds since the epoch). `None` for models in the
+    /// first catalog a device saved, so a fresh install marks nothing new.
+    /// The pickers' "New" badge reads it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

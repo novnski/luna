@@ -128,8 +128,6 @@ struct CompactUsagePalette {
     control_icon: gpui::Hsla,
     refresh_active: gpui::Hsla,
     opencode_icon: gpui::Hsla,
-    environment: gpui::Hsla,
-    environment_text: gpui::Hsla,
     badge: gpui::Hsla,
     badge_text: gpui::Hsla,
     track: gpui::Hsla,
@@ -155,8 +153,6 @@ impl CompactUsagePalette {
             control_icon: theme.text_muted,
             refresh_active: theme.text,
             opencode_icon: theme.accent,
-            environment: theme.surface_raised,
-            environment_text: theme.text,
             badge: theme.surface_raised,
             badge_text: theme.text_muted,
             track: theme.surface_raised,
@@ -1551,101 +1547,55 @@ impl Shell {
     pub(super) fn toggle_usage_card(&mut self, cx: &mut Context<Self>) {
         self.usage_card_open = !self.usage_card_open;
         if self.usage_card_open {
-            if self.usage_environment_filter.is_none() {
-                self.usage_environment_filter = self
-                    .state
-                    .read(cx)
-                    .selected_chat
-                    .as_ref()
-                    .and_then(|id| self.state.read(cx).chats.iter().find(|chat| &chat.id == id))
-                    .map(|chat| chat.device_id.clone());
-            }
             self.refresh_usage(cx);
         }
         cx.notify();
     }
 
-    fn render_usage_provider_tabs(
-        &mut self,
-        theme: &Theme,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let visible = self.selected_usage_snapshot();
-        div()
-            .flex()
-            .flex_wrap()
-            .gap(px(5.0))
-            .children(
-                [
-                    (None, "All providers"),
-                    (Some(UsageProvider::Codex), "Codex"),
-                    (Some(UsageProvider::OpenCodeGo), "OpenCode Go"),
-                    (Some(UsageProvider::Claude), "Claude"),
-                ]
-                .into_iter()
-                .filter(|(provider, _)| {
-                    provider.is_none_or(|provider| {
-                        visible.as_ref().is_some_and(|snapshot| {
-                            snapshot
-                                .summary
-                                .sources
-                                .iter()
-                                .any(|source| source.provider == provider)
-                                || snapshot
-                                    .limits
-                                    .iter()
-                                    .any(|limit| limit.provider == provider)
-                        })
-                    })
-                })
-                .map(|(provider, label)| {
-                    let label = if compact && provider.is_none() {
-                        "All"
-                    } else if compact && provider == Some(UsageProvider::OpenCodeGo) {
-                        "Go"
-                    } else {
-                        label
-                    };
-                    div()
-                        .id(SharedString::from(format!("usage-provider-{label}")))
-                        .px(px(if compact { 6.0 } else { 8.0 }))
-                        .py(px(if compact { 4.0 } else { 5.0 }))
-                        .rounded(px(Theme::CONTROL_RADIUS))
-                        .bg(if self.usage_provider_filter == provider {
-                            theme.accent_wash
-                        } else {
-                            theme.glass_hover().opacity(0.1)
-                        })
-                        .text_color(if self.usage_provider_filter == provider {
-                            theme.text
-                        } else {
-                            theme.text_muted
-                        })
-                        .text_size(crate::typography::ui_rems(if compact {
-                            10.0
-                        } else {
-                            11.0
-                        }))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.usage_provider_filter = provider;
-                            cx.notify();
-                        }))
-                        .child(label)
-                }),
-            )
-            .into_any_element()
+    /// This machine's device id: the app's own, else the attached engine's.
+    pub(super) fn local_usage_device(&self, cx: &Context<Self>) -> Option<String> {
+        let state = self.state.read(cx);
+        state.local_device_id.clone().or_else(|| {
+            state
+                .engine()
+                .map(|engine| engine.engine_info().device_id.clone())
+        })
     }
 
-    fn selected_usage_snapshot(&self) -> Option<UsageSnapshot> {
-        let Some(filter) = &self.usage_environment_filter else {
-            return self.usage_snapshot.clone();
-        };
+    /// The compact card's data: this machine's connected accounts only.
+    /// Other machines' usage lives on the full Usage page.
+    fn local_usage_snapshot(&self, cx: &Context<Self>) -> Option<UsageSnapshot> {
+        let local = self.local_usage_device(cx)?;
         self.usage_environment_snapshots
             .iter()
-            .find(|(device, _)| device == filter)
+            .find(|(device, _)| *device == local)
             .map(|(_, snapshot)| snapshot.clone())
+    }
+
+    /// The compact card's provider tabs: every provider this machine's
+    /// snapshot reports limits or usage for, in one fixed order.
+    pub(super) fn usage_card_providers(snapshot: Option<&UsageSnapshot>) -> Vec<UsageProvider> {
+        let Some(snapshot) = snapshot else {
+            return Vec::new();
+        };
+        [
+            UsageProvider::Codex,
+            UsageProvider::Claude,
+            UsageProvider::OpenCodeGo,
+        ]
+        .into_iter()
+        .filter(|provider| {
+            snapshot
+                .limits
+                .iter()
+                .any(|limit| limit.provider == *provider)
+                || snapshot
+                    .summary
+                    .sources
+                    .iter()
+                    .any(|source| source.provider == *provider)
+        })
+        .collect()
     }
 
     fn page_usage_snapshot(&self) -> Option<UsageSnapshot> {
@@ -1695,23 +1645,6 @@ impl Shell {
         cx.notify();
     }
 
-    fn cycle_usage_environment(&mut self, cx: &mut Context<Self>) {
-        let environments: Vec<_> = self
-            .usage_environment_snapshots
-            .iter()
-            .map(|(device, _)| device.clone())
-            .collect();
-        let next = match &self.usage_environment_filter {
-            None => environments.first().cloned(),
-            Some(current) => environments
-                .iter()
-                .position(|id| id == current)
-                .and_then(|index| environments.get(index + 1).cloned()),
-        };
-        self.usage_environment_filter = next;
-        cx.notify();
-    }
-
     fn can_show_usage_alert(&self) -> bool {
         !self.settings.usage_sidebar_hidden
             && !self.settings.sidebar_collapsed
@@ -1740,8 +1673,15 @@ impl Shell {
         let active = self.working_usage_targets(cx);
         let can_show = self.can_show_usage_alert();
         let now_ms = Utc::now().timestamp_millis();
+        // The card shows this machine's accounts, so only a run here can
+        // open it.
+        let local = self.local_usage_device(cx);
         let mut alert = None;
-        for (device, snapshot) in &self.usage_environment_snapshots {
+        for (device, snapshot) in self
+            .usage_environment_snapshots
+            .iter()
+            .filter(|(device, _)| Some(device) == local.as_ref())
+        {
             for limit in snapshot
                 .limits
                 .iter()
@@ -1764,11 +1704,10 @@ impl Shell {
                 }
             }
         }
-        if let Some((device, provider)) = alert
+        if let Some((_, provider)) = alert
             && !self.usage_card_open
         {
             self.usage_card_open = true;
-            self.usage_environment_filter = Some(device);
             self.usage_provider_filter = Some(provider);
             cx.notify();
         }
@@ -1866,18 +1805,9 @@ impl Shell {
                     }
                     shell.usage_environment_snapshots = snapshots;
                     shell.usage_snapshot = Some(merged);
+                    let local = shell.local_usage_snapshot(cx);
                     if shell.usage_provider_filter.is_some_and(|provider| {
-                        shell.selected_usage_snapshot().is_none_or(|snapshot| {
-                            !snapshot
-                                .summary
-                                .sources
-                                .iter()
-                                .any(|source| source.provider == provider)
-                                && !snapshot
-                                    .limits
-                                    .iter()
-                                    .any(|limit| limit.provider == provider)
-                        })
+                        !Self::usage_card_providers(local.as_ref()).contains(&provider)
                     }) {
                         shell.usage_provider_filter = None;
                     }
@@ -1908,22 +1838,6 @@ impl Shell {
         {
             return;
         }
-        if self.usage_card_open
-            && self.usage_environment_filter.is_none()
-            && self.usage_last_refresh_attempt_ms.is_none()
-        {
-            let state = self.state.read(cx);
-            self.usage_environment_filter = state
-                .selected_chat
-                .as_ref()
-                .and_then(|id| state.chats.iter().find(|chat| &chat.id == id))
-                .map(|chat| chat.device_id.clone())
-                .or_else(|| {
-                    state
-                        .engine()
-                        .map(|engine| engine.engine_info().device_id.clone())
-                });
-        }
         let now_ms = Utc::now().timestamp_millis();
         if self
             .usage_last_refresh_attempt_ms
@@ -1948,30 +1862,6 @@ impl Shell {
         self.usage_hover_period_start = None;
         self.schedule_save(cx);
         self.refresh_usage(cx);
-    }
-
-    fn compact_usage_environment_label(&self, cx: &Context<Self>) -> String {
-        let Some(id) = self.usage_environment_filter.as_deref() else {
-            return "All machines".into();
-        };
-        let state = self.state.read(cx);
-        if let Some(name) = state
-            .devices
-            .iter()
-            .find(|device| device.id == id)
-            .map(|device| device.name.trim())
-            .filter(|name| !name.is_empty() && uuid::Uuid::parse_str(name).is_err())
-        {
-            return name.to_owned();
-        }
-        if state
-            .engine()
-            .is_some_and(|engine| engine.engine_info().device_id == id)
-        {
-            "This machine".into()
-        } else {
-            "Selected machine".into()
-        }
     }
 
     pub(super) fn render_usage_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -2945,39 +2835,11 @@ impl Shell {
             return div().into_any_element();
         }
         let palette = CompactUsagePalette::for_theme(theme);
-        let environment_label = self.compact_usage_environment_label(cx);
-        let snapshot = self.selected_usage_snapshot();
-        let mut providers: Vec<_> = [UsageProvider::Codex, UsageProvider::OpenCodeGo]
-            .into_iter()
-            .filter(|provider| {
-                snapshot.as_ref().is_none_or(|snapshot| {
-                    snapshot
-                        .limits
-                        .iter()
-                        .any(|limit| limit.provider == *provider)
-                        || snapshot
-                            .summary
-                            .sources
-                            .iter()
-                            .any(|source| source.provider == *provider)
-                })
-            })
-            .collect();
-        if providers.is_empty()
-            && snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot
-                    .limits
-                    .iter()
-                    .any(|limit| limit.provider == UsageProvider::Claude)
-                    || snapshot
-                        .summary
-                        .sources
-                        .iter()
-                        .any(|source| source.provider == UsageProvider::Claude)
-            })
-        {
-            providers.push(UsageProvider::Claude);
-        }
+        // This machine's connected accounts, one tab per provider that
+        // reports limits or usage here; no machine switcher (the full Usage
+        // page compares machines).
+        let snapshot = self.local_usage_snapshot(cx);
+        let providers = Self::usage_card_providers(snapshot.as_ref());
         let active = self
             .usage_provider_filter
             .filter(|provider| providers.contains(provider))
@@ -3131,30 +2993,7 @@ impl Shell {
                     .items_center()
                     .gap(px(4.0))
                     .child(tabs)
-                    .child(
-                        div()
-                            .id("usage-card-environment")
-                            .role(gpui::Role::Button)
-                            .aria_label("Change usage machine")
-                            .tab_index(0)
-                            .min_w_0()
-                            .flex_1()
-                            .ml(px(6.0))
-                            .truncate()
-                            .px(px(5.0))
-                            .py(px(4.0))
-                            .rounded(px(5.0))
-                            .bg(palette.environment)
-                            .cursor_pointer()
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(palette.environment_text)
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.cycle_usage_environment(cx)),
-                            )
-                            .on_key_down(crate::swallow_activation_key)
-                            .child(environment_label),
-                    )
+                    .child(div().flex_1())
                     .child(
                         div()
                             .id("usage-card-refresh")

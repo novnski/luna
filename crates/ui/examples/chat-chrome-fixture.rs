@@ -1,7 +1,7 @@
 //! Headless GPUI E2E for three pieces of chat chrome: the new-thread card a
 //! parent shows when it creates a child chat, the timeline's disclosure
-//! headers ("Thought process", "Called 2 tools"), and the composer's focus
-//! treatment.
+//! headers ("Thought process", "Called 2 tools"), the composer's focus
+//! treatment, and the composer's model picker.
 //!
 //! Drives the production `Shell` in hidden windows against an in-process
 //! `EngineCore` with a Mock harness. The parent's transcript is seeded with
@@ -25,6 +25,11 @@
 //!    or the disc is not the recessed grey; unfocused and empty, the arrow
 //!    is accent; with a draft, the disc is not solid (`send` counts accent
 //!    pixels in the send disc's corner of the pill).
+//! 5. The model picker shows a model's tagline under or beside its name, or
+//!    misses the "New" badge on a model this device's catalog first listed
+//!    now (the engine cache is seeded with an older catalog without it, so
+//!    the real refresh stamps it), or badges a model from that older
+//!    catalog.
 //!
 //! Build: scripts/cargo.sh build --locked -p luna-ui --features appshots-fixture \
 //!   --example chat-chrome-fixture
@@ -256,6 +261,23 @@ fn main() -> anyhow::Result<()> {
             session_id: None,
         }],
     }));
+    // An older Mock catalog from a previous cache version: the engine
+    // re-fetches it, so "Fable 5", absent here, is stamped as first seen now
+    // while "Mock 1" keeps this baseline.
+    {
+        use sha2::{Digest, Sha256};
+        let dir = engine_data.join("model-cache");
+        std::fs::create_dir_all(&dir)?;
+        let name = format!("{:x}.json", Sha256::digest(b"Mock:device"));
+        std::fs::write(
+            dir.join(name),
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "checkedAtMs": 0,
+                "models": [{"id": "mock-1", "label": "Mock 1"}],
+            }))?,
+        )?;
+    }
     let core = runtime.block_on(async {
         EngineCore::assemble_with_profile_and_agent_accounts_config(
             EngineProfile::development(&engine_data, "chrome-fixture", "chrome-fixture"),
@@ -685,7 +707,28 @@ async fn run(
                     })
                 });
 
+                // 5. The model picker, once per theme at the default size.
+                let mut picker = serde_json::Value::Null;
+                if pixels == 16.0 && width > 1000.0 {
+                    let pickers = cx.update(|cx| composer.read(cx).pickers().clone());
+                    window.update(cx, |_, window, cx| {
+                        pickers.update(cx, |pickers, cx| pickers.open_model_menu(window, cx))
+                    })?;
+                    for _ in 0..60 {
+                        picker = cx.update(|cx| pickers.read(cx).fixture_model_rows(cx));
+                        if picker.as_array().is_some_and(|rows| rows.len() >= 2) {
+                            break;
+                        }
+                        settle(cx, 100).await;
+                    }
+                    park_pointer(window, cx, width)?;
+                    let open_picker = stable(window, cx).await?;
+                    capture("picker", &open_picker, &mut shots)?;
+                    cx.update(|cx| pickers.update(cx, |pickers, cx| pickers.fixture_close(cx)));
+                }
+
                 let readback = json!({
+                    "picker": picker,
                     "pill": pill,
                     "accentPixels": {
                         "restSend": rest_send, "restRing": rest_ring,
@@ -708,6 +751,20 @@ async fn run(
                 }
                 if draft_send >= 4 {
                     failures.push("a draft leaves the send disc accent instead of solid");
+                }
+                // 5: name-only rows; the newly listed model is New, the
+                // baseline model isn't.
+                if let Some(rows) = picker.as_array() {
+                    let row = |id: &str| rows.iter().find(|row| row["id"] == id);
+                    if row("mock-fable-5").is_none_or(|row| row["new"] != true) {
+                        failures.push("the newly listed model has no New badge");
+                    }
+                    if row("mock-1").is_none_or(|row| row["new"] != false) {
+                        failures.push("a baseline model wears the New badge");
+                    }
+                    if rows.iter().any(|row| !row["attribution"].is_null()) {
+                        failures.push("a model row shows a description");
+                    }
                 }
                 if !failures.is_empty() {
                     // CHAT_CHROME_RECORD_ONLY records a baseline (the state

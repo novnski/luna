@@ -129,6 +129,7 @@ impl Harness for Synthetic {
                         },
                     ],
                 }],
+                first_seen_at_ms: None,
             })
             .collect())
     }

@@ -544,6 +544,7 @@ fn synthetic_models(harness: HarnessId) -> Vec<Model> {
         description: Some(description.into()),
         reasoning_levels: levels.to_vec(),
         options: vec![],
+        first_seen_at_ms: None,
     };
     match harness {
         HarnessId::Codex => {

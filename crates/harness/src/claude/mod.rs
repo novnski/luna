@@ -458,6 +458,14 @@ impl Harness for ClaudeHarness {
         Ok(static_models())
     }
 
+    /// The engine cache's refresh (startup, every two hours, Refresh models):
+    /// the CLI's own account-visible list from `initialize`, so a model
+    /// released after this build appears without a LUNA update. A failed
+    /// probe reaches the cache, which keeps its last good snapshot.
+    async fn models_live(&self) -> Result<Vec<Model>, HarnessError> {
+        self.live_models().await
+    }
+
     /// Legacy unscoped discovery: the default (Ask) profile, no workspace.
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         self.commands_in(&CommandScope::default()).await

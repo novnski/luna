@@ -1291,6 +1291,30 @@ impl Pickers {
         self.pick_harness(harness, cx);
     }
 
+    /// The open model menu's rows as drawn (QA readback): id, label, the
+    /// inline attribution and whether the row wears the "New" badge.
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_model_rows(&self, cx: &App) -> serde_json::Value {
+        let now = chrono::Utc::now().timestamp_millis();
+        serde_json::Value::Array(
+            self.model_rows(cx)
+                .iter()
+                .map(|row| {
+                    let catalog = self.models.get(&row.harness).and_then(|list| list.ready());
+                    serde_json::json!({
+                        "id": row.model.id,
+                        "label": row.model.label,
+                        "firstSeenAtMs": row.model.first_seen_at_ms,
+                        "attribution": (row.harness == HarnessId::Opencode)
+                            .then(|| row.model.description.clone())
+                            .flatten(),
+                        "new": catalog.is_some_and(|catalog| model_is_new(&row.model, catalog, now)),
+                    })
+                })
+                .collect(),
+        )
+    }
+
     /// The account a model-catalog query for `harness` would send (Codex:
     /// its own selection or active account; others: their own selection).
     #[cfg(feature = "appshots-fixture")]
@@ -7463,17 +7487,23 @@ impl Pickers {
         let star_model = row.model.id.clone();
         // Provider attribution (field report: several connected opencode
         // providers advertise identically-named models — "GLM-5.2" exists
-        // under 64 providers — and rows were indistinguishable). The driver
-        // ships the provider display name in `description`; other harnesses'
-        // taglines read fine in the same slot. Skip when it just repeats the
-        // harness name.
-        let attribution: Option<SharedString> = row
-            .model
-            .description
-            .as_deref()
+        // under 64 providers — and rows were indistinguishable). The OpenCode
+        // driver ships the provider display name in `description`. Other
+        // harnesses' descriptions are taglines, and rows show the name alone
+        // (user request). Skip when it just repeats the harness name.
+        let attribution: Option<SharedString> = (row.harness == HarnessId::Opencode)
+            .then(|| row.model.description.as_deref())
+            .flatten()
             .map(str::trim)
             .filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case(harness_name.as_ref()))
             .map(|d| SharedString::from(d.to_owned()));
+        let is_new = self
+            .models
+            .get(&row.harness)
+            .and_then(|list| list.ready())
+            .is_some_and(|catalog| {
+                model_is_new(&row.model, catalog, chrono::Utc::now().timestamp_millis())
+            });
         let compact = self.model_rail == ModelRail::Harness;
         let mut el = div()
             .id(("model-row", ix))
@@ -7526,6 +7556,7 @@ impl Pickers {
                         .text_color(theme.text)
                         .child(label),
                 )
+                .when(is_new, |el| el.child(new_model_badge(&theme)))
                 .when_some(attribution, |el, attribution| {
                     el.child(
                         div()
@@ -7547,11 +7578,19 @@ impl Pickers {
                 .child(
                     div()
                         .w_full()
-                        .truncate()
-                        .text_size(crate::typography::ui_rems(12.5))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(label),
+                        .flex()
+                        .items_center()
+                        .gap(crate::typography::ui_rems(6.0))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(crate::typography::ui_rems(12.5))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child(label),
+                        )
+                        .when(is_new, |el| el.child(new_model_badge(&theme))),
                 )
                 .child(
                     // Harness identity subline (t3 `showProvider`), plus
@@ -8065,6 +8104,71 @@ fn default_badge(theme: &Theme) -> gpui::Div {
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(theme.for_popup().text_muted)
         .child(SharedString::from("Default"))
+}
+
+/// How long a model wears the "New" badge after this device's catalog first
+/// listed it.
+const NEW_MODEL_WINDOW_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+/// A label's model family and version: "Opus 5.5" is (`opus`, [5, 5]) and
+/// "GPT-6.1-Sol" is (`gpt sol`, [6, 1]). `None` when the label has no number.
+fn model_family_version(label: &str) -> Option<(String, Vec<u32>)> {
+    let start = label.find(|ch: char| ch.is_ascii_digit())?;
+    let run: String = label[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect();
+    let version: Vec<u32> = run
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.parse().ok())
+        .collect();
+    let family = format!("{}{}", &label[..start], &label[start + run.len()..])
+        .to_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some((family, version))
+}
+
+/// Whether `model` wears the "New" badge: this device's catalog first listed
+/// it within the last week, and it is the newest version of its family in
+/// `catalog`. An older model that only now became visible (a back catalog
+/// the CLI started listing) is not new.
+pub(crate) fn model_is_new(model: &Model, catalog: &[Model], now_ms: i64) -> bool {
+    let Some(first_seen) = model.first_seen_at_ms else {
+        return false;
+    };
+    if now_ms.saturating_sub(first_seen) > NEW_MODEL_WINDOW_MS {
+        return false;
+    }
+    let Some((family, version)) = model_family_version(&model.label) else {
+        return true;
+    };
+    !catalog.iter().any(|other| {
+        model_family_version(&other.label).is_some_and(|(other_family, other_version)| {
+            other_family == family && other_version > version
+        })
+    })
+}
+
+/// The "New" badge beside a model's name: a small accent-tinted capsule.
+pub(crate) fn new_model_badge(theme: &Theme) -> gpui::Div {
+    let tone = theme.readable_tone(theme.accent, 1.0);
+    div()
+        .flex_none()
+        .h(crate::typography::ui_rems(16.0))
+        .px(crate::typography::ui_rems(5.0))
+        .flex()
+        .items_center()
+        .rounded(px(crate::theme::radius::XS))
+        .bg(theme.accent.opacity(0.14))
+        .text_size(crate::typography::ui_rems(10.5))
+        .line_height(crate::typography::ui_rems(14.0))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(tone)
+        .child(SharedString::from("New"))
 }
 
 /// Brand mark + optional tint for a harness (the Claude mark keeps its brand
@@ -9005,6 +9109,7 @@ mod tests {
             description: None,
             reasoning_levels: Vec::new(),
             options: Vec::new(),
+            first_seen_at_ms: None,
         }
     }
 
@@ -9740,7 +9845,7 @@ mod tests {
         );
         assert_eq!(
             models.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
-            vec!["Opus 5", "Fable 5", "Sonnet 5", "Haiku 4.5", "Nova 1"]
+            vec!["Opus 5.5", "Fable 5", "Sonnet 5.5", "Haiku 4.5", "Nova 1"]
         );
         assert_eq!(
             models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
@@ -9787,6 +9892,7 @@ mod tests {
                     default_choice: "normal".into(),
                 },
             ],
+            first_seen_at_ms: None,
         };
         let mut selections = serde_json::Map::new();
         selections.insert("context".into(), serde_json::Value::String("1m".into()));
@@ -10009,6 +10115,7 @@ mod tests {
                 description: None,
                 reasoning_levels: vec![],
                 options: vec![],
+                first_seen_at_ms: None,
             },
             Model {
                 id: "fast".into(),
@@ -10016,6 +10123,7 @@ mod tests {
                 description: None,
                 reasoning_levels: vec![],
                 options: vec![],
+                first_seen_at_ms: None,
             },
         ];
         assert_eq!(default_model(&models).map(|m| &*m.id), Some("flagship"));

@@ -350,6 +350,7 @@ impl Harness for L09FixtureHarness {
             description: Some("bounded fixture-only synthetic harness".into()),
             reasoning_levels: self.reasoning_levels.to_vec(),
             options: Vec::new(),
+            first_seen_at_ms: None,
         }];
         if let Some(alternate) = self.alternate_model_id {
             models.push(Model {
@@ -358,6 +359,7 @@ impl Harness for L09FixtureHarness {
                 description: Some("second synthetic model for same-provider QA".into()),
                 reasoning_levels: self.reasoning_levels.to_vec(),
                 options: Vec::new(),
+                first_seen_at_ms: None,
             });
         }
         Ok(models)

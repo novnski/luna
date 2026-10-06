@@ -203,6 +203,7 @@ impl Harness for ClaudeShaped {
                 description: None,
                 reasoning_levels: LADDER.to_vec(),
                 options: options(),
+                first_seen_at_ms: None,
             },
             Model {
                 id: "claude-opus-5-5".into(),
@@ -210,6 +211,7 @@ impl Harness for ClaudeShaped {
                 description: None,
                 reasoning_levels: LADDER.to_vec(),
                 options: options(),
+                first_seen_at_ms: None,
             },
         ])
     }

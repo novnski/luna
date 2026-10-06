@@ -531,6 +531,7 @@ fn parse_model_list_page(result: &Value) -> (Vec<(Model, bool)>, Option<String>)
                 description,
                 reasoning_levels,
                 options,
+                first_seen_at_ms: None,
             },
             item.get("isDefault").and_then(Value::as_bool) == Some(true),
         ));

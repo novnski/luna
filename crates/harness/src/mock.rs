@@ -78,6 +78,7 @@ impl Harness for MockHarness {
                 description: None,
                 reasoning_levels: vec![ReasoningLevel::Medium],
                 options: vec![],
+                first_seen_at_ms: None,
             },
             // Claude-mirroring demo model: lets scripted runs carry the same
             // chip labels ("Fable 5 · High") as a real Claude session.
@@ -92,6 +93,7 @@ impl Harness for MockHarness {
                     ReasoningLevel::XHigh,
                 ],
                 options: vec![],
+                first_seen_at_ms: None,
             },
         ])
     }

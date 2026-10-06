@@ -1340,6 +1340,7 @@ fn models_from_providers(providers: &ProviderCatalog) -> Vec<Model> {
                     description: Some(provider_name.to_owned()),
                     reasoning_levels: levels,
                     options: Vec::new(),
+                    first_seen_at_ms: None,
                 }
             })
             .collect();

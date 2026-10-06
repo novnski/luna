@@ -123,6 +123,8 @@ struct ModelEntry {
     value: Option<String>,
     label: SharedString,
     caption: Option<SharedString>,
+    /// Wears the "New" badge beside the label (recently listed models).
+    new: bool,
 }
 
 pub struct ProjectsPage {
@@ -500,6 +502,7 @@ impl ProjectsPage {
             value: None,
             label: "Provider default".into(),
             caption: Some("Follows the provider's catalog".into()),
+            new: false,
         }];
         let mut matched = 0;
         if let popover::Loadable::Ready(list) = &self.models {
@@ -513,6 +516,9 @@ impl ProjectsPage {
                 })
                 .collect::<Vec<_>>();
             matched = filtered.len();
+            // Rows name the model alone (user request); a recently listed
+            // model wears the "New" badge.
+            let now = chrono::Utc::now().timestamp_millis();
             entries.extend(
                 filtered
                     .into_iter()
@@ -520,7 +526,8 @@ impl ProjectsPage {
                     .map(|model| ModelEntry {
                         value: Some(model.id.clone()),
                         label: model.label.clone().into(),
-                        caption: (model.label != model.id).then(|| model.id.clone().into()),
+                        caption: None,
+                        new: crate::pickers::model_is_new(model, list, now),
                     }),
             );
         }
@@ -952,7 +959,17 @@ impl ProjectsPage {
                             .min_w_0()
                             .flex()
                             .flex_col()
-                            .child(div().truncate().child(entry.label))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex()
+                                    .items_center()
+                                    .gap(ui_rems(6.0))
+                                    .child(div().min_w_0().truncate().child(entry.label))
+                                    .when(entry.new, |line| {
+                                        line.child(crate::pickers::new_model_badge(&theme))
+                                    }),
+                            )
                             .when_some(entry.caption, |column, caption| {
                                 column.child(
                                     div()

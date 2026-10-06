@@ -1086,6 +1086,7 @@ async fn model_catalog_cache_survives_refresh_failure_and_engine_reopen() {
         description: None,
         reasoning_levels: Vec::new(),
         options: Vec::new(),
+        first_seen_at_ms: None,
     };
     let root = tempfile::tempdir().unwrap();
     let answer = Arc::new(Mutex::new(Ok(vec![model("first")])));

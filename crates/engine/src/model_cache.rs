@@ -48,6 +48,40 @@ fn codex_source_signature() -> Option<String> {
     ))
 }
 
+/// The id a catalog row stands for across spellings: the long-context
+/// `[1m]` variant and a dated snapshot (`-20251001`) are the same model.
+fn catalog_base_id(id: &str) -> &str {
+    let id = id.strip_suffix("[1m]").unwrap_or(id);
+    match id.rsplit_once('-') {
+        Some((stem, date)) if date.len() == 8 && date.chars().all(|ch| ch.is_ascii_digit()) => stem,
+        _ => id,
+    }
+}
+
+/// Carry each model's first-seen stamp forward and stamp models this key's
+/// previous catalog never listed with `now`. With no previous catalog (or an
+/// empty one) nothing is stamped: a device's first list is its baseline, so
+/// an install or a new account marks nothing new.
+fn stamp_first_seen(
+    models: &[Model],
+    previous: Option<&HashMap<String, Option<i64>>>,
+    now: i64,
+) -> Vec<Model> {
+    let previous = previous.filter(|previous| !previous.is_empty());
+    models
+        .iter()
+        .cloned()
+        .map(|mut model| {
+            model.first_seen_at_ms =
+                previous.and_then(|previous| match previous.get(catalog_base_id(&model.id)) {
+                    Some(stamp) => *stamp,
+                    None => Some(now),
+                });
+            model
+        })
+        .collect()
+}
+
 pub(crate) struct ModelCache {
     root: PathBuf,
     write: DeviceWriteHandle,
@@ -111,7 +145,54 @@ impl ModelCache {
             .then_some(catalog.models)
     }
 
-    fn save(&self, harness: HarnessId, identity: &str, models: &[Model]) -> Result<(), String> {
+    /// The first-seen stamps of the catalog last saved under this key, by
+    /// base id, whatever its cache version; `None` when there is none.
+    fn previous_first_seen(
+        &self,
+        harness: HarnessId,
+        identity: &str,
+    ) -> Option<HashMap<String, Option<i64>>> {
+        #[derive(Deserialize)]
+        struct Previous {
+            #[serde(default)]
+            models: Vec<PreviousModel>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PreviousModel {
+            id: String,
+            #[serde(default)]
+            first_seen_at_ms: Option<i64>,
+        }
+        let path = self.path(harness, identity);
+        let metadata = fs::symlink_metadata(&path).ok()?;
+        if !metadata.file_type().is_file() || metadata.len() > MAX_CACHE_BYTES {
+            return None;
+        }
+        let previous: Previous = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+        let mut stamps = HashMap::new();
+        for model in previous.models {
+            let stamp = stamps
+                .entry(catalog_base_id(&model.id).to_owned())
+                .or_insert(model.first_seen_at_ms);
+            // Two spellings of one model keep the earlier stamp.
+            if let (Some(kept), Some(other)) = (*stamp, model.first_seen_at_ms) {
+                *stamp = Some(kept.min(other));
+            } else if model.first_seen_at_ms.is_none() {
+                *stamp = None;
+            }
+        }
+        Some(stamps)
+    }
+
+    /// Persist `models` with their first-seen stamps, returning the stamped
+    /// rows.
+    fn save(
+        &self,
+        harness: HarnessId,
+        identity: &str,
+        models: &[Model],
+    ) -> Result<Vec<Model>, String> {
         let _permit = self
             .write
             .try_admit()
@@ -128,13 +209,16 @@ impl ModelCache {
         if dir.canonicalize().map_err(|error| error.to_string())? != dir {
             return Err("model cache directory is not inside the device root".into());
         }
+        let now = chrono::Utc::now().timestamp_millis();
+        let previous = self.previous_first_seen(harness, identity);
+        let models = stamp_first_seen(models, previous.as_ref(), now);
         let catalog = CatalogFile {
             version: CACHE_VERSION,
-            checked_at_ms: chrono::Utc::now().timestamp_millis(),
+            checked_at_ms: now,
             source_signature: (harness == HarnessId::Codex)
                 .then(codex_source_signature)
                 .flatten(),
-            models: models.to_vec(),
+            models,
         };
         if harness == HarnessId::Codex && catalog.source_signature.is_none() {
             return Err("Codex CLI executable is unavailable".into());
@@ -148,7 +232,7 @@ impl ModelCache {
         temp.flush().map_err(|error| error.to_string())?;
         temp.persist(self.path(harness, identity))
             .map_err(|error| error.to_string())?;
-        Ok(())
+        Ok(catalog.models)
     }
 
     pub(crate) async fn list(
@@ -212,20 +296,21 @@ impl ModelCache {
             Ok(models) if harness == HarnessId::Codex && models.is_empty() => {
                 // An authoritative empty `model/list` must replace an older
                 // runnable catalog for this account and CLI.
-                self.save(harness, identity, &models)?;
-                Ok(models)
+                self.save(harness, identity, &models)
             }
-            Ok(models) if !models.is_empty() => {
-                if let Err(error) = self.save(harness, identity, &models) {
+            // The saved rows carry their first-seen stamps; answer with those.
+            Ok(models) if !models.is_empty() => match self.save(harness, identity, &models) {
+                Ok(stamped) => Ok(stamped),
+                Err(error) => {
                     tracing::warn!(?harness, %error, "model catalog could not be cached");
                     if refresh {
                         return Err(format!(
                             "model catalog loaded but could not be saved: {error}"
                         ));
                     }
+                    Ok(models)
                 }
-                Ok(models)
-            }
+            },
             Ok(_) if !refresh && harness == HarnessId::ClaudeCode => {
                 Ok(luna_harness::claude::catalog::static_models())
             }

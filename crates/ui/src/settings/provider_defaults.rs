@@ -83,6 +83,8 @@ struct MenuItem {
     key: String,
     label: SharedString,
     detail: Option<SharedString>,
+    /// Wears the "New" badge beside the label (recently listed models).
+    new: bool,
     active: bool,
     action: Action,
 }
@@ -438,7 +440,17 @@ impl ProviderDefaultsPanel {
                                 .min_w_0()
                                 .flex()
                                 .flex_col()
-                                .child(div().truncate().child(item.label))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex()
+                                        .items_center()
+                                        .gap(ui_rems(6.0))
+                                        .child(div().min_w_0().truncate().child(item.label))
+                                        .when(item.new, |line| {
+                                            line.child(crate::pickers::new_model_badge(theme))
+                                        }),
+                                )
                                 .when_some(item.detail, |column, detail| {
                                     column.child(
                                         div()
@@ -539,6 +551,7 @@ impl ProviderDefaultsPanel {
                     key: ix.to_string(),
                     label,
                     detail: None,
+                    new: false,
                     active: ix == selected,
                     action,
                 })
@@ -717,22 +730,24 @@ impl Render for ProviderDefaultsPanel {
                         key: "default".into(),
                         label: "Provider default".into(),
                         detail: first_label.map(SharedString::from),
+                        new: false,
                         active: defaults.model.is_none(),
                         action: Action::Model(None),
                     }];
+                    // Rows name the model alone (user request); a recently
+                    // listed model wears the "New" badge.
+                    let now = chrono::Utc::now().timestamp_millis();
                     items.extend(models.iter().map(|model| MenuItem {
                         key: model.id.clone(),
                         label: model.label.clone().into(),
-                        detail: model.description.clone().map(SharedString::from),
+                        detail: None,
+                        new: crate::pickers::model_is_new(model, &models, now),
                         active: defaults.model.as_deref() == Some(model.id.as_str()),
                         action: Action::Model(Some(model.id.clone())),
                     }));
-                    let description = selected
-                        .and_then(|model| model.description.clone())
-                        .map(SharedString::from);
                     rows.push(
                         widgets::card_row(&theme, false)
-                            .child(widgets::row_text(&theme, "Model", description))
+                            .child(widgets::row_text(&theme, "Model", None))
                             .child(widgets::row_controls().child(self.select_menu(
                                 Menu::Model,
                                 SharedString::from(format!("defaults-model-{key}")),
