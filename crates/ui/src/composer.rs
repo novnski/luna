@@ -6861,16 +6861,15 @@ impl Composer {
             self.failure = Some(message.clone());
             self.failure_key = Some(key.to_string());
             self.draft_merge_notice = Some((key.to_string(), message));
-        } else {
+        } else if let Some(submission) = restored.pending_entries.last() {
+            // `pending_entries` holds only deliveries no live send of this
+            // composer accounts for; its own in-flight send needs no notice.
             let warning: SharedString =
                 "A submitted message is still awaiting an authoritative delivery receipt; newer typing is being saved separately."
                     .into();
             self.failure = Some(warning.clone());
             self.failure_key = Some(key.to_string());
-            self.delivery_failure = restored
-                .pending_entries
-                .last()
-                .map(|submission| (submission.command_id.clone(), warning));
+            self.delivery_failure = Some((submission.command_id.clone(), warning));
         }
         self.draft_saved_revisions
             .entry(key.to_string())
@@ -7388,6 +7387,21 @@ impl Composer {
         }
     }
 
+    /// Exact snapshots (draft id, revision) this composer is delivering right
+    /// now. Its send task or receipt watch owns their outcome, and the
+    /// transcript echo already shows them as sending. A draft read that meets
+    /// one is seeing this composer's own work: a first send re-keys to its
+    /// minted task while that very submission is still pending. Only a
+    /// submission no live send here accounts for (restart, another window)
+    /// is an unconfirmed delivery to report and watch. The draft id is part
+    /// of the identity because revisions of different drafts are unrelated.
+    fn live_submission_snapshots(&self) -> HashSet<(String, u64)> {
+        self.draft_submitting
+            .iter()
+            .map(|(key, revision)| (self.draft_id_for(key), *revision))
+            .collect()
+    }
+
     fn load_draft(&mut self, key: String, cx: &mut Context<Self>) {
         if self.draft_loaded.contains(&key) || self.draft_load_tasks.contains_key(&key) {
             return;
@@ -7402,6 +7416,9 @@ impl Composer {
         let task_id = (!key.is_empty()).then(|| key.clone());
         let canvas_id = key.is_empty().then(|| self.canvas_draft_id.clone());
         let starting_revision = self.draft_revisions.get(&key).copied().unwrap_or(0);
+        // Captured now as well as at completion: a live send can settle while
+        // this read is in flight, and the read may still report it pending.
+        let live_at_start = self.live_submission_snapshots();
         let load_key = key.clone();
         let task = cx.spawn(async move |this, cx| {
             let read = crate::drafts::read(
@@ -7415,6 +7432,15 @@ impl Composer {
                     let mut applied = HashSet::new();
                     for submission in &mut read.submissions {
                         if submission.state != DraftSubmissionState::Pending {
+                            continue;
+                        }
+                        // The live send settles its own receipt (and restores
+                        // its own draft on rejection); a second settlement
+                        // from this read would race it.
+                        if live_at_start.contains(&(
+                            submission.snapshot.draft_id.clone(),
+                            submission.snapshot.revision,
+                        )) {
                             continue;
                         }
                         let receipt = engine
@@ -7708,10 +7734,20 @@ impl Composer {
                     return;
                 }
                 composer.draft_load_tasks.remove(&load_key);
-                let Some(restored) = restored else {
+                let Some(mut restored) = restored else {
                     composer.draft_loaded.insert(load_key.clone());
                     return;
                 };
+                // This composer's own live sends are not unconfirmed
+                // deliveries to warn about or watch a second time. They still
+                // count for `pending_same_revision`, so a submitted snapshot
+                // never comes back as an editable, resendable draft.
+                let mut live = composer.live_submission_snapshots();
+                live.extend(live_at_start.iter().cloned());
+                restored.pending_entries.retain(|submission| {
+                    !live.contains(&(submission.snapshot.draft_id.clone(), submission.snapshot.revision))
+                });
+                restored.pending_submission = !restored.pending_entries.is_empty();
                 // A higher local revision means typing or attachment intake
                 // raced this read. Merge the durable row and local state,
                 // then persist a revision strictly above both versions.
@@ -14407,6 +14443,259 @@ mod tests {
         );
         drop(drafts);
         assert_eq!(service.command_calls.load(Ordering::SeqCst), calls);
+    }
+
+    fn first_send_composer(
+        cx: &mut gpui::TestAppContext,
+        service: Arc<DraftTestRpc>,
+    ) -> (Entity<AppState>, Entity<Composer>) {
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                luna_rpc::memory_client(service),
+            ));
+            state.local_device_id = Some("local".into());
+            state.provider_defaults_loaded = true;
+            state.spaces = vec![luna_proto::Space {
+                execution_defaults: Default::default(),
+                id: "first-send-project".into(),
+                device_id: "local".into(),
+                path: "/synthetic/first-send-project".into(),
+                name: Some("First send".into()),
+                git_detected: false,
+                git_checked_at: None,
+                checkout_id: None,
+                created_at: chrono::Utc::now(),
+            }];
+            state.selected_space = Some("first-send-project".into());
+        });
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        composer.update(cx, |composer, cx| {
+            // The report's chat ran with Full access in the main checkout.
+            composer.pickers.update(cx, |pickers, cx| {
+                let mut execution = pickers.persisted_draft_execution(cx);
+                execution["draft"]["permissionMode"] = "full".into();
+                execution["draft"]["checkout"] = "local".into();
+                pickers.restore_draft_execution(&execution, cx);
+            });
+            composer.on_state_changed(cx);
+        });
+        (state, composer)
+    }
+
+    fn delivery_warning(composer: &Composer) -> Option<String> {
+        composer
+            .failure
+            .as_ref()
+            .map(ToString::to_string)
+            .filter(|failure| failure.contains("awaiting an authoritative delivery receipt"))
+    }
+
+    #[track_caller]
+    fn pump_clock_until(
+        cx: &mut gpui::TestAppContext,
+        runtime: &tokio::runtime::Runtime,
+        mut done: impl FnMut(&gpui::TestAppContext) -> bool,
+    ) {
+        for _ in 0..20 {
+            cx.executor().advance_clock(Duration::from_secs(4));
+            for _ in 0..20 {
+                cx.run_until_parked();
+                runtime.block_on(tokio::time::sleep(Duration::from_millis(1)));
+            }
+            if done(cx) {
+                return;
+            }
+        }
+        assert!(done(cx), "receipt watch did not reach its expected state");
+    }
+
+    /// 2026-10-06 report: a first send showed "Checking delivery — a
+    /// submitted message is still awaiting an authoritative delivery receipt;
+    /// newer typing is being saved separately" while the run was already
+    /// thinking, with nothing typed. The send mints its task and re-keys the
+    /// composer to it at once; that key's draft read can land after the send
+    /// recorded its own pending submission (a Run receipt stays Pending until
+    /// the session starts). The submission is this composer's live send, so it
+    /// is neither a delivery warning nor a second receipt watch. A restarted
+    /// composer, which does not own it, still warns and never resends.
+    #[gpui::test]
+    fn first_send_does_not_flag_its_own_pending_delivery(cx: &mut gpui::TestAppContext) {
+        const PROMPT: &str =
+            "Just a test: create 2 threads, 1 astra for backend, 1 claude for frontend";
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let service = Arc::new(DraftTestRpc::new(Vec::new()));
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Pending);
+        let (state, composer) = first_send_composer(cx, service.clone());
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(""))
+        });
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit(PROMPT.into(), cx);
+            composer.mark_draft_dirty(cx);
+            composer.schedule_draft_save(String::new(), Duration::ZERO, cx);
+        });
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_flush_complete())
+        });
+        let submitted_revision = composer.read_with(cx, |composer, _| composer.draft_revisions[""]);
+
+        // Hold the new task's draft read until the send has durably recorded
+        // its submission: the interleaving the report hit.
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        *service.read_started.lock().unwrap() = Some(started_tx);
+        *service.read_release.lock().unwrap() = Some(release_rx);
+        composer.update(cx, |composer, cx| composer.send(PROMPT.into(), None, cx));
+        let task = composer.read_with(cx, |composer, _| composer.current_key.clone());
+        assert!(
+            !task.is_empty(),
+            "the first send re-keys to its minted task"
+        );
+        assert_eq!(
+            state.read_with(cx, |state, _| state.selected_chat.clone()),
+            Some(task.clone())
+        );
+        pump_until(cx, &runtime, |_| {
+            !service.submissions.lock().unwrap().is_empty()
+        });
+        runtime
+            .block_on(tokio::time::timeout(Duration::from_secs(2), started_rx))
+            .expect("task draft read started")
+            .expect("task draft read signal");
+        release_tx.send(()).unwrap();
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(&task))
+        });
+        pump_clock_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| !composer.sending)
+        });
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(delivery_warning(composer), None);
+            assert!(composer.delivery_failure.is_none());
+            assert!(
+                composer.failure.is_none(),
+                "unexpected notice: {:?}",
+                composer.failure
+            );
+            assert_eq!(composer.input.read(cx).text(), "");
+        });
+        {
+            let submissions = service.submissions.lock().unwrap();
+            assert_eq!(submissions.len(), 1);
+            assert_eq!(submissions[0].state, DraftSubmissionState::Pending);
+        }
+        let calls = service.command_calls.load(Ordering::SeqCst);
+
+        // Genuine case: a composer that did not send it (restart, another
+        // window) still reports the unresolved delivery and keeps the sent
+        // text out of the editor.
+        let (_reopened_state, reopened) = composer_with_draft_rpc(cx, &task, service.clone());
+        pump_until(cx, &runtime, |cx| {
+            reopened.read_with(cx, |composer, _| composer.draft_loaded.contains(&task))
+        });
+        reopened.read_with(cx, |composer, cx| {
+            assert!(
+                delivery_warning(composer)
+                    .is_some_and(|warning| warning.contains("will not be resent automatically")),
+                "a restarted composer must still warn: {:?}",
+                composer.failure
+            );
+            assert_eq!(composer.input.read(cx).text(), "");
+        });
+
+        // The live send's own receipt watch settles it: the canvas revision
+        // is released and fenced, and the sent text never returns.
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Applied);
+        pump_clock_until(cx, &runtime, |cx| {
+            service.submissions.lock().unwrap().is_empty()
+                && composer.read_with(cx, |composer, _| {
+                    composer.draft_receipt_tasks.is_empty() && composer.draft_flush_complete()
+                })
+        });
+        composer.read_with(cx, |composer, _| {
+            assert!(
+                composer.draft_submitting.is_empty(),
+                "the send's own revision stayed submitting: {:?}",
+                composer.draft_submitting
+            );
+            assert!(composer.draft_revisions[""] > submitted_revision);
+            assert!(
+                composer.failure.is_none(),
+                "unexpected notice: {:?}",
+                composer.failure
+            );
+        });
+        for draft in service.drafts.lock().unwrap().values() {
+            assert!(
+                draft.text.is_empty(),
+                "the sent message came back as draft {}: {:?}",
+                draft.draft_id,
+                draft.text
+            );
+        }
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), calls);
+    }
+
+    /// Restart with an unresolved send and no task draft row: typing that
+    /// races the read keeps the "newer typing" warning and the typed text,
+    /// and never merges the submitted snapshot back into the editor.
+    #[gpui::test]
+    fn restarted_pending_delivery_with_newer_typing_still_warns(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let task = "restarted-pending-task";
+        let mut snapshot = test_draft("old-canvas-draft", 40, "submitted before restart");
+        snapshot.task_id = None;
+        let (service, started, release) = DraftTestRpc::delayed(Vec::new());
+        *service.command_status.lock().unwrap() = Some(CommandReceiptStatus::Pending);
+        service.submissions.lock().unwrap().push(DraftSubmission {
+            command_id: "restarted-pending-send".into(),
+            state: DraftSubmissionState::Pending,
+            snapshot,
+            task_id: Some(task.into()),
+            queue_id: None,
+            updated_at_ms: 1,
+        });
+        let (_state, composer) = composer_with_draft_rpc(cx, task, service.clone());
+        cx.run_until_parked();
+        runtime
+            .block_on(tokio::time::timeout(Duration::from_secs(2), started))
+            .expect("draft read started")
+            .expect("draft read signal");
+        composer.update(cx, |composer, cx| {
+            composer.set_input_text_without_draft_edit("typed after restart".into(), cx);
+            composer.mark_draft_dirty(cx);
+        });
+        release.send(()).unwrap();
+        pump_until(cx, &runtime, |cx| {
+            composer.read_with(cx, |composer, _| composer.draft_loaded.contains(task))
+        });
+        composer.read_with(cx, |composer, cx| {
+            assert!(
+                delivery_warning(composer).is_some_and(
+                    |warning| warning.contains("newer typing is being saved separately")
+                ),
+                "unexpected notice: {:?}",
+                composer.failure
+            );
+            assert_eq!(
+                composer
+                    .delivery_failure
+                    .as_ref()
+                    .map(|(id, _)| id.as_str()),
+                Some("restarted-pending-send")
+            );
+            assert_eq!(composer.input.read(cx).text(), "typed after restart");
+        });
+        assert_eq!(service.command_calls.load(Ordering::SeqCst), 0);
     }
 
     #[gpui::test]
