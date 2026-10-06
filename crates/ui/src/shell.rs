@@ -8718,7 +8718,7 @@ impl Shell {
                         })
                         .into()
                     })
-                    .tooltip_show_delay(Duration::from_millis(350))
+                    .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         this.set_chat_pinned(pin_id.clone(), !pinned, cx);
@@ -8820,7 +8820,7 @@ impl Shell {
                                 })
                                 .into()
                             })
-                            .tooltip_show_delay(Duration::from_millis(350))
+                            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.activate_chat_row(surface, open_id.clone(), cx);
@@ -8858,7 +8858,7 @@ impl Shell {
                                 })
                                 .into()
                             })
-                            .tooltip_show_delay(Duration::from_millis(350))
+                            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.stop_propagation();
                                 this.set_chat_settled(settle_id.clone(), !settled, cx);
@@ -8902,7 +8902,7 @@ impl Shell {
                             })
                             .into()
                         })
-                        .tooltip_show_delay(Duration::from_millis(350))
+                        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.set_chat_archived(archive_id.clone(), !archived, cx);
@@ -9052,7 +9052,7 @@ impl Shell {
                     })
                     .into()
                 })
-                .tooltip_show_delay(Duration::from_millis(350))
+                .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.open_related_chats_for(click_id.clone(), cx);
@@ -9190,7 +9190,7 @@ impl Shell {
                         sidebar_thread_tooltip_anchor(bounds, pointer, window, action_width, height)
                     },
                 )
-                .tooltip_show_delay(Duration::from_millis(300))
+                .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             })
             // Line 1: project and one stable right-side status/action group.
             .child(
@@ -9855,7 +9855,7 @@ impl Shell {
                                 })
                                 .into()
                             })
-                            .tooltip_show_delay(Duration::from_millis(350))
+                            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                             .flex()
                             .items_center()
                             .justify_center()
@@ -9883,7 +9883,7 @@ impl Shell {
                                 })
                                 .into()
                             })
-                            .tooltip_show_delay(Duration::from_millis(350))
+                            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                             .flex()
                             .items_center()
                             .justify_center()

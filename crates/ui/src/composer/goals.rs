@@ -836,7 +836,7 @@ impl Composer {
             .when(icon_only, |button| {
                 button
                     .tooltip(crate::popover::text_tooltip(tooltip.clone()))
-                    .tooltip_show_delay(Duration::from_millis(350))
+                    .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 if this.binding.chat_id(this.state.read(cx)) != owner.as_deref() {

@@ -5,9 +5,10 @@
 //!   the same set the Electron app used via `@solar-icons/react`. Solar Icons is
 //!   licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/);
 //!   attribution: "Solar Icons by 480 Design".
-//! - The terminal tab glyphs (`terminal`, `plus`, `close`) and the stop square
-//!   are ports of the hand-drawn inline SVGs in luna's `terminal-panel.tsx` /
-//!   `composer-actions.tsx`.
+//! - Every interface glyph is official Solar Linear, fetched with
+//!   `@solar-icons/cli` (UI polish audit DS-09). The exceptions: the filled
+//!   stop square (a state glyph), the window controls (they mirror the OS),
+//!   the return-key glyph, and the queue's own line family.
 //! - The harness brand marks (`claude-mark`, `openai-mark`, `opencode-mark`) are
 //!   ports of luna's `icons.tsx`. gpui tints SVGs with the text color, so the
 //!   Claude mark's brand orange is applied at the call site ([`CLAUDE_BRAND`]).
@@ -64,7 +65,7 @@ icon_assets![
     (MONITOR, "monitor"),
     (SUN, "sun"),
     (MOON, "moon"),
-    // Browser globe, drawn in the same linear weight as the toolbar family.
+    // Browser globe: Solar `global` (the catalog's `globe` is a desk globe).
     (GLOBE, "globe"),
     (LAPTOP, "laptop"),
     (PEN_NEW_SQUARE, "pen-new-square"),
@@ -82,7 +83,7 @@ icon_assets![
     (QUEUE_CLOSE, "queue-close"),
     (QUEUE_PAPERCLIP, "queue-paperclip"),
     (CLOCK_CIRCLE, "clock-circle"),
-    // Goal card glyphs, drawn in the Solar Linear weight (24px canvas,
+    // Goal card glyphs, official Solar Linear (24px canvas,
     // 1.5px strokes): the goal target, token usage, pause and resume.
     (TARGET, "target"),
     (BOLT, "bolt"),
@@ -97,10 +98,9 @@ icon_assets![
     // Solar Linear composer chips: slash commands and generic file mentions.
     (MAGIC_WAND_3, "magic-wand-3"),
     (FILE, "file"),
-    // Hand-drawn floppy disk in the Solar Linear style. Workspace editor save.
+    // Solar `diskette`: workspace editor save.
     (FLOPPY_DISK, "floppy-disk"),
-    // Hand-drawn git-branch glyph in the Solar Linear style (like the
-    // terminal/plus/return ports) — the set has no branch icon.
+    // Solar `git-branch`.
     (GIT_BRANCH, "git-branch"),
     // Compact task pin for the sidebar's pinned rows and hover action.
     (PIN, "pin"),
@@ -174,7 +174,7 @@ icon_assets![
     (SETTINGS_GEAR, "settings-gear"),
     (LOGOUT_2, "logout-2"),
     (MAGNIFER, "magnifer"),
-    // Compact magnifier with a distinct handle, matching the linear icon family.
+    // Solar `magnifier`.
     (PALETTE_SEARCH, "palette-search"),
     (COMMAND, "command"),
     (DOCUMENT, "document"),
@@ -188,28 +188,26 @@ icon_assets![
     (GLOBAL, "global"),
     (CHECKLIST, "checklist"),
     (WIDGET, "widget"),
+    // Solar `palette`: the accent colour setting (audit DS-21).
+    (PALETTE, "palette"),
     // Solar Linear via @solar-icons/cli (audit TL-16): MCP tools and thoughts.
     (PLUG_CIRCLE, "plug-circle"),
     (LIGHTBULB, "lightbulb-minimalistic"),
     (WIFI_OFF, "wifi-off"),
     (CLOSE_CIRCLE, "close-circle"),
-    // Hand-drawn info glyph in the Solar Linear style (like the terminal/
-    // plus/return ports) — the embedded set has no info-circle.
+    // Solar `info-circle`.
     (INFO_CIRCLE, "info-circle"),
     (DANGER_TRIANGLE, "danger-triangle"),
     (CHAT_ROUND_LINE, "chat-round-line"),
     // Related chats: the surface, and the side-chat (user fork) kind mark.
     (DIALOG, "dialog"),
     (GIT_FORK, "git-fork"),
-    // Hand-drawn bot head (antenna + eyes + ears) in the Solar Linear style
-    // — the embedded set has no bot/robot glyph. Subagent tabs.
+    // Solar `bot`: subagent tabs.
     (BOT, "bot"),
-    // Hand-drawn bell + speaker in the Solar Linear style (like the terminal/
-    // plus/return ports) — the embedded set has neither.
+    // Solar `bell` and `volume-loud`.
     (BELL, "bell"),
     (VOLUME_LOUD, "volume-loud"),
-    // Hand-drawn luna glyphs (terminal-panel.tsx / composer-actions.tsx /
-    // menu-check.tsx / logo.tsx).
+    // Solar `programming` (terminal), `add` (plus) and `close`.
     (TERMINAL, "terminal"),
     (PLUS, "plus"),
     (CLOSE, "close"),
@@ -220,16 +218,14 @@ icon_assets![
     (WINDOW_MINIMIZE, "window-minimize"),
     (WINDOW_MAXIMIZE, "window-maximize"),
     (WINDOW_RESTORE, "window-restore"),
-    // Hand-drawn hard-drive + home glyphs in the Solar Linear style (like the
-    // terminal/plus/return ports) — drawn for the add-space palette's
-    // Locations rail; the set has neither.
+    // The add-space palette's Locations rail: a drawn hard drive and Solar
+    // `home`.
     (HARD_DRIVE, "hard-drive"),
     (HOME, "home"),
     (STOP, "stop"),
     (CHECK, "check"),
     (COPY, "copy"),
-    // Hand-drawn star pair in the Solar Linear style (like the terminal/
-    // plus/return ports) — outline for the favorite affordance, bold for the
+    // Solar `star` for the favorite affordance; the filled twin marks the
     // favorited state and the picker's favorites rail tab.
     (STAR, "star"),
     (STAR_BOLD, "star-bold"),

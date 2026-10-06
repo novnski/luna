@@ -1240,7 +1240,7 @@ impl Composer {
                 el.cursor(gpui::CursorStyle::Arrow).opacity(0.45)
             })
             .tooltip(move |_, cx| cx.new(|_| crate::popover::TextTooltip(label.into())).into())
-            .tooltip_show_delay(std::time::Duration::from_millis(350))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             .child(
                 icon(glyph)
                     .size(px(QUEUE_ICON_SIZE))
@@ -1303,7 +1303,7 @@ impl Composer {
                 let label = tooltip.clone();
                 cx.new(|_| crate::popover::TextTooltip(label)).into()
             })
-            .tooltip_show_delay(std::time::Duration::from_millis(350))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             .child(if compact {
                 icon(icons::QUEUE_SEND)
                     .size(px(QUEUE_ICON_SIZE))

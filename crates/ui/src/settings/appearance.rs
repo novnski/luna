@@ -3462,7 +3462,7 @@ impl Render for AppearancePage {
         let mut settings_rows = theme_rows;
         settings_rows.push(
             widgets::card_row(&theme, false)
-                .child(widgets::row_tile(&theme, icons::TUNING))
+                .child(widgets::row_tile(&theme, icons::PALETTE))
                 .child(
                     div()
                         .flex_1()
@@ -3636,7 +3636,7 @@ impl Render for AppearancePage {
                 .collect::<Vec<_>>();
             settings_rows.push(
                 widgets::card_row(&theme, false)
-                    .child(widgets::row_tile(&theme, icons::TUNING))
+                    .child(widgets::row_tile(&theme, icons::MAGIC_WAND_3))
                     .child(
                         div()
                             .flex_1()
@@ -3895,7 +3895,7 @@ impl Render for AppearancePage {
         code_rows.push(preference_row(
             &theme,
             false,
-            icons::TUNING,
+            icons::SPLIT_COLUMNS,
             "Diff colors",
             "Choose an addition and deletion pair that is easy for you to distinguish.",
             color_controls.into_any_element(),
@@ -3908,20 +3908,22 @@ impl Render for AppearancePage {
             .gap(px(12.0))
             .child(widgets::field_label(&theme, "Reset"))
             .child(
-                widgets::section_card(&theme).child(preference_row(
-                    &theme,
-                    true,
-                    icons::TUNING,
-                    "Reset appearance",
-                    "Restore the first-install look without deleting imported themes.",
-                    compact_action(&theme, "Restore defaults", "appearance-reset-open")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.reset_confirmation_open = true;
-                            cx.notify();
-                        }))
-                        .on_key_down(crate::swallow_activation_key)
-                        .into_any_element(),
-                )),
+                widgets::section_card(&theme)
+                    .mt(px(0.0))
+                    .child(preference_row(
+                        &theme,
+                        true,
+                        icons::RESTART,
+                        "Reset appearance",
+                        "Restore the first-install look without deleting imported themes.",
+                        compact_action(&theme, "Restore defaults", "appearance-reset-open")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.reset_confirmation_open = true;
+                                cx.notify();
+                            }))
+                            .on_key_down(crate::swallow_activation_key)
+                            .into_any_element(),
+                    )),
             );
 
         let scrollbar = popover::rail(self, "appearance-page-scrollbar", &theme, cx);
@@ -3981,7 +3983,11 @@ impl Render for AppearancePage {
                                     .child(widgets::field_label(&theme, "Appearance"))
                                     .child(widgets::option_card_row().children(cards)),
                             )
-                            .child(widgets::section_card(&theme).children(settings_rows))
+                            .child(
+                                widgets::section_card(&theme)
+                                    .mt(px(0.0))
+                                    .children(settings_rows),
+                            )
                             .child(font_section)
                             .child(
                                 div()
@@ -3990,7 +3996,11 @@ impl Render for AppearancePage {
                                     .flex_col()
                                     .gap(px(12.0))
                                     .child(widgets::field_label(&theme, "Code & diffs"))
-                                    .child(widgets::section_card(&theme).children(code_rows)),
+                                    .child(
+                                        widgets::section_card(&theme)
+                                            .mt(px(0.0))
+                                            .children(code_rows),
+                                    ),
                             )
                             .child(reset_section)
                             .when_some(library_warning, |page, warning| {

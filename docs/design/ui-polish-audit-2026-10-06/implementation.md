@@ -79,28 +79,28 @@ Update this file as each finding lands so work can resume after compaction.
 | SH-24 | P2 | Three empty states, three different visual languages | todo | |
 | SH-25 | P3 | Palette rows: three heights, tiny headers, non-concentric radius | done (milestone D) | PALETTE_ITEM_RADIUS 16−8; palette rows 32 / 44 |
 | SH-26 | P3 | The Activity bell's unread dot floats off the glyph | done (milestone D) | 6 pt unread dot seated on the bell shoulder |
-| DS-01 | P1 | No type scale; 17 sizes and borrowed 1.618 leading | todo | |
-| DS-02 | P1 | Nine button/picker recipes; five heights on one page | todo | |
-| DS-03 | P1 | Settings row text runs under its control; no reflow | todo | |
+| DS-01 | P1 | No type scale; 17 sizes and borrowed 1.618 leading | done (milestone F) | typography::TextStyle (caption2…display) + TypeStyleExt::type_style; used for new UI, page titles |
+| DS-02 | P1 | Nine button/picker recipes; five heights on one page | partial | ControlSize tokens via pickers::CONTROL_HEIGHT and shared button recipes (git, notice, trailer); full ui::Button kit not built |
+| DS-03 | P1 | Settings row text runs under its control; no reflow | done (milestone F) | meta_line fragments shrink and wrap instead of running under controls |
 | DS-04 | P1 | macOS "Reduce motion" is never read | done (milestone A) | appearance::observe_accessibility reads NSWorkspace reduce motion on launch and activation |
-| DS-05 | P1 | 25 hover fills and two hover behaviours | todo | |
-| DS-06 | P1 | Switches, segments and swatches snap; the switch is off-brand | todo | |
-| DS-07 | P1 | Settings group headers float between groups | todo | |
-| DS-08 | P1 | Three settings-row anatomies, all oversized | todo | |
-| DS-09 | P1 | Icon set is not uniformly Solar Linear | todo | |
-| DS-10 | P1 | 17 corner radii, colliding names, non-concentric nesting | todo | |
-| DS-11 | P2 | Spacing is half off the 4-pt grid | todo | |
-| DS-12 | P2 | 17 icon sizes; no icon tokens or icon+label helper | todo | |
-| DS-13 | P2 | Secondary text has no defined tiers (two greys on one page) | todo | |
-| DS-14 | P2 | Fills and hairlines are 27 raw alphas, untinted by the theme | todo | |
-| DS-15 | P2 | Motion catalog fragmented: 16 durations, 6 curves, no spring | wip | Motion tokens MICRO/QUICK/STANDARD/EMPHASIZED/DISCLOSURE + curves added; call sites migrate per surface |
-| DS-16 | P2 | Five ways to show "selected"; no shared segmented control | todo | |
-| DS-17 | P2 | Seven focus treatments; most clickables are mouse-only | todo | |
+| DS-05 | P1 | 25 hover fills and two hover behaviours | partial | Sidebar, menu and meta hovers unified; 175 ad-hoc .hover() fills remain |
+| DS-06 | P1 | Switches, segments and swatches snap; the switch is off-brand | partial | Accent-track switch in macOS proportions; knob animation skipped (no stable per-switch key without mount replay) |
+| DS-07 | P1 | Settings group headers float between groups | done (milestone F) | Group headers 24 pt above / 8 pt to their card (field_label margins; label-led cards drop mt) |
+| DS-08 | P1 | Three settings-row anatomies, all oversized | done (milestone F) | card_row 16/10 padding, 12 gap; row tile 28 r7 (~52 pt rows) |
+| DS-09 | P1 | Icon set is not uniformly Solar Linear | done (milestone F) | 37 glyphs replaced with official Solar Linear (pixel-compared); stop, window controls, return and queue family stay custom |
+| DS-10 | P1 | 17 corner radii, colliding names, non-concentric nesting | done (milestone F) | theme::radius ladder (XS/SM/MD/LG/XL + inner); timeline migrated |
+| DS-11 | P2 | Spacing is half off the 4-pt grid | done (milestone F) | theme::space ladder on the 4 pt grid |
+| DS-12 | P2 | 17 icon sizes; no icon tokens or icon+label helper | done (milestone F) | icons::size ladder (XS 12 / SM 14 / MD 16 / LG 20) |
+| DS-13 | P2 | Secondary text has no defined tiers (two greys on one page) | done (milestone F) | meta_line uses readable_muted (secondary tier floored); content tones for the canvas |
+| DS-14 | P2 | Fills and hairlines are 27 raw alphas, untinted by the theme | partial | Hairline token for menus; general fill/separator roles not yet added |
+| DS-15 | P2 | Motion catalog fragmented: 16 durations, 6 curves, no spring | done (milestone F) | Motion tokens MICRO/QUICK/STANDARD/EMPHASIZED/DISCLOSURE + curves; menus, disclosures, palette, toasts use them |
+| DS-16 | P2 | Five ways to show "selected"; no shared segmented control | partial | Not unified: segmented controls still bespoke |
+| DS-17 | P2 | Seven focus treatments; most clickables are mouse-only | done (milestone F) | One focus ring recipe across transcript, shell, composer, surfaces; theme::focus_visible_ring helper |
 | DS-18 | P2 | Sub-11 pt text in everyday chrome | done (milestone E) | No ui_rems text below 11 pt remains in the UI crate |
-| DS-19 | P2 | 16–18 pt click targets | todo | |
-| DS-20 | P3 | Six tooltip delays, no warm-up, no fade | todo | |
-| DS-21 | P3 | One glyph, many meanings in Settings | todo | |
-| DS-22 | P3 | Page, group and row titles look alike | todo | |
+| DS-19 | P2 | 16–18 pt click targets | done (milestone F) | 24 pt hit boxes with negative margins for the 16–18 pt targets |
+| DS-20 | P3 | Six tooltip delays, no warm-up, no fade | done (milestone F) | popover::TOOLTIP_DELAY 400 ms everywhere (250/300/350 removed); shared TextTooltip |
+| DS-21 | P3 | One glyph, many meanings in Settings | done (milestone F) | Settings rows use palette / magic wand / columns / restart; General vs Appearance rail glyphs distinct |
+| DS-22 | P3 | Page, group and row titles look alike | done (milestone F) | Page title title1 20/25 semibold; group headers 13 semibold secondary; rows 13 medium |
 | SS-01 | P1 | Right pane content swaps to the surface picker (or blanks) while the pane closes | done (milestone E) | Closing pane renders empty instead of flashing the surface picker |
 | SS-02 | P1 | Diff rows: no word-level highlight, near-invisible tint, four redundant add/remove signals | done (milestone E) | Row wash 0.10/0.08, word-level highlights (similar word diff, 0.28/0.20), no edge bar, marker 16, quiet line numbers |
 | SS-03 | P1 | The diff view and 12 other scroll regions have no scrollbar at all | done (milestone E) | Diff list gets the shared floating rail (popover::list_rail_geometry); other lists remain |

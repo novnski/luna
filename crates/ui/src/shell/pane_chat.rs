@@ -239,7 +239,7 @@ pub(super) fn render_pane_header<V: 'static>(
         })
         .into()
     })
-    .tooltip_show_delay(Duration::from_millis(350))
+    .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
     .child(icon(icons::ALT_ARROW_LEFT).size(px(14.0)).text_color(muted))
     .child(actions.back_label);
     let badge = div()
@@ -294,7 +294,7 @@ pub(super) fn render_pane_header<V: 'static>(
                 })
                 .into()
             })
-            .tooltip_show_delay(Duration::from_millis(350))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             .child(
                 icon(icons::ARROW_UP_RIGHT)
                     .size(px(crate::surface_chrome::ICON_SIZE))

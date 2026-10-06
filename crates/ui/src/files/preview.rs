@@ -2428,7 +2428,7 @@ impl FilesSurface {
                 })
                 .into()
             })
-            .tooltip_show_delay(Duration::from_millis(350));
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY);
         toolbar(theme)
             .pr(px(crate::surface_chrome::CONTROL_GAP))
             .child(
@@ -2518,7 +2518,7 @@ impl FilesSurface {
                                     })
                                     .into()
                                 })
-                                .tooltip_show_delay(Duration::from_millis(350))
+                                .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                         })
                         .child(label),
                 )
@@ -3013,7 +3013,9 @@ impl FilesSurface {
                                 "file-comment-remove-{}",
                                 comment.id
                             )))
-                            .size(px(16.0))
+                            // 24 pt hit box, 16 pt footprint (DS-19).
+                            .size(px(24.0))
+                            .m(px(-4.0))
                             .flex_none()
                             .flex()
                             .items_center()

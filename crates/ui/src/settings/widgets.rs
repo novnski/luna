@@ -172,9 +172,12 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
         .flex_row()
         .items_baseline()
         .gap(px(10.0))
+        // The page title is the top of a clear ladder (audit DS-22):
+        // title1 20/25 semibold over 13 pt group headers and rows.
         .child(
             div()
-                .text_size(crate::typography::ui_rems(16.0))
+                .text_size(crate::typography::TextStyle::Title1.size())
+                .line_height(crate::typography::TextStyle::Title1.line_height())
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.text)
                 .child(SharedString::from(title.to_string())),
@@ -201,10 +204,14 @@ pub fn page_subtitle(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div 
 /// Small label above a group of controls (`text-[13px] font-medium`) — the
 /// "Theme" caption over a picker, not a page headline.
 pub fn field_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    // A group header belongs to the group below it (audit DS-07): 24 pt
+    // above (with the column's 12 pt gap), 8 pt to its own card.
     div()
+        .mt(px(12.0))
+        .mb(px(-4.0))
         .text_size(crate::typography::ui_rems(13.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text)
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_color(theme.readable_muted(0.85))
         .child(label.into())
 }
 
@@ -302,15 +309,17 @@ pub fn section_card(theme: &Theme) -> gpui::Div {
 /// One card row: `border-t border-border px-5 py-3.5 first:border-t-0` with the
 /// quiet hover wash.
 pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
+    // One compact row anatomy (audit DS-08): ~52 pt with a description,
+    // 16 pt sides, 12 pt between tile, text and control.
     div()
-        .px(px(20.0))
-        .py(px(14.0))
+        .px(px(16.0))
+        .py(px(10.0))
         .when(!first, |el| el.border_t_1().border_color(theme.border))
-        .hover(|s| s.bg(ink(0.015)))
+        .hover(|s| s.bg(ink(0.03)))
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(14.0))
+        .gap(px(12.0))
 }
 
 /// The identity tile on a row: `size-9 rounded-[10px] border bg-white/[0.03]`
@@ -318,8 +327,8 @@ pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
 pub fn row_tile(theme: &Theme, icon_path: &'static str) -> gpui::Div {
     div()
         .flex_none()
-        .size(px(36.0))
-        .rounded(px(10.0))
+        .size(px(28.0))
+        .rounded(px(7.0))
         .border_1()
         .border_color(theme.border)
         .bg(ink(0.03))
@@ -349,6 +358,7 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
 /// muted tone intact; fading it over pale cards made useful copy hard to read.
 pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
     let mut line = div()
+        .min_w_0()
         .mt(px(Theme::TEXT_STACK_GAP))
         .flex()
         .flex_row()
@@ -357,11 +367,9 @@ pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
         .gap_x(px(8.0))
         .gap_y(px(2.0))
         .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
-        .text_color(if theme.appearance.is_light() {
-            theme.text_muted
-        } else {
-            theme.text_muted.opacity(0.65)
-        });
+        // The secondary tier, held to the text floor (audit DS-13); a raw
+        // 65% fade dropped below it on frosted cards.
+        .text_color(theme.readable_muted(0.8));
     let mut first = true;
     for fragment in fragments {
         if !first {
@@ -375,7 +383,9 @@ pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
                     .child(SharedString::from("·")),
             );
         }
-        line = line.child(fragment);
+        // A fragment may wrap but never overflow into the control column
+        // (audit DS-03): it can shrink below its one-line width.
+        line = line.child(div().min_w_0().flex_shrink(1.0).child(fragment));
         first = false;
     }
     line
@@ -415,33 +425,32 @@ pub fn badge_active(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div 
 /// pill whose knob slides right and track flips white when on. State is owned
 /// by the parent row — the caller adds `.id(..)` and `.on_click(..)`.
 pub fn toggle_switch(theme: &Theme, on: bool) -> gpui::Div {
+    // macOS-style switch (audit DS-06): the accent track when on and a white
+    // knob with a soft shadow, in macOS proportions.
+    const W: f32 = 34.0;
+    const H: f32 = 20.0;
+    const KNOB: f32 = 16.0;
+    let track_off = if theme.appearance.is_light() {
+        theme.text_muted.opacity(0.45)
+    } else {
+        ink(0.18)
+    };
     div()
         .flex_none()
-        .w(px(32.0))
-        .h(px(18.0))
+        .w(px(W))
+        .h(px(H))
         .rounded_full()
-        .bg(if on {
-            theme.text
-        } else if theme.appearance.is_light() {
-            theme.text_muted.opacity(0.72)
-        } else {
-            ink(0.15)
-        })
+        .bg(if on { theme.accent_strong } else { track_off })
         .relative()
         .child(
             div()
                 .absolute()
-                .top(px(2.0))
-                .left(px(if on { 16.0 } else { 2.0 }))
-                .size(px(14.0))
+                .top(px((H - KNOB) / 2.0))
+                .left(px(if on { W - KNOB - 2.0 } else { 2.0 }))
+                .size(px(KNOB))
                 .rounded_full()
-                .bg(if on {
-                    theme.on_solid
-                } else if theme.appearance.is_light() {
-                    theme.bg
-                } else {
-                    ink(0.7)
-                }),
+                .bg(gpui::white())
+                .shadow_sm(),
         )
 }
 
@@ -458,7 +467,7 @@ pub fn switch_control<V: 'static>(
     cx: &mut Context<V>,
     toggle: impl Fn(&mut V, &mut Context<V>) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
-    let accent = theme.accent;
+    let ring = theme.focus_ring();
     div()
         .id(id)
         .role(gpui::Role::Switch)
@@ -474,7 +483,7 @@ pub fn switch_control<V: 'static>(
         .rounded_full()
         .border_2()
         .border_color(gpui::transparent_black())
-        .focus_visible(move |style| style.border_color(accent))
+        .focus_visible(move |style| style.border_color(ring))
         .cursor_pointer()
         .on_click(cx.listener(move |view, _, _, cx| toggle(view, cx)))
         .on_key_down(crate::swallow_activation_key)

@@ -1126,13 +1126,17 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
                 number,
                 row,
             ));
-            out.push(p(
-                "related/tools",
-                element("accent bar"),
-                Kind::NonText,
-                bar.expect("tinted row"),
-                row,
-            ));
+            // Changed rows no longer paint an edge bar (UI polish audit
+            // SS-02); measure one only where a palette still draws it.
+            if let Some(bar) = bar {
+                out.push(p(
+                    "related/tools",
+                    element("accent bar"),
+                    Kind::NonText,
+                    bar,
+                    row,
+                ));
+            }
             for (name, color) in syntax(theme) {
                 out.push(Pair {
                     family: "code/syntax",

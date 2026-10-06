@@ -1762,12 +1762,15 @@ impl Shell {
                                 .id("wb-child-failure-dismiss")
                                 .role(gpui::Role::Button)
                                 .aria_label("Dismiss")
-                                .size(px(18.0))
+                                // A 24 pt hit box that keeps its 18 pt
+                                // footprint (audit DS-19).
+                                .size(px(24.0))
+                                .m(px(-3.0))
                                 .flex_none()
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(4.0))
+                                .rounded(px(crate::theme::radius::SM))
                                 .cursor_pointer()
                                 .hover(|style| style.bg(crate::theme::wash(0.1)))
                                 .on_click(cx.listener(|this, _, _, cx| {

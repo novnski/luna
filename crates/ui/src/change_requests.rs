@@ -164,7 +164,7 @@ pub(crate) fn pull_request_badge_with_query(
             cx.new(|_| ChangeRequestTooltip::new(&tooltip_summary))
                 .into()
         })
-        .tooltip_show_delay(std::time::Duration::from_millis(350))
+        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
         .when(composer, |element| {
             element.child(
                 crate::icons::icon(crate::icons::PULL_REQUEST)

@@ -3875,7 +3875,7 @@ impl Changes {
             this.toggle_wrap(cx);
         }))
         .tooltip(|_, cx| cx.new(|_| DiffHeaderTooltip("Wrap long lines")).into())
-        .tooltip_show_delay(Duration::from_millis(350))
+        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
         .into_any_element()
     }
 

@@ -115,7 +115,9 @@ pub(crate) fn render_comment_card<T: 'static>(
                             div()
                                 .id(SharedString::from(format!("cmt-remove-{}", comment.id)))
                                 .flex_none()
-                                .size(px(16.0))
+                                // 24 pt hit box, 16 pt footprint (DS-19).
+                                .size(px(24.0))
+                                .m(px(-4.0))
                                 .flex()
                                 .items_center()
                                 .justify_center()

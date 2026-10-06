@@ -413,6 +413,7 @@ impl Render for GeneralPage {
                                     .child(widgets::field_label(&theme, "Composer"))
                                     .child(
                                         widgets::section_card(&theme)
+                                            .mt(px(0.0))
                                             .child(send_row)
                                             .child(follow_up_row)
                                             .child(self.switch_row(
@@ -427,12 +428,9 @@ impl Render for GeneralPage {
                                 div()
                                     .mt(px(26.0))
                                     .child(widgets::field_label(&theme, "Links"))
-                                    .child(widgets::section_card(&theme).child(self.switch_row(
-                                        &theme,
-                                        GeneralToggle::OpenLinks,
-                                        true,
-                                        cx,
-                                    ))),
+                                    .child(widgets::section_card(&theme).mt(px(0.0)).child(
+                                        self.switch_row(&theme, GeneralToggle::OpenLinks, true, cx),
+                                    )),
                             )
                             .child(
                                 div()
@@ -440,6 +438,7 @@ impl Render for GeneralPage {
                                     .child(widgets::field_label(&theme, "Running tasks"))
                                     .child(
                                         widgets::section_card(&theme)
+                                            .mt(px(0.0))
                                             .child(self.switch_row(
                                                 &theme,
                                                 GeneralToggle::AutomaticRetries,
@@ -460,7 +459,7 @@ impl Render for GeneralPage {
                                 div()
                                     .mt(px(26.0))
                                     .child(widgets::field_label(&theme, "Task confirmations"))
-                                    .child(widgets::section_card(&theme).children(
+                                    .child(widgets::section_card(&theme).mt(px(0.0)).children(
                                         TaskConfirmation::ALL.into_iter().enumerate().map(
                                             |(index, action)| {
                                                 self.switch_row(

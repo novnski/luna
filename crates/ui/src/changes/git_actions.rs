@@ -671,6 +671,16 @@ impl Changes {
         label: &'static str,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
+        let hover = theme.surface_raised_hover;
+        Self::git_button_base(id, label, theme).hover(move |style| style.bg(hover))
+    }
+
+    /// The shared button body without a hover style (GPUI allows one).
+    fn git_button_base(
+        id: impl Into<SharedString>,
+        label: &'static str,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id.into())
             .role(gpui::Role::Button)
@@ -687,7 +697,6 @@ impl Changes {
             .text_size(crate::typography::ui_rems(12.0))
             .text_color(theme.text)
             .cursor_pointer()
-            .hover(|style| style.bg(theme.surface_raised_hover))
             .focus_visible({
                 let ring = theme.focus_ring();
                 move |style| crate::theme::focus_ring(style, ring)
@@ -703,7 +712,7 @@ impl Changes {
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
         let fill = theme.accent_strong;
-        Self::git_button(id, label, theme)
+        Self::git_button_base(id, label, theme)
             .bg(fill)
             .border_color(gpui::transparent_black())
             .font_weight(gpui::FontWeight::MEDIUM)

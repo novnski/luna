@@ -1286,7 +1286,7 @@ impl Shell {
                 }
             }))
             .tooltip(|_, cx| cx.new(|_| SidebarViewOptionsTooltip).into())
-            .tooltip_show_delay(std::time::Duration::from_millis(350))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             .child(
                 icon(icons::SORT)
                     .size(px(16.0))
@@ -2215,7 +2215,7 @@ impl Shell {
                             )
                         },
                     )
-                    .tooltip_show_delay(Duration::from_millis(300))
+                    .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                     .when(selected_row, |el| el.bg(crate::theme::glass_selected_bg()))
                     .hover(|el| el.bg(theme.glass_hover()))
                     .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)))
@@ -2450,7 +2450,7 @@ impl Shell {
                             })
                             .into()
                         })
-                        .tooltip_show_delay(Duration::from_millis(350))
+                        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
                             this.set_chat_archived(restore_id.clone(), false, cx);
@@ -2500,7 +2500,7 @@ impl Shell {
                                 )
                             },
                         )
-                        .tooltip_show_delay(Duration::from_millis(300))
+                        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                         .when(is_selected, |el| el.bg(selected_wash))
                         .when(!is_selected, |el| {
                             el.hover(|s| s.bg(crate::theme::sidebar_hover_bg()))

@@ -1674,7 +1674,7 @@ impl Render for GitHistoryViewButton {
                 })
                 .into()
             })
-            .tooltip_show_delay(Duration::from_millis(350))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
     }
 }
 
@@ -1718,7 +1718,7 @@ impl Render for GitHistorySearchControl {
                     })
                     .into()
                 })
-                .tooltip_show_delay(Duration::from_millis(350))
+                .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                 .into_any_element();
         }
         if self.blur_subscription.is_none() {
@@ -1783,12 +1783,14 @@ impl Render for GitHistorySearchControl {
             .child(
                 div()
                     .id("history-search-close")
-                    .size(px(16.0))
+                    // A 24 pt hit box in a 16 pt footprint (audit DS-19).
+                    .size(px(24.0))
+                    .m(px(-4.0))
                     .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(3.5))
+                    .rounded(px(crate::theme::radius::SM))
                     .cursor_pointer()
                     .hover(|style| style.bg(crate::theme::ink(0.08)))
                     .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
@@ -3650,7 +3652,7 @@ impl GitHistory {
                     })
                     .into()
                 })
-                .tooltip_show_delay(Duration::from_millis(250))
+                .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
         });
         let node = div()
             .absolute()
@@ -3738,7 +3740,7 @@ impl GitHistory {
                 })
                 .into()
             })
-            .tooltip_show_delay(Duration::from_millis(350))
+            .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             .into_any_element()
     }
 
@@ -3777,7 +3779,7 @@ impl GitHistory {
                             })
                             .into()
                         })
-                        .tooltip_show_delay(Duration::from_millis(350)),
+                        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY),
                 )
             })
             .into_any_element()
@@ -3846,7 +3848,7 @@ impl GitHistory {
                             })
                             .into()
                         })
-                        .tooltip_show_delay(Duration::from_millis(300)),
+                        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY),
                 )
             })
             .when(display == GitHistoryAuthorDisplay::Name, |author| {
