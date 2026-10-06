@@ -2058,7 +2058,7 @@ impl Shell {
             .child(
                 div()
                     .id("usage-environment")
-                    .size(px(29.0))
+                    .size(px(crate::surface_chrome::CONTROL_M))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -2091,12 +2091,12 @@ impl Shell {
                     .child(
                         div()
                             .id("usage-refresh")
-                            .size(px(29.0))
+                            .size(px(crate::surface_chrome::CONTROL_M))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(8.0))
+                            .rounded(px(crate::surface_chrome::RADIUS_M))
                             .cursor_pointer()
                             .text_color(theme.text_muted)
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))

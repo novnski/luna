@@ -1346,12 +1346,12 @@ impl Shell {
                 .id(SharedString::from(format!("wb-tab-close-{}", tab.chat_id)))
                 .role(gpui::Role::Button)
                 .aria_label(SharedString::from(format!("Close tab: {title}")))
-                .size(px(16.0))
+                .size(px(crate::surface_chrome::CONTROL_S))
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
-                .rounded(px(4.0))
+                .rounded(px(crate::surface_chrome::RADIUS_S))
                 .opacity(if active { 1.0 } else { 0.0 })
                 .group_hover(group.clone(), |style| style.opacity(1.0))
                 .hover_fill(
@@ -1370,7 +1370,7 @@ impl Shell {
                 }))
                 .child(
                     icon(icons::CLOSE)
-                        .size(px(11.0))
+                        .size(px(crate::surface_chrome::ICON_S))
                         .text_color(theme.text_muted),
                 )
         });
@@ -2421,12 +2421,12 @@ fn strip_button_titled(
         .relative()
         // Above any tab scrolled beneath the strip's trailing controls.
         .occlude()
-        .size(px(24.0))
+        .size(px(crate::surface_chrome::CONTROL_M))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(6.0))
+        .rounded(px(crate::surface_chrome::RADIUS_M))
         .cursor_pointer()
         .hover_wash(id)
         .tooltip(move |_, cx| {
@@ -2434,7 +2434,11 @@ fn strip_button_titled(
         })
         .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
         .on_key_down(crate::swallow_activation_key)
-        .child(icon(glyph).size(px(13.0)).text_color(theme.text_muted))
+        .child(
+            icon(glyph)
+                .size(px(crate::surface_chrome::ICON_M))
+                .text_color(theme.text_muted),
+        )
 }
 
 /// The half of `bounds` a split on `edge` gives the new pane.

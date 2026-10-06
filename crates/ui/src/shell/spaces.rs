@@ -1248,12 +1248,12 @@ impl Shell {
             .aria_label("Sidebar view options")
             .aria_expanded(view_open)
             .track_focus(&view_focus)
-            .size(px(29.0))
+            .size(px(crate::surface_chrome::CONTROL_M))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(8.0))
+            .rounded(px(crate::surface_chrome::RADIUS_M))
             // Keyboard focus only (audit SH-09): a mouse click no longer
             // leaves a ring behind once the menu closes.
             .focus_visible({
@@ -2194,6 +2194,15 @@ impl Shell {
             let time_ago = format_time_ago(chat.last_message_at.unwrap_or(chat.created_at), now);
             let selected_row = selected.as_deref() == Some(id.as_str());
             let parent = parents.get(&id).cloned();
+            let settled_brand = self
+                .settings
+                .sidebar_show_harness
+                .then(|| {
+                    chat.config
+                        .as_ref()
+                        .map(|config| crate::pickers::harness_brand_icon(config.harness))
+                })
+                .flatten();
             let details = {
                 let state = self.state.read(cx);
                 sidebar_thread_tooltip(
@@ -2224,7 +2233,7 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(10.0))
+                    .gap(px(SIDEBAR_MARK_GAP))
                     .px(px(Theme::SPACE_SM))
                     .rounded(px(8.0))
                     .cursor_pointer()
@@ -2265,6 +2274,23 @@ impl Shell {
                             });
                             cx.notify();
                         }),
+                    )
+                    // The shared mark slot (audit SH-14): settled titles sit on
+                    // the same column as active and archived ones.
+                    .child(
+                        div()
+                            .w(px(SIDEBAR_MARK_SLOT))
+                            .flex_none()
+                            .flex()
+                            .justify_center()
+                            .when_some(settled_brand, |el, (mark, tint)| {
+                                el.child(
+                                    crate::icons::icon(mark)
+                                        .size(px(SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE))
+                                        .flex_none()
+                                        .text_color(tint.unwrap_or(theme.text_muted).opacity(0.7)),
+                                )
+                            }),
                     )
                     .when(parent.is_some(), |el| {
                         el.child(super::related_kind_badge(
@@ -2525,7 +2551,7 @@ impl Shell {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(SIDEBAR_ARCHIVED_HARNESS_TITLE_GAP))
+                        .gap(px(SIDEBAR_MARK_GAP))
                         .px(px(Theme::SPACE_SM))
                         .rounded(px(8.0))
                         .cursor_pointer()
@@ -2583,19 +2609,28 @@ impl Shell {
                             }),
                         )
                         // Archived history recedes: dimmed mark at rest,
-                        // restored on hover (t3code's grayscale favicon).
-                        .when_some(brand, |el, (mark, tint)| {
-                            el.child(
-                                crate::icons::icon(mark)
-                                    .size(px(SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE))
-                                    .flex_none()
-                                    .text_color(if hovered || is_selected {
-                                        tint.unwrap_or(theme.text_muted)
-                                    } else {
-                                        tint.unwrap_or(theme.text_muted).opacity(0.4)
-                                    }),
-                            )
-                        })
+                        // restored on hover (t3code's grayscale favicon). The
+                        // slot stays when there's no mark, so every row kind
+                        // shares one title column (audit SH-14).
+                        .child(
+                            div()
+                                .w(px(SIDEBAR_MARK_SLOT))
+                                .flex_none()
+                                .flex()
+                                .justify_center()
+                                .when_some(brand, |el, (mark, tint)| {
+                                    el.child(
+                                        crate::icons::icon(mark)
+                                            .size(px(SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE))
+                                            .flex_none()
+                                            .text_color(if hovered || is_selected {
+                                                tint.unwrap_or(theme.text_muted)
+                                            } else {
+                                                tint.unwrap_or(theme.text_muted).opacity(0.4)
+                                            }),
+                                    )
+                                }),
+                        )
                         .when(parent.is_some(), |el| {
                             el.child(super::related_kind_badge(
                                 super::related_chats::RelatedKind::Child,

@@ -1,7 +1,6 @@
 //! Git actions card in the existing Changes surface.
 
 use super::*;
-use crate::interaction::HoverFill as _;
 use luna_proto::{
     GitActionKind, GitActionReceipt, GitActionRequest, GitCheckpointDiff, GitCheckpointList,
     GitCheckpointRestorePreview, GitCheckpointRestoreReceipt, GitCheckpointRestoreRequest,

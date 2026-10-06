@@ -826,21 +826,23 @@ fn sidebar_key_order_changed(old: &[(String, f32)], new: &[(String, f32)]) -> bo
 }
 
 /// All active task rows reserve the same height, including tasks without a
-/// branch or pull request. The tallest metadata line fits within 63 pixels.
-/// Keep this value shared by the renderer and sidebar reorder geometry.
+/// branch or pull request: a title line and one meta line on the 8 pt rhythm
+/// (audit SH-13). Keep this value shared by the renderer and sidebar reorder
+/// geometry.
 pub(super) fn chat_row_height(_shows_branch: bool, _shows_pull_request: bool) -> f32 {
-    63.0
+    52.0
 }
 /// Keep adjacent task hitboxes contiguous so vertical pointer movement never
 /// crosses an arrow-cursor strip between clickable rows.
 const SIDEBAR_LIST_GAP: f32 = 0.0;
-/// Harness/title geometry follows the row hierarchy: active multi-line cards
-/// keep identity close on the standard 8px rhythm, while the one-line archived
-/// shelf gives its larger mark a little more separation.
+/// One leading grid for every sidebar row kind (audit SH-14): a 16 pt mark
+/// slot and an 8 pt gap put every title on the same column. Marks keep the
+/// row hierarchy inside the slot: active cards a 13 pt mark, the one-line
+/// settled and archived shelves a slightly larger 14 pt one.
+const SIDEBAR_MARK_SLOT: f32 = 16.0;
+const SIDEBAR_MARK_GAP: f32 = Theme::SPACE_SM;
 const SIDEBAR_ACTIVE_HARNESS_ICON_SIZE: f32 = 13.0;
-const SIDEBAR_ACTIVE_HARNESS_TITLE_GAP: f32 = Theme::SPACE_SM;
 const SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE: f32 = 14.0;
-const SIDEBAR_ARCHIVED_HARNESS_TITLE_GAP: f32 = 10.0;
 
 /// Keep the fade short so only the last few glyphs recede. Tracking clipped
 /// content lets the shared paint-time overflow gate leave fitting labels intact.
@@ -1104,30 +1106,30 @@ impl Render for SidebarChatGhost {
             .border_color(theme.border_strong)
             .bg(crate::popover::surface_bg(theme))
             .shadow_md()
-            .child(
-                div()
-                    .truncate()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(crate::typography::ui_rems(14.0))
-                    .text_color(theme.text_muted)
-                    .child(self.project.clone()),
-            )
+            // The row it lifts from (audit SH-13): title line, then project.
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(SIDEBAR_ACTIVE_HARNESS_TITLE_GAP))
-                    .when_some(
-                        self.harness.map(crate::pickers::harness_brand_icon),
-                        |el, (path, tint)| {
-                            el.child(
-                                icon(path)
-                                    .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
-                                    .flex_none()
-                                    .text_color(tint.unwrap_or(theme.text_muted)),
-                            )
-                        },
+                    .gap(px(SIDEBAR_MARK_GAP))
+                    .child(
+                        div()
+                            .w(px(SIDEBAR_MARK_SLOT))
+                            .flex_none()
+                            .flex()
+                            .justify_center()
+                            .when_some(
+                                self.harness.map(crate::pickers::harness_brand_icon),
+                                |el, (path, tint)| {
+                                    el.child(
+                                        icon(path)
+                                            .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
+                                            .flex_none()
+                                            .text_color(tint.unwrap_or(theme.text_muted)),
+                                    )
+                                },
+                            ),
                     )
                     .child(
                         div()
@@ -1135,9 +1137,19 @@ impl Render for SidebarChatGhost {
                             .truncate()
                             .text_size(crate::typography::ui_rems(13.0))
                             .line_height(crate::typography::ui_rems(17.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text)
                             .child(self.title.clone()),
                     ),
+            )
+            .child(
+                div()
+                    .pl(px(SIDEBAR_MARK_SLOT + SIDEBAR_MARK_GAP))
+                    .truncate()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .line_height(crate::typography::ui_rems(14.0))
+                    .text_color(theme.text_muted)
+                    .child(self.project.clone()),
             );
         crate::frost::frosted(8.0, crate::frost::MENU_BLUR, card)
     }
@@ -8729,12 +8741,12 @@ impl Shell {
                     .id(SharedString::from(format!("{row_id}-pin")))
                     .role(gpui::Role::Button)
                     .aria_label(if pinned { "Unpin task" } else { "Pin task" })
-                    .size(px(20.0))
+                    .size(px(crate::surface_chrome::CONTROL_S))
                     .flex_none()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.0))
+                    .rounded(px(crate::surface_chrome::RADIUS_S))
                     .cursor_pointer()
                     .hover_wash(format!("{row_id}-pin"))
                     .tooltip(move |_, cx| {
@@ -8748,7 +8760,11 @@ impl Shell {
                         cx.stop_propagation();
                         this.set_chat_pinned(pin_id.clone(), !pinned, cx);
                     }))
-                    .child(icon(icons::PIN).size(px(12.0)).text_color(theme.text_muted))
+                    .child(
+                        icon(icons::PIN)
+                            .size(px(crate::surface_chrome::ICON_S))
+                            .text_color(theme.text_muted),
+                    )
                     .into_any_element()
             });
         // Send-truth overrides: a send unadopted past the grace window is
@@ -8786,7 +8802,6 @@ impl Shell {
                 luna_proto::ChatIndicator::Idle => None,
             }
         };
-        let shows_metadata = branch.is_some() || change_request.is_some() || note.is_some();
         let queued = queued && !undelivered;
         let working = status == luna_proto::ChatIndicator::Working && !queued && !undelivered;
         let corner_body: AnyElement = if let Some(label) = jump_label {
@@ -8831,12 +8846,12 @@ impl Shell {
                             .id(SharedString::from(format!("{row_id}-open-tab")))
                             .role(gpui::Role::Button)
                             .aria_label("Open tab")
-                            .size(px(20.0))
+                            .size(px(crate::surface_chrome::CONTROL_S))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(4.0))
+                            .rounded(px(crate::surface_chrome::RADIUS_S))
                             .cursor_pointer()
                             .hover_wash(format!("{row_id}-open-tab"))
                             .tooltip(move |_, cx| {
@@ -8852,7 +8867,7 @@ impl Shell {
                             }))
                             .child(
                                 icon(icons::ARROW_UP_RIGHT)
-                                    .size(px(13.0))
+                                    .size(px(crate::surface_chrome::ICON_S))
                                     .text_color(theme.text_muted),
                             ),
                     )
@@ -8869,12 +8884,12 @@ impl Shell {
                             .id(SharedString::from(format!("{row_id}-settle")))
                             .role(gpui::Role::Button)
                             .aria_label(settle_label)
-                            .size(px(20.0))
+                            .size(px(crate::surface_chrome::CONTROL_S))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(4.0))
+                            .rounded(px(crate::surface_chrome::RADIUS_S))
                             .cursor_pointer()
                             .hover_wash(format!("{row_id}-settle"))
                             .tooltip(move |_, cx| {
@@ -8894,7 +8909,7 @@ impl Shell {
                                 } else {
                                     icons::CHECK
                                 })
-                                .size(px(13.0))
+                                .size(px(crate::surface_chrome::ICON_S))
                                 .text_color(theme.text_muted),
                             ),
                     )
@@ -8908,12 +8923,12 @@ impl Shell {
                         } else {
                             "Archive task"
                         })
-                        .size(px(20.0))
+                        .size(px(crate::surface_chrome::CONTROL_S))
                         .flex_none()
                         .flex()
                         .items_center()
                         .justify_center()
-                        .rounded(px(4.0))
+                        .rounded(px(crate::surface_chrome::RADIUS_S))
                         .cursor_pointer()
                         .hover_wash(format!("{row_id}-archive"))
                         .tooltip(move |_, cx| {
@@ -8938,94 +8953,97 @@ impl Shell {
                             } else {
                                 icons::ARCHIVE_MINIMALISTIC
                             })
-                            .size(px(13.0))
+                            .size(px(crate::surface_chrome::ICON_S))
                             .text_color(theme.text_muted),
                         ),
                 )
                 .into_any_element()
         } else {
-            let status_body: AnyElement = match status_label {
-                Some(label) => {
-                    // Glyph slot: Working wears the preset's animated pixel
-                    // glyph beside its label, Done wears the check, and the
-                    // remaining statuses use a compact dot.
-                    let glyph: AnyElement = if working {
-                        loaders::mini_glyph_spinner(
-                            format!("{row_id}-working"),
-                            2.0,
-                            theme.glyph,
-                            animation_view,
-                            cx,
-                        )
-                        .into_any_element()
-                    } else {
-                        div()
-                            .size(px(6.0))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(status_color)
-                            .into_any_element()
-                    };
-                    let status = div()
-                        .h(px(18.0))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(4.0))
-                        .child(glyph);
-                    if label == "Done" {
-                        status.into_any_element()
-                    } else {
-                        status
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    // The status word is text: its tone,
-                                    // held to the text floor.
-                                    .text_color(theme.readable_tone(status_color, 1.0))
-                                    .child(SharedString::from(label)),
-                            )
-                            .into_any_element()
-                    }
-                }
-                None => div()
-                    .h(px(18.0))
-                    .flex()
-                    .items_center()
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(time_ago.clone())
-                    .into_any_element(),
-            };
+            // At rest the corner is the time alone (audit SH-13): status and
+            // pin moved to the meta line's glyph slot, so this corner never
+            // changes meaning between rows.
             div()
                 .h(px(18.0))
                 .flex()
-                .flex_row()
                 .items_center()
-                .justify_end()
-                .gap(px(2.0))
-                .when_some(pin_control, |el, control| el.child(control))
-                .child(status_body)
+                .text_size(crate::typography::ui_rems(11.0))
+                .font_features(crate::typography::tabular_figures())
+                .child(time_ago.clone())
                 .into_any_element()
         };
         // One stable wrapper across both states (identity keeps the hover
         // from flickering as the content swaps); the swap is driven by the
         // ROW's hover (user request — corner-only felt undiscoverable), but
         // archiving only clicks on the corner itself, so the row's own click
-        // stays the selector.
+        // stays the selector. Only the hovered row's own title yields room to
+        // the actions; its faded edge absorbs the change, and neighbours never
+        // move.
         let corner: AnyElement = {
             div()
                 .id(SharedString::from(format!("{row_id}-corner")))
                 .flex_none()
-                .w(px(96.0))
-                .h(px(14.0))
+                .h(px(18.0))
                 .flex()
                 .items_center()
                 .justify_end()
                 .child(corner_body)
                 .into_any_element()
         };
+        // The meta line's leading glyph slot shares the harness mark's column
+        // (audit SH-13/SH-14): Working's animated glyph, a status dot, or the
+        // pin for a pinned task at rest.
+        let status_slot: AnyElement = {
+            let glyph: Option<AnyElement> = if status_label.is_some() {
+                Some(if working {
+                    loaders::mini_glyph_spinner(
+                        format!("{row_id}-working"),
+                        2.0,
+                        theme.glyph,
+                        animation_view,
+                        cx,
+                    )
+                    .into_any_element()
+                } else {
+                    div()
+                        .size(px(6.0))
+                        .flex_none()
+                        .rounded_full()
+                        .bg(status_color)
+                        .into_any_element()
+                })
+            } else if pinned && !archived {
+                Some(
+                    icon(icons::PIN)
+                        .size(px(crate::surface_chrome::ICON_S))
+                        .text_color(theme.readable_muted(0.5))
+                        .into_any_element(),
+                )
+            } else {
+                None
+            };
+            div()
+                .w(px(SIDEBAR_MARK_SLOT))
+                .h(px(14.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .children(glyph)
+                .into_any_element()
+        };
+        // Done is told by its dot; every other status names itself.
+        let status_word = status_label.filter(|label| *label != "Done").map(|label| {
+            div()
+                .flex_none()
+                .text_size(crate::typography::ui_rems(11.0))
+                .line_height(crate::typography::ui_rems(14.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.readable_tone(status_color, 1.0))
+                .child(SharedString::from(label))
+        });
+        // A single-project sidebar would repeat the project on every row.
+        let show_project =
+            !(self.settings.space_filter.is_some() && !surface.in_pane() && search_query.is_none());
         let (hover, text) = (crate::theme::sidebar_hover_bg(), theme.text);
         let selected_wash = crate::theme::glass_selected_bg();
         let subline = if search_query.is_some() {
@@ -9220,51 +9238,38 @@ impl Shell {
                 )
                 .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             })
-            // Line 1: project and one stable right-side status/action group.
+            // Line 1 (audit SH-13): the harness mark and the title lead, with
+            // the time (or the row's hover actions) at the right.
             .child(
                 div()
                     .w_full()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(Theme::SPACE_SM))
-                    // Who started a related chat, in the sidebar badge's
-                    // quiet cloth; the row's detail tooltip explains it.
-                    .when_some(kind, |el, kind| el.child(related_kind_badge(kind, theme)))
-                    .child(sidebar_faded_label(
-                        format!("{row_id}-device").into(),
-                        true,
+                    .gap(px(SIDEBAR_MARK_GAP))
+                    // Harness identity belongs directly with the title.
+                    .child(
                         div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .line_height(crate::typography::ui_rems(14.0))
-                            .text_color(subline)
-                            .child(popover::search_highlight(space_name, search_query, theme)),
-                    ))
-                    .child(div().text_color(subline).child(corner)),
-            )
-            // Line 2: harness identity belongs directly with the title,
-            // instead of floating as unrelated metadata below it.
-            .child(
-                div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(SIDEBAR_ACTIVE_HARNESS_TITLE_GAP))
-                    .when_some(
-                        harness.map(crate::pickers::harness_brand_icon),
-                        |el, (path, tint)| {
-                            el.child(
-                                icon(path)
-                                    .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
-                                    .flex_none()
-                                    .text_color(if theme.appearance.is_light() {
-                                        theme.text_muted
-                                    } else {
-                                        tint.unwrap_or(subline).opacity(0.8)
-                                    }),
-                            )
-                        },
+                            .w(px(SIDEBAR_MARK_SLOT))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when_some(
+                                harness.map(crate::pickers::harness_brand_icon),
+                                |el, (path, tint)| {
+                                    el.child(
+                                        icon(path)
+                                            .size(px(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE))
+                                            .flex_none()
+                                            .text_color(if theme.appearance.is_light() {
+                                                theme.text_muted
+                                            } else {
+                                                tint.unwrap_or(subline).opacity(0.8)
+                                            }),
+                                    )
+                                },
+                            ),
                     )
                     .child(sidebar_faded_label(
                         format!("{row_id}-title").into(),
@@ -9272,6 +9277,7 @@ impl Shell {
                         div()
                             .text_size(crate::typography::ui_rems(13.0))
                             .line_height(crate::typography::ui_rems(17.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
                             .child(popover::search_highlight(title, search_query, theme)),
                     ))
                     .when_some(child_chats_chip, |el, chip| el.child(chip))
@@ -9308,66 +9314,93 @@ impl Shell {
                                 ))
                                 .child("Open"),
                         )
+                    })
+                    .child(div().text_color(subline).child(corner)),
+            )
+            // Line 2: a quiet meta line under the title — status word, who
+            // started a related chat, project and branch or note — with the
+            // optional PR badge pinned right.
+            .child(
+                div()
+                    .w_full()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(SIDEBAR_MARK_GAP))
+                    .child(status_slot)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(4.0))
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .line_height(crate::typography::ui_rems(14.0))
+                            .text_color(subline)
+                            .when_some(status_word, |el, word| {
+                                el.child(word).when(
+                                    show_project || branch.is_some() || note.is_some(),
+                                    |el| el.child(div().flex_none().child("·")),
+                                )
+                            })
+                            .when_some(kind, |el, kind| el.child(related_kind_badge(kind, theme)))
+                            .when(show_project, |el| {
+                                el.child(sidebar_faded_label(
+                                    format!("{row_id}-device").into(),
+                                    false,
+                                    div().child(popover::search_highlight(
+                                        space_name,
+                                        search_query,
+                                        theme,
+                                    )),
+                                ))
+                                .when(branch.is_some() || note.is_some(), |el| {
+                                    el.child(div().flex_none().child("·"))
+                                })
+                            })
+                            .when_some(note, |el, note| {
+                                el.child(
+                                    icon(icons::CHAT_ROUND_LINE)
+                                        .size(px(11.0))
+                                        .flex_none()
+                                        .text_color(subline),
+                                )
+                                .child(sidebar_faded_label(
+                                    format!("{row_id}-note").into(),
+                                    false,
+                                    div().child(note),
+                                ))
+                            })
+                            .when_some(branch, |el, branch| {
+                                el.child(
+                                    icon(icons::GIT_BRANCH)
+                                        .size(px(11.0))
+                                        .flex_none()
+                                        .text_color(subline),
+                                )
+                                .child(sidebar_faded_label(
+                                    format!("{row_id}-branch").into(),
+                                    false,
+                                    div().child(popover::search_highlight(
+                                        branch,
+                                        search_query,
+                                        theme,
+                                    )),
+                                ))
+                            }),
+                    )
+                    .when_some(change_request, |el, summary| {
+                        el.child(crate::change_requests::pull_request_badge_with_query(
+                            format!("{row_id}-pr").into(),
+                            summary,
+                            crate::change_requests::ChangeRequestBadgeSurface::Sidebar,
+                            search_query,
+                            theme,
+                        ))
                     }),
             )
-            // Omit the third line when both Branch and Pull request are hidden;
-            // the two-line group stays centered in the uniform row height.
-            .when(shows_metadata, |row| {
-                row.child(
-                    div()
-                        .w_full()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(4.0))
-                        .when_some(note, |el, note| {
-                            el.child(
-                                icon(icons::CHAT_ROUND_LINE)
-                                    .size(px(11.0))
-                                    .flex_none()
-                                    .text_color(subline),
-                            )
-                            .child(sidebar_faded_label(
-                                format!("{row_id}-note").into(),
-                                false,
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .line_height(crate::typography::ui_rems(14.0))
-                                    .text_color(subline)
-                                    .child(note),
-                            ))
-                        })
-                        .when_some(branch, |el, branch| {
-                            el.child(
-                                icon(icons::GIT_BRANCH)
-                                    .size(px(11.0))
-                                    .flex_none()
-                                    .text_color(subline),
-                            )
-                            .child(sidebar_faded_label(
-                                format!("{row_id}-branch").into(),
-                                false,
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .line_height(crate::typography::ui_rems(14.0))
-                                    .text_color(subline)
-                                    .child(popover::search_highlight(branch, search_query, theme)),
-                            ))
-                        })
-                        // Stable invisible spring keeps the optional PR badge
-                        // pinned right without changing no-PR paint.
-                        .child(div().flex_1().min_w_0())
-                        .when_some(change_request, |el, summary| {
-                            el.child(crate::change_requests::pull_request_badge_with_query(
-                                format!("{row_id}-pr").into(),
-                                summary,
-                                crate::change_requests::ChangeRequestBadgeSurface::Sidebar,
-                                search_query,
-                                theme,
-                            ))
-                        }),
-                )
-            })
             .into_any_element()
     }
 
@@ -13908,8 +13941,8 @@ impl Shell {
                         .id(("right-surface-close", ix))
                         .debug_selector(|| format!("right-surface-close-{ix}"))
                         .flex_none()
-                        .size(px(18.0))
-                        .rounded(px(4.0))
+                        .size(px(crate::surface_chrome::CONTROL_S))
+                        .rounded(px(crate::surface_chrome::RADIUS_S))
                         .relative()
                         .hover_fill(
                             format!("right-surface-close-{ix}"),
@@ -14037,12 +14070,12 @@ impl Shell {
         let plus_fade = "right-surface-add-fade";
         let mut plus = div()
             .id("right-surface-add")
-            .size(px(24.0))
+            .size(px(crate::surface_chrome::CONTROL_M))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(6.0))
+            .rounded(px(crate::surface_chrome::RADIUS_M))
             .cursor_pointer()
             .bg(motion::hover_blend(
                 plus_fade,
@@ -14747,12 +14780,12 @@ fn window_control_button(
     let fade_key = format!("window-control-{id}");
     div()
         .id(id)
-        .size(px(24.0))
+        .size(px(crate::surface_chrome::CONTROL_M))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(6.0))
+        .rounded(px(crate::surface_chrome::RADIUS_M))
         .cursor_pointer()
         // luna window-controls.tsx: `transition-colors` — the wash fades.
         .bg(motion::hover_blend(
@@ -14779,7 +14812,11 @@ fn window_control_button(
             cx.stop_propagation();
             on_click(event, window, cx)
         })
-        .child(icon(icon_path).size(px(16.0)).text_color(muted))
+        .child(
+            icon(icon_path)
+                .size(px(crate::surface_chrome::ICON_M))
+                .text_color(muted),
+        )
 }
 
 const WINDOWS_CAPTION_BUTTON_WIDTH: f32 = 36.0;
@@ -14869,12 +14906,12 @@ fn linux_caption_button(
         // gpui svgs don't inherit the div's text color — recolor the glyph
         // on hover through the group instead (zed's WindowControl idiom).
         .group("linux-caption-button")
-        .size(px(24.0))
+        .size(px(crate::surface_chrome::CONTROL_M))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(6.0))
+        .rounded(px(crate::surface_chrome::RADIUS_M))
         .cursor_pointer()
         .hover_fill(id, gpui::transparent_black(), hover_bg)
         .occlude()
@@ -14905,7 +14942,7 @@ fn nav_history_button(
 ) -> AnyElement {
     if !enabled {
         return div()
-            .size(px(24.0))
+            .size(px(crate::surface_chrome::CONTROL_M))
             .flex_none()
             .flex()
             .items_center()
@@ -14936,18 +14973,18 @@ fn header_icon_button(
     let fade_key = format!("header-icon-{id}");
     div()
         .id(id)
-        .size(px(28.0))
+        .size(px(crate::surface_chrome::CONTROL_M))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(6.0))
+        .rounded(px(crate::surface_chrome::RADIUS_M))
         .cursor_pointer()
         // luna __root.tsx header buttons: `transition-colors`.
         .bg(motion::hover_blend(
             &fade_key,
-            crate::theme::wash(0.0),
-            crate::theme::wash(0.11),
+            theme.glass_hover().opacity(0.0),
+            theme.glass_hover(),
         ))
         .on_hover(motion::hover_listener(fade_key))
         // Same occlusion + click-swallowing as [`window_control_button`]: this
@@ -16811,16 +16848,19 @@ mod tests {
 
     #[test]
     fn sidebar_chat_height_is_uniform() {
-        assert_eq!(chat_row_height(false, false), 63.0);
-        assert_eq!(chat_row_height(true, false), 63.0);
-        assert_eq!(chat_row_height(false, true), 63.0);
-        assert_eq!(chat_row_height(true, true), 63.0);
+        assert_eq!(chat_row_height(false, false), 52.0);
+        assert_eq!(chat_row_height(true, false), 52.0);
+        assert_eq!(chat_row_height(false, true), 52.0);
+        assert_eq!(chat_row_height(true, true), 52.0);
     }
 
     #[test]
     fn sidebar_harness_geometry_reflects_row_hierarchy() {
-        assert_eq!(SIDEBAR_ACTIVE_HARNESS_TITLE_GAP, Theme::SPACE_SM);
-        assert!(SIDEBAR_ACTIVE_HARNESS_TITLE_GAP < SIDEBAR_ARCHIVED_HARNESS_TITLE_GAP);
+        // Every row kind shares one title column; the marks keep the
+        // hierarchy inside their shared slot.
+        assert_eq!(SIDEBAR_MARK_GAP, Theme::SPACE_SM);
+        assert!(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE <= SIDEBAR_MARK_SLOT);
+        assert!(SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE <= SIDEBAR_MARK_SLOT);
         assert!(SIDEBAR_ACTIVE_HARNESS_ICON_SIZE < SIDEBAR_ARCHIVED_HARNESS_ICON_SIZE);
     }
 

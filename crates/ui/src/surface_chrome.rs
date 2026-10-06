@@ -5,9 +5,25 @@ use gpui::{Div, div, prelude::*, px};
 use crate::theme::Theme;
 
 pub(crate) const HEADER_HEIGHT: f32 = Theme::TITLEBAR_HEIGHT;
-pub(crate) const CONTROL_SIZE: f32 = 24.0;
-pub(crate) const CONTROL_RADIUS: f32 = 6.0;
-pub(crate) const ICON_SIZE: f32 = 14.0;
+
+/// The chrome control ladder (audit SH-10), with glyphs that scale with the
+/// control: `S` for inline row actions, tab close buttons and chips; `M` for
+/// the titlebar, toolbars, tab strips and sidebar header; `L` for the
+/// sidebar footer.
+pub(crate) const CONTROL_S: f32 = 20.0;
+pub(crate) const CONTROL_M: f32 = 28.0;
+pub(crate) const CONTROL_L: f32 = 32.0;
+pub(crate) const ICON_S: f32 = 12.0;
+pub(crate) const ICON_M: f32 = 16.0;
+pub(crate) const ICON_L: f32 = 18.0;
+pub(crate) const RADIUS_S: f32 = crate::theme::radius::XS;
+pub(crate) const RADIUS_M: f32 = crate::theme::radius::SM;
+pub(crate) const RADIUS_L: f32 = crate::theme::radius::MD;
+
+/// Surface toolbar controls are the ladder's medium step.
+pub(crate) const CONTROL_SIZE: f32 = CONTROL_M;
+pub(crate) const CONTROL_RADIUS: f32 = RADIUS_M;
+pub(crate) const ICON_SIZE: f32 = ICON_M;
 pub(crate) const CONTROL_GAP: f32 = 4.0;
 pub(crate) const EDGE_INSET: f32 = 8.0;
 
