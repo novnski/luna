@@ -2163,17 +2163,23 @@ pub struct Shell {
     /// Shared route clock and measured prepaint geometry for the persistent composer.
     composer_dock: crate::composer_dock::SharedDock,
     new_thread_artwork_ready: crate::new_thread_background_effects::Readiness,
-    /// The sidebar's archived accordion (t3code Sidebar): OPEN by default
-    /// (user request), session-transient. `archived_shown` pages the
-    /// expanded list ("Show more" reveals another page).
+    /// The Archived and Settled shelves at the bottom of the sidebar list.
+    /// Both start collapsed (secondary history, user request); session-
+    /// transient. Settled shelves inactive threads without archiving their
+    /// provider task.
     pub(super) archived_open: bool,
-    pub(super) archived_shown: usize,
-    /// Inactive threads are shelved by the sidebar view, without archiving
-    /// their provider task. Keep this disclosure collapsed by default.
     pub(super) settled_open: bool,
-    pub(super) settled_shown: usize,
-    pub(super) active_shown: usize,
-    pub(super) sidebar_hidden_active_count: usize,
+    /// How far each list section has been expanded with "Show more" (five
+    /// rows until then); collapsing a section or switching projects resets it.
+    sidebar_pages: spaces::SidebarPages,
+    /// Opening a bottom shelf keeps the shelf tray scrolled into view until
+    /// its disclosure tween ends, so the revealed rows never open below the
+    /// fold.
+    sidebar_shelf_reveal: Option<std::time::Instant>,
+    /// Painted sidebar section rows and bounds, for the sidebar-sections QA
+    /// fixture only (off until it opts in).
+    #[cfg(feature = "appshots-fixture")]
+    sidebar_probe: Option<spaces::SidebarProbe>,
     /// Which drill-in the Related chats surface shows when a child and a
     /// side chat are both open (the most recently opened).
     pub(super) related_focus: related_chats::RelatedKind,
@@ -2751,12 +2757,12 @@ impl Shell {
             bottom_stack_has_composer: std::rc::Rc::new(std::cell::Cell::new(false)),
             composer_dock: Default::default(),
             new_thread_artwork_ready: Default::default(),
-            archived_open: true,
-            archived_shown: 0,
+            archived_open: false,
             settled_open: false,
-            settled_shown: 0,
-            active_shown: 20,
-            sidebar_hidden_active_count: 0,
+            sidebar_pages: Default::default(),
+            sidebar_shelf_reveal: None,
+            #[cfg(feature = "appshots-fixture")]
+            sidebar_probe: None,
             related_focus: related_chats::RelatedKind::Child,
             sidebar_drag: None,
             sidebar_drag_rows: Vec::new(),
@@ -9669,6 +9675,14 @@ impl Shell {
     fn render_chat_sidebar(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let activity_view = self.activity.view_active;
         let activity_unavailable = self.activity_is_unavailable();
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe.begin_frame();
+        }
+        // Every path that changes the project filter (the selector, landing
+        // in a new project, healing a deleted one) resets Show more.
+        self.sidebar_pages
+            .rescope(self.settings.space_filter.as_deref());
 
         // Keyed rows: (stable key, estimated height, element) — the key + height
         // list drives the §1.6 resort FLIP diff below (attention-bucket
@@ -9734,13 +9748,17 @@ impl Shell {
             })
             .collect();
 
-        // t3code's archived accordion, below the active list.
-        let older_section = (!activity_view)
-            .then(|| self.render_settled_section(theme, cx))
+        // Settled and Archived: one quiet tray at the bottom of the list.
+        let shelves = (!activity_view)
+            .then(|| self.render_sidebar_shelves(theme, cx))
             .flatten();
-        let archived_section = (!activity_view)
-            .then(|| self.render_archived_section(theme, cx))
-            .flatten();
+        if self
+            .sidebar_shelf_reveal
+            .is_some_and(|until| std::time::Instant::now() >= until)
+            || shelves.is_none()
+        {
+            self.sidebar_shelf_reveal = None;
+        }
 
         // The normal project filter and Activity toggle share the existing
         // fixed header row above the sidebar's scrolling task list.
@@ -9762,6 +9780,97 @@ impl Shell {
         // over an unscrollable list (user report).
         let terminal_inventory = self.render_terminal_inventory(theme, cx);
         let activity_load_state = self.render_activity_load_state(theme);
+        let top = if !list_items.is_empty() {
+            self.sidebar_probed(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(SIDEBAR_LIST_GAP))
+                    .children(list_items),
+                || {
+                    self.sidebar_prev_order
+                        .iter()
+                        .map(|(key, _)| key.clone())
+                        .collect()
+                },
+            )
+            .into_any_element()
+        } else {
+            // A centred, readable empty state with the next step
+            // (audit SH-24) rather than a faint corner caption.
+            let new_task = crate::settings::display_combo(
+                crate::settings::current(cx)
+                    .keymap
+                    .get(crate::settings::ShortcutId::NewSession),
+            );
+            let (title, hint): (&str, String) = if activity_unavailable {
+                (
+                    "Activity is unavailable",
+                    "It will return when the engine reconnects.".into(),
+                )
+            } else if activity_view {
+                (
+                    "Nothing needs attention",
+                    "Running and waiting tasks appear here.".into(),
+                )
+            } else if shelves.is_some() {
+                // Settled or archived tasks wait on the shelves below.
+                ("No active tasks", format!("Start one with {new_task}."))
+            } else {
+                ("No tasks yet", format!("Start one with {new_task}."))
+            };
+            div()
+                .px(px(Theme::SPACE_SM))
+                .py(px(Theme::SPACE_LG))
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap(px(2.0))
+                .text_center()
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.readable_muted(0.9))
+                        .child(SharedString::from(title)),
+                )
+                .child(
+                    div()
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.readable_faint(0.9))
+                        .child(SharedString::from(hint)),
+                )
+                .into_any_element()
+        };
+        // The shelf tray follows a flex spacer: a short list leaves it on the
+        // bottom edge of the viewport, a long one lets it flow after the rows
+        // (the spacer shrinks to nothing; scrolling reaches it).
+        let shelves_index = shelves.as_ref().map(|_| {
+            usize::from(activity_load_state.is_some())
+                + 1
+                + usize::from(terminal_inventory.is_some())
+                + 1
+        });
+        if let Some(index) = shelves_index
+            && self.sidebar_shelf_reveal.is_some()
+        {
+            // Re-requested every frame of the opening tween so the growing
+            // body stays in view (FirstVisible: the minimal scroll).
+            sidebar_scroll.scroll_to_item(index);
+        }
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe.scroll_children = activity_load_state
+                .as_ref()
+                .map(|_| "load".to_owned())
+                .into_iter()
+                .chain(["top".to_owned()])
+                .chain(terminal_inventory.as_ref().map(|_| "terminals".to_owned()))
+                .chain(shelves.as_ref().map(|_| "spacer".to_owned()))
+                .chain(shelves.as_ref().map(|_| "shelves".to_owned()))
+                .collect();
+        }
+        let has_shelves = shelves.is_some();
         let sidebar_lists = crate::edge_fade::edge_faded(
             SIDEBAR_GLASS_FADE_BAND,
             true,
@@ -9784,60 +9893,10 @@ impl Shell {
                     // is the whole column; a little air stands in.
                     .pt(px(4.0))
                     .when_some(activity_load_state, |el, state| el.child(state))
-                    .child(if !list_items.is_empty() {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(SIDEBAR_LIST_GAP))
-                            .children(list_items)
-                            .into_any_element()
-                    } else {
-                        // A centred, readable empty state with the next step
-                        // (audit SH-24) rather than a faint corner caption.
-                        let new_task = crate::settings::display_combo(
-                            crate::settings::current(cx)
-                                .keymap
-                                .get(crate::settings::ShortcutId::NewSession),
-                        );
-                        let (title, hint): (&str, String) = if activity_unavailable {
-                            (
-                                "Activity is unavailable",
-                                "It will return when the engine reconnects.".into(),
-                            )
-                        } else if activity_view {
-                            (
-                                "Nothing needs attention",
-                                "Running and waiting tasks appear here.".into(),
-                            )
-                        } else {
-                            ("No tasks yet", format!("Start one with {new_task}."))
-                        };
-                        div()
-                            .px(px(Theme::SPACE_SM))
-                            .py(px(Theme::SPACE_LG))
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(2.0))
-                            .text_center()
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(13.0))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(theme.readable_muted(0.9))
-                                    .child(SharedString::from(title)),
-                            )
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.readable_faint(0.9))
-                                    .child(SharedString::from(hint)),
-                            )
-                            .into_any_element()
-                    })
+                    .child(top)
                     .children(terminal_inventory)
-                    .children(older_section)
-                    .children(archived_section),
+                    .when(has_shelves, |el| el.child(div().flex_1().min_h_0()))
+                    .children(shelves),
             ),
         )
         .fade_overflow_y(&sidebar_scroll);
