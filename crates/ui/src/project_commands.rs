@@ -7,31 +7,23 @@ use gpui::{
 use luna_proto::{ProjectAction, ProjectCommandRun, ProjectCommandsSnapshot};
 use luna_rpc::methods;
 
-fn command_action(theme: &Theme, enabled: bool) -> gpui::Div {
-    widgets::ghost_action(theme)
-        .when(enabled, |el| {
-            el.hover(|style| widgets::ghost_hover(theme, style))
-        })
-        .when(!enabled, |el| el.opacity(0.5).cursor_default())
+fn command_action(
+    theme: &Theme,
+    enabled: bool,
+    id: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    widgets::ghost_action(id, enabled, theme)
 }
 
 fn command_settings_button(
     theme: &Theme,
     enabled: bool,
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<SharedString>,
     label: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
     // GPUI sends Enter/Space on a focused on_click control as one keyboard
     // click on key-up. A separate key-down handler would activate it twice.
-    let accent = theme.accent;
-    command_action(theme, enabled)
-        .id(id.into())
-        .role(gpui::Role::Button)
-        .aria_label(label.into())
-        .when(enabled, |el| {
-            el.tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-        })
+    command_action(theme, enabled, id).aria_label(label.into())
 }
 
 #[derive(Clone, PartialEq, Action)]
@@ -572,8 +564,7 @@ impl Render for ProjectCommandPanel {
             .border_b_1()
             .border_color(theme.border)
             .child(
-                command_action(&theme, true)
-                    .id("toggle-project-commands")
+                command_action(&theme, true, "toggle-project-commands")
                     .child(if self.expanded {
                         "▾ Commands"
                     } else {
@@ -614,35 +605,40 @@ impl Render for ProjectCommandPanel {
                 let action_id = action.id.clone();
                 let origin = self.scope.clone();
                 let mut row = div().flex().items_center().gap(px(8.0)).child(
-                    command_action(&theme, !self.busy)
-                        .id(SharedString::from(format!("run-command-{}", action.id)))
-                        .when(cfg!(test), |el| {
-                            el.debug_selector(|| format!("qa-command-run-{}", action.id))
-                        })
-                        .child(SharedString::from(action.name))
-                        .when(!self.busy, |el| {
-                            el.on_click(cx.listener(move |view, _, _, cx| {
-                                if !origin.is_current(view.state.read(cx)) {
-                                    return;
-                                }
-                                view.execute(
-                                    methods::RUN_PROJECT_COMMAND,
-                                    action_id.clone(),
-                                    String::new(),
-                                    cx,
-                                )
-                            }))
-                        }),
+                    command_action(
+                        &theme,
+                        !self.busy,
+                        SharedString::from(format!("run-command-{}", action.id)),
+                    )
+                    .when(cfg!(test), |el| {
+                        el.debug_selector(|| format!("qa-command-run-{}", action.id))
+                    })
+                    .child(SharedString::from(action.name))
+                    .when(!self.busy, |el| {
+                        el.on_click(cx.listener(move |view, _, _, cx| {
+                            if !origin.is_current(view.state.read(cx)) {
+                                return;
+                            }
+                            view.execute(
+                                methods::RUN_PROJECT_COMMAND,
+                                action_id.clone(),
+                                String::new(),
+                                cx,
+                            )
+                        }))
+                    }),
                 );
                 if let Some(url) = action.preview_url {
                     row = row.child(
-                        command_action(&theme, true)
-                            .id(SharedString::from(format!("preview-command-{}", action.id)))
-                            .child("Preview")
-                            .on_click(move |_, window, cx| {
-                                window
-                                    .dispatch_action(Box::new(OpenCommandPreview(url.clone())), cx)
-                            }),
+                        command_action(
+                            &theme,
+                            true,
+                            SharedString::from(format!("preview-command-{}", action.id)),
+                        )
+                        .child("Preview")
+                        .on_click(move |_, window, cx| {
+                            window.dispatch_action(Box::new(OpenCommandPreview(url.clone())), cx)
+                        }),
                     );
                 }
                 rows = rows.child(row);
@@ -676,25 +672,29 @@ impl Render for ProjectCommandPanel {
                                 ))),
                         )
                         .child(
-                            command_action(&theme, true)
-                                .id(SharedString::from(format!("disclose-command-{}", run.id)))
-                                .role(gpui::Role::Button)
-                                .aria_label(if disclosed {
-                                    "Hide captured command"
-                                } else {
-                                    "Show captured command"
-                                })
-                                .tab_index(0)
-                                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                                .when(cfg!(test), |el| {
-                                    el.debug_selector(|| format!("qa-command-disclose-{}", run.id))
-                                })
-                                .child(if disclosed {
-                                    "Hide command"
-                                } else {
-                                    "Show command"
-                                })
-                                .on_click(cx.listener(move |view, _, _, cx| {
+                            command_action(
+                                &theme,
+                                true,
+                                SharedString::from(format!("disclose-command-{}", run.id)),
+                            )
+                            .role(gpui::Role::Button)
+                            .aria_label(if disclosed {
+                                "Hide captured command"
+                            } else {
+                                "Show captured command"
+                            })
+                            .tab_index(0)
+                            .focus_visible(move |style| crate::theme::focus_ring(style, accent))
+                            .when(cfg!(test), |el| {
+                                el.debug_selector(|| format!("qa-command-disclose-{}", run.id))
+                            })
+                            .child(if disclosed {
+                                "Hide command"
+                            } else {
+                                "Show command"
+                            })
+                            .on_click(cx.listener(
+                                move |view, _, _, cx| {
                                     if !disclosure_origin.is_current(view.state.read(cx))
                                         || !view.snapshot.as_ref().is_some_and(|snapshot| {
                                             snapshot.runs.iter().any(|run| run.id == disclosure_id)
@@ -711,16 +711,22 @@ impl Render for ProjectCommandPanel {
                                             Some(disclosure_id.clone())
                                         };
                                     cx.notify();
-                                })),
+                                },
+                            )),
                         )
                         .child(
-                            command_action(&theme, !self.busy || (active && !self.write_pending))
-                                .id(SharedString::from(format!("control-command-{}", run.id)))
-                                .when(cfg!(test), |el| {
-                                    el.debug_selector(|| format!("qa-command-control-{}", run.id))
-                                })
-                                .child(if active { "Stop" } else { "Retry" })
-                                .when(!self.busy || (active && !self.write_pending), |el| {
+                            command_action(
+                                &theme,
+                                !self.busy || (active && !self.write_pending),
+                                SharedString::from(format!("control-command-{}", run.id)),
+                            )
+                            .when(cfg!(test), |el| {
+                                el.debug_selector(|| format!("qa-command-control-{}", run.id))
+                            })
+                            .child(if active { "Stop" } else { "Retry" })
+                            .when(
+                                !self.busy || (active && !self.write_pending),
+                                |el| {
                                     el.on_click(cx.listener(move |view, _, _, cx| {
                                         if !origin.is_current(view.state.read(cx)) {
                                             return;
@@ -736,7 +742,8 @@ impl Render for ProjectCommandPanel {
                                             cx,
                                         )
                                     }))
-                                }),
+                                },
+                            ),
                         ),
                 );
                 if disclosed {
@@ -811,22 +818,25 @@ impl Render for ProjectCommandPanel {
                     let chat = run.chat_id;
                     let scope = self.scope.clone();
                     row = row.child(
-                        command_action(&theme, true)
-                            .id(SharedString::from(format!("output-command-{}", run.id)))
-                            .child(if self.scope.chat.as_deref() == Some(chat.as_str()) {
-                                "Output"
-                            } else {
-                                "Output in original task"
-                            })
-                            .on_click(cx.listener(move |view, _, _, cx| {
-                                if scope.is_current(view.state.read(cx)) {
-                                    cx.emit(ProjectCommandEvent::Output {
-                                        scope: scope.clone(),
-                                        chat_id: chat.clone(),
-                                        terminal_id: id.clone(),
-                                    });
-                                }
-                            })),
+                        command_action(
+                            &theme,
+                            true,
+                            SharedString::from(format!("output-command-{}", run.id)),
+                        )
+                        .child(if self.scope.chat.as_deref() == Some(chat.as_str()) {
+                            "Output"
+                        } else {
+                            "Output in original task"
+                        })
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            if scope.is_current(view.state.read(cx)) {
+                                cx.emit(ProjectCommandEvent::Output {
+                                    scope: scope.clone(),
+                                    chat_id: chat.clone(),
+                                    terminal_id: id.clone(),
+                                });
+                            }
+                        })),
                     );
                 }
                 if let Some(detail) = run.detail {

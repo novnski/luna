@@ -7,6 +7,7 @@ use gpui::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::interaction::HoverFill as _;
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,11 +93,10 @@ impl RemoteReadWindow {
             .rounded(px(Theme::CONTROL_RADIUS))
             .border_1()
             .border_color(theme.border)
-            .bg(theme.surface_raised)
             .text_color(theme.text)
             .text_size(crate::typography::ui_rems(13.0))
             .cursor_pointer()
-            .hover(|style| style.bg(theme.surface_raised_hover))
+            .hover_fill(label, theme.surface_raised, theme.surface_raised_hover)
             .tab_index(0)
             .focus_visible(|style| style.border_color(theme.accent))
             .child(label)

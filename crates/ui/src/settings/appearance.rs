@@ -20,6 +20,7 @@ use luna_theme::{
 use crate::appearance::{self, AppearanceMode};
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::icons;
+use crate::interaction::HoverFill as _;
 use crate::popover::{self, Popup};
 use crate::settings::widgets;
 use crate::settings::{DiffColorScheme, SavePolicy};
@@ -518,8 +519,11 @@ impl AppearancePage {
                                 div()
                                     .id("reset-transcript-width")
                                     .cursor_pointer()
-                                    .text_color(theme.text_muted)
-                                    .hover(|style| style.text_color(theme.text))
+                                    .hover_fg(
+                                        "reset-transcript-width",
+                                        theme.text_muted,
+                                        theme.text,
+                                    )
                                     .on_click(cx.listener(|this, _, _, cx| {
                                         this.pending_width = None;
                                         crate::settings::set_transcript_width(
@@ -1371,102 +1375,6 @@ fn surface_helper(surface: SurfacePreference, resolved: SurfaceTreatment) -> Str
     }
 }
 
-fn surface_choice(
-    theme: &Theme,
-    surface: SurfacePreference,
-    selected: bool,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(SharedString::from(format!(
-            "appearance-surface-{}",
-            surface_label(surface).to_lowercase().replace(' ', "-")
-        )))
-        .role(gpui::Role::Button)
-        .aria_label(format!("Glass: {}", surface_label(surface)))
-        .aria_toggled(if selected {
-            gpui::Toggled::True
-        } else {
-            gpui::Toggled::False
-        })
-        .tab_index(0)
-        .h(px(30.0))
-        .px(px(10.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(if selected { theme.accent } else { theme.border })
-        .bg(if selected {
-            theme.accent_wash
-        } else {
-            theme.surface_raised.opacity(0.28)
-        })
-        .text_size(crate::typography::ui_rems(11.5))
-        .font_weight(if selected {
-            gpui::FontWeight::MEDIUM
-        } else {
-            gpui::FontWeight::NORMAL
-        })
-        .text_color(if selected {
-            theme.accent
-        } else {
-            theme.text_muted
-        })
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .when(!selected, |control| {
-            control.hover(|style| style.bg(theme.surface_raised_hover))
-        })
-        .child(surface_label(surface))
-}
-
-fn preference_choice(
-    theme: &Theme,
-    label: &'static str,
-    id: &'static str,
-    selected: bool,
-) -> gpui::Stateful<gpui::Div> {
-    let focus_color = theme.accent;
-    div()
-        .id(id)
-        .role(gpui::Role::Button)
-        .aria_label(label)
-        .aria_toggled(if selected {
-            gpui::Toggled::True
-        } else {
-            gpui::Toggled::False
-        })
-        .tab_index(0)
-        .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
-        .h(px(30.0))
-        .px(px(10.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(if selected { theme.accent } else { theme.border })
-        .bg(if selected {
-            theme.accent_wash
-        } else {
-            theme.surface_raised
-        })
-        .text_size(crate::typography::ui_rems(11.5))
-        .font_weight(if selected {
-            gpui::FontWeight::MEDIUM
-        } else {
-            gpui::FontWeight::NORMAL
-        })
-        .text_color(if selected {
-            theme.accent
-        } else {
-            theme.text_muted
-        })
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .when(!selected, |control| {
-            control.hover(|style| style.bg(theme.surface_raised_hover))
-        })
-        .child(label)
-}
-
 fn preference_row(
     theme: &Theme,
     first: bool,
@@ -1495,54 +1403,6 @@ fn preference_row(
         )
         .child(div().flex_none().ml(px(10.0)).child(control))
         .into_any_element()
-}
-
-fn background_effect_choice(
-    theme: &Theme,
-    effect: crate::settings::NewThreadBackgroundEffect,
-    selected: bool,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(SharedString::from(format!(
-            "new-thread-background-effect-{}",
-            effect.label().to_lowercase()
-        )))
-        .role(gpui::Role::Button)
-        .aria_label(format!("Background effect: {}", effect.label()))
-        .aria_toggled(if selected {
-            gpui::Toggled::True
-        } else {
-            gpui::Toggled::False
-        })
-        .tab_index(0)
-        .h(px(28.0))
-        .px(px(9.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(if selected { theme.accent } else { theme.border })
-        .bg(if selected {
-            theme.accent_wash
-        } else {
-            theme.surface_raised.opacity(0.28)
-        })
-        .text_size(crate::typography::ui_rems(11.0))
-        .font_weight(if selected {
-            gpui::FontWeight::MEDIUM
-        } else {
-            gpui::FontWeight::NORMAL
-        })
-        .text_color(if selected {
-            theme.accent
-        } else {
-            theme.text_muted
-        })
-        .flex()
-        .items_center()
-        .cursor_pointer()
-        .when(!selected, |control| {
-            control.hover(|style| style.bg(theme.surface_raised_hover))
-        })
-        .child(effect.label())
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1675,22 +1535,15 @@ fn compact_action(
     label: &str,
     id: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    let id = id.into();
-    popover::btn_ghost(theme, label, id.clone())
-        .id(id)
-        .role(gpui::Role::Button)
-        .aria_label(label)
-        .tab_index(0)
-        .h(px(28.0))
-        .px(px(9.0))
-        .py(px(0.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(theme.border)
-        .bg(theme.surface_raised.opacity(0.34))
-        .flex()
-        .items_center()
-        .text_size(crate::typography::ui_rems(11.5))
+    crate::button::button(
+        id,
+        crate::button::ButtonKind::Secondary,
+        crate::button::ControlSize::Md,
+        true,
+        theme,
+    )
+    .aria_label(SharedString::from(label.to_string()))
+    .child(SharedString::from(label.to_string()))
 }
 
 fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
@@ -1909,30 +1762,27 @@ fn accent_swatch(
         })
         .tab_index(0)
         .flex_none()
-        .w(px(30.0))
-        .h(px(34.0))
-        .pb(px(4.0))
-        .border_b_2()
-        .border_color(if selected {
-            swatch_theme.accent
-        } else {
-            gpui::transparent_black()
-        })
+        .rounded(px(12.0))
         .cursor_pointer()
-        .child(
+        .focus_visible({
+            let ring = page_theme.focus_ring();
+            move |style| crate::theme::focus_ring(style, ring)
+        })
+        // A ring, not a tab-style underline, marks the chosen accent
+        // (audit DS-16); the ring takes the swatch's own accent.
+        .child(crate::button::selection_ring(
+            selected,
+            8.0,
+            &swatch_theme,
             div()
                 .size(px(30.0))
                 .p(px(2.0))
                 .rounded(px(8.0))
                 .border_1()
-                .border_color(if selected {
-                    page_theme.border_strong
-                } else {
-                    page_theme.border
-                })
+                .border_color(page_theme.border)
                 .bg(page_theme.surface_raised.opacity(0.42))
                 .child(sample),
-        )
+        ))
 }
 
 impl AppearancePage {
@@ -2096,61 +1946,45 @@ impl AppearancePage {
 
         let open = self.font_menu(kind).is_open();
         let closing = self.font_menu(kind).closing_since();
-        div()
-            .id(SharedString::from(format!("{slug}-font-dropdown")))
-            .role(gpui::Role::Button)
-            .aria_label(format!("{} family: {}", kind.label(), effective.label()))
-            .tab_index(0)
-            .relative()
-            .w(px(220.0))
-            .h(px(36.0))
-            .px(px(11.0))
-            .rounded(px(9.0))
-            .border_1()
-            .border_color(if open {
-                theme.border_strong
-            } else {
-                theme.border
-            })
-            .bg(crate::theme::ink(0.025))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .cursor_pointer()
-            .track_focus(self.font_focus(kind))
-            // Only the closed state: once open, the card above owns these keys
-            // and stops their propagation before they reach us.
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                if !this.font_menu(kind).is_open() {
-                    this.on_font_key_down(kind, event, window, cx);
-                }
-            }))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                window.focus(&this.font_focus(kind).clone(), cx);
-                this.toggle_font_menu(kind, window, cx);
-            }))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .child(SharedString::from(effective.label().to_owned())),
-            )
-            .child(
-                icons::icon(icons::ALT_ARROW_DOWN)
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
-            .when_some(self.font_menu(kind).get(), |trigger, _| {
-                trigger.child(popover::anchored_menu_below(
-                    SharedString::from(format!("{slug}-font-menu")),
-                    menu,
-                    closing,
-                ))
-            })
-            .into_any_element()
+        // One pop-up recipe for every picker on the page (audit DS-02).
+        crate::button::select_frame(
+            format!("{slug}-font-dropdown"),
+            crate::button::ControlSize::Md,
+            open,
+            true,
+            theme,
+        )
+        .aria_label(format!("{} family: {}", kind.label(), effective.label()))
+        .relative()
+        .w(px(220.0))
+        .track_focus(self.font_focus(kind))
+        // Only the closed state: once open, the card above owns these keys
+        // and stops their propagation before they reach us.
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            if !this.font_menu(kind).is_open() {
+                this.on_font_key_down(kind, event, window, cx);
+            }
+        }))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            window.focus(&this.font_focus(kind).clone(), cx);
+            this.toggle_font_menu(kind, window, cx);
+        }))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(SharedString::from(effective.label().to_owned())),
+        )
+        .child(crate::button::select_chevron(theme))
+        .when_some(self.font_menu(kind).get(), |trigger, _| {
+            trigger.child(popover::anchored_menu_below(
+                SharedString::from(format!("{slug}-font-menu")),
+                menu,
+                closing,
+            ))
+        })
+        .into_any_element()
     }
 
     /// The size dropdown, identical in shape to the family picker beside it.
@@ -2208,57 +2042,40 @@ impl AppearancePage {
 
         let open = self.size_menu(kind).is_open();
         let closing = self.size_menu(kind).closing_since();
-        div()
-            .id(SharedString::from(format!("{slug}-font-size-dropdown")))
-            .role(gpui::Role::Button)
-            .aria_label(format!("{} size: {}", kind.label(), labels[current]))
-            .tab_index(0)
-            .relative()
-            .w(px(128.0))
-            .h(px(36.0))
-            .px(px(11.0))
-            .rounded(px(9.0))
-            .border_1()
-            .border_color(if open {
-                theme.border_strong
-            } else {
-                theme.border
-            })
-            .bg(crate::theme::ink(0.025))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(8.0))
-            .cursor_pointer()
-            .track_focus(self.size_focus(kind))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                this.on_size_key_down(kind, event, window, cx)
-            }))
-            .on_click(
-                cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
-                    if event.is_keyboard() {
-                        this.activate_size_from_keyboard(kind, window, cx);
-                        return;
-                    }
-                    window.focus(&this.size_focus(kind).clone(), cx);
-                    this.toggle_size_menu(kind, cx);
-                }),
-            )
-            .child(div().flex_1().child(labels[current].clone()))
-            .child(
-                icons::icon(icons::ALT_ARROW_DOWN)
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(theme.text_muted),
-            )
-            .when_some(self.size_menu(kind).get(), |trigger, _| {
-                trigger.child(popover::anchored_menu_below(
-                    SharedString::from(format!("{slug}-font-size-menu")),
-                    menu,
-                    closing,
-                ))
-            })
-            .into_any_element()
+        crate::button::select_frame(
+            format!("{slug}-font-size-dropdown"),
+            crate::button::ControlSize::Md,
+            open,
+            true,
+            theme,
+        )
+        .aria_label(format!("{} size: {}", kind.label(), labels[current]))
+        .relative()
+        .w(px(128.0))
+        .track_focus(self.size_focus(kind))
+        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+            this.on_size_key_down(kind, event, window, cx)
+        }))
+        .on_click(
+            cx.listener(move |this, event: &gpui::ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    this.activate_size_from_keyboard(kind, window, cx);
+                    return;
+                }
+                window.focus(&this.size_focus(kind).clone(), cx);
+                this.toggle_size_menu(kind, cx);
+            }),
+        )
+        .child(div().flex_1().child(labels[current].clone()))
+        .child(crate::button::select_chevron(theme))
+        .when_some(self.size_menu(kind).get(), |trigger, _| {
+            trigger.child(popover::anchored_menu_below(
+                SharedString::from(format!("{slug}-font-size-menu")),
+                menu,
+                closing,
+            ))
+        })
+        .into_any_element()
     }
 
     fn render_theme_selector(
@@ -2288,87 +2105,65 @@ impl AppearancePage {
         );
         let open = self.theme_menu(appearance_kind).is_open();
 
-        let mut trigger = div()
-            .id(SharedString::from(format!(
+        let mut trigger = crate::button::select_frame(
+            format!(
                 "{}-theme-selector",
                 if appearance_kind.is_light() {
                     "light"
                 } else {
                     "dark"
                 }
-            )))
-            .role(gpui::Role::Button)
-            .aria_label(format!(
-                "{} theme: {}",
-                if appearance_kind.is_light() {
-                    "Light"
-                } else {
-                    "Dark"
-                },
-                selected_variant.name
-            ))
-            .tab_index(0)
-            .relative()
-            .flex_none()
-            .w(px(218.0))
-            .h(px(34.0))
-            .px(px(10.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(if open {
-                theme.border_strong
+            ),
+            crate::button::ControlSize::Md,
+            open,
+            true,
+            &theme,
+        )
+        .aria_label(format!(
+            "{} theme: {}",
+            if appearance_kind.is_light() {
+                "Light"
             } else {
-                theme.border
-            })
-            .bg(theme.surface_raised.opacity(if open { 0.75 } else { 0.42 }))
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .cursor_pointer()
-            .when(!open, |el| {
-                el.hover(|style| style.bg(theme.surface_raised_hover))
-            })
-            .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(move |this, _, _, _| {
-                    this.theme_menu_mut(appearance_kind).note_trigger_press();
-                }),
-            )
-            .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
-                // GPUI's Enter/Space keyboard click has no mouse-down press
-                // note, so the press check would always reopen; toggle instead.
-                if event.is_keyboard() {
-                    this.toggle_theme_menu(appearance_kind, cx);
-                } else if this.theme_menu_mut(appearance_kind).take_press_was_open() {
-                    this.close_theme_menu(appearance_kind, cx);
+                "Dark"
+            },
+            selected_variant.name
+        ))
+        .relative()
+        .w(px(218.0))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |this, _, _, _| {
+                this.theme_menu_mut(appearance_kind).note_trigger_press();
+            }),
+        )
+        .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
+            // GPUI's Enter/Space keyboard click has no mouse-down press
+            // note, so the press check would always reopen; toggle instead.
+            if event.is_keyboard() {
+                this.toggle_theme_menu(appearance_kind, cx);
+            } else if this.theme_menu_mut(appearance_kind).take_press_was_open() {
+                this.close_theme_menu(appearance_kind, cx);
+            } else {
+                let other = if appearance_kind.is_light() {
+                    Appearance::Dark
                 } else {
-                    let other = if appearance_kind.is_light() {
-                        Appearance::Dark
-                    } else {
-                        Appearance::Light
-                    };
-                    this.close_theme_menu(other, cx);
-                    this.theme_menu_mut(appearance_kind).open(());
-                }
-                cx.notify();
-            }))
-            .on_key_down(crate::swallow_activation_key)
-            .child(palette_preview(&selected_theme))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(crate::typography::ui_rems(12.5))
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(SharedString::from(selected_variant.name.clone())),
-            )
-            .child(
-                icons::icon(icons::SORT_VERTICAL)
-                    .size(px(14.0))
-                    .text_color(theme.readable_muted(if open { 0.9 } else { 0.45 })),
-            );
+                    Appearance::Light
+                };
+                this.close_theme_menu(other, cx);
+                this.theme_menu_mut(appearance_kind).open(());
+            }
+            cx.notify();
+        }))
+        .on_key_down(crate::swallow_activation_key)
+        .child(palette_preview(&selected_theme))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(SharedString::from(selected_variant.name.clone())),
+        )
+        .child(crate::button::select_chevron(&theme));
 
         if self.theme_menu(appearance_kind).get().is_some() {
             let closing = self.theme_menu(appearance_kind).closing_since();
@@ -2508,15 +2303,20 @@ impl AppearancePage {
                 .rounded(px(9.0))
                 .border_1()
                 .border_color(if active { theme.accent } else { theme.border })
-                .bg(if active {
-                    theme.accent_wash
-                } else {
-                    theme.surface_raised.opacity(0.28)
-                })
                 .cursor_pointer()
-                .when(!active, |control| {
-                    control.hover(|style| style.bg(theme.surface_raised_hover))
-                })
+                .hover_fill(
+                    format!("theme-import-mode-{}", slug(label)),
+                    if active {
+                        theme.accent_wash
+                    } else {
+                        theme.fill(crate::theme::FillTier::Quaternary)
+                    },
+                    if active {
+                        theme.accent_wash
+                    } else {
+                        theme.fill(crate::theme::FillTier::Tertiary)
+                    },
+                )
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if let Some(dialog) = this.import_dialog.as_mut() {
                         dialog.mode = value;
@@ -2878,31 +2678,18 @@ impl AppearancePage {
                     ),
             )
             .child(
-                div()
-                    .id("theme-import-close")
-                    .role(gpui::Role::Button)
-                    .aria_label("Close theme import")
-                    .tab_index(0)
-                    .size(px(28.0))
-                    .rounded(px(7.0))
-                    .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.surface_raised.opacity(0.28))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.surface_raised_hover))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.import_dialog = None;
-                        cx.notify();
-                    }))
-                    .on_key_down(crate::swallow_activation_key)
-                    .child(
-                        icons::icon(icons::CLOSE)
-                            .size(px(12.0))
-                            .text_color(theme.text_muted),
-                    ),
+                crate::button::icon_button(
+                    "theme-import-close",
+                    icons::CLOSE,
+                    crate::button::ControlSize::Md,
+                    true,
+                    &theme,
+                )
+                .aria_label("Close theme import")
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.import_dialog = None;
+                    cx.notify();
+                })),
             );
 
         let footer = div()
@@ -3448,17 +3235,30 @@ impl Render for AppearancePage {
                     .on_key_down(crate::swallow_activation_key)
             })
             .collect::<Vec<_>>();
-        let surface_controls = SurfacePreference::ALL
-            .into_iter()
-            .map(|surface| {
-                surface_choice(&theme, surface, surface == current_surface)
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        appearance::set_surface(surface, cx);
-                        cx.notify();
-                    }))
-                    .on_key_down(crate::swallow_activation_key)
-            })
-            .collect::<Vec<_>>();
+        // One segmented control per fixed choice (audit DS-16).
+        let surface_control = crate::button::segmented(
+            "appearance-surface",
+            SurfacePreference::ALL
+                .into_iter()
+                .map(|surface| {
+                    crate::button::Segment::new(
+                        surface_label(surface).to_lowercase().replace(' ', "-"),
+                        surface_label(surface),
+                    )
+                })
+                .collect(),
+            SurfacePreference::ALL
+                .iter()
+                .position(|surface| *surface == current_surface)
+                .unwrap_or(0),
+            300.0,
+            crate::button::ControlSize::Md,
+            &theme,
+            cx.listener(|_, ix: &usize, _, cx| {
+                appearance::set_surface(SurfacePreference::ALL[*ix], cx);
+                cx.notify();
+            }),
+        );
         let mut settings_rows = theme_rows;
         settings_rows.push(
             widgets::card_row(&theme, false)
@@ -3508,15 +3308,7 @@ impl Render for AppearancePage {
                             ],
                         )),
                 )
-                .child(
-                    div()
-                        .flex_none()
-                        .ml(px(10.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .children(surface_controls),
-                )
+                .child(div().flex_none().ml(px(10.0)).child(surface_control))
                 .into_any_element(),
         );
         let background_available = current_background
@@ -3623,17 +3415,27 @@ impl Render for AppearancePage {
                 .into_any_element(),
         );
         if background_available {
-            let effect_controls = crate::settings::NewThreadBackgroundEffect::ALL
-                .into_iter()
-                .map(|effect| {
-                    background_effect_choice(&theme, effect, effect == current_background_effect)
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            crate::settings::set_new_thread_background_effect(effect, cx);
-                            cx.notify();
-                        }))
-                        .on_key_down(crate::swallow_activation_key)
-                })
-                .collect::<Vec<_>>();
+            let effects = crate::settings::NewThreadBackgroundEffect::ALL;
+            let effect_control = crate::button::segmented(
+                "new-thread-background-effect",
+                effects
+                    .into_iter()
+                    .map(|effect| {
+                        crate::button::Segment::new(effect.label().to_lowercase(), effect.label())
+                    })
+                    .collect(),
+                effects
+                    .iter()
+                    .position(|effect| *effect == current_background_effect)
+                    .unwrap_or(0),
+                360.0,
+                crate::button::ControlSize::Md,
+                &theme,
+                cx.listener(move |_, ix: &usize, _, cx| {
+                    crate::settings::set_new_thread_background_effect(effects[*ix], cx);
+                    cx.notify();
+                }),
+            );
             settings_rows.push(
                 widgets::card_row(&theme, false)
                     .child(widgets::row_tile(&theme, icons::MAGIC_WAND_3))
@@ -3651,17 +3453,7 @@ impl Render for AppearancePage {
                                 ],
                             )),
                     )
-                    .child(
-                        div()
-                            .flex_none()
-                            .ml(px(10.0))
-                            .max_w(px(430.0))
-                            .flex()
-                            .flex_wrap()
-                            .justify_end()
-                            .gap(px(6.0))
-                            .children(effect_controls),
-                    )
+                    .child(div().flex_none().ml(px(10.0)).child(effect_control))
                     .into_any_element(),
             );
         }
@@ -3770,21 +3562,25 @@ impl Render for AppearancePage {
             icons::WRAP_TEXT,
             "Chat code wrapping",
             "Fit long code lines to the conversation instead of scrolling sideways.",
-            widgets::toggle_switch(&theme, ui_settings.code_fences_fit_content)
-                .id("appearance-chat-code-wrap")
-                .role(gpui::Role::Switch)
-                .aria_label("Chat code wrapping")
-                .aria_toggled(if ui_settings.code_fences_fit_content {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_chat_code_wrap(cx)))
-                .on_key_down(crate::swallow_activation_key)
-                .into_any_element(),
+            widgets::toggle_switch(
+                &theme,
+                ui_settings.code_fences_fit_content,
+                "appearance-chat-code-wrap",
+            )
+            .id("appearance-chat-code-wrap")
+            .role(gpui::Role::Switch)
+            .aria_label("Chat code wrapping")
+            .aria_toggled(if ui_settings.code_fences_fit_content {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .tab_index(0)
+            .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_chat_code_wrap(cx)))
+            .on_key_down(crate::swallow_activation_key)
+            .into_any_element(),
         ));
         code_rows.push(preference_row(
             &theme,
@@ -3792,7 +3588,7 @@ impl Render for AppearancePage {
             icons::WRAP_TEXT,
             "Diff wrapping",
             "Wrap long source lines in open and future diff panes.",
-            widgets::toggle_switch(&theme, ui_settings.diff_wrap)
+            widgets::toggle_switch(&theme, ui_settings.diff_wrap, "appearance-diff-wrap")
                 .id("appearance-diff-wrap")
                 .role(gpui::Role::Switch)
                 .aria_label("Diff wrapping")
@@ -3814,7 +3610,7 @@ impl Render for AppearancePage {
             icons::FILE_CODE,
             "Workspace file wrapping",
             "Wrap long lines in open and future file editors and previews.",
-            widgets::toggle_switch(&theme, ui_settings.files_word_wrap)
+            widgets::toggle_switch(&theme, ui_settings.files_word_wrap, "appearance-file-wrap")
                 .id("appearance-file-wrap")
                 .role(gpui::Role::Switch)
                 .aria_label("Workspace file wrapping")
@@ -3830,30 +3626,18 @@ impl Render for AppearancePage {
                 .on_key_down(crate::swallow_activation_key)
                 .into_any_element(),
         ));
-        let layout_controls = div()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(
-                preference_choice(
-                    &theme,
-                    "Unified",
-                    "appearance-diff-unified",
-                    !ui_settings.diff_split,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.set_diff_layout(false, cx)))
-                .on_key_down(crate::swallow_activation_key),
-            )
-            .child(
-                preference_choice(
-                    &theme,
-                    "Side by side",
-                    "appearance-diff-split",
-                    ui_settings.diff_split,
-                )
-                .on_click(cx.listener(|this, _, _, cx| this.set_diff_layout(true, cx)))
-                .on_key_down(crate::swallow_activation_key),
-            );
+        let layout_controls = crate::button::segmented(
+            "appearance-diff-layout",
+            vec![
+                crate::button::Segment::new("unified", "Unified"),
+                crate::button::Segment::new("split", "Side by side"),
+            ],
+            usize::from(ui_settings.diff_split),
+            220.0,
+            crate::button::ControlSize::Md,
+            &theme,
+            cx.listener(|this, ix: &usize, _, cx| this.set_diff_layout(*ix == 1, cx)),
+        );
         code_rows.push(preference_row(
             &theme,
             false,
@@ -3862,36 +3646,28 @@ impl Render for AppearancePage {
             "Show changes in one column or compare old and new side by side.",
             layout_controls.into_any_element(),
         ));
-        let color_controls = div()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(
-                preference_choice(
-                    &theme,
-                    "Red & green",
-                    "appearance-diff-red-green",
-                    ui_settings.diff_color_scheme == DiffColorScheme::RedGreen,
-                )
-                .on_click(cx.listener(|_, _, _, cx| {
-                    appearance::set_diff_color_scheme(DiffColorScheme::RedGreen, cx);
-                    cx.notify();
-                }))
-                .on_key_down(crate::swallow_activation_key),
-            )
-            .child(
-                preference_choice(
-                    &theme,
-                    "Blue & orange",
-                    "appearance-diff-blue-orange",
-                    ui_settings.diff_color_scheme == DiffColorScheme::BlueOrange,
-                )
-                .on_click(cx.listener(|_, _, _, cx| {
-                    appearance::set_diff_color_scheme(DiffColorScheme::BlueOrange, cx);
-                    cx.notify();
-                }))
-                .on_key_down(crate::swallow_activation_key),
-            );
+        let color_controls = crate::button::segmented(
+            "appearance-diff-colors",
+            vec![
+                crate::button::Segment::new("red-green", "Red & green"),
+                crate::button::Segment::new("blue-orange", "Blue & orange"),
+            ],
+            usize::from(ui_settings.diff_color_scheme == DiffColorScheme::BlueOrange),
+            240.0,
+            crate::button::ControlSize::Md,
+            &theme,
+            cx.listener(|_, ix: &usize, _, cx| {
+                appearance::set_diff_color_scheme(
+                    if *ix == 1 {
+                        DiffColorScheme::BlueOrange
+                    } else {
+                        DiffColorScheme::RedGreen
+                    },
+                    cx,
+                );
+                cx.notify();
+            }),
+        );
         code_rows.push(preference_row(
             &theme,
             false,

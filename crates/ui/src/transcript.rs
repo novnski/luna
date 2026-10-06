@@ -45,6 +45,7 @@ use luna_doc::{
 };
 use luna_proto::{ConversationForkBoundaryKind, ToolCall};
 
+use crate::interaction::HoverFill as _;
 use crate::markdown::parser::{
     Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, parse_full,
 };
@@ -6362,9 +6363,12 @@ impl Transcript {
                 .text_size(crate::typography::ui_rems(13.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
-                .text_color(theme.content_muted)
                 .cursor_pointer()
-                .hover(|s| s.text_color(theme.text))
+                .hover_fg(
+                    format!("tl-{row_id}-expander"),
+                    theme.content_muted,
+                    theme.text,
+                )
                 .child(label)
                 .child(
                     // One glyph, turned over when expanded.
@@ -6548,7 +6552,11 @@ impl Transcript {
                     .rounded(px(crate::theme::radius::XL))
                     .p(px(8.0))
                     .gap(px(6.0))
-                    .hover(|style| style.bg(crate::theme::ink(0.045)));
+                    .hover_fill(
+                        format!("tl-{row_id}-appshot-{aix}"),
+                        gpui::transparent_black(),
+                        crate::theme::fill(crate::theme::FillTier::Quaternary),
+                    );
                 let image_frame = div()
                     .w_full()
                     .h(px(128.0))
@@ -7250,7 +7258,7 @@ impl Transcript {
                             .opacity(0.0)
                             .group_hover("working-trailer", |style| style.opacity(1.0))
                             .focus_visible(|style| style.opacity(1.0))
-                            .hover(|style| style.bg(crate::theme::wash(0.08)))
+                            .hover_wash("tl-working-stop")
                             .child("Stop")
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 cx.stop_propagation();
@@ -8327,8 +8335,7 @@ impl Transcript {
             // broke" (user report). Failures still show on the individual
             // chips (destructive tint, luna tool-chip.tsx) and in the
             // summary's "· N failed" count.
-            .text_color(theme.content_muted)
-            .hover(|s| s.text_color(theme.text))
+            .hover_fg(format!("tl-{row_id}-hdr"), theme.content_muted, theme.text)
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
                 this.toggle_fold(toggle_id.clone(), viewport_height, effective_auto_open);
@@ -8587,7 +8594,7 @@ impl Transcript {
                         );
                         // A real (ghost) button: icon, label, hover fade and
                         // focus ring; the item spinner while it loads.
-                        let fade_key = format!("{key}-blob");
+                        let fade_key = format!("tl-{key}-blob");
                         let mut button = div()
                             .id(SharedString::from(fade_key.clone()))
                             .role(gpui::Role::Button)
@@ -8921,7 +8928,7 @@ fn user_bubble_text(
 /// palette so old failures do not look like unresolved errors on every visit.
 fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
     let copy_message = message.clone();
-    let fade_key = "transcript-error-copy".to_string();
+    let fade_key = "tl-transcript-error-copy".to_string();
     let ring = theme.focus_ring();
     let copy = div()
         .id("transcript-error-copy")
@@ -10129,7 +10136,7 @@ fn subagent_chip(
         })
         .child(
             div()
-                .id(id)
+                .id(id.clone())
                 .role(gpui::Role::Button)
                 .aria_label("Open subagent transcript")
                 .tab_index(0)
@@ -10147,9 +10154,12 @@ fn subagent_chip(
                 .rounded(px(crate::theme::radius::LG))
                 .border_1()
                 .border_color(crate::theme::hairline(0.07))
-                .bg(crate::theme::ink(0.03))
                 .cursor_pointer()
-                .hover(|s| s.bg(crate::theme::ink(0.05)))
+                .hover_fill(
+                    format!("tl-{id}"),
+                    crate::theme::fill(crate::theme::FillTier::Quaternary),
+                    crate::theme::fill(crate::theme::FillTier::Tertiary),
+                )
                 .on_click(on_open)
                 .tooltip(move |_, cx| {
                     cx.new(|_| ChildInspectionTooltip {
@@ -10354,7 +10364,7 @@ fn meta_action(
     label: &'static str,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    let fade_key = id.to_string();
+    let fade_key = format!("tl-{id}");
     let ring = theme.focus_ring();
     div()
         .id(id)
@@ -10421,12 +10431,11 @@ fn trailer_action(
         .rounded(px(crate::theme::radius::SM))
         .border_1()
         .border_color(edge)
-        .bg(fill)
         .text_size(crate::typography::ui_rems(12.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(text)
         .cursor_pointer()
-        .hover(move |style| style.bg(hover))
+        .hover_fill(format!("tl-{id}"), fill, hover)
         .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, cx)))
         .on_key_down(crate::swallow_activation_key)
@@ -10497,6 +10506,12 @@ impl Render for Transcript {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let _perf = crate::perf_counters::Timer::start("transcript.render", || self.perf_scope(cx));
         self.last_painted.set(Some(Instant::now()));
+        // This view is cached inside the shell, so the shell's frame requests
+        // don't reach it: keep frames coming while one of its own hover
+        // fades (keys prefixed `tl-`) is mid-flight.
+        if motion::hover_fading_with_prefix("tl-") {
+            window.request_animation_frame();
+        }
         // A narrower view lays its rows out with a narrower gutter; row
         // heights depend on it, so the list remeasures.
         let gutter = transcript_row_gutter(self.measured_width.get());

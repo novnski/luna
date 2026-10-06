@@ -720,7 +720,7 @@ impl Shell {
                     .child(div().flex_1().text_color(theme.text).child(name));
                 if enabled && kind == CreationKind::NewThread {
                     row.cursor_pointer()
-                        .hover(|style| style.bg(crate::theme::wash(0.05)))
+                        .hover_wash(format!("wb-chooser-provider-{provider:?}"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.workbench_chooser_provider(provider, cx)
                         }))

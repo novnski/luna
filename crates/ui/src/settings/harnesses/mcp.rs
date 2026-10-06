@@ -51,37 +51,19 @@ fn mcp_button(
     label: SharedString,
     text: &'static str,
     enabled: bool,
-) -> gpui_base::Button {
-    let accent = theme.accent;
-    let wash = theme.ink(0.08);
-    let text_color = theme.text;
-    gpui_base::Button::new(id.clone())
-        .role(gpui::Role::Button)
-        .accessibility_id(id)
-        .accessibility_label(label)
-        .disabled(!enabled)
-        .tab_index(0)
-        .tab_stop(enabled)
-        .flex_none()
-        .px(px(10.0))
-        .h(px(24.0))
-        .flex()
-        .items_center()
-        .rounded(px(6.0))
-        .border_1()
-        .border_color(theme.border)
-        .text_size(crate::typography::ui_rems(11.5))
-        .text_color(theme.readable_muted(0.9))
-        .when(enabled, |button| {
-            button
-                .cursor_pointer()
-                .hover(move |style| style.bg(wash).text_color(text_color))
-                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-        })
-        .when(!enabled, |button| {
-            button.opacity(0.45).aria_description(BUSY_REASON)
-        })
-        .child(text)
+) -> gpui::Stateful<gpui::Div> {
+    // The kit's small secondary button (audit DS-02). Disabled buttons get
+    // no click handler from the callers.
+    crate::button::button(
+        id,
+        crate::button::ButtonKind::Secondary,
+        crate::button::ControlSize::Sm,
+        enabled,
+        theme,
+    )
+    .aria_label(label)
+    .when(!enabled, |button| button.aria_description(BUSY_REASON))
+    .child(text)
 }
 
 impl HarnessesPage {
@@ -282,9 +264,16 @@ impl HarnessesPage {
                     let (identity, server) = (identity.clone(), item.name.clone());
                     actions.push(
                         mcp_button(theme, id, label, "Inspect app view", enabled)
-                            .on_click(cx.listener(move |page, _, _, cx| {
-                                page.mcp_inspect(identity.clone(), server.clone(), uri.clone(), cx)
-                            }))
+                            .when(enabled, |button| {
+                                button.on_click(cx.listener(move |page, _, _, cx| {
+                                    page.mcp_inspect(
+                                        identity.clone(),
+                                        server.clone(),
+                                        uri.clone(),
+                                        cx,
+                                    )
+                                }))
+                            })
                             .into_any_element(),
                     );
                 }
@@ -324,9 +313,11 @@ impl HarnessesPage {
                     },
                     enabled,
                 )
-                .on_click(cx.listener(move |page, _, _, cx| {
-                    page.mcp_set_enabled(identity.clone(), server.clone(), target, cx)
-                }))
+                .when(enabled, |button| {
+                    button.on_click(cx.listener(move |page, _, _, cx| {
+                        page.mcp_set_enabled(identity.clone(), server.clone(), target, cx)
+                    }))
+                })
                 .into_any_element(),
             );
         }

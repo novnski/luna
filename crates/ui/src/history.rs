@@ -24,6 +24,7 @@ use luna_proto::{
 use luna_rpc::methods;
 
 use crate::composer::{ComposerInput, ComposerInputEvent};
+use crate::interaction::HoverFill as _;
 use crate::motion::AnimationExt;
 use crate::popover::{self, Popup};
 use crate::settings::{
@@ -1792,7 +1793,7 @@ impl Render for GitHistorySearchControl {
                     .justify_center()
                     .rounded(px(crate::theme::radius::SM))
                     .cursor_pointer()
-                    .hover(|style| style.bg(crate::theme::ink(0.08)))
+                    .hover_wash("history-search-close")
                     .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                         window.prevent_default()
                     })
@@ -2996,17 +2997,16 @@ impl GitHistory {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let hover = theme.border_strong;
+        let key = SharedString::from(format!("history-resize-{left:?}-{right:?}"));
         div()
-            .id(SharedString::from(format!(
-                "history-resize-{left:?}-{right:?}"
-            )))
+            .id(key.clone())
             .absolute()
             .left(px(-3.0))
             .top_0()
             .bottom_0()
             .w(px(6.0))
             .cursor_col_resize()
-            .hover(move |style| style.bg(hover.opacity(0.7)))
+            .hover_fill(key, hover.opacity(0.0), hover.opacity(0.7))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
@@ -3910,7 +3910,7 @@ impl GitHistory {
                     .items_center()
                     .rounded(px(4.0))
                     .cursor_pointer()
-                    .hover(|style| style.bg(crate::theme::ink(0.07)))
+                    .hover_wash(format!("history-sha-{index}"))
                     .font_family(theme.font_mono.clone())
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(if copied {
@@ -3963,23 +3963,35 @@ impl GitHistory {
                 .gap(px(6.0))
                 .rounded(px(7.0))
                 .border_1()
-                .border_color(theme.border.opacity(0.85))
-                .bg(theme.surface_raised.opacity(0.72))
                 .text_size(crate::typography::ui_rems(11.0))
-                .text_color(if pending {
-                    theme.text_faint
-                } else {
-                    theme.text_muted
-                })
+                .hover_colors(
+                    "history-load-older",
+                    crate::interaction::HoverColors {
+                        bg: theme.surface_raised.opacity(0.72),
+                        border: theme.border.opacity(0.85),
+                        fg: if pending {
+                            theme.text_faint
+                        } else {
+                            theme.text_muted
+                        },
+                    },
+                    if pending {
+                        crate::interaction::HoverColors {
+                            bg: theme.surface_raised.opacity(0.72),
+                            border: theme.border.opacity(0.85),
+                            fg: theme.text_faint,
+                        }
+                    } else {
+                        crate::interaction::HoverColors {
+                            bg: theme.glass_hover(),
+                            border: theme.border_strong.opacity(0.75),
+                            fg: theme.text,
+                        }
+                    },
+                )
                 .when(!pending, |element| {
                     element
                         .cursor_pointer()
-                        .hover(|style| {
-                            style
-                                .bg(theme.element_hover)
-                                .border_color(theme.border_strong.opacity(0.75))
-                                .text_color(theme.text)
-                        })
                         .on_click(cx.listener(|this, _, _, cx| this.load_older(cx)))
                 })
                 .when(!pending, |element| {
@@ -4084,9 +4096,20 @@ impl GitHistory {
             .items_center()
             .text_size(crate::typography::ui_rems(11.0))
             .cursor_pointer()
-            .when_some(focused_row_wash, |element, wash| element.bg(wash))
-            .hover(|style| style.bg(crate::theme::ink(0.025)))
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+            .bg(focused_row_wash.unwrap_or_else(|| {
+                crate::motion::hover_blend(
+                    &format!("history-row-{index}"),
+                    gpui::transparent_black(),
+                    crate::theme::fill(crate::theme::FillTier::Quaternary),
+                )
+            }))
+            .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                crate::motion::set_hover(
+                    &format!("history-row-{index}"),
+                    *hovered,
+                    crate::motion::reduced_motion(cx),
+                );
+                window.refresh();
                 this.set_row_hover((*hovered).then_some(row_hover_path), cx);
             }))
             // A commit row click opens the commit as its own diff tab (the
@@ -4228,7 +4251,7 @@ impl Render for GitHistory {
             .opacity(0.0)
             .group_hover("history-column-header", |style| style.opacity(1.0))
             .when(self.column_menu.is_open(), |button| button.opacity(1.0))
-            .hover(|style| style.bg(crate::theme::ink(0.08)))
+            .hover_wash("history-columns-button")
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {

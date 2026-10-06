@@ -1951,7 +1951,7 @@ fn code_icon_action(
     handler: Rc<dyn Fn(&mut Window, &mut gpui::App)>,
     theme: &Theme,
 ) -> AnyElement {
-    let fade_key = id.to_string();
+    let fade_key = format!("tl-{id}");
     code_action_button(id, label, theme)
         .size(px(CODE_ACTION_SIZE))
         .rounded(px(crate::theme::radius::SM))
@@ -1987,7 +1987,7 @@ pub(crate) fn copy_action(
     handler: Rc<dyn Fn(&mut Window, &mut gpui::App)>,
     theme: &Theme,
 ) -> AnyElement {
-    let fade_key = id.to_string();
+    let fade_key = format!("tl-{id}");
     code_action_button(id, label, theme)
         .h(px(CODE_ACTION_SIZE))
         .px(px(6.0))
@@ -2032,7 +2032,7 @@ fn code_copy_button(
         let copied = copy.copied_ix == Some(ix);
         let code_text: SharedString = code.to_string().into();
         let handler = copy.handler.clone();
-        let fade_key = format!("{}-copy{ix}", opts.row_key);
+        let fade_key = format!("tl-{}-copy{ix}", opts.row_key);
         code_action_button(SharedString::from(fade_key.clone()), "Copy code", theme)
             .h(px(CODE_ACTION_SIZE))
             .px(px(6.0))
@@ -2218,7 +2218,7 @@ fn render_code_block_source_with_actions(
 
     let fit_button = code_ui.as_ref().map(|ui| {
         let toggle = ui.toggle_fit.clone();
-        let fade_key = format!("{}-fit{ix}", opts.row_key);
+        let fade_key = format!("tl-{}-fit{ix}", opts.row_key);
         let label = if fit_content {
             "Use horizontal scrolling"
         } else {

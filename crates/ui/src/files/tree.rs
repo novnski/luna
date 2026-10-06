@@ -8,6 +8,7 @@ use super::{
     FilesSurface, WorkspacePathDrag, model::DirectoryLoadState, model::VisibleRowKind,
     workspace_path_drag_ghost,
 };
+use crate::interaction::HoverFill as _;
 use crate::{
     file_icons::{self, FileIconIdentity},
     icons::{self, icon},
@@ -239,7 +240,7 @@ impl FilesSurface {
                         })
                     })
                     .when(!selected, |element| {
-                        element.hover(|style| style.bg(crate::theme::wash(0.055)))
+                        element.hover_wash(format!("files-tree-entry:{}", row.path))
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.tree_focus.focus(window, cx);
@@ -332,7 +333,7 @@ impl FilesSurface {
                 .items_center()
                 .gap(px(6.0))
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::wash(0.055)))
+                .hover_wash(format!("files-tree-error-{index}"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let cursor = this
                         .tree
@@ -362,7 +363,7 @@ impl FilesSurface {
                 .flex()
                 .items_center()
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::wash(0.055)))
+                .hover_wash(format!("files-tree-more-{index}"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.load_directory(directory.clone(), Some(cursor.clone()), cx);
                 }))

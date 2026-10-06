@@ -225,7 +225,7 @@ impl Render for NotificationsPage {
                 .when(!interactive, |el| {
                     el.aria_description("Unavailable while its parent setting is off")
                 })
-                .child(widgets::toggle_switch(&theme, enabled))
+                .child(widgets::toggle_switch(&theme, enabled, id))
         };
         let card = widgets::section_card(&theme)
             .child(
@@ -498,7 +498,11 @@ impl Render for NotificationsPage {
                                 this.toggle_task_awake(&awake_id, cx)
                             }))
                             .on_key_down(crate::swallow_activation_key)
-                            .child(widgets::toggle_switch(&theme, task.keep_awake)),
+                            .child(widgets::toggle_switch(
+                                &theme,
+                                task.keep_awake,
+                                &format!("task-keep-awake-{}", task.id),
+                            )),
                     )
             },
         ));

@@ -14,6 +14,7 @@ use crate::popover::{self, ScrollRailHost};
 #[path = "appshots.rs"]
 mod appshots_page;
 use crate::AccessibleButton as _;
+use crate::interaction::HoverFill as _;
 use crate::settings::widgets;
 use crate::settings::{
     ComposerSendBehavior, KeymapConfig, ShortcutId, combo_from_keystroke, display_combo,
@@ -389,9 +390,12 @@ impl ShortcutsPage {
                         .tab_index(0)
                         .focus_visible(move |style| crate::theme::focus_ring(style, accent))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.readable_muted(0.7))
                         .cursor_pointer()
-                        .hover(|s| s.text_color(theme.text))
+                        .hover_fg(
+                            format!("shortcut-reset-{ix}"),
+                            theme.readable_muted(0.7),
+                            theme.text,
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.reset_shortcut(id, cx);
                         }))
@@ -426,14 +430,15 @@ impl ShortcutsPage {
                                 .text_color(theme.on_solid)
                         } else {
                             el.border_color(theme.border)
-                                .bg(theme.bg)
                                 .text_color(theme.text)
-                                .hover(|s| {
-                                    // `hover:border-foreground/20` — the
-                                    // neutral foreground, not pure white.
-                                    s.border_color(theme.text.opacity(0.2))
-                                        .bg(crate::theme::ink(0.03))
-                                })
+                                .hover_fill(
+                                    format!("shortcut-combo-{ix}"),
+                                    theme.bg,
+                                    crate::theme::flatten(
+                                        theme.fill(crate::theme::FillTier::Tertiary),
+                                        theme.bg,
+                                    ),
+                                )
                         }
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -671,75 +676,40 @@ impl Render for ShortcutsPage {
             .gap(px(10.0))
             .when(send_behavior != ComposerSendBehavior::Enter, |el| {
                 el.child(
-                    div()
-                        .id("composer-send-reset")
-                        .size(px(26.0))
-                        .rounded(px(7.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(theme.text_muted)
-                        .cursor_pointer()
-                        .hover(|s| s.bg(crate::theme::ink(0.04)).text_color(theme.text))
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.set_composer_send_behavior(ComposerSendBehavior::Enter, cx)
-                        }))
-                        .child(
-                            crate::icons::icon(crate::icons::RESTART)
-                                .size(px(13.0))
-                                .text_color(theme.text_muted),
-                        ),
+                    crate::button::icon_button(
+                        "composer-send-reset",
+                        crate::icons::RESTART,
+                        crate::button::ControlSize::Md,
+                        true,
+                        &theme,
+                    )
+                    .aria_label("Reset send shortcut")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.set_composer_send_behavior(ComposerSendBehavior::Enter, cx)
+                    })),
                 )
             })
-            .child(
-                div()
-                    .id("composer-send-behavior")
-                    .flex()
-                    .flex_row()
-                    .rounded(px(9.0))
-                    .p(px(2.0))
-                    .bg(crate::theme::ink(0.04))
-                    .children(
-                        [
-                            (ComposerSendBehavior::Enter, "Enter"),
-                            (ComposerSendBehavior::ModEnter, modifier_label),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(ix, (behavior, label))| {
-                            let selected = send_behavior == behavior;
-                            div()
-                                .id(("composer-send-option", ix))
-                                .min_w(px(72.0))
-                                .px(px(12.0))
-                                .py(px(6.0))
-                                .rounded(px(7.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .font_family(theme.font_mono.clone())
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(if selected {
-                                    theme.text
-                                } else {
-                                    theme.text_muted
-                                })
-                                .when(selected, |el| {
-                                    el.bg(theme.bg)
-                                        .border_1()
-                                        .border_color(theme.border.opacity(0.8))
-                                })
-                                .when(!selected, |el| {
-                                    el.cursor_pointer()
-                                        .hover(|s| s.text_color(theme.text))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.set_composer_send_behavior(behavior, cx)
-                                        }))
-                                })
-                                .child(SharedString::from(label))
-                        }),
-                    ),
-            );
+            .child(crate::button::segmented(
+                "composer-send-behavior",
+                vec![
+                    crate::button::Segment::new("enter", "Enter"),
+                    crate::button::Segment::new("mod-enter", modifier_label),
+                ],
+                usize::from(send_behavior == ComposerSendBehavior::ModEnter),
+                184.0,
+                crate::button::ControlSize::Md,
+                &theme,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.set_composer_send_behavior(
+                        if *ix == 1 {
+                            ComposerSendBehavior::ModEnter
+                        } else {
+                            ComposerSendBehavior::Enter
+                        },
+                        cx,
+                    )
+                }),
+            ));
 
         let send_behavior_row = widgets::section_card(&theme)
             .child(
@@ -866,17 +836,11 @@ impl Render for ShortcutsPage {
                                         // `disabled:opacity-35` when nothing is
                                         // customized or while recording.
                                         let disabled = !customized || recording.is_some();
-                                        widgets::ghost_action(&theme)
-                                            .id("shortcuts-restore-defaults")
+                                        widgets::ghost_action("shortcuts-restore-defaults", !disabled, &theme)
                                             .when(!disabled, |el| el.accessible_button("Restore default shortcuts", theme.accent))
                                             .flex_none()
-                                            .when(disabled, |el| el.opacity(0.35))
                                             .when(!disabled, |el| {
-                                                el.hover(|s| {
-                                                    s.bg(crate::theme::ink(0.04))
-                                                        .text_color(theme.text)
-                                                })
-                                                .on_click(
+                                                el.on_click(
                                                     cx.listener(|this, _, _, cx| {
                                                         this.keymap = KeymapConfig::default();
                                                         this.stop_recording();

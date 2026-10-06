@@ -1,4 +1,5 @@
 use super::{BrowserEvent, BrowserSurface};
+use crate::interaction::HoverFill as _;
 use crate::{icons, surface_chrome, theme::Theme};
 use gpui::{
     AnyElement, Context, Focusable, IntoElement, KeyDownEvent, MouseButton, Render, Window, div,
@@ -144,18 +145,32 @@ impl BrowserSurface {
                     .px(px(14.0))
                     .rounded(px(10.0))
                     .border_1()
-                    .border_color(theme.border)
-                    .bg(crate::theme::ink(0.02))
                     .flex()
                     .items_center()
                     .gap(px(10.0))
+                    .hover_colors(
+                        format!("preview-row-{}", service.id),
+                        crate::interaction::HoverColors {
+                            bg: crate::theme::fill(crate::theme::FillTier::Quaternary),
+                            border: theme.border,
+                            fg: theme.text,
+                        },
+                        if available {
+                            crate::interaction::HoverColors {
+                                bg: crate::theme::fill(crate::theme::FillTier::Tertiary),
+                                border: border_strong,
+                                fg: theme.text,
+                            }
+                        } else {
+                            crate::interaction::HoverColors {
+                                bg: crate::theme::fill(crate::theme::FillTier::Quaternary),
+                                border: theme.border,
+                                fg: theme.text,
+                            }
+                        },
+                    )
                     .when(available, |el| {
                         el.cursor_pointer()
-                            .hover(move |style| {
-                                style
-                                    .bg(crate::theme::ink(0.05))
-                                    .border_color(border_strong)
-                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.navigate(&row_url, window, cx)
                             }))
@@ -216,7 +231,7 @@ impl BrowserSurface {
                             .aria_label(format!("Open {} preview", service.name))
                             .when(available, |el| {
                                 el.cursor_pointer()
-                                    .hover(|style| style.bg(crate::theme::ink(0.05)))
+                                    .hover_wash(format!("open-preview-{}", service.id))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         cx.stop_propagation();
                                         this.navigate(&url, window, cx)
@@ -357,7 +372,6 @@ impl BrowserSurface {
                             .rounded(px(6.0))
                             .border_1()
                             .border_color(theme.border)
-                            .bg(theme.surface_raised)
                             .cursor_pointer()
                             .role(gpui::Role::Button)
                             .aria_label(if has_error {
@@ -365,7 +379,14 @@ impl BrowserSurface {
                             } else {
                                 "Enter an address"
                             })
-                            .hover(|style| style.bg(crate::theme::wash(0.10)))
+                            .hover_fill(
+                                "browser-empty-action",
+                                theme.surface_raised,
+                                crate::theme::flatten(
+                                    crate::theme::fill(crate::theme::FillTier::Tertiary),
+                                    theme.surface_raised,
+                                ),
+                            )
                             .flex()
                             .items_center()
                             .gap(px(8.0))
@@ -503,7 +524,7 @@ impl Render for BrowserSurface {
                         .cursor_pointer()
                         .role(gpui::Role::Button)
                         .aria_label("Go to address")
-                        .hover(|s| s.bg(crate::theme::wash(0.10)))
+                        .hover_wash("browser-go")
                         .on_mouse_down(MouseButton::Left, |_, w, _| w.prevent_default())
                         .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
                         .child(

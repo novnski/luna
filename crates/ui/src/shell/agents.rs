@@ -148,7 +148,7 @@ impl Shell {
                                 let ring = theme.focus_ring();
                                 move |style| crate::theme::focus_ring(style, ring)
                             })
-                            .hover(|style| style.bg(crate::theme::sidebar_hover_bg()))
+                            .hover_wash(format!("agent-{id}"))
                             .cursor_pointer()
                             .on_click(cx.listener(move |shell, _, _, cx| {
                                 if let Some(doc) = doc_id.clone() {

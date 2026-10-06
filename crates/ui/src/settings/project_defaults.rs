@@ -358,7 +358,7 @@ impl ProjectsPage {
 
     fn choice(
         &self,
-        id: impl Into<gpui::ElementId>,
+        id: impl Into<SharedString>,
         label: impl Into<SharedString>,
         selected: bool,
         action: Action,
@@ -382,14 +382,22 @@ impl ProjectsPage {
                 | Action::Permission(_)
                 | Action::Checkout(_)
         );
-        let border = theme.border;
-        let accent = theme.accent;
         let origin = self.current_request_scope(cx);
         // Keep the engine epoch even when no project is selected yet, so an
         // old project-selector frame cannot cross a connection replacement.
         let engine_generation = self.state.read(cx).engine_generation();
-        widgets::ghost_action(theme)
-            .id(id.into())
+        let control = if is_choice {
+            crate::button::chip(
+                id,
+                selected,
+                crate::button::ControlSize::Md,
+                !self.busy,
+                theme,
+            )
+        } else {
+            widgets::ghost_action(id, !self.busy, theme)
+        };
+        control
             .when(
                 cfg!(test)
                     && matches!(
@@ -398,41 +406,7 @@ impl ProjectsPage {
                     ),
                 |el| el.debug_selector(|| "qa-defaults-new-worktree".into()),
             )
-            .role(gpui::Role::Button)
             .aria_label(format!("{field}: {label}"))
-            .tab_index(0)
-            .when(is_choice, |el| {
-                el.aria_toggled(if selected {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-            })
-            .rounded(px(7.0))
-            .h(px(30.0))
-            .border_1()
-            .border_color(if selected { accent } else { border })
-            .bg(if selected {
-                theme.accent_wash
-            } else {
-                theme.surface_raised
-            })
-            .text_size(crate::typography::ui_rems(11.5))
-            .font_weight(if selected {
-                gpui::FontWeight::MEDIUM
-            } else {
-                gpui::FontWeight::NORMAL
-            })
-            .text_color(if selected {
-                theme.accent
-            } else {
-                theme.text_muted
-            })
-            .when(self.busy, |el| el.opacity(0.5))
-            .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-            .when(!selected && !self.busy, |el| {
-                el.hover(|style| style.bg(theme.surface_raised_hover))
-            })
             .child(label)
             .on_click(cx.listener(move |page, _, _, cx| {
                 if page.state.read(cx).engine_generation() == engine_generation
@@ -506,7 +480,7 @@ impl Render for ProjectsPage {
         let mut project_choices = Self::choices();
         for (index, space) in projects.iter().enumerate() {
             project_choices = project_choices.child(self.choice(
-                ("project-defaults-project", index),
+                format!("project-defaults-project-{index}"),
                 format!(
                     "{} · {}",
                     space.display_name(),
@@ -540,7 +514,7 @@ impl Render for ProjectsPage {
             {
                 providers = providers.child(
                     self.choice(
-                        ("project-provider", index),
+                        format!("project-provider-{index}"),
                         label,
                         defaults
                             .provider
@@ -618,7 +592,7 @@ impl Render for ProjectsPage {
                             }
                             for (index, model) in filtered.iter().take(50).enumerate() {
                                 models = models.child(self.choice(
-                                    ("project-model", index),
+                                    format!("project-model-{index}"),
                                     format!("{} · {}", model.label, model.id),
                                     provider.model.as_deref() == Some(model.id.as_str()),
                                     Action::Model(Some(model.id.clone())),
@@ -666,7 +640,7 @@ impl Render for ProjectsPage {
             .enumerate()
             {
                 permissions = permissions.child(self.choice(
-                    ("project-permission", index),
+                    format!("project-permission-{index}"),
                     label,
                     defaults.permission_mode == value,
                     Action::Permission(value),
@@ -685,7 +659,7 @@ impl Render for ProjectsPage {
             .enumerate()
             {
                 checkout = checkout.child(self.choice(
-                    ("project-checkout", index),
+                    format!("project-checkout-{index}"),
                     label,
                     defaults.checkout == value,
                     Action::Checkout(value),

@@ -25,6 +25,7 @@ use luna_rpc::methods;
 
 use crate::AccessibleButton as _;
 use crate::composer::{ComposerInput, ComposerInputEvent};
+use crate::interaction::HoverFill as _;
 use crate::popover::{self, Loadable};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::widgets;
@@ -504,12 +505,15 @@ impl AccountsPage {
                 .items_center()
                 .gap(px(6.0))
                 .cursor_pointer()
-                .bg(if open {
-                    crate::theme::ink(0.06)
-                } else {
-                    gpui::transparent_black()
-                })
-                .when(!open, |el| el.hover(|s| s.bg(crate::theme::ink(0.04))))
+                .hover_fill(
+                    "accounts-device-switcher",
+                    if open {
+                        theme.fill(crate::theme::FillTier::Tertiary)
+                    } else {
+                        gpui::transparent_black()
+                    },
+                    theme.fill(crate::theme::FillTier::Tertiary),
+                )
                 .on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(|this, _, _, _| this.device_menu.note_trigger_press()),
@@ -1518,10 +1522,9 @@ impl AccountsPage {
                     .id(id)
                     .mt(px(6.0))
                     .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.text_muted)
                     .truncate()
                     .cursor_pointer()
-                    .hover(|s| s.text_color(theme.text))
+                    .hover_fg(id, theme.text_muted, theme.text)
                     .on_click(cx.listener(move |_, _, _, cx| {
                         cx.open_url(&open_url);
                     }))
@@ -2080,42 +2083,37 @@ impl Render for AccountsPage {
                                     .child(div().flex_1())
                                     .when(update_available && update_command.is_some(), |el| {
                                         el.child(
-                                            widgets::ghost_action(&theme)
-                                                .id(SharedString::from(format!(
-                                                    "provider-update-{name}"
-                                                )))
-                                                .accessible_button(
-                                                    format!("Update {name}"),
-                                                    theme.accent,
+                                            widgets::ghost_action(
+                                                format!("provider-update-{name}"),
+                                                !is_updating,
+                                                &theme,
+                                            )
+                                            .accessible_button(
+                                                format!("Update {name}"),
+                                                theme.accent,
+                                            )
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.update_provider(harness, cx);
+                                            }))
+                                            .child(
+                                                crate::button::glyph(
+                                                    crate::icons::ARROW_DOWN,
+                                                    crate::button::ControlSize::Md,
                                                 )
-                                                .hover(|s| widgets::ghost_hover(&theme, s))
-                                                .when(is_updating, |button| button.opacity(0.5))
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    this.update_provider(harness, cx);
-                                                }))
-                                                .child(
-                                                    crate::icons::icon(crate::icons::ARROW_DOWN)
-                                                        .size(px(15.0))
-                                                        .text_color(
-                                                            theme.readable_icon(theme.accent),
-                                                        ),
-                                                )
-                                                .child(if is_updating {
-                                                    "Updating…"
-                                                } else {
-                                                    "Update"
-                                                }),
+                                                .text_color(theme.readable_icon(theme.accent)),
+                                            )
+                                            .child(
+                                                if is_updating { "Updating…" } else { "Update" },
+                                            ),
                                         )
                                     })
                                     .when(harness != HarnessId::Opencode, |el| {
                                         el.child(
-                                            widgets::ghost_action(&theme)
-                                                .id(add_id)
+                                            widgets::ghost_action(add_id, true, &theme)
                                                 .accessible_button(
                                                     sign_in_label.to_string(),
                                                     theme.accent,
                                                 )
-                                                .hover(|s| widgets::ghost_hover(&theme, s))
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.request_login(
                                                         harness,
@@ -2146,9 +2144,13 @@ impl Render for AccountsPage {
                                         .into_any_element()
                                     } else {
                                         // Not installed: shown, but not a control.
-                                        widgets::toggle_switch(&theme, enabled)
-                                            .opacity(0.35)
-                                            .into_any_element()
+                                        widgets::toggle_switch(
+                                            &theme,
+                                            enabled,
+                                            &format!("provider-toggle-{name}"),
+                                        )
+                                        .opacity(0.35)
+                                        .into_any_element()
                                     }),
                             )
                             .when(!installed, |el| {
@@ -2221,25 +2223,23 @@ impl Render for AccountsPage {
                                         // `text-[12.5px]` + leading 16px Refresh icon,
                                         // dimmed while a refresh is in flight (luna
                                         // `disabled:opacity-50`).
-                                        widgets::ghost_action(&theme)
-                                            .id("accounts-refresh")
-                                            .accessible_button(
-                                                "Refresh provider accounts",
-                                                theme.accent,
-                                            )
-                                            .flex_none()
-                                            .text_size(crate::typography::ui_rems(12.5))
-                                            .hover(|s| widgets::ghost_hover(&theme, s))
-                                            .when(refreshing, |el| el.opacity(0.5))
-                                            .on_click(cx.listener(|this, _, _, cx| {
-                                                this.load(force_usage_for(LoadTrigger::Refresh), cx)
-                                            }))
-                                            .child(
-                                                crate::icons::icon(crate::icons::REFRESH)
-                                                    .size(px(16.0))
-                                                    .text_color(theme.text_muted),
-                                            )
-                                            .child(SharedString::from("Refresh")),
+                                        widgets::ghost_action(
+                                            "accounts-refresh",
+                                            !refreshing,
+                                            &theme,
+                                        )
+                                        .accessible_button(
+                                            "Refresh provider accounts",
+                                            theme.accent,
+                                        )
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.load(force_usage_for(LoadTrigger::Refresh), cx)
+                                        }))
+                                        .child(crate::button::glyph(
+                                            crate::icons::REFRESH,
+                                            crate::button::ControlSize::Md,
+                                        ))
+                                        .child(SharedString::from("Refresh")),
                                     )
                                     .child(self.render_device_switcher(&theme, cx)),
                             )
@@ -2274,26 +2274,26 @@ impl Render for AccountsPage {
                             )
                             .children(sections)
                             .child(
-                                widgets::ghost_action(&theme)
-                                    .id("providers-advanced-disclosure")
-                                    .accessible_button(
-                                        if self.advanced_open {
-                                            "Hide provider options"
-                                        } else {
-                                            "Advanced provider options"
-                                        },
-                                        theme.accent,
-                                    )
-                                    .mt(px(24.0))
-                                    .hover(|s| widgets::ghost_hover(&theme, s))
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| this.toggle_advanced(cx)),
-                                    )
-                                    .child(if self.advanced_open {
+                                widgets::ghost_action(
+                                    "providers-advanced-disclosure",
+                                    true,
+                                    &theme,
+                                )
+                                .accessible_button(
+                                    if self.advanced_open {
                                         "Hide provider options"
                                     } else {
                                         "Advanced provider options"
-                                    }),
+                                    },
+                                    theme.accent,
+                                )
+                                .mt(px(24.0))
+                                .on_click(cx.listener(|this, _, _, cx| this.toggle_advanced(cx)))
+                                .child(if self.advanced_open {
+                                    "Hide provider options"
+                                } else {
+                                    "Advanced provider options"
+                                }),
                             )
                             .children(advanced_sections)
                             // Footer note (luna: `mt-6 text-[12px] leading-relaxed

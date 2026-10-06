@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::AccessibleButton as _;
+use crate::interaction::HoverFill as _;
 use crate::task_work::{
     MAX_STOP, StopAnswer, WorkGroup, WorkStatus, kind_label, selectable, state_label,
     stop_status_label,
@@ -424,8 +425,15 @@ impl Composer {
             .gap(px(4.0))
             .rounded_full()
             .cursor_pointer()
-            .when(open, |el| el.bg(theme.element_hover))
-            .hover(|style| style.bg(theme.element_hover))
+            .hover_fill(
+                "composer-work-chip",
+                if open {
+                    theme.glass_hover()
+                } else {
+                    gpui::transparent_black()
+                },
+                theme.glass_hover(),
+            )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_work_menu(cx)))
             .when(!open, |el| {
                 el.tooltip(move |_, cx| {
@@ -512,10 +520,7 @@ impl Composer {
                     .gap(px(8.0))
                     .p(px(6.0))
                     .rounded(px(6.0))
-                    .when(chosen.is_some(), |el| {
-                        el.cursor_pointer()
-                            .hover(|style| style.bg(crate::theme::ink(0.05)))
-                    })
+                    .when(chosen.is_some(), |el| el.cursor_pointer())
                     .child(div().w(px(14.0)).flex_none().pt(px(1.0)).when_some(
                         chosen,
                         |slot, on| {
@@ -637,6 +642,7 @@ impl Composer {
                         body = body.child(if can {
                             element
                                 .id(SharedString::from(format!("work-row-{}", item.id)))
+                                .hover_wash(format!("work-row-{}", item.id))
                                 .role(gpui::Role::CheckBox)
                                 .aria_label(SharedString::from(item.title.clone()))
                                 .on_click(cx.listener(move |this, _, _, cx| {

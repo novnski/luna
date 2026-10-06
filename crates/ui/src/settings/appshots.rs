@@ -38,7 +38,7 @@ impl ShortcutsPage {
         let accent = theme.accent;
         let capabilities = self.appshot_capabilities;
         let toggle = |id: &'static str, label: &'static str, enabled: bool| {
-            widgets::toggle_switch(&theme, enabled)
+            widgets::toggle_switch(&theme, enabled, id)
                 .id(id)
                 .role(gpui::Role::Switch)
                 .aria_label(label)
@@ -139,13 +139,8 @@ impl ShortcutsPage {
                 cx,
             ));
         let action = |id: &'static str, label: &'static str| {
-            widgets::ghost_action(&theme)
-                .id(id)
-                .role(gpui::Role::Button)
+            widgets::ghost_action(id, true, &theme)
                 .aria_label(label)
-                .tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                .cursor_pointer()
                 .child(label)
         };
         let mut window_access = div()

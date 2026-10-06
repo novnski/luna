@@ -23,6 +23,7 @@ use gpui::{
     AnyElement, BackgroundExecutor, Image, ImageFormat, SharedString, Size, div, prelude::*, px,
 };
 
+use crate::interaction::HoverFill as _;
 use crate::state::EngineHandle;
 use crate::theme::ink;
 use luna_rpc::methods;
@@ -997,8 +998,11 @@ pub(crate) fn lightbox_with_size(
         .flex()
         .items_center()
         .justify_center()
-        .bg(crate::theme::wash(0.14))
-        .hover(|style| style.bg(crate::theme::wash(0.22)))
+        .hover_fill(
+            "attachment-lightbox-close",
+            crate::theme::wash(0.14),
+            crate::theme::wash(0.22),
+        )
         .cursor_pointer()
         .on_click(move |_, window, cx| {
             cx.stop_propagation();

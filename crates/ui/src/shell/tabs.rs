@@ -247,7 +247,7 @@ impl Shell {
                 .aria_label(SharedString::from(format!("Open parent chat: {title}")))
                 .tab_index(0)
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::wash(0.11)))
+                .hover_wash("parent-breadcrumb")
                 .focus_visible({
                     let ring = theme.focus_ring();
                     move |style| crate::theme::focus_ring(style, ring)

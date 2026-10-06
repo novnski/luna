@@ -7,7 +7,7 @@ use luna_proto::{
 };
 use luna_rpc::methods;
 
-use crate::{AccessibleButton as _, settings::widgets, state::AppState, theme::Theme};
+use crate::{settings::widgets, state::AppState, theme::Theme};
 
 #[derive(Clone)]
 enum Action {
@@ -223,28 +223,21 @@ impl ProviderDefaultsPanel {
     ) -> AnyElement {
         let generation = self.state.read(cx).engine_generation();
         let provider = self.provider;
-        widgets::ghost_action(theme)
-            .id(SharedString::from(id))
-            .accessible_button(label.clone(), theme.accent)
-            .border_1()
-            .rounded(px(7.0))
-            .border_color(if selected { theme.accent } else { theme.border })
-            .bg(if selected {
-                theme.accent_wash
-            } else {
-                theme.surface_raised
-            })
-            .text_color(if selected { theme.accent } else { theme.text })
-            .when(self.busy, |element| element.opacity(0.5))
-            .child(SharedString::from(label))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                if this.state.read(cx).engine_generation() == generation
-                    && this.provider == provider
-                {
-                    this.act(action.clone(), cx);
-                }
-            }))
-            .into_any_element()
+        crate::button::chip(
+            id,
+            selected,
+            crate::button::ControlSize::Md,
+            !self.busy,
+            theme,
+        )
+        .aria_label(label.clone())
+        .child(SharedString::from(label))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            if this.state.read(cx).engine_generation() == generation && this.provider == provider {
+                this.act(action.clone(), cx);
+            }
+        }))
+        .into_any_element()
     }
 }
 

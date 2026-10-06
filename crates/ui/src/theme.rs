@@ -1457,11 +1457,13 @@ impl Theme {
             ))
     }
 
-    /// Theme-owned hover wash for chrome that sits on glass (sidebar rows,
-    /// tabs, titlebar buttons). The importer maps this role from the source
-    /// theme, so forcing frost does not reintroduce Luna's neutral hover.
+    /// Hover wash for chrome that sits on glass (sidebar rows, tabs,
+    /// titlebar buttons): the shared [`FillTier::Tertiary`] fill. It takes
+    /// its tint from the palette's text, so imported themes keep their
+    /// character without each one's authored hover alpha drifting from the
+    /// rest of the app (audit DS-05 / SH-12).
     pub fn glass_hover(&self) -> Hsla {
-        self.element_hover
+        self.fill(FillTier::Tertiary)
     }
 
     /// Muted popup text is the theme foreground composited onto the glass.
@@ -2208,6 +2210,99 @@ impl Theme {
     pub fn wash(&self, alpha: f32) -> Hsla {
         wash_for(self.appearance, alpha)
     }
+
+    /// Interaction fill at `tier`, tinted by this palette's text colour —
+    /// see [`fill`].
+    pub fn fill(&self, tier: FillTier) -> Hsla {
+        fill_for(self.appearance, fill_tint(self.text), tier)
+    }
+
+    /// Separator hairline, tinted by this palette's text colour — see
+    /// [`separator`].
+    pub fn separator(&self, strong: bool) -> Hsla {
+        separator_for(self.appearance, fill_tint(self.text), strong)
+    }
+}
+
+/// The interaction fill ladder (audit DS-05 / DS-14): one set of weights for
+/// every hover, press and selection wash instead of per-call-site alphas.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FillTier {
+    /// Resting plates (ghost buttons, wells): dark 4%, light 3%.
+    Quaternary,
+    /// Hover: dark 8%, light 5%.
+    Tertiary,
+    /// Pressed, or hover on an already-filled control: dark 12%, light 8%.
+    Secondary,
+    /// Selected: dark 16%, light 10%.
+    Primary,
+}
+
+impl FillTier {
+    fn alpha(self, appearance: Appearance) -> f32 {
+        match (self, appearance) {
+            (FillTier::Quaternary, Appearance::Dark) => 0.04,
+            (FillTier::Tertiary, Appearance::Dark) => 0.08,
+            (FillTier::Secondary, Appearance::Dark) => 0.12,
+            (FillTier::Primary, Appearance::Dark) => 0.16,
+            (FillTier::Quaternary, Appearance::Light) => 0.03,
+            (FillTier::Tertiary, Appearance::Light) => 0.05,
+            (FillTier::Secondary, Appearance::Light) => 0.08,
+            (FillTier::Primary, Appearance::Light) => 0.10,
+        }
+    }
+}
+
+/// Hue and (capped) saturation of a palette's text colour. Fills carry the
+/// palette's tint so a Nord or Solarized list doesn't get grey washes; the cap
+/// keeps a saturated text colour from turning hovers into coloured paint.
+fn fill_tint(text: Hsla) -> (f32, f32) {
+    (text.h, text.s.min(0.35))
+}
+
+fn fill_for(appearance: Appearance, (h, s): (f32, f32), tier: FillTier) -> Hsla {
+    let lightness = match appearance {
+        Appearance::Dark => 0.92,
+        Appearance::Light => 0.10,
+    };
+    hsla(h, s, lightness, tier.alpha(appearance))
+}
+
+fn separator_for(appearance: Appearance, (h, s): (f32, f32), strong: bool) -> Hsla {
+    match appearance {
+        Appearance::Dark => hsla(h, s, 0.92, if strong { 0.14 } else { 0.08 }),
+        Appearance::Light => hsla(
+            h,
+            s,
+            0.10,
+            (if strong { 0.14 } else { 0.08 }) * INK_HAIRLINE_SCALE,
+        ),
+    }
+}
+
+thread_local! {
+    /// The installed theme's fill tint, for context-free builders (see [`fill`]).
+    static CURRENT_FILL_TINT: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((0.0, 0.0)) };
+}
+
+/// Interaction fill at `tier` for the installed theme: hover, pressed and
+/// selected washes all come from this ladder, tinted by the palette's text.
+pub fn fill(tier: FillTier) -> Hsla {
+    fill_for(
+        current_appearance(),
+        CURRENT_FILL_TINT.with(|t| t.get()),
+        tier,
+    )
+}
+
+/// Separator hairline for the installed theme: 8% (or 14% `strong`) of the
+/// palette's text tint, scaled up on light backgrounds like [`hairline`].
+pub fn separator(strong: bool) -> Hsla {
+    separator_for(
+        current_appearance(),
+        CURRENT_FILL_TINT.with(|t| t.get()),
+        strong,
+    )
 }
 
 fn scrollbar_thumb_colors(theme: &Theme) -> (Hsla, Hsla, Hsla) {
@@ -2237,6 +2332,7 @@ pub fn focus_visible_ring(style: gpui::StyleRefinement) -> gpui::StyleRefinement
 
 fn sync_gpui_base_scrollbar(theme: &Theme, cx: &mut App) {
     CURRENT_FOCUS_RING.with(|ring| ring.set(theme.focus_ring()));
+    CURRENT_FILL_TINT.with(|tint| tint.set(fill_tint(theme.text)));
     let (normal, hover, active) = scrollbar_thumb_colors(theme);
     gpui_base::Theme::global_mut(cx).scrollbar.styles = gpui_base::ScrollbarStyles::default()
         .thumb(|style| style.bg(normal))
@@ -2382,18 +2478,12 @@ fn band_for(appearance: Appearance) -> Hsla {
 pub fn glass_selected_bg() -> Hsla {
     // Clearly above the hover wash ([`sidebar_hover_bg`]) so the selected
     // row never reads like the one under the pointer (audit SH-02).
-    match current_appearance() {
-        Appearance::Dark => wash(0.16),
-        Appearance::Light => wash(0.10),
-    }
+    fill(FillTier::Primary)
 }
 
-/// Sidebar row hover: a light wash, well below [`glass_selected_bg`].
+/// Sidebar row hover: the shared hover fill, well below [`glass_selected_bg`].
 pub fn sidebar_hover_bg() -> Hsla {
-    match current_appearance() {
-        Appearance::Dark => wash(0.06),
-        Appearance::Light => wash(0.04),
-    }
+    fill(FillTier::Tertiary)
 }
 
 /// The user message bubble's plate: the same translucent wash family as

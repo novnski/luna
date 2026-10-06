@@ -1354,7 +1354,11 @@ impl Shell {
                 .rounded(px(4.0))
                 .opacity(if active { 1.0 } else { 0.0 })
                 .group_hover(group.clone(), |style| style.opacity(1.0))
-                .hover(|style| style.bg(crate::theme::wash(0.12)))
+                .hover_fill(
+                    format!("wb-tab-close-{}", tab.chat_id),
+                    gpui::transparent_black(),
+                    crate::theme::fill(crate::theme::FillTier::Secondary),
+                )
                 // The tab owns a drag payload: claim the close press first.
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.prevent_default();
@@ -1404,7 +1408,7 @@ impl Shell {
             .text_color(theme.tab_title(active, strip_focused))
             .when(active, |el| el.bg(selected_fill))
             .when(!active, |el| {
-                el.hover(|style| style.bg(crate::theme::wash(0.05)))
+                el.hover_wash(format!("wb-tab-{}", tab.chat_id))
             })
             .when(dragging, |el| el.opacity(0.6))
             .tooltip(move |_, cx| {
@@ -1777,7 +1781,7 @@ impl Shell {
                                 .justify_center()
                                 .rounded(px(crate::theme::radius::SM))
                                 .cursor_pointer()
-                                .hover(|style| style.bg(crate::theme::wash(0.1)))
+                                .hover_wash("wb-child-failure-dismiss")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.workbench_dismiss_child_failure(cx)
                                 }))
@@ -1997,7 +2001,7 @@ impl Shell {
                 .border_1()
                 .border_color(theme.border)
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::wash(0.08)))
+                .hover_wash(id)
                 .on_key_down(crate::swallow_activation_key)
                 .tooltip(move |_, cx| crate::pickers::ControlTooltip::view(label.clone(), None, cx))
                 .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
@@ -2067,7 +2071,7 @@ impl Shell {
                 .border_1()
                 .border_color(gpui::transparent_black())
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::wash(0.08)))
+                .hover_wash("wb-balance-panes")
                 .focus_visible({
                     let ring = theme.focus_ring();
                     move |style| crate::theme::focus_ring(style, ring)
@@ -2410,7 +2414,7 @@ fn strip_button_titled(
         None => label.into(),
     };
     div()
-        .id(id)
+        .id(id.clone())
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
@@ -2424,7 +2428,7 @@ fn strip_button_titled(
         .justify_center()
         .rounded(px(6.0))
         .cursor_pointer()
-        .hover(|style| style.bg(crate::theme::wash(0.10)))
+        .hover_wash(id)
         .tooltip(move |_, cx| {
             crate::pickers::ControlTooltip::view(title.clone(), detail.map(SharedString::from), cx)
         })

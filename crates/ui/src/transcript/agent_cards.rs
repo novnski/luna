@@ -434,6 +434,7 @@ impl Render for AgentCard {
         // Small labeled actions in the chip's trailing-tile language: muted
         // until hovered, a soft wash, never a raised button.
         let (muted, faint, text) = (theme.content_muted, theme.content_faint, theme.text);
+        let card = cx.entity_id();
         let action = move |id: &'static str, label: &'static str, glyph: &'static str| {
             div()
                 .id(id)
@@ -444,9 +445,14 @@ impl Render for AgentCard {
                 .gap(px(4.0))
                 .flex_none()
                 .rounded(px(crate::theme::radius::SM))
-                .text_color(muted)
                 .cursor_pointer()
-                .hover(move |style| style.bg(crate::theme::ink(0.06)).text_color(text))
+                .hover_fill_fg(
+                    format!("tl-{id}-{card}"),
+                    gpui::transparent_black(),
+                    crate::theme::fill(crate::theme::FillTier::Tertiary),
+                    muted,
+                    text,
+                )
                 .child(crate::icons::icon(glyph).size(px(12.0)).text_color(faint))
                 .child(label)
         };

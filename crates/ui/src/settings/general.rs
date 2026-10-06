@@ -240,7 +240,6 @@ impl ScrollRailHost for GeneralPage {
 impl Render for GeneralPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
-        let accent = theme.accent;
         let send_behavior = self.composer_send_behavior;
         let follow_up_behavior = self.follow_up_behavior;
         let modifier_label = if cfg!(target_os = "macos") {
@@ -266,62 +265,27 @@ impl Render for GeneralPage {
                             .child("Choose whether Enter sends or inserts a line break."),
                     ),
             )
-            .child(
-                div()
-                    .id("general-send-shortcut")
-                    .flex()
-                    .flex_row()
-                    .rounded(px(9.0))
-                    .p(px(2.0))
-                    .bg(crate::theme::ink(0.04))
-                    .children(
-                        [
-                            (ComposerSendBehavior::Enter, "Enter"),
-                            (ComposerSendBehavior::ModEnter, modifier_label),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(ix, (behavior, label))| {
-                            let selected = send_behavior == behavior;
-                            div()
-                                .id(("general-send-option", ix))
-                                .role(gpui::Role::Button)
-                                .aria_label(format!("Send shortcut: {label}"))
-                                .aria_toggled(if selected {
-                                    gpui::Toggled::True
-                                } else {
-                                    gpui::Toggled::False
-                                })
-                                .tab_index(0)
-                                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                                .min_w(px(78.0))
-                                .px(px(10.0))
-                                .py(px(6.0))
-                                .rounded(px(7.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .text_color(if selected {
-                                    theme.text
-                                } else {
-                                    theme.text_muted
-                                })
-                                .when(selected, |el| {
-                                    el.bg(theme.bg)
-                                        .border_1()
-                                        .border_color(theme.border.opacity(0.8))
-                                })
-                                .cursor_pointer()
-                                .hover(|s| s.text_color(theme.text))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.set_composer_send_behavior(behavior, cx)
-                                }))
-                                .on_key_down(crate::swallow_activation_key)
-                                .child(label)
-                        }),
-                    ),
-            );
+            .child(crate::button::segmented(
+                "general-send-shortcut",
+                vec![
+                    crate::button::Segment::new("enter", "Enter"),
+                    crate::button::Segment::new("mod-enter", modifier_label),
+                ],
+                usize::from(send_behavior == ComposerSendBehavior::ModEnter),
+                184.0,
+                crate::button::ControlSize::Md,
+                &theme,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.set_composer_send_behavior(
+                        if *ix == 1 {
+                            ComposerSendBehavior::ModEnter
+                        } else {
+                            ComposerSendBehavior::Enter
+                        },
+                        cx,
+                    )
+                }),
+            ));
 
         let follow_up_row = widgets::card_row(&theme, false)
             .min_h(px(84.0))
@@ -344,45 +308,27 @@ impl Render for GeneralPage {
                             )),
                     ),
             )
-            .child(
-                div()
-                    .id("general-follow-up-behavior")
-                    .flex()
-                    .flex_row()
-                    .rounded(px(9.0))
-                    .p(px(2.0))
-                    .bg(crate::theme::ink(0.04))
-                    .children(
-                        [(FollowUpBehavior::Queue, "Queue"), (FollowUpBehavior::Steer, "Steer")]
-                            .into_iter()
-                            .enumerate()
-                            .map(|(ix, (behavior, label))| {
-                                let selected = follow_up_behavior == behavior;
-                                div()
-                                    .id(("general-follow-up-option", ix))
-                                    .role(gpui::Role::Button)
-                                    .aria_label(format!("Follow-up behavior: {label}"))
-                                    .aria_toggled(if selected { gpui::Toggled::True } else { gpui::Toggled::False })
-                                    .tab_index(0)
-                                    .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-                                    .min_w(px(72.0))
-                                    .px(px(12.0))
-                                    .py(px(6.0))
-                                    .rounded(px(7.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(if selected { theme.text } else { theme.text_muted })
-                                    .when(selected, |el| el.bg(theme.bg).border_1().border_color(theme.border.opacity(0.8)))
-                                    .cursor_pointer()
-                                    .hover(|s| s.text_color(theme.text))
-                                    .on_click(cx.listener(move |this, _, _, cx| this.set_follow_up_behavior(behavior, cx)))
-                                    .on_key_down(crate::swallow_activation_key)
-                                    .child(label)
-                            }),
-                    ),
-            );
+            .child(crate::button::segmented(
+                "general-follow-up-behavior",
+                vec![
+                    crate::button::Segment::new("queue", "Queue"),
+                    crate::button::Segment::new("steer", "Steer"),
+                ],
+                usize::from(follow_up_behavior == FollowUpBehavior::Steer),
+                168.0,
+                crate::button::ControlSize::Md,
+                &theme,
+                cx.listener(|this, ix: &usize, _, cx| {
+                    this.set_follow_up_behavior(
+                        if *ix == 1 {
+                            FollowUpBehavior::Steer
+                        } else {
+                            FollowUpBehavior::Queue
+                        },
+                        cx,
+                    )
+                }),
+            ));
 
         let scrollbar = popover::rail(self, "general-page-scrollbar", &theme, cx);
         div()

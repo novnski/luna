@@ -1,6 +1,7 @@
 //! Git actions card in the existing Changes surface.
 
 use super::*;
+use crate::interaction::HoverFill as _;
 use luna_proto::{
     GitActionKind, GitActionReceipt, GitActionRequest, GitCheckpointDiff, GitCheckpointList,
     GitCheckpointRestorePreview, GitCheckpointRestoreReceipt, GitCheckpointRestoreRequest,
@@ -671,11 +672,15 @@ impl Changes {
         label: &'static str,
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
-        let hover = theme.surface_raised_hover;
-        Self::git_button_base(id, label, theme).hover(move |style| style.bg(hover))
+        let id: SharedString = id.into();
+        Self::git_button_base(id.clone(), label, theme).hover_fill(
+            id,
+            theme.surface_raised,
+            theme.surface_raised_hover,
+        )
     }
 
-    /// The shared button body without a hover style (GPUI allows one).
+    /// The shared button body without a fill (each recipe eases its own).
     fn git_button_base(
         id: impl Into<SharedString>,
         label: &'static str,
@@ -691,7 +696,6 @@ impl Changes {
             .flex()
             .items_center()
             .rounded(px(Theme::CONTROL_RADIUS))
-            .bg(theme.surface_raised)
             .border_1()
             .border_color(theme.border)
             .text_size(crate::typography::ui_rems(12.0))
@@ -712,12 +716,12 @@ impl Changes {
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
         let fill = theme.accent_strong;
-        Self::git_button_base(id, label, theme)
-            .bg(fill)
+        let id: SharedString = id.into();
+        Self::git_button_base(id.clone(), label, theme)
             .border_color(gpui::transparent_black())
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.on_accent)
-            .hover(move |style| style.bg(fill.opacity(0.88)))
+            .hover_fill(id, fill, fill.opacity(0.88))
     }
 
     fn render_pr_status(&self, theme: &Theme) -> AnyElement {

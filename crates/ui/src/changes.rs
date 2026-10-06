@@ -52,6 +52,7 @@ use crate::history::{
     GitHistory, GitHistoryCount, GitHistoryEvent, GitHistoryFetchButton, GitHistorySearchControl,
     GitHistoryViewButton,
 };
+use crate::interaction::HoverFill as _;
 use crate::markdown::render;
 use crate::motion::{self, AnimationExt as _};
 use crate::popover::{self, Popup};
@@ -3669,9 +3670,8 @@ impl Changes {
             .items_center()
             .gap(px(8.0))
             .px(px(Theme::SPACE_MD))
-            .bg(rest_bg)
             .cursor_pointer()
-            .hover(move |s| s.bg(hover_bg))
+            .hover_fill(presentation.element_id(ix), rest_bg, hover_bg)
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_fold(ix, cx);
                 cx.notify();

@@ -1,4 +1,5 @@
 //! Context occupancy is read from the replicated chat snapshot, never local CLI state.
+use crate::interaction::HoverFill as _;
 use crate::popover::TooltipAboveExt as _;
 use crate::theme::Theme;
 use gpui::{
@@ -121,7 +122,7 @@ pub fn render(
         .rounded_full()
         .text_size(crate::typography::ui_rems(12.0))
         .text_color(color)
-        .hover(move |s| s.bg(hover))
+        .hover_fill("context-usage", gpui::transparent_black(), hover)
         .child(ring)
         // An unknown share shows the bare track (its card explains why)
         // instead of a "—" placeholder (audit CP-17); a known share uses

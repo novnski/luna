@@ -48,22 +48,13 @@ fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
 
 fn skill_button(
     theme: &Theme,
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     enabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
     // GPUI synthesizes one keyboard click on key-up for a focused on_click
     // control. Keep keyboard behavior there rather than adding key handlers.
-    let accent = theme.accent;
-    widgets::ghost_action(theme)
-        .id(id.into())
-        .role(gpui::Role::Button)
-        .aria_label(label.into())
-        .when(enabled, |el| {
-            el.tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-        })
-        .when(!enabled, |el| el.cursor_default())
+    widgets::ghost_action(id, enabled, theme).aria_label(label.into())
 }
 
 /// One row of the Execution card's settings table.
@@ -1144,9 +1135,9 @@ impl HarnessesPage {
             .child(widgets::row_title(theme, "Execution"))
             .child(widgets::page_subtitle(theme,
                 "What the focused chat runs with, as its engine reports it. Instruction text, credentials and provider identifiers are never shown here."))
-            .child(widgets::ghost_action(theme).id("refresh-effective-session")
+            .child(widgets::ghost_action("refresh-effective-session", true, theme)
                 .accessible_button("Refresh execution details", theme.accent)
-                .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
+                .mt(px(8.0))
                 .on_click(cx.listener(|page, _, _, cx| { page.load_runtime_contract(cx); cx.notify(); }))
                 .child("Refresh"));
         let focus = self.state.read(cx).execution_focus_chat();
@@ -1326,50 +1317,50 @@ impl HarnessesPage {
                 "Browse provider-owned skills by global or project scope. Check provider reads Codex's native catalog or Claude's own MCP server readback; file presence and selected-session attachment are separate checks."))
             .child(skill_button(theme, "refresh-integrations", "Check provider skill and MCP catalog", !self.skill_busy)
                 .mt(px(8.0))
-                .when(!self.skill_busy, |el| el.hover(|s| widgets::ghost_hover(theme, s))
+                .when(!self.skill_busy, |el| el
                     .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(true, cx); cx.notify(); })))
                 .child("Check provider"));
         if let Loadable::Ready(harnesses) = &self.harnesses {
-            let mut picker = div()
-                .mt(px(10.0))
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(6.0));
-            for harness in harnesses {
-                let id = harness.id;
-                if !matches!(
-                    id,
-                    HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::Opencode
-                ) {
-                    continue;
-                }
-                let selected = id == self.integration_provider;
-                picker = picker.child(
-                    skill_button(
-                        theme,
-                        SharedString::from(format!("integration-provider-{id:?}")),
-                        format!("Show {} skills", harness.name),
-                        !self.skill_busy,
+            // A segmented control for the provider (audit DS-16).
+            let providers: Vec<(HarnessId, SharedString)> = harnesses
+                .iter()
+                .filter(|harness| {
+                    matches!(
+                        harness.id,
+                        HarnessId::ClaudeCode | HarnessId::Codex | HarnessId::Opencode
                     )
-                    .aria_toggled(if selected {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .when(selected, |el| el.bg(theme.accent_wash))
-                    .when(!self.skill_busy, |el| {
-                        el.hover(|s| widgets::ghost_hover(theme, s))
-                            .on_click(cx.listener(move |page, _, _, cx| {
-                                page.integration_provider = id;
-                                page.clear_skill_editor();
-                                page.load_inventory(false, cx);
-                                cx.notify();
-                            }))
-                    })
-                    .child(harness.name.clone()),
-                );
-            }
+                })
+                .map(|harness| (harness.id, SharedString::from(harness.name.clone())))
+                .collect();
+            let selected = providers
+                .iter()
+                .position(|(id, _)| *id == self.integration_provider)
+                .unwrap_or(0);
+            let ids: Vec<HarnessId> = providers.iter().map(|(id, _)| *id).collect();
+            let busy = self.skill_busy;
+            let picker = div().mt(px(10.0)).child(crate::button::segmented(
+                "integration-provider",
+                providers
+                    .iter()
+                    .map(|(id, name)| crate::button::Segment::new(format!("{id:?}"), name.clone()))
+                    .collect(),
+                selected,
+                120.0 * providers.len().max(1) as f32,
+                crate::button::ControlSize::Md,
+                theme,
+                cx.listener(move |page, ix: &usize, _, cx| {
+                    let Some(id) = ids.get(*ix).copied() else {
+                        return;
+                    };
+                    if busy || id == page.integration_provider {
+                        return;
+                    }
+                    page.integration_provider = id;
+                    page.clear_skill_editor();
+                    page.load_inventory(false, cx);
+                    cx.notify();
+                }),
+            ));
             card = card.child(picker);
         }
         let has_project = self.selected_skill_project_id(cx).is_some();
@@ -1388,10 +1379,9 @@ impl HarnessesPage {
                         !self.skill_busy,
                     )
                     .when(!self.skill_busy, |el| {
-                        el.hover(|style| widgets::ghost_hover(theme, style))
-                            .on_click(cx.listener(|page, _, _, cx| {
-                                page.create_skill(IntegrationSkillScope::Global, cx)
-                            }))
+                        el.on_click(cx.listener(|page, _, _, cx| {
+                            page.create_skill(IntegrationSkillScope::Global, cx)
+                        }))
                     })
                     .child("New global skill"),
                 )
@@ -1404,10 +1394,9 @@ impl HarnessesPage {
                             !self.skill_busy,
                         )
                         .when(!self.skill_busy, |el| {
-                            el.hover(|style| widgets::ghost_hover(theme, style))
-                                .on_click(cx.listener(|page, _, _, cx| {
-                                    page.create_skill(IntegrationSkillScope::Project, cx)
-                                }))
+                            el.on_click(cx.listener(|page, _, _, cx| {
+                                page.create_skill(IntegrationSkillScope::Project, cx)
+                            }))
                         })
                         .child("New project skill"),
                     )
@@ -1471,11 +1460,9 @@ impl HarnessesPage {
                                         )
                                         .mt(px(6.0))
                                         .when(!self.skill_busy, |button| {
-                                            button
-                                                .hover(|style| widgets::ghost_hover(theme, style))
-                                                .on_click(cx.listener(move |page, _, _, cx| {
-                                                    page.open_skill(identity.clone(), cx)
-                                                }))
+                                            button.on_click(cx.listener(move |page, _, _, cx| {
+                                                page.open_skill(identity.clone(), cx)
+                                            }))
                                         })
                                         .child("Inspect / edit"),
                                     )
@@ -1501,9 +1488,8 @@ impl HarnessesPage {
                 "LUNA edits the provider's SKILL.md in its selected global or project folder. Existing sessions may need a fresh turn to discover a change."))
             .child(skill_button(theme, "close-skill-editor", "Close skill details", !self.skill_busy)
                 .mt(px(8.0))
-                .when(!self.skill_busy, |el| el.hover(|style| widgets::ghost_hover(theme, style))
+                .when(!self.skill_busy, |el| el
                     .on_click(cx.listener(|page, _, _, cx| { page.clear_skill_editor(); cx.notify(); })))
-                .when(self.skill_busy, |el| el.opacity(0.5))
                 .child("Close"));
         if let Some(error) = &self.skill_error {
             card = card.child(widgets::error_strip(theme, error.clone()));
@@ -1606,8 +1592,7 @@ impl HarnessesPage {
                 )
                 .mt(px(8.0))
                 .when(save_enabled, |el| {
-                    el.hover(|style| widgets::ghost_hover(theme, style))
-                        .on_click(cx.listener(|page, _, _, cx| page.save_skill(cx)))
+                    el.on_click(cx.listener(|page, _, _, cx| page.save_skill(cx)))
                 })
                 .when(!save_enabled, |el| el.opacity(0.5))
                 .child(if self.skill_busy {
@@ -1645,11 +1630,10 @@ impl HarnessesPage {
                         el.bg(theme.accent_wash)
                     })
                     .when(!self.skill_busy, |el| {
-                        el.hover(|style| widgets::ghost_hover(theme, style))
-                            .on_click(cx.listener(move |page, _, _, cx| {
-                                page.skill_install_provider = provider;
-                                cx.notify();
-                            }))
+                        el.on_click(cx.listener(move |page, _, _, cx| {
+                            page.skill_install_provider = provider;
+                            cx.notify();
+                        }))
                     })
                     .child(label),
                 );
@@ -1681,11 +1665,10 @@ impl HarnessesPage {
                         el.bg(theme.accent_wash)
                     })
                     .when(!self.skill_busy, |el| {
-                        el.hover(|style| widgets::ghost_hover(theme, style))
-                            .on_click(cx.listener(move |page, _, _, cx| {
-                                page.skill_install_scope = scope;
-                                cx.notify();
-                            }))
+                        el.on_click(cx.listener(move |page, _, _, cx| {
+                            page.skill_install_scope = scope;
+                            cx.notify();
+                        }))
                     })
                     .child(label),
                 );
@@ -1703,10 +1686,7 @@ impl HarnessesPage {
                 .mt(px(8.0))
                 .when(
                     install_valid && !self.skill_busy && document.read_only_reason.is_none(),
-                    |el| {
-                        el.hover(|style| widgets::ghost_hover(theme, style))
-                            .on_click(cx.listener(|page, _, _, cx| page.install_skill(cx)))
-                    },
+                    |el| el.on_click(cx.listener(|page, _, _, cx| page.install_skill(cx))),
                 )
                 .when(
                     !install_valid || self.skill_busy || document.read_only_reason.is_some(),
@@ -1746,10 +1726,7 @@ impl HarnessesPage {
                     .mt(px(8.0))
                     .when(
                         !self.skill_busy && document.read_only_reason.is_none(),
-                        |el| {
-                            el.hover(|style| widgets::ghost_hover(theme, style))
-                                .on_click(cx.listener(|page, _, _, cx| page.remove_skill(cx)))
-                        },
+                        |el| el.on_click(cx.listener(|page, _, _, cx| page.remove_skill(cx))),
                     )
                     .when(
                         self.skill_busy || document.read_only_reason.is_some(),
@@ -1770,9 +1747,9 @@ impl HarnessesPage {
             .child(widgets::row_title(theme, "LUNA instructions"))
             .child(widgets::page_subtitle(theme,
                 "Global instructions precede project instructions. Provider-native files remain with their provider. Changes apply at the next safe turn or a new provider session."))
-            .child(widgets::ghost_action(theme).id("reload-luna-instructions")
+            .child(widgets::ghost_action("reload-luna-instructions", true, theme)
                 .accessible_button("Reload LUNA instructions", theme.accent)
-                .mt(px(8.0)).hover(|s| widgets::ghost_hover(theme, s))
+                .mt(px(8.0))
                 .on_click(cx.listener(|page, _, _, cx| { page.load_instructions(cx); cx.notify(); }))
                 .child("Reload"));
         match &self.instructions {
@@ -1787,19 +1764,21 @@ impl HarnessesPage {
                         self.global_input.clone().into_any_element(),
                     )))
                     .child(
-                        widgets::ghost_action(theme)
-                            .id("save-global-instructions")
-                            .when(!self.instruction_saving, |el| {
-                                el.accessible_button("Save global instructions", theme.accent)
-                            })
-                            .mt(px(8.0))
-                            .hover(|s| widgets::ghost_hover(theme, s))
-                            .when(!self.instruction_saving, |el| {
-                                el.on_click(
-                                    cx.listener(|page, _, _, cx| page.save_instructions(false, cx)),
-                                )
-                            })
-                            .child("Save global"),
+                        widgets::ghost_action(
+                            "save-global-instructions",
+                            !self.instruction_saving,
+                            theme,
+                        )
+                        .when(!self.instruction_saving, |el| {
+                            el.accessible_button("Save global instructions", theme.accent)
+                        })
+                        .mt(px(8.0))
+                        .when(!self.instruction_saving, |el| {
+                            el.on_click(
+                                cx.listener(|page, _, _, cx| page.save_instructions(false, cx)),
+                            )
+                        })
+                        .child("Save global"),
                     );
                 if view.project_id.is_some() {
                     card = card
@@ -1812,19 +1791,21 @@ impl HarnessesPage {
                             self.project_input.clone().into_any_element(),
                         )))
                         .child(
-                            widgets::ghost_action(theme)
-                                .id("save-project-instructions")
-                                .when(!self.instruction_saving, |el| {
-                                    el.accessible_button("Save project instructions", theme.accent)
-                                })
-                                .mt(px(8.0))
-                                .hover(|s| widgets::ghost_hover(theme, s))
-                                .when(!self.instruction_saving, |el| {
-                                    el.on_click(cx.listener(|page, _, _, cx| {
-                                        page.save_instructions(true, cx)
-                                    }))
-                                })
-                                .child("Save project"),
+                            widgets::ghost_action(
+                                "save-project-instructions",
+                                !self.instruction_saving,
+                                theme,
+                            )
+                            .when(!self.instruction_saving, |el| {
+                                el.accessible_button("Save project instructions", theme.accent)
+                            })
+                            .mt(px(8.0))
+                            .when(!self.instruction_saving, |el| {
+                                el.on_click(
+                                    cx.listener(|page, _, _, cx| page.save_instructions(true, cx)),
+                                )
+                            })
+                            .child("Save project"),
                         );
                 } else {
                     card = card.child(meta_text(
@@ -1899,28 +1880,32 @@ impl HarnessesPage {
                     },
                 ))
                 .child(
-                    widgets::ghost_action(theme)
-                        .id(if is_model {
+                    crate::button::select(
+                        if is_model {
                             "title-model"
                         } else {
                             "title-harness"
-                        })
-                        .when(interactive, |el| {
-                            el.accessible_button(title_aria.clone(), theme.accent)
-                        })
-                        .when(interactive, |el| {
-                            el.cursor_pointer()
-                                .on_click(cx.listener(move |page, _, _, cx| {
-                                    page.title_menu = if page.title_menu == Some(is_model) {
-                                        None
-                                    } else {
-                                        Some(is_model)
-                                    };
-                                    cx.notify();
-                                }))
-                        })
-                        .when(!interactive, |el| el.opacity(0.5))
-                        .child(label),
+                        },
+                        label,
+                        crate::button::ControlSize::Md,
+                        self.title_menu == Some(is_model),
+                        interactive,
+                        theme,
+                    )
+                    .min_w(px(160.0))
+                    .when(interactive, |el| {
+                        el.accessible_button(title_aria.clone(), theme.accent)
+                    })
+                    .when(interactive, |el| {
+                        el.on_click(cx.listener(move |page, _, _, cx| {
+                            page.title_menu = if page.title_menu == Some(is_model) {
+                                None
+                            } else {
+                                Some(is_model)
+                            };
+                            cx.notify();
+                        }))
+                    }),
                 );
             if self.title_menu == Some(is_model) {
                 let mut choices = vec![(
@@ -2147,18 +2132,15 @@ impl HarnessesPage {
                 "LUNA saves model lists on each device and refreshes them in the background after launch. Refresh now to check the selected device for new models without restarting.",
             ))
             .child(
-                widgets::ghost_action(theme)
-                    .id("refresh-model-cache")
+                widgets::ghost_action("refresh-model-cache", !self.model_refresh_running, theme)
                     .when(!self.model_refresh_running, |el| el.accessible_button("Refresh model cache", theme.accent))
                     .mt(px(8.0))
                     .when(!self.model_refresh_running, |element| {
                         element
-                            .hover(|style| widgets::ghost_hover(theme, style))
                             .on_click(cx.listener(|page, _, _, cx| {
                                 page.refresh_model_cache(cx);
                             }))
                     })
-                    .when(self.model_refresh_running, |element| element.opacity(0.5))
                     .child(if self.model_refresh_running {
                         "Refreshing…"
                     } else {

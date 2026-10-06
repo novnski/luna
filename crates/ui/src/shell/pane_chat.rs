@@ -184,9 +184,9 @@ fn header_control<V: 'static>(
     cx: &mut Context<V>,
 ) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
-    let hover = crate::theme::ink(0.06);
+    let id: SharedString = id.into();
     div()
-        .id(id.into())
+        .id(id.clone())
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
@@ -199,7 +199,7 @@ fn header_control<V: 'static>(
         .border_1()
         .border_color(gpui::transparent_black())
         .cursor_pointer()
-        .hover(move |style| style.bg(hover))
+        .hover_wash(id)
         .focus_visible({
             let ring = theme.focus_ring();
             move |style| crate::theme::focus_ring(style, ring)

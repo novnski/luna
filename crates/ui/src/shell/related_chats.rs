@@ -163,7 +163,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let muted = theme.text_muted;
-        let hover = crate::theme::ink(0.06);
         let back = div()
             .id(SharedString::from(format!("{id}-back")))
             .role(gpui::Role::Button)
@@ -178,7 +177,7 @@ impl Shell {
             .border_1()
             .border_color(gpui::transparent_black())
             .cursor_pointer()
-            .hover(move |style| style.bg(hover))
+            .hover_wash(format!("{id}-back"))
             .focus_visible({
                 let ring = theme.focus_ring();
                 move |style| crate::theme::focus_ring(style, ring)
@@ -213,9 +212,9 @@ impl Shell {
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
         let muted = theme.text_muted;
-        let hover = crate::theme::ink(0.06);
+        let id: SharedString = id.into();
         div()
-            .id(id.into())
+            .id(id.clone())
             .role(gpui::Role::Button)
             .aria_label(label)
             .tab_index(0)
@@ -231,7 +230,7 @@ impl Shell {
             .cursor_pointer()
             .text_size(crate::typography::ui_rems(11.5))
             .text_color(theme.text_muted)
-            .hover(move |style| style.bg(hover))
+            .hover_wash(id)
             .focus_visible({
                 let ring = theme.focus_ring();
                 move |style| crate::theme::focus_ring(style, ring)
@@ -288,8 +287,12 @@ impl Shell {
                 } else {
                     div().into_any_element()
                 };
-                let mut header = spaces::sidebar_disclosure_header(theme, label, chevron)
-                    .id(SharedString::from(format!("related-section-{key}")));
+                let mut header = spaces::sidebar_disclosure_header(
+                    SharedString::from(format!("related-section-{key}")),
+                    theme,
+                    label,
+                    chevron,
+                );
                 if section.collapsible() {
                     header = header.on_click(cx.listener(move |this, _, _, cx| {
                         if !this.related_expanded.remove(&key) {

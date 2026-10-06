@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use gpui::{AnyElement, Context, Render, SharedString, Window, div, prelude::*, px};
 use luna_proto::{ChangeRequestSummary, Chat, CheckoutChangeRequestStatus, Space};
 
+use crate::interaction::HoverFill as _;
 use crate::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,7 +134,7 @@ pub(crate) fn pull_request_badge_with_query(
     let composer = surface == ChangeRequestBadgeSurface::Composer;
 
     div()
-        .id(id)
+        .id(id.clone())
         .h(crate::typography::ui_rems(if composer {
             20.0
         } else {
@@ -146,16 +147,22 @@ pub(crate) fn pull_request_badge_with_query(
         .gap(px(if composer { 5.0 } else { 0.0 }))
         .px(px(if composer { 7.0 } else { 4.0 }))
         .rounded(px(if composer { 6.0 } else { 4.0 }))
-        .bg(color.opacity(0.08))
         .text_size(crate::typography::ui_rems(if composer {
             11.0
         } else {
             10.0
         }))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.readable_tone(color, 0.85))
         .cursor_pointer()
-        .hover(move |style| style.bg(color.opacity(0.16)).text_color(color))
+        // `tl-` keys keep their fade frames coming inside the cached
+        // transcript (see `motion::hover_fading_with_prefix`).
+        .hover_fill_fg(
+            format!("tl-pr-badge-{id}"),
+            color.opacity(0.08),
+            color.opacity(0.16),
+            theme.readable_tone(color, 0.85),
+            color,
+        )
         .on_click(move |_, _, cx| {
             cx.stop_propagation();
             cx.open_url(&url);

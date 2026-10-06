@@ -14,6 +14,7 @@ use luna_rpc::methods;
 
 use crate::AccessibleButton as _;
 use crate::composer::{ComposerInput, ComposerInputEvent};
+use crate::interaction::HoverFill as _;
 use crate::popover;
 use crate::settings::widgets;
 use crate::state::AppState;
@@ -330,13 +331,20 @@ impl Render for DevicesPage {
                         .id(("device-id", ix))
                         .font_family(theme.font_mono.clone())
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(if id_copied {
-                            theme.readable_tone(theme.success_muted, 0.9)
-                        } else {
-                            theme.readable_muted(0.5)
-                        })
                         .cursor_pointer()
-                        .hover(|s| s.text_color(theme.text_muted))
+                        .hover_fg(
+                            format!("device-id-{ix}"),
+                            if id_copied {
+                                theme.readable_tone(theme.success_muted, 0.9)
+                            } else {
+                                theme.readable_muted(0.5)
+                            },
+                            if id_copied {
+                                theme.readable_tone(theme.success_muted, 0.9)
+                            } else {
+                                theme.text_muted
+                            },
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.copy_id(copy_id.clone(), cx);
                         }))
@@ -376,23 +384,15 @@ impl Render for DevicesPage {
                         // `opacity-70 hover:opacity-100` (luna: also rises on
                         // row hover — gpui has no group-hover, so the button's
                         // own hover carries the reveal).
-                        widgets::ghost_action(&theme)
-                            .id(("device-rename", ix))
+                        widgets::ghost_action(format!("device-rename-{ix}"), true, &theme)
                             .accessible_button("Rename device", theme.accent)
-                            .opacity(0.7)
-                            .hover(|s| {
-                                s.opacity(1.0)
-                                    .bg(crate::theme::ink(0.06))
-                                    .text_color(theme.text)
-                            })
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.open_rename(rename_id.clone(), rename_name.clone(), cx);
                             }))
-                            .child(
-                                crate::icons::icon(crate::icons::PEN)
-                                    .size(px(14.0))
-                                    .text_color(theme.text_muted),
-                            )
+                            .child(crate::button::glyph(
+                                crate::icons::PEN,
+                                crate::button::ControlSize::Md,
+                            ))
                             .child(SharedString::from("Rename")),
                     )
                     .into_any_element()

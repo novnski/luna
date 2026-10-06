@@ -133,8 +133,18 @@ impl Render for ArchivedPage {
                     .rounded(px(8.0))
                     .px(px(12.0))
                     .py(px(8.0))
-                    .hover(|s| s.bg(crate::theme::ink(0.03)))
-                    .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                    .bg(crate::motion::hover_blend(
+                        &format!("archived-row-{ix}"),
+                        gpui::transparent_black(),
+                        crate::theme::fill(crate::theme::FillTier::Quaternary),
+                    ))
+                    .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
+                        crate::motion::set_hover(
+                            &format!("archived-row-{ix}"),
+                            *hovered,
+                            crate::motion::reduced_motion(cx),
+                        );
+                        window.refresh();
                         if *hovered {
                             this.hovered = Some(ix);
                         } else if this.hovered == Some(ix) {
@@ -216,37 +226,32 @@ impl Render for ArchivedPage {
                         // Hidden until the row is hovered (luna `opacity-0
                         // group-hover:opacity-100`); hover fill is the solid
                         // accent tone (`hover:bg-accent`).
-                        div()
-                            .id(("unarchive", ix))
-                            .flex_none()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(6.0))
-                            .px(px(10.0))
-                            .py(px(4.0))
-                            .rounded(px(6.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.text_muted)
-                            .opacity(if row_hovered || is_busy { 1.0 } else { 0.0 })
-                            .when(is_busy, |el| el.opacity(0.4))
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.surface_raised).text_color(theme.text))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.unarchive(chat_id.clone(), cx);
-                            }))
-                            .child(
-                                crate::icons::icon(crate::icons::ARCHIVE_UP_MINIMALISTIC)
-                                    .size(px(14.0))
-                                    .text_color(theme.text_muted),
-                            )
-                            .child(SharedString::from(if is_busy {
-                                "Unarchiving…"
-                            } else {
-                                "Unarchive"
-                            })),
+                        crate::button::button(
+                            format!("unarchive-{ix}"),
+                            crate::button::ButtonKind::Secondary,
+                            crate::button::ControlSize::Sm,
+                            !is_busy,
+                            &theme,
+                        )
+                        .opacity(if is_busy {
+                            0.45
+                        } else if row_hovered {
+                            1.0
+                        } else {
+                            0.0
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.unarchive(chat_id.clone(), cx);
+                        }))
+                        .child(crate::button::glyph(
+                            crate::icons::ARCHIVE_UP_MINIMALISTIC,
+                            crate::button::ControlSize::Sm,
+                        ))
+                        .child(SharedString::from(if is_busy {
+                            "Unarchiving…"
+                        } else {
+                            "Unarchive"
+                        })),
                     )
                     .into_any_element()
             })

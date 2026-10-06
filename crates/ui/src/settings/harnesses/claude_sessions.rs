@@ -1,7 +1,7 @@
 //! Settings → Providers advanced section: the Claude Code advanced-feature
 //! ledger and Claude's own sessions outside LUNA (read-only).
 
-use gpui::{AnyElement, Context, div, prelude::*, px};
+use gpui::{AnyElement, Context, div, prelude::*};
 
 use luna_proto::ClaudeExternalSessionsView;
 use luna_rpc::methods;
@@ -49,30 +49,14 @@ impl HarnessesPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let loading = matches!(self.claude_sessions, ExternalSessionsState::Loading);
-        let accent = theme.accent;
-        let wash = theme.surface_raised;
-        let refresh = gpui_base::Button::new("refresh-claude-sessions")
-            .role(gpui::Role::Button)
-            .accessibility_id("refresh-claude-sessions")
-            .accessibility_label("Refresh Claude sessions outside LUNA")
-            .disabled(loading)
-            .tab_index(0)
-            .tab_stop(!loading)
-            .flex_none()
-            .px(px(10.0))
-            .py(px(6.0))
-            .rounded(px(8.0))
-            .text_size(crate::typography::ui_rems(12.0))
-            .text_color(theme.text_muted)
-            .when(!loading, |button| {
-                button
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(wash))
-                    .focus_visible(move |style| style.bg(accent.opacity(0.18)).text_color(accent))
-            })
-            .child(if loading { "Checking…" } else { "Refresh" })
-            .on_click(cx.listener(|page, _, _, cx| page.load_claude_sessions(cx)))
-            .into_any_element();
+        let refresh =
+            crate::settings::widgets::ghost_action("refresh-claude-sessions", !loading, theme)
+                .aria_label("Refresh Claude sessions outside LUNA")
+                .child(if loading { "Checking…" } else { "Refresh" })
+                .when(!loading, |button| {
+                    button.on_click(cx.listener(|page, _, _, cx| page.load_claude_sessions(cx)))
+                })
+                .into_any_element();
         div()
             .flex()
             .flex_col()

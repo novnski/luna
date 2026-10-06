@@ -16,6 +16,7 @@ use luna_rpc::methods;
 
 use super::{SettingsSection, Shell};
 use crate::icons::{self, icon};
+use crate::interaction::HoverFill;
 use crate::theme::Theme;
 
 /// CC-06 live provider sessions section.
@@ -2875,7 +2876,11 @@ impl Shell {
                     } else {
                         palette.idle_rule
                     })
-                    .hover(|el| el.bg(palette.hover))
+                    .hover_fill(
+                        format!("usage-compact-provider-{provider:?}"),
+                        palette.hover.opacity(0.0),
+                        palette.hover,
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.usage_provider_filter = Some(provider);
                         cx.notify();
@@ -3015,7 +3020,11 @@ impl Shell {
                             .items_center()
                             .justify_center()
                             .cursor_pointer()
-                            .hover(|el| el.bg(palette.hover))
+                            .hover_fill(
+                                "usage-card-refresh",
+                                palette.hover.opacity(0.0),
+                                palette.hover,
+                            )
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_usage(cx)))
                             .on_key_down(crate::swallow_activation_key)
                             .child(icon(icons::REFRESH).size(px(15.0)).text_color(
@@ -3083,14 +3092,19 @@ impl Shell {
             .rounded(px(crate::theme::radius::MD))
             // Same footer recipe as its neighbours (audit SH-11); an open
             // card shows the selected wash.
-            .when(open, |el| el.bg(crate::theme::glass_selected_bg()))
-            .hover(move |el| {
-                el.bg(if open {
+            .hover_fill(
+                "usage-sidebar-action",
+                if open {
+                    crate::theme::glass_selected_bg()
+                } else {
+                    gpui::transparent_black()
+                },
+                if open {
                     crate::theme::glass_selected_bg()
                 } else {
                     crate::theme::sidebar_hover_bg()
-                })
-            })
+                },
+            )
             .flex()
             .items_center()
             .justify_center()

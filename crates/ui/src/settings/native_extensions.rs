@@ -46,20 +46,11 @@ fn mode_label(mode: PermissionMode) -> &'static str {
 
 fn action(
     theme: &Theme,
-    id: impl Into<gpui::ElementId>,
+    id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     enabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
-    let accent = theme.accent;
-    widgets::ghost_action(theme)
-        .id(id.into())
-        .role(gpui::Role::Button)
-        .aria_label(label.into())
-        .when(enabled, |el| {
-            el.tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, accent))
-        })
-        .when(!enabled, |el| el.cursor_default())
+    widgets::ghost_action(id, enabled, theme).aria_label(label.into())
 }
 
 fn heading(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
@@ -189,39 +180,33 @@ impl NativeExtensionsPanel {
             .flex_wrap()
             .items_center()
             .gap(px(6.0));
-        for (id, label, mode) in [
-            ("native-ext-mode-task", "Task mode", None),
-            ("native-ext-mode-ask", "Ask", Some(PermissionMode::Ask)),
-            ("native-ext-mode-auto", "Auto", Some(PermissionMode::Auto)),
-            (
-                "native-ext-mode-full",
-                "Full access",
-                Some(PermissionMode::Full),
-            ),
-        ] {
-            let selected = self.mode == mode;
-            row = row.child(
-                action(
-                    theme,
-                    id,
-                    format!("Show what a {label} launch loads"),
-                    !busy,
-                )
-                .aria_toggled(if selected {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .when(selected, |el| {
-                    el.bg(theme.accent_wash).text_color(theme.text)
-                })
-                .when(!busy, |el| {
-                    el.hover(|style| widgets::ghost_hover(theme, style))
-                        .on_click(cx.listener(move |panel, _, _, cx| panel.set_mode(mode, cx)))
-                })
-                .child(label),
-            );
-        }
+        let modes = [
+            ("task", "Task mode", None),
+            ("ask", "Ask", Some(PermissionMode::Ask)),
+            ("auto", "Auto", Some(PermissionMode::Auto)),
+            ("full", "Full access", Some(PermissionMode::Full)),
+        ];
+        let selected = modes
+            .iter()
+            .position(|(_, _, mode)| *mode == self.mode)
+            .unwrap_or(0);
+        // One segmented control for the launch mode (audit DS-16).
+        row = row.child(crate::button::segmented(
+            "native-ext-mode",
+            modes
+                .iter()
+                .map(|(key, label, _)| crate::button::Segment::new(*key, *label))
+                .collect(),
+            selected,
+            360.0,
+            crate::button::ControlSize::Md,
+            theme,
+            cx.listener(move |panel, ix: &usize, _, cx| {
+                if !busy && let Some((_, _, mode)) = modes.get(*ix) {
+                    panel.set_mode(*mode, cx);
+                }
+            }),
+        ));
         row.child(
             action(
                 theme,
@@ -230,8 +215,7 @@ impl NativeExtensionsPanel {
                 !busy,
             )
             .when(!busy, |el| {
-                el.hover(|style| widgets::ghost_hover(theme, style))
-                    .on_click(cx.listener(|panel, _, _, cx| panel.load(true, cx)))
+                el.on_click(cx.listener(|panel, _, _, cx| panel.load(true, cx)))
             })
             .child(if busy {
                 "Checking…"

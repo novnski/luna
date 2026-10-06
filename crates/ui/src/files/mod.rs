@@ -12,6 +12,7 @@ use gpui::{
 };
 use luna_proto::ListWorkspaceDirectoryRequest;
 
+use crate::interaction::HoverFill as _;
 use crate::{
     composer::{ComposerInput, ComposerInputEvent},
     state::AppState,
@@ -59,7 +60,7 @@ pub(super) fn toolbar_button(id: &'static str, label: &'static str) -> gpui::Sta
         .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
             window.prevent_default()
         })
-        .hover(|style| style.bg(crate::theme::wash(0.14)))
+        .hover_wash(id)
         .tooltip(crate::popover::text_tooltip(label))
         .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
 }
@@ -221,8 +222,11 @@ impl Render for FilesSurface {
                 .rounded(px(7.0))
                 .border_1()
                 .border_color(theme.border)
-                .bg(crate::theme::wash(0.04))
-                .hover(|style| style.bg(crate::theme::wash(0.09)))
+                .hover_fill(
+                    "files-retry-root",
+                    crate::theme::fill(crate::theme::FillTier::Quaternary),
+                    crate::theme::fill(crate::theme::FillTier::Tertiary),
+                )
                 .cursor_pointer()
                 .flex()
                 .items_center()
@@ -309,8 +313,13 @@ impl Render for FilesSurface {
                                 .cursor_pointer()
                                 .role(gpui::Role::Button)
                                 .aria_label("Refresh workspace files now")
-                                .text_color(theme.text_muted)
-                                .hover(|style| style.bg(crate::theme::wash(0.07)))
+                                .hover_fill_fg(
+                                    "files-watch-refresh-now",
+                                    gpui::transparent_black(),
+                                    crate::theme::fill(crate::theme::FillTier::Tertiary),
+                                    theme.text_muted,
+                                    theme.text,
+                                )
                                 .child("Refresh now")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.refresh(cx);

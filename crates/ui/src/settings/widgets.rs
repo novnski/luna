@@ -261,14 +261,20 @@ pub fn option_card(
         .gap(px(8.0))
         .cursor_pointer()
         .child(
-            div()
-                .h(px(OPTION_CARD_HEIGHT))
-                .w_full()
-                .rounded(px(OPTION_CARD_RADIUS))
-                .overflow_hidden()
-                .border_1()
-                .border_color(if selected { theme.accent } else { theme.border })
-                .child(preview),
+            crate::button::selection_ring(
+                selected,
+                OPTION_CARD_RADIUS,
+                theme,
+                div()
+                    .h(px(OPTION_CARD_HEIGHT))
+                    .w_full()
+                    .rounded(px(OPTION_CARD_RADIUS))
+                    .overflow_hidden()
+                    .border_1()
+                    .border_color(theme.border)
+                    .child(preview),
+            )
+            .w_full(),
         )
         .child(
             div()
@@ -281,8 +287,9 @@ pub fn option_card(
                 } else {
                     gpui::FontWeight::NORMAL
                 })
+                // Accent is reserved for the ring (audit DS-16).
                 .text_color(if selected {
-                    theme.accent
+                    theme.text
                 } else {
                     theme.text_muted
                 })
@@ -306,16 +313,16 @@ pub fn section_card(theme: &Theme) -> gpui::Div {
         .flex_col()
 }
 
-/// One card row: `border-t border-border px-5 py-3.5 first:border-t-0` with the
-/// quiet hover wash.
+/// One card row: `border-t border-border px-5 py-3.5 first:border-t-0`.
 pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
     // One compact row anatomy (audit DS-08): ~52 pt with a description,
-    // 16 pt sides, 12 pt between tile, text and control.
+    // 16 pt sides, 12 pt between tile, text and control. The row itself has
+    // no hover: it isn't a control, and a wash on it implied a click that
+    // does nothing. Its switches and buttons carry the feedback (audit DS-05).
     div()
         .px(px(16.0))
         .py(px(10.0))
         .when(!first, |el| el.border_t_1().border_color(theme.border))
-        .hover(|s| s.bg(ink(0.03)))
         .flex()
         .flex_row()
         .items_center()
@@ -421,12 +428,15 @@ pub fn badge_active(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div 
         .child(label.into())
 }
 
-/// Display-only toggle switch (luna branch-picker.tsx `Toggle`): an 18×32
-/// pill whose knob slides right and track flips white when on. State is owned
-/// by the parent row — the caller adds `.id(..)` and `.on_click(..)`.
-pub fn toggle_switch(theme: &Theme, on: bool) -> gpui::Div {
+/// Display-only toggle switch: a pill whose knob slides right and whose track
+/// fills with the accent when on. State is owned by the parent row — the
+/// caller adds `.id(..)` and `.on_click(..)`. `key` names this switch for its
+/// motion and must be unique on screen (use the control's id).
+pub fn toggle_switch(theme: &Theme, on: bool, key: &str) -> gpui::Div {
     // macOS-style switch (audit DS-06): the accent track when on and a white
-    // knob with a soft shadow, in macOS proportions.
+    // knob with a soft shadow, in macOS proportions. The knob travels and the
+    // track crossfades only when the value flips; a page that mounts with the
+    // switch on shows it on (see `motion::follow`).
     const W: f32 = 34.0;
     const H: f32 = 20.0;
     const KNOB: f32 = 16.0;
@@ -435,18 +445,23 @@ pub fn toggle_switch(theme: &Theme, on: bool) -> gpui::Div {
     } else {
         ink(0.18)
     };
+    let t = crate::motion::follow(
+        &format!("switch-{key}"),
+        if on { 1.0 } else { 0.0 },
+        crate::motion::DISCLOSURE,
+    );
     div()
         .flex_none()
         .w(px(W))
         .h(px(H))
         .rounded_full()
-        .bg(if on { theme.accent_strong } else { track_off })
+        .bg(crate::motion::mix(track_off, theme.accent_strong, t))
         .relative()
         .child(
             div()
                 .absolute()
                 .top(px((H - KNOB) / 2.0))
-                .left(px(if on { W - KNOB - 2.0 } else { 2.0 }))
+                .left(px(crate::motion::lerp(2.0, W - KNOB - 2.0, t)))
                 .size(px(KNOB))
                 .rounded_full()
                 .bg(gpui::white())
@@ -468,6 +483,8 @@ pub fn switch_control<V: 'static>(
     toggle: impl Fn(&mut V, &mut Context<V>) + 'static,
 ) -> gpui::Stateful<gpui::Div> {
     let ring = theme.focus_ring();
+    let id: gpui::ElementId = id.into();
+    let key = id.to_string();
     div()
         .id(id)
         .role(gpui::Role::Switch)
@@ -487,31 +504,24 @@ pub fn switch_control<V: 'static>(
         .cursor_pointer()
         .on_click(cx.listener(move |view, _, _, cx| toggle(view, cx)))
         .on_key_down(crate::swallow_activation_key)
-        .child(toggle_switch(theme, on))
+        .child(toggle_switch(theme, on, &key))
 }
 
-/// A small quiet ghost action (`rounded-lg px-2.5 py-1.5 text-[12px]
-/// text-muted-foreground`). Caller adds id + click + leading icon child AND
-/// its own `.hover(..)` — gpui panics on a second hover, and the pages vary
-/// it (reveal opacity, 4% vs 6% washes).
-pub fn ghost_action(theme: &Theme) -> gpui::Div {
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(6.0))
-        .rounded(px(8.0))
-        .px(px(10.0))
-        .py(px(6.0))
-        .text_size(crate::typography::ui_rems(12.0))
-        .text_color(theme.text_muted)
-        .cursor_pointer()
-}
-
-/// The default ghost-action hover wash (`hover:bg-white/[0.06]
-/// hover:text-foreground`).
-pub fn ghost_hover(theme: &Theme, s: gpui::StyleRefinement) -> gpui::StyleRefinement {
-    s.bg(ink(0.06)).text_color(theme.text)
+/// The Settings control-column action: a medium ghost button from the shared
+/// kit (audit DS-02), with its faint resting plate, eased hover, focus ring
+/// and disabled look. The caller adds the label, accessible name and click.
+pub fn ghost_action(
+    id: impl Into<SharedString>,
+    enabled: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    crate::button::button(
+        id,
+        crate::button::ButtonKind::Ghost,
+        crate::button::ControlSize::Md,
+        enabled,
+        theme,
+    )
 }
 
 /// The dismissible red error strip (`flex items-start gap-2 rounded-xl border

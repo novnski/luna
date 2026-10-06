@@ -10,10 +10,10 @@ use luna_rpc::methods;
 
 use super::widgets;
 use crate::AccessibleButton as _;
+use crate::icons;
 use crate::popover::{self, Loadable};
 use crate::state::AppState;
 use crate::theme::Theme;
-use crate::{icons, theme};
 
 pub struct BackupsPage {
     state: Entity<AppState>,
@@ -368,32 +368,20 @@ impl Render for BackupsPage {
                                             .child(widgets::meta_line(&theme, vec![div().child(SharedString::from(last_line)).into_any_element()]))))
                             )
                             .child(div().mt(px(16.0)).flex().flex_row().flex_wrap().gap(px(8.0))
-                                .child(widgets::ghost_action(&theme)
-                                    .id("backup-now")
+                                .child(widgets::ghost_action("backup-now", ready, &theme)
                                     .when(ready, |button| button.accessible_button("Back up now", theme.accent))
-                                    .opacity(if ready { 1.0 } else { 0.45 })
-                                    .hover(|s| s.bg(theme::wash(0.06)))
                                     .child("Back up now")
                                     .when(ready, |button| button.on_click(cx.listener(|page, _, _, cx| page.run_backup(false, cx)))))
-                                .child(widgets::ghost_action(&theme)
-                                    .id("backup-export")
+                                .child(widgets::ghost_action("backup-export", ready, &theme)
                                     .when(ready, |button| button.accessible_button("Export to backup folder", theme.accent))
-                                    .opacity(if ready { 1.0 } else { 0.45 })
-                                    .hover(|s| s.bg(theme::wash(0.06)))
                                     .child("Export to backup folder")
                                     .when(ready, |button| button.on_click(cx.listener(|page, _, _, cx| page.run_backup(true, cx)))))
-                                .child(widgets::ghost_action(&theme)
-                                    .id("backup-inspect")
+                                .child(widgets::ghost_action("backup-inspect", can_inspect, &theme)
                                     .when(can_inspect, |button| button.accessible_button("Inspect last backup", theme.accent))
-                                    .opacity(if can_inspect { 1.0 } else { 0.45 })
-                                    .hover(|s| s.bg(theme::wash(0.06)))
                                     .child("Inspect last backup")
                                     .when(can_inspect, |button| button.on_click(cx.listener(|page, _, _, cx| page.inspect_latest(cx)))))
-                                .child(widgets::ghost_action(&theme)
-                                    .id("backup-stage")
+                                .child(widgets::ghost_action("backup-stage", can_stage, &theme)
                                     .when(can_stage, |button| button.accessible_button(if has_stage { "Verify staged copy" } else { "Stage restore" }, theme.accent))
-                                    .opacity(if can_stage { 1.0 } else { 0.45 })
-                                    .hover(|s| s.bg(theme::wash(0.06)))
                                     .child(if has_stage { "Verify staged copy" } else { "Stage restore" })
                                     .when(can_stage, |button| button.on_click(cx.listener(|page, _, _, cx| page.stage_latest(cx)))))
                             )

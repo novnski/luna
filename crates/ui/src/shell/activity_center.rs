@@ -727,13 +727,16 @@ impl Shell {
                 let ring = theme.focus_ring();
                 move |style| crate::theme::focus_ring(style, ring)
             })
-            .bg(if active {
-                theme.glass_hover()
-            } else {
-                theme.glass_hover().opacity(0.0)
-            })
             .cursor_pointer()
-            .hover(|style| style.bg(theme.glass_hover()))
+            .hover_fill(
+                "sidebar-activity-action",
+                if active {
+                    theme.glass_hover()
+                } else {
+                    theme.glass_hover().opacity(0.0)
+                },
+                theme.glass_hover(),
+            )
             .tooltip(move |_, cx| {
                 cx.new(|_| SurfaceTabTooltip {
                     text: (if active {

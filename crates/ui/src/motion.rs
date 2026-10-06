@@ -825,7 +825,25 @@ pub fn hover_listener(
 /// Frame-drive hook: call ONCE per window frame (the shell render tail); true
 /// while any hover fade is mid-flight and frames must keep coming.
 pub fn hover_fades_active() -> bool {
-    HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(Instant::now()))
+    let now = Instant::now();
+    let hovers = HOVER_FADES.with(|fades| fades.borrow_mut().tick_at(now));
+    let values = FOLLOWERS.with(|followers| followers.borrow_mut().tick_at(now));
+    hovers | values
+}
+
+/// True while any hover fade whose key starts with `prefix` is mid-flight.
+/// A cached view (the transcript) calls this from its own render to keep its
+/// frames coming, since the shell's frame requests don't reach inside it.
+pub fn hover_fading_with_prefix(prefix: &str) -> bool {
+    let now = Instant::now();
+    HOVER_FADES.with(|fades| {
+        let fades = fades.borrow();
+        let duration = HoverFades::duration();
+        fades
+            .entries
+            .iter()
+            .any(|(key, entry)| key.starts_with(prefix) && !entry.settled(now, duration))
+    })
 }
 
 /// Blend two colors by `t` the way the browser transitions them: component
@@ -856,6 +874,136 @@ pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
 /// The standard hover blend: rest → hover color at `key`'s current progress.
 pub fn hover_blend(key: &str, rest: Hsla, hover: Hsla) -> Hsla {
     mix(rest, hover, hover_t(key))
+}
+
+// ---------------------------------------------------------------------------
+// Value followers (switch knobs, segmented thumbs)
+// ---------------------------------------------------------------------------
+//
+// A control whose resting value changes (a switch turning on, a segmented
+// choice moving) eases from where it was to where it now is. The first time a
+// key is seen it settles immediately, so mounting a page never replays the
+// motion — the failure `with_animation` has on remount. Same liveness rules as
+// the hover store: stamped on every read, pruned after a full frame unread,
+// ticked by [`hover_fades_active`].
+
+#[derive(Debug, Clone, Copy)]
+struct FollowEntry {
+    origin: f32,
+    target: f32,
+    started: Instant,
+    duration: Duration,
+    curve: CubicBezier,
+    seen: u64,
+}
+
+impl FollowEntry {
+    fn value(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.started);
+        if self.duration.is_zero() || elapsed >= self.duration {
+            return self.target;
+        }
+        let raw = elapsed.as_secs_f32() / self.duration.as_secs_f32();
+        lerp(self.origin, self.target, self.curve.eval(raw))
+    }
+
+    fn settled(&self, now: Instant) -> bool {
+        self.origin == self.target || now.saturating_duration_since(self.started) >= self.duration
+    }
+}
+
+/// Per-key value store behind [`follow`]. Pure core (explicit `now`).
+#[derive(Default)]
+pub struct Followers {
+    entries: HashMap<String, FollowEntry>,
+    frame: u64,
+}
+
+impl Followers {
+    /// The eased value for `key` heading to `target` under `spec`. A new key
+    /// settles at `target`; a changed target starts from the current value.
+    pub fn follow_at(
+        &mut self,
+        key: &str,
+        target: f32,
+        spec: MotionSpec,
+        reduced: bool,
+        now: Instant,
+    ) -> f32 {
+        let frame = self.frame;
+        let duration = spec.total().mul_f32(speed_scale());
+        match self.entries.get_mut(key) {
+            Some(entry) => {
+                if entry.target != target {
+                    let current = entry.value(now);
+                    *entry = FollowEntry {
+                        origin: if reduced { target } else { current },
+                        target,
+                        started: now,
+                        duration,
+                        curve: spec.curve,
+                        seen: frame,
+                    };
+                }
+                entry.seen = frame;
+                if reduced { target } else { entry.value(now) }
+            }
+            None => {
+                self.entries.insert(
+                    key.to_string(),
+                    FollowEntry {
+                        origin: target,
+                        target,
+                        started: now,
+                        duration,
+                        curve: spec.curve,
+                        seen: frame,
+                    },
+                );
+                target
+            }
+        }
+    }
+
+    /// Once-per-frame bookkeeping: drop entries unread for a full frame and
+    /// report whether any value is still moving.
+    pub fn tick_at(&mut self, now: Instant) -> bool {
+        self.frame += 1;
+        let frame = self.frame;
+        let mut active = false;
+        self.entries.retain(|_, entry| {
+            if entry.seen + 1 < frame {
+                return false;
+            }
+            if !entry.settled(now) {
+                active = true;
+            }
+            true
+        });
+        active
+    }
+}
+
+thread_local! {
+    static FOLLOWERS: RefCell<Followers> = RefCell::new(Followers::default());
+    /// The window's reduce-motion reading, refreshed by the frame tick so
+    /// context-free builders can honour it.
+    static FRAME_REDUCED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The eased value of `key` heading to `target` (see [`Followers`]).
+pub fn follow(key: &str, target: f32, spec: MotionSpec) -> f32 {
+    let reduced = FRAME_REDUCED.with(|r| r.get());
+    FOLLOWERS.with(|f| {
+        f.borrow_mut()
+            .follow_at(key, target, spec, reduced, Instant::now())
+    })
+}
+
+/// Record the window's reduce-motion setting for [`follow`]; the shell's
+/// render tail calls this once per frame.
+pub fn note_frame_reduced(reduced: bool) {
+    FRAME_REDUCED.with(|r| r.set(reduced));
 }
 
 // ---------------------------------------------------------------------------

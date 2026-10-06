@@ -36,6 +36,7 @@ use crate::changes::{Changes, ChangesEvent};
 use crate::composer::{Composer, ComposerEvent, ComposerInput, ComposerInputEvent};
 use crate::files::{FilesCloseDisposition, FilesEvent, FilesSurface, WorkspacePathDrag};
 use crate::icons::{self, icon};
+use crate::interaction::HoverFill;
 use crate::loaders;
 use crate::motion::{self, AnimationExt as _, MotionSpec, RESIZE, SPLASH_OUT, TAB_SLIDE};
 use crate::popover::{self, Loadable};
@@ -8458,9 +8459,14 @@ impl Shell {
                     .px(px(Theme::SPACE_SM))
                     .py(px(6.0))
                     .text_size(crate::typography::ui_rems(13.0))
-                    .text_color(theme.text_muted)
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
+                    .hover_fill_fg(
+                        "settings-account-action",
+                        gpui::transparent_black(),
+                        theme.glass_hover(),
+                        theme.text_muted,
+                        theme.text,
+                    )
                     .on_click(
                         cx.listener(move |this, _, _, cx| this.activate_account_action(action, cx)),
                     )
@@ -8559,20 +8565,30 @@ impl Shell {
                                                 .py(px(6.0))
                                                 .text_size(crate::typography::ui_rems(13.0))
                                                 .when(selected, |el| {
-                                                    // Same tokens as the main sidebar's session
-                                                    // rows — the two sidebars must feel alike.
-                                                    el.bg(crate::theme::glass_selected_bg())
-                                                        .font_weight(gpui::FontWeight::MEDIUM)
-                                                })
-                                                .text_color(if selected {
-                                                    theme.text
-                                                } else {
-                                                    theme.text_muted
+                                                    el.font_weight(gpui::FontWeight::MEDIUM)
                                                 })
                                                 .cursor_pointer()
-                                                .hover(|s| {
-                                                    s.bg(theme.glass_hover()).text_color(theme.text)
-                                                })
+                                                // Same tokens as the main sidebar's session
+                                                // rows — the two sidebars must feel alike.
+                                                .hover_fill_fg(
+                                                    format!("settings-nav-{}", item.label()),
+                                                    if selected {
+                                                        crate::theme::glass_selected_bg()
+                                                    } else {
+                                                        gpui::transparent_black()
+                                                    },
+                                                    if selected {
+                                                        crate::theme::glass_selected_bg()
+                                                    } else {
+                                                        theme.glass_hover()
+                                                    },
+                                                    if selected {
+                                                        theme.text
+                                                    } else {
+                                                        theme.text_muted
+                                                    },
+                                                    theme.text,
+                                                )
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.open_settings(item, cx)
                                                 }))
@@ -8620,9 +8636,14 @@ impl Shell {
                             .px(px(Theme::SPACE_SM))
                             .py(px(6.0))
                             .text_size(crate::typography::ui_rems(13.0))
-                            .text_color(theme.text_muted)
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
+                            .hover_fill_fg(
+                                "settings-back",
+                                gpui::transparent_black(),
+                                theme.glass_hover(),
+                                theme.text_muted,
+                                theme.text,
+                            )
                             .on_click(cx.listener(|this, _, _, cx| this.close_settings(cx)))
                             .on_key_down(crate::swallow_activation_key)
                             .child(
@@ -8715,7 +8736,7 @@ impl Shell {
                     .justify_center()
                     .rounded(px(4.0))
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.glass_hover()))
+                    .hover_wash(format!("{row_id}-pin"))
                     .tooltip(move |_, cx| {
                         cx.new(|_| SurfaceTabTooltip {
                             text: (if pinned { "Unpin task" } else { "Pin task" }).into(),
@@ -8817,7 +8838,7 @@ impl Shell {
                             .justify_center()
                             .rounded(px(4.0))
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.glass_hover()))
+                            .hover_wash(format!("{row_id}-open-tab"))
                             .tooltip(move |_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
                                     text: "Open tab".into(),
@@ -8855,7 +8876,7 @@ impl Shell {
                             .justify_center()
                             .rounded(px(4.0))
                             .cursor_pointer()
-                            .hover(|s| s.bg(theme.glass_hover()))
+                            .hover_wash(format!("{row_id}-settle"))
                             .tooltip(move |_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
                                     text: settle_label.into(),
@@ -8894,7 +8915,7 @@ impl Shell {
                         .justify_center()
                         .rounded(px(4.0))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.glass_hover()))
+                        .hover_wash(format!("{row_id}-archive"))
                         .tooltip(move |_, cx| {
                             cx.new(|_| SurfaceTabTooltip {
                                 text: (if archived {
@@ -9040,12 +9061,15 @@ impl Shell {
                 .rounded(px(4.0))
                 .border_1()
                 .border_color(gpui::transparent_black())
-                .bg(tone.opacity(0.08))
+                .hover_fill(
+                    format!("{row_id}-child-chats"),
+                    tone.opacity(0.08),
+                    tone.opacity(0.16),
+                )
                 .text_size(crate::typography::ui_rems(11.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.readable_tone(tone, 0.85))
                 .cursor_pointer()
-                .hover(move |s| s.bg(tone.opacity(0.16)))
                 .focus_visible({
                     let ring = theme.focus_ring();
                     move |s| crate::theme::focus_ring(s, ring)
@@ -9883,7 +9907,7 @@ impl Shell {
                             .size(px(SIDEBAR_FOOTER_BUTTON))
                             .rounded(px(crate::theme::radius::MD))
                             .cursor_pointer()
-                            .hover(|el| el.bg(crate::theme::sidebar_hover_bg()))
+                            .hover_wash("sidebar-settings-action")
                             .tooltip(|_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
                                     text: "Open settings".into(),
@@ -9912,7 +9936,7 @@ impl Shell {
                             .size(px(SIDEBAR_FOOTER_BUTTON))
                             .rounded(px(crate::theme::radius::MD))
                             .cursor_pointer()
-                            .hover(|el| el.bg(crate::theme::sidebar_hover_bg()))
+                            .hover_wash("sidebar-devices-action")
                             .tooltip(|_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
                                     text: "Open devices".into(),
@@ -9978,9 +10002,12 @@ impl Shell {
                 .rounded(px(12.0))
                 .border_1()
                 .border_color(theme.border_strong)
-                .bg(theme.card_glass_bg())
                 .cursor_pointer()
-                .hover(|el| el.bg(theme.glass_hover()))
+                .hover_fill(
+                    "sidebar-provider-update",
+                    theme.card_glass_bg(),
+                    theme.glass_hover(),
+                )
                 .flex()
                 .items_center()
                 .justify_center()
@@ -10343,7 +10370,7 @@ impl Shell {
         if clickable {
             strip = strip
                 .cursor_pointer()
-                .hover(move |s| s.bg(chip_bg_hover))
+                .hover_fill("update-strip", chip_bg, chip_bg_hover)
                 .on_click(cx.listener(move |this, _, _, cx| this.on_update_strip_click(cx)));
         }
         Some(strip.into_any_element())
@@ -12922,7 +12949,7 @@ impl Shell {
                     .items_center()
                     .justify_center()
                     .cursor_pointer()
-                    .hover(|style| style.bg(crate::theme::ink(0.08)))
+                    .hover_wash("toast-dismiss")
                     .focus_visible(move |style| crate::theme::focus_ring(style, ring))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this
@@ -13432,13 +13459,16 @@ impl Shell {
                 .h(px(44.0))
                 .px(px(14.0))
                 .rounded(px(crate::theme::radius::LG))
-                .bg(crate::theme::wash(0.05))
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(px(10.0))
                 .cursor_pointer()
-                .hover(move |s| s.bg(crate::theme::wash(0.09)))
+                .hover_fill(
+                    id,
+                    crate::theme::fill(crate::theme::FillTier::Quaternary),
+                    crate::theme::fill(crate::theme::FillTier::Tertiary),
+                )
                 .child(icon(icon_path).size(px(16.0)).flex_none().text_color(muted))
                 .child(
                     div()
@@ -13840,10 +13870,10 @@ impl Shell {
                 .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                     window.prevent_default()
                 })
-                .when(is_active, |el| el.bg(crate::theme::wash(0.10)))
-                .when(!is_active, |el| {
-                    el.hover(|s| s.bg(crate::theme::wash(0.06)))
+                .when(is_active, |el| {
+                    el.bg(crate::theme::fill(crate::theme::FillTier::Secondary))
                 })
+                .when(!is_active, |el| el.hover_wash(group.clone()))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     cx.stop_propagation();
                     this.set_right_active(surface, cx);
@@ -13881,7 +13911,11 @@ impl Shell {
                         .size(px(18.0))
                         .rounded(px(4.0))
                         .relative()
-                        .hover(|s| s.bg(crate::theme::wash(0.12)))
+                        .hover_fill(
+                            format!("right-surface-close-{ix}"),
+                            gpui::transparent_black(),
+                            crate::theme::fill(crate::theme::FillTier::Secondary),
+                        )
                         // The tab owns a drag payload. Claim the close press
                         // before it reaches that parent or GPUI starts a tab
                         // drag instead of delivering the close click.
@@ -14291,7 +14325,7 @@ impl Shell {
                         .text_size(crate::typography::ui_rems(13.0))
                         .text_color(theme.text)
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.glass_hover()))
+                        .hover_wash("retry-engine")
                         .on_click(cx.listener(|this, _, _, cx| this.retry_engine(cx)))
                         .child(SharedString::from("Retry")),
                 )
@@ -14350,7 +14384,7 @@ impl Shell {
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.on_solid)
                         .cursor_pointer()
-                        .hover(|s| s.opacity(0.9))
+                        .hover_opacity("sign-in", 1.0, 0.9)
                         .on_click(cx.listener(|this, _, _, cx| this.start_sign_in(cx)))
                         .child(SharedString::from("Log in")),
                 )
@@ -14428,7 +14462,7 @@ impl Shell {
                                 .border_color(theme.border)
                                 .text_color(theme.text)
                                 .cursor_pointer()
-                                .hover(|s| s.bg(theme.glass_hover()))
+                                .hover_wash("orgs-retry")
                                 .on_click(cx.listener(|this, _, _, cx| this.load_orgs(cx)))
                                 .child(SharedString::from("Retry")),
                         ),
@@ -14459,12 +14493,11 @@ impl Shell {
                                 .rounded(px(8.0))
                                 .border_1()
                                 .border_color(theme.border)
-                                .bg(theme.bg)
+                                .hover_fill(format!("org-row-{ix}"), theme.bg, theme.glass_hover())
                                 .text_size(crate::typography::ui_rems(13.0))
                                 .text_color(theme.text)
                                 .when(submitting, |el| el.opacity(0.5))
                                 .cursor_pointer()
-                                .hover(|s| s.bg(crate::theme::wash(0.11)))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.select_org(org_id.clone(), cx);
                                 }))
@@ -14553,9 +14586,12 @@ impl Shell {
                             .text_size(crate::typography::ui_rems(14.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.on_solid)
-                            .when(submitting, |el| el.opacity(0.5))
                             .cursor_pointer()
-                            .hover(|s| s.opacity(0.9))
+                            .hover_opacity(
+                                "create-org",
+                                if submitting { 0.5 } else { 1.0 },
+                                if submitting { 0.5 } else { 0.9 },
+                            )
                             .on_click(cx.listener(|this, _, _, cx| this.create_org(cx)))
                             .child(SharedString::from(if submitting {
                                 "Creating…"
@@ -14580,9 +14616,8 @@ impl Shell {
                     div()
                         .id("org-signout")
                         .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.readable_muted(0.6))
                         .cursor_pointer()
-                        .hover(|s| s.text_color(theme.text))
+                        .hover_fg("org-signout", theme.readable_muted(0.6), theme.text)
                         .on_click(cx.listener(|this, _, _, cx| this.cancel_auth_setup(cx)))
                         .child(SharedString::from(if local_setup {
                             "Cancel sync setup"
@@ -14797,8 +14832,13 @@ fn windows_caption_button(
         .items_center()
         .justify_center()
         .text_size(crate::typography::ui_rems(11.0))
-        .text_color(theme.text)
-        .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
+        .hover_fill_fg(
+            id,
+            gpui::transparent_black(),
+            hover_bg,
+            theme.text,
+            hover_fg,
+        )
         .active(move |style| style.bg(active_bg).text_color(active_fg))
         .occlude()
         .window_control_area(area)
@@ -14836,7 +14876,7 @@ fn linux_caption_button(
         .justify_center()
         .rounded(px(6.0))
         .cursor_pointer()
-        .hover(move |style| style.bg(hover_bg))
+        .hover_fill(id, gpui::transparent_black(), hover_bg)
         .occlude()
         .on_mouse_down(MouseButton::Left, |_, window, _| window.prevent_default())
         .on_click(move |event, window, cx| {
@@ -15604,6 +15644,7 @@ impl Render for Shell {
         // scheduling `with_animation` would have requested). Hover color fades
         // ride the same clock; their once-per-frame tick lives here (this is
         // the window's root render — it runs exactly once per frame).
+        motion::note_frame_reduced(motion::reduced_motion(cx));
         if self.motion_active.get() | motion::hover_fades_active() {
             crate::perf_counters::count("frame.request", "shell#3", 1, 0);
             window.request_animation_frame();

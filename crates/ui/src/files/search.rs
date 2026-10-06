@@ -15,6 +15,7 @@ use super::{
     FilesSurface, WorkspacePathDrag, client::WorkspaceFilesClient, model::parent_path,
     workspace_path_drag_ghost,
 };
+use crate::interaction::HoverFill as _;
 use crate::{
     file_icons::{self, FileIconIdentity},
     icons::{self, icon},
@@ -543,9 +544,11 @@ impl FilesSurface {
             .items_center()
             .gap(px(4.0))
             .cursor_pointer()
-            .when(selected, |element| element.bg(crate::theme::wash(0.1)))
+            .when(selected, |element| {
+                element.bg(crate::theme::fill(crate::theme::FillTier::Secondary))
+            })
             .when(!selected, |element| {
-                element.hover(|style| style.bg(crate::theme::wash(0.055)))
+                element.hover_wash(format!("files-search-result-{index}"))
             })
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.search_state.active = index;

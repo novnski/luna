@@ -416,13 +416,15 @@ pub(super) fn sidebar_separator(theme: &Theme) -> gpui::Div {
 }
 
 pub(super) fn sidebar_disclosure_header(
+    id: SharedString,
     theme: &Theme,
     label: SharedString,
     chevron: AnyElement,
-) -> gpui::Div {
+) -> gpui::Stateful<gpui::Div> {
     // macOS-style section header (audit SH-15): a small semibold label, no
     // rule, and the disclosure chevron only under the pointer.
     div()
+        .id(id.clone())
         .group("sidebar-disclosure-header")
         .flex()
         .flex_row()
@@ -432,7 +434,7 @@ pub(super) fn sidebar_disclosure_header(
         .px(px(Theme::SPACE_SM))
         .rounded(px(crate::theme::radius::SM))
         .cursor_pointer()
-        .hover(|style| style.bg(crate::theme::sidebar_hover_bg()))
+        .hover_wash(id)
         .child(super::sidebar_faded_label(
             "sidebar-disclosure-label".into(),
             false,
@@ -1260,12 +1262,15 @@ impl Shell {
             })
             .cursor_pointer()
             .text_color(theme.text_muted)
-            .bg(if view_open {
-                theme.glass_hover()
-            } else {
-                theme.glass_hover().opacity(0.0)
-            })
-            .hover(|el| el.bg(theme.glass_hover()))
+            .hover_fill(
+                "sidebar-view-options",
+                if view_open {
+                    theme.glass_hover()
+                } else {
+                    theme.glass_hover().opacity(0.0)
+                },
+                theme.glass_hover(),
+            )
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, _, _, _| this.sidebar_view_menu.note_trigger_press()),
@@ -2001,22 +2006,26 @@ impl Shell {
             let chevron = self.sidebar_disclosure_chevron(&motion_key, !collapsed, theme);
             let toggle_key = collapse_key.clone();
             let toggle_motion_key = motion_key.clone();
-            let header = sidebar_disclosure_header(theme, visible_label, chevron)
-                .id(SharedString::from(format!("sidebar-group-{collapse_key}")))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let was_open = !this.sidebar_collapsed_groups.contains(&toggle_key);
-                    this.begin_sidebar_disclosure_motion(
-                        &toggle_motion_key,
-                        if was_open { body_height } else { 0.0 },
-                        if was_open { 0.0 } else { body_height },
-                    );
-                    if was_open {
-                        this.sidebar_collapsed_groups.insert(toggle_key.clone());
-                    } else {
-                        this.sidebar_collapsed_groups.remove(&toggle_key);
-                    }
-                    cx.notify();
-                }));
+            let header = sidebar_disclosure_header(
+                SharedString::from(format!("sidebar-group-{collapse_key}")),
+                theme,
+                visible_label,
+                chevron,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let was_open = !this.sidebar_collapsed_groups.contains(&toggle_key);
+                this.begin_sidebar_disclosure_motion(
+                    &toggle_motion_key,
+                    if was_open { body_height } else { 0.0 },
+                    if was_open { 0.0 } else { body_height },
+                );
+                if was_open {
+                    this.sidebar_collapsed_groups.insert(toggle_key.clone());
+                } else {
+                    this.sidebar_collapsed_groups.remove(&toggle_key);
+                }
+                cx.notify();
+            }));
             let body = self.render_sidebar_disclosure_body(
                 &motion_key,
                 !collapsed,
@@ -2062,8 +2071,13 @@ impl Shell {
                 .rounded(px(6.0))
                 .cursor_pointer()
                 .text_size(crate::typography::ui_rems(13.0))
-                .text_color(theme.text_muted)
-                .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
+                .hover_fill_fg(
+                    "active-more",
+                    gpui::transparent_black(),
+                    theme.glass_hover(),
+                    theme.text_muted,
+                    theme.text,
+                )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.active_shown += ACTIVE_PAGE;
                     cx.notify();
@@ -2149,11 +2163,11 @@ impl Shell {
             format!("Settled ({total})").into()
         };
         let header = sidebar_disclosure_header(
+            "settled-toggle".into(),
             theme,
             label,
             self.sidebar_disclosure_chevron("settled", open, theme),
         )
-        .id("settled-toggle")
         .on_click(cx.listener(move |this, _, _, cx| {
             this.begin_sidebar_disclosure_motion(
                 "settled",
@@ -2227,8 +2241,19 @@ impl Shell {
                         },
                     )
                     .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
-                    .when(selected_row, |el| el.bg(crate::theme::glass_selected_bg()))
-                    .hover(|el| el.bg(theme.glass_hover()))
+                    .hover_fill(
+                        format!("settled-{id}"),
+                        if selected_row {
+                            crate::theme::glass_selected_bg()
+                        } else {
+                            gpui::transparent_black()
+                        },
+                        if selected_row {
+                            crate::theme::glass_selected_bg()
+                        } else {
+                            theme.glass_hover()
+                        },
+                    )
                     .on_click(cx.listener(move |this, _, _, cx| this.open_chat(id.clone(), cx)))
                     .on_mouse_down(
                         MouseButton::Right,
@@ -2279,8 +2304,13 @@ impl Shell {
                     .rounded(px(6.0))
                     .cursor_pointer()
                     .text_size(crate::typography::ui_rems(13.0))
-                    .text_color(theme.text_muted)
-                    .hover(|el| el.bg(theme.glass_hover()).text_color(theme.text))
+                    .hover_fill_fg(
+                        "settled-more",
+                        gpui::transparent_black(),
+                        theme.glass_hover(),
+                        theme.text_muted,
+                        theme.text,
+                    )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.settled_shown = this.settled_shown.max(SETTLED_INITIAL) + SETTLED_PAGE;
                         cx.notify();
@@ -2377,8 +2407,7 @@ impl Shell {
             format!("Archived ({total})").into()
         };
         let chevron = self.sidebar_disclosure_chevron("archived", open, theme);
-        let header = sidebar_disclosure_header(theme, label, chevron)
-            .id("archived-toggle")
+        let header = sidebar_disclosure_header("archived-toggle".into(), theme, label, chevron)
             .on_click(cx.listener(move |this, _, _, cx| {
                 let was_open = this.archived_open;
                 this.begin_sidebar_disclosure_motion(
@@ -2454,7 +2483,7 @@ impl Shell {
                         .justify_center()
                         .size(px(20.0))
                         .rounded(px(4.0))
-                        .hover(|s| s.bg(theme.glass_hover()))
+                        .hover_wash(format!("archived-restore-{id}"))
                         .tooltip(|_, cx| {
                             cx.new(|_| SurfaceTabTooltip {
                                 text: "Unarchive task".into(),
@@ -2487,6 +2516,7 @@ impl Shell {
                 let hover_id = id.clone();
                 let open_id = id.clone();
                 let menu_id = id.clone();
+                let fade_key: SharedString = format!("archived-{id}").into();
                 let tooltip_height = details.estimated_height();
                 list = list.child(
                     div()
@@ -2512,11 +2542,22 @@ impl Shell {
                             },
                         )
                         .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
-                        .when(is_selected, |el| el.bg(selected_wash))
-                        .when(!is_selected, |el| {
-                            el.hover(|s| s.bg(crate::theme::sidebar_hover_bg()))
+                        .bg(if is_selected {
+                            selected_wash
+                        } else {
+                            crate::motion::hover_blend(
+                                &fade_key,
+                                gpui::transparent_black(),
+                                crate::theme::sidebar_hover_bg(),
+                            )
                         })
-                        .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
+                        .on_hover(cx.listener(move |this, entered: &bool, window, cx| {
+                            crate::motion::set_hover(
+                                &fade_key,
+                                *entered,
+                                crate::motion::reduced_motion(cx),
+                            );
+                            window.refresh();
                             if *entered {
                                 if this.archived_hover.as_deref() != Some(hover_id.as_str()) {
                                     this.archived_hover = Some(hover_id.clone());
@@ -2596,9 +2637,14 @@ impl Shell {
                         .px(px(Theme::SPACE_SM))
                         .rounded(px(6.0))
                         .text_size(crate::typography::ui_rems(13.0))
-                        .text_color(theme.readable_muted(0.55))
                         .cursor_pointer()
-                        .hover(|s| s.bg(theme.glass_hover()).text_color(theme.text))
+                        .hover_fill_fg(
+                            "archived-more",
+                            gpui::transparent_black(),
+                            theme.glass_hover(),
+                            theme.readable_muted(0.55),
+                            theme.text,
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.archived_shown = this.archived_shown.max(INITIAL) + PAGE;
                             cx.notify();
@@ -3635,7 +3681,7 @@ impl Shell {
         let crumb =
             |id: SharedString, name: SharedString, glyph: Option<&'static str>, current: bool| {
                 div()
-                    .id(id)
+                    .id(id.clone())
                     .h(px(26.0))
                     .px(px(7.0))
                     .rounded(px(6.0))
@@ -3643,13 +3689,21 @@ impl Shell {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_pointer()
-                    .text_color(if current {
-                        theme.text
-                    } else {
-                        theme.text_muted
-                    })
-                    .when(current, |el| el.bg(theme.element_hover))
-                    .hover(|s| s.bg(theme.element_hover).text_color(theme.text))
+                    .hover_fill_fg(
+                        format!("crumb-{id}"),
+                        if current {
+                            theme.glass_hover()
+                        } else {
+                            gpui::transparent_black()
+                        },
+                        theme.glass_hover(),
+                        if current {
+                            theme.text
+                        } else {
+                            theme.text_muted
+                        },
+                        theme.text,
+                    )
                     .when_some(glyph, |el, glyph| {
                         el.child(
                             icon(glyph)
@@ -3771,8 +3825,13 @@ impl Shell {
                     .justify_center()
                     .rounded(px(6.0))
                     .cursor_pointer()
-                    .text_color(theme.text_muted)
-                    .hover(|s| s.bg(theme.element_hover).text_color(theme.text))
+                    .hover_fill_fg(
+                        "project-crumb-back",
+                        gpui::transparent_black(),
+                        theme.glass_hover(),
+                        theme.text_muted,
+                        theme.text,
+                    )
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.dismiss_add_space(cx);
                         this.toggle_command_palette(window, cx);

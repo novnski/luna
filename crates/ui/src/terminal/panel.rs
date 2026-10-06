@@ -26,6 +26,7 @@ use gpui::{
 use luna_proto::{TerminalEvent, TerminalInventoryEntry, TerminalProcessState, TerminalSession};
 use luna_rpc::methods;
 
+use crate::interaction::HoverFill as _;
 use crate::motion::{self, AnimationExt as _, TAB_SLIDE};
 use crate::popover::{MenuScrollbarMetrics, MenuScrollbarState, ScrollRailHost};
 use crate::settings::{TERMINAL_MAX_VH, TERMINAL_MIN_HEIGHT};
@@ -1721,7 +1722,11 @@ impl TerminalPanel {
                             .rounded(px(6.0))
                             .when(!selected, |el| el.invisible())
                             .cursor_pointer()
-                            .hover(|s| s.bg(crate::theme::ink(0.09)))
+                            .hover_fill(
+                                format!("terminal-tab-close-{key}"),
+                                gpui::transparent_black(),
+                                crate::theme::fill(crate::theme::FillTier::Secondary),
+                            )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
                                 this.close_tab(&chat_close2, key, window, cx);

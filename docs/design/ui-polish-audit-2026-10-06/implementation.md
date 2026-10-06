@@ -64,7 +64,7 @@ Update this file as each finding lands so work can resume after compaction.
 | SH-09 | P1 | The sidebar "View options" button keeps a focus ring after mouse use | done (milestone D) | View options uses focus_visible ring instead of in_focus border |
 | SH-10 | P2 | Chrome controls and icons have no size ladder | partial | surface_chrome tokens + footer sizes; full control ladder not migrated |
 | SH-11 | P2 | The three sidebar footer buttons disagree on size, tone and hover | done (milestone G) | Footer buttons one recipe: 32 pt, 18 pt icon, muted tone, shared hover; open usage card shows selected wash |
-| SH-12 | P2 | Hover feedback mixes timing and uses seven different washes | partial | Sidebar/footer/menu hovers share washes; other shell .hover() calls remain instant |
+| SH-12 | P2 | Hover feedback mixes timing and uses seven different washes | done (milestone H) | Every shell hover (sidebar rows, row actions, footer, tabs, titlebar, palette tiles, strip and pane buttons) eases through `interaction::HoverFill` on the shared fade, with the `FillTier` weights |
 | SH-13 | P2 | Sidebar rows lead with the project, and the trailing corner keeps changing meaning | partial | Not changed: the sidebar row layout is user-tuned (user-request comments); needs design sign-off |
 | SH-14 | P2 | Active, settled and archived rows use different geometry in one column | partial | Shelf rows share radius 8; harness geometry kept (a test pins the deliberate active vs archived hierarchy) |
 | SH-15 | P2 | Sidebar section headers: hairline rules, always-on chevrons, uneven grouping | done (milestone G) | Section headers 11 pt semibold faint, no rule, chevron on hover, hover wash |
@@ -80,11 +80,11 @@ Update this file as each finding lands so work can resume after compaction.
 | SH-25 | P3 | Palette rows: three heights, tiny headers, non-concentric radius | done (milestone D) | PALETTE_ITEM_RADIUS 16−8; palette rows 32 / 44 |
 | SH-26 | P3 | The Activity bell's unread dot floats off the glyph | done (milestone D) | 6 pt unread dot seated on the bell shoulder |
 | DS-01 | P1 | No type scale; 17 sizes and borrowed 1.618 leading | done (milestone F) | typography::TextStyle (caption2…display) + TypeStyleExt::type_style; used for new UI, page titles |
-| DS-02 | P1 | Nine button/picker recipes; five heights on one page | partial | ControlSize tokens via pickers::CONTROL_HEIGHT and shared button recipes (git, notice, trailer); full ui::Button kit not built |
+| DS-02 | P1 | Nine button/picker recipes; five heights on one page | done (milestone H) | `button.rs` kit: `button`/`icon_button`/`select`/`select_frame`/`chip` in Sm 24 / Md 28 / Lg 32 with Primary/Secondary/Ghost/Danger; Settings ghost actions, dialog buttons, theme and font pickers (one chevron), MCP and git buttons rebuilt on it |
 | DS-03 | P1 | Settings row text runs under its control; no reflow | done (milestone F) | meta_line fragments shrink and wrap instead of running under controls |
 | DS-04 | P1 | macOS "Reduce motion" is never read | done (milestone A) | appearance::observe_accessibility reads NSWorkspace reduce motion on launch and activation |
-| DS-05 | P1 | 25 hover fills and two hover behaviours | partial | Sidebar, menu and meta hovers unified; 175 ad-hoc .hover() fills remain |
-| DS-06 | P1 | Switches, segments and swatches snap; the switch is off-brand | partial | Accent-track switch in macOS proportions; knob animation skipped (no stable per-switch key without mount replay) |
+| DS-05 | P1 | 25 hover fills and two hover behaviours | done (milestone H) | `interaction::HoverFill` (hover_fill/_fg/_wash/_border/_opacity/_colors) on `motion::HOVER_FADE`; all ~170 `.hover()` fills migrated except the composer files (milestone I) and scrollbar thumbs; Settings card rows no longer hover (not controls) |
+| DS-06 | P1 | Switches, segments and swatches snap; the switch is off-brand | done (milestone H) | Switch knob travels and track crossfades on `motion::DISCLOSURE` only when the value flips (`motion::follow`, keyed per switch; a new key settles, so mounts never replay); segmented thumbs slide on `motion::QUICK` |
 | DS-07 | P1 | Settings group headers float between groups | done (milestone F) | Group headers 24 pt above / 8 pt to their card (field_label margins; label-led cards drop mt) |
 | DS-08 | P1 | Three settings-row anatomies, all oversized | done (milestone F) | card_row 16/10 padding, 12 gap; row tile 28 r7 (~52 pt rows) |
 | DS-09 | P1 | Icon set is not uniformly Solar Linear | done (milestone F) | 37 glyphs replaced with official Solar Linear (pixel-compared); stop, window controls, return and queue family stay custom |
@@ -92,9 +92,9 @@ Update this file as each finding lands so work can resume after compaction.
 | DS-11 | P2 | Spacing is half off the 4-pt grid | done (milestone F) | theme::space ladder on the 4 pt grid |
 | DS-12 | P2 | 17 icon sizes; no icon tokens or icon+label helper | done (milestone F) | icons::size ladder (XS 12 / SM 14 / MD 16 / LG 20) |
 | DS-13 | P2 | Secondary text has no defined tiers (two greys on one page) | done (milestone F) | meta_line uses readable_muted (secondary tier floored); content tones for the canvas |
-| DS-14 | P2 | Fills and hairlines are 27 raw alphas, untinted by the theme | partial | Hairline token for menus; general fill/separator roles not yet added |
+| DS-14 | P2 | Fills and hairlines are 27 raw alphas, untinted by the theme | done (milestone H) | `Theme::fill(FillTier)` (4/8/12/16% dark, 3/5/8/10% light) and `Theme::separator(strong)` tinted by the palette's text; free `fill()`/`separator()` for context-free builders; `glass_hover`, selection and sidebar hover use them |
 | DS-15 | P2 | Motion catalog fragmented: 16 durations, 6 curves, no spring | done (milestone F) | Motion tokens MICRO/QUICK/STANDARD/EMPHASIZED/DISCLOSURE + curves; menus, disclosures, palette, toasts use them |
-| DS-16 | P2 | Five ways to show "selected"; no shared segmented control | partial | Not unified: segmented controls still bespoke |
+| DS-16 | P2 | Five ways to show "selected"; no shared segmented control | done (milestone H) | `button::segmented` (sliding thumb) for Glass, background effect, diff layout/colors, send shortcut, follow-up, provider and launch-mode choices; `button::selection_ring` for accent swatches and option cards; `chip` for many-option choices |
 | DS-17 | P2 | Seven focus treatments; most clickables are mouse-only | done (milestone F) | One focus ring recipe across transcript, shell, composer, surfaces; theme::focus_visible_ring helper |
 | DS-18 | P2 | Sub-11 pt text in everyday chrome | done (milestone E) | No ui_rems text below 11 pt remains in the UI crate |
 | DS-19 | P2 | 16–18 pt click targets | done (milestone F) | 24 pt hit boxes with negative margins for the 16–18 pt targets |

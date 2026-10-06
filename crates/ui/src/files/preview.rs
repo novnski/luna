@@ -23,6 +23,7 @@ use super::{
     document::{DocumentKey, DocumentPhase, FileDocument},
     toolbar, toolbar_button,
 };
+use crate::interaction::HoverFill as _;
 use crate::{
     comments::{self, ReviewComment},
     composer::{ComposerInput, ComposerInputEvent},
@@ -2502,7 +2503,7 @@ impl FilesSurface {
                                 .cursor_pointer()
                                 .role(gpui::Role::Button)
                                 .aria_label("Save file")
-                                .hover(|style| style.bg(crate::theme::wash(0.14)))
+                                .hover_wash("files-save-status")
                                 .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
                                     window.prevent_default()
                                 })
@@ -2871,11 +2872,17 @@ impl FilesSurface {
             if let Some(comment) = comments_by_line.get(&row.line) {
                 let id = comment.id.clone();
                 overlays.push(
-                    cell.bg(theme.surface_card)
-                        .cursor_pointer()
+                    cell.cursor_pointer()
                         .role(gpui::Role::Button)
                         .aria_label(format!("Open comment on line {}", row.line))
-                        .hover(|style| style.bg(crate::theme::wash(0.08)))
+                        .hover_fill(
+                            group.clone(),
+                            theme.surface_card,
+                            crate::theme::flatten(
+                                crate::theme::fill(crate::theme::FillTier::Tertiary),
+                                theme.surface_card,
+                            ),
+                        )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.toggle_editor_comment(id.clone(), cx)
                         }))
@@ -2894,7 +2901,11 @@ impl FilesSurface {
                         .cursor_pointer()
                         .role(gpui::Role::Button)
                         .aria_label(format!("Comment on line {line}"))
-                        .hover(|style| style.bg(theme.surface_card))
+                        .hover_fill(
+                            group.clone(),
+                            theme.surface_card.opacity(0.0),
+                            theme.surface_card,
+                        )
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.open_editor_comment_draft(target.clone(), line, window, cx)
                         }))
@@ -3450,7 +3461,7 @@ fn banner_action(
         .rounded(px(Theme::CONTROL_RADIUS))
         .text_color(color)
         .cursor_pointer()
-        .hover(|style| style.bg(crate::theme::ink(0.06)))
+        .hover_wash(id)
         .focus_visible(move |style| crate::theme::focus_ring(style, focus))
         .on_key_down(crate::swallow_activation_key)
         .child(label)

@@ -20,6 +20,7 @@ use luna_rpc::methods;
 
 use crate::composer::{Composer, QUEUE_COMPOSER_OVERLAP};
 use crate::icons::{self, icon};
+use crate::interaction::HoverFill as _;
 use crate::motion::{self, AnimationExt as _, TAB_SLIDE};
 use crate::terminal::panel::{drop_index, slide_offset};
 use crate::theme::Theme;
@@ -801,9 +802,11 @@ impl Composer {
                 8.0
             }))
             .rounded(px(ROW_RADIUS))
-            .when(being_edited, |el| el.bg(crate::theme::ink(0.06)))
+            .when(being_edited, |el| {
+                el.bg(crate::theme::fill(crate::theme::FillTier::Tertiary))
+            })
             .when(!being_edited && !being_removed, |el| {
-                el.hover(|s| s.bg(crate::theme::ink(0.04)))
+                el.hover_wash(format!("{key}-row"))
             })
             .when(being_removed, |el| el.opacity(0.55))
             .cursor(gpui::CursorStyle::Arrow)
@@ -1150,7 +1153,11 @@ impl Composer {
                     .aria_label(format!("Preview {}", label))
                     .tab_index(0)
                     .focus_visible(move |style| style.border_color(accent))
-                    .hover(move |style| style.border_color(accent))
+                    .hover_border(
+                        format!("{key}-image-{index}"),
+                        crate::theme::hairline(0.1),
+                        accent,
+                    )
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1224,7 +1231,13 @@ impl Composer {
             .text_color(theme.content_muted)
             .when(enabled, |el| {
                 el.cursor_pointer()
-                    .hover(|s| s.bg(crate::theme::ink(0.07)).text_color(theme.text))
+                    .hover_fill_fg(
+                        format!("{key}-{slot}"),
+                        gpui::transparent_black(),
+                        crate::theme::fill(crate::theme::FillTier::Tertiary),
+                        theme.content_muted,
+                        theme.text,
+                    )
                     .tab_index(0)
                     .focus_visible({
                         let ring = theme.focus_ring();
@@ -1287,7 +1300,13 @@ impl Composer {
             .when(enabled, |el| {
                 el.cursor_pointer()
                     .tab_index(0)
-                    .hover(|s| s.bg(crate::theme::ink(0.07)).text_color(theme.text))
+                    .hover_fill_fg(
+                        format!("{key}-primary"),
+                        gpui::transparent_black(),
+                        crate::theme::fill(crate::theme::FillTier::Tertiary),
+                        theme.text_muted,
+                        theme.text,
+                    )
                     .focus_visible({
                         let ring = theme.focus_ring();
                         move |s| crate::theme::focus_ring(s, ring)

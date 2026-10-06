@@ -1,6 +1,6 @@
 //! Settings → Files: local preferences for workspace-file editing.
 
-use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*, px};
+use gpui::{Context, EventEmitter, Window, div, prelude::*, px};
 
 use super::widgets;
 use crate::popover;
@@ -83,7 +83,6 @@ impl Render for FilesSettingsPage {
         let selected = self.autosave_delay_ms;
         let word_wrap = self.word_wrap;
         let show_all_files = self.show_all_files;
-        let accent = theme.accent;
         // Collected now: the switches below need `cx` mutably, so the chips'
         // listeners cannot stay borrowed by a lazy iterator.
         let options: Vec<_> = DELAY_OPTIONS
@@ -95,44 +94,21 @@ impl Render for FilesSettingsPage {
                 } else {
                     format!("{delay} ms")
                 };
-                div()
-                    .id(SharedString::from(format!("files-autosave-{delay}")))
-                    .role(gpui::Role::RadioButton)
-                    .aria_label(format!("Autosave after {label}"))
-                    .aria_toggled(if active {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .tab_index(0)
-                    .focus_visible(move |style| style.border_color(accent))
-                    .h(px(28.0))
-                    .px(px(10.0))
-                    .rounded(px(7.0))
-                    .border_1()
-                    .border_color(if active {
-                        theme.accent.opacity(0.7)
-                    } else {
-                        theme.border
-                    })
-                    .bg(if active {
-                        theme.accent.opacity(0.11)
-                    } else {
-                        crate::theme::wash(0.025)
-                    })
-                    .text_size(crate::typography::ui_rems(11.5))
-                    .text_color(if active { theme.text } else { theme.text_muted })
-                    .flex()
-                    .items_center()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(crate::theme::wash(0.08)))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.autosave_delay_ms = delay;
-                        cx.emit(FilesSettingsEvent::AutosaveDelayChanged(delay));
-                        cx.notify();
-                    }))
-                    .on_key_down(crate::swallow_activation_key)
-                    .child(label)
+                crate::button::chip(
+                    format!("files-autosave-{delay}"),
+                    active,
+                    crate::button::ControlSize::Md,
+                    true,
+                    &theme,
+                )
+                .role(gpui::Role::RadioButton)
+                .aria_label(format!("Autosave after {label}"))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.autosave_delay_ms = delay;
+                    cx.emit(FilesSettingsEvent::AutosaveDelayChanged(delay));
+                    cx.notify();
+                }))
+                .child(label)
             })
             .collect();
         let card = widgets::section_card(&theme)

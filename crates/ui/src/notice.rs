@@ -2,6 +2,7 @@
 
 use gpui::{AnyElement, Div, FontWeight, SharedString, div, prelude::*, px};
 
+use crate::interaction::HoverFill as _;
 use crate::theme::Theme;
 
 /// A notice action: a 24 pt capsule button in the notice's title row.
@@ -23,7 +24,7 @@ pub fn notice_action(id: &'static str, label: &'static str, theme: &Theme) -> gp
         .font_weight(FontWeight::MEDIUM)
         .text_color(theme.text)
         .cursor_pointer()
-        .hover(|style| style.bg(crate::theme::ink(0.06)))
+        .hover_wash(id)
         .focus_visible(move |style| crate::theme::focus_ring(style, ring))
         .child(label)
 }
@@ -87,7 +88,11 @@ pub fn notice_chip(
                         .items_center()
                         .justify_center()
                         .cursor_pointer()
-                        .hover(move |style| style.bg(accent.opacity(0.12)))
+                        .hover_fill(
+                            format!("notice-copy-{label}"),
+                            accent.opacity(0.0),
+                            accent.opacity(0.12),
+                        )
                         .on_click(move |_, _, cx| {
                             cx.stop_propagation();
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(
