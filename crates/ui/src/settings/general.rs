@@ -1,6 +1,6 @@
 //! Device-local task behavior preferences shown at the Settings entry point.
 
-use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*, px};
+use gpui::{Context, EventEmitter, SharedString, Window, div, prelude::*};
 use luna_proto::FollowUpBehavior;
 
 use crate::popover::{self, ScrollRailHost};
@@ -144,7 +144,6 @@ impl GeneralPage {
         &self,
         theme: &Theme,
         toggle: GeneralToggle,
-        first: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let (title, description, enabled, id) = match toggle {
@@ -168,7 +167,7 @@ impl GeneralPage {
             ),
             GeneralToggle::AutomaticRetries => (
                 "Automatic retries",
-                "Retry temporary overloads and known subscription resets within four attempts and six hours. Other failures still require review.",
+                "Retry temporary overloads and known subscription resets, up to four attempts within six hours. Other failures still need your review.",
                 self.automatic_retries_enabled,
                 "general-automatic-retries-toggle",
             ),
@@ -191,33 +190,15 @@ impl GeneralPage {
                 "general-confirm-delete-toggle",
             ),
         };
-        widgets::card_row(theme, first)
-            .min_h(px(76.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(widgets::row_title(theme, title))
-                    .child(
-                        div()
-                            .mt(px(4.0))
-                            .max_w(px(430.0))
-                            .text_size(crate::typography::ui_rems(11.5))
-                            .line_height(crate::typography::ui_rems(17.0))
-                            .text_color(theme.readable_muted(0.65))
-                            .child(SharedString::from(description)),
-                    ),
-            )
-            .child(widgets::switch_control(
-                id,
-                title,
-                enabled,
-                theme,
-                cx,
-                move |this, cx| this.toggle(toggle, cx),
-            ))
+        setting_row(
+            theme,
+            title,
+            description,
+            widgets::switch_control(id, title, enabled, theme, cx, move |this, cx| {
+                this.toggle(toggle, cx)
+            })
+            .into_any_element(),
+        )
     }
 
     fn on_scroll_hovered(&mut self, hovered: &bool, _: &mut Window, cx: &mut Context<Self>) {
@@ -237,98 +218,148 @@ impl ScrollRailHost for GeneralPage {
     }
 }
 
+/// One settings row on the spec's anatomy: a wrapping title and description,
+/// and the row's control in the trailing column. Every row here follows its
+/// section's header, so each draws the hairline above it.
+fn setting_row(
+    theme: &Theme,
+    title: &'static str,
+    description: &'static str,
+    control: gpui::AnyElement,
+) -> gpui::Div {
+    widgets::card_row(theme, false)
+        .child(widgets::row_text(
+            theme,
+            title,
+            Some(SharedString::from(description)),
+        ))
+        .child(widgets::row_controls().child(control))
+}
+
 impl Render for GeneralPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let send_behavior = self.composer_send_behavior;
         let follow_up_behavior = self.follow_up_behavior;
-        let modifier_label = if cfg!(target_os = "macos") {
-            "⌘ Enter"
+        let modifier = if cfg!(target_os = "macos") {
+            "⌘"
         } else {
-            "Ctrl Enter"
+            "Ctrl"
         };
+        // Both choices share one width so the two segmented controls stack
+        // as a single column in the Composer card.
+        const CHOICE_WIDTH: f32 = 184.0;
 
-        let send_row = widgets::card_row(&theme, true)
-            .min_h(px(84.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(widgets::row_title(&theme, "Send shortcut"))
-                    .child(
-                        div()
-                            .mt(px(4.0))
-                            .text_size(crate::typography::ui_rems(11.5))
-                            .text_color(theme.readable_muted(0.65))
-                            .child("Choose whether Enter sends or inserts a line break."),
-                    ),
-            )
-            .child(crate::button::segmented(
-                "general-send-shortcut",
-                vec![
-                    crate::button::Segment::new("enter", "Enter"),
-                    crate::button::Segment::new("mod-enter", modifier_label),
-                ],
-                usize::from(send_behavior == ComposerSendBehavior::ModEnter),
-                184.0,
-                crate::button::ControlSize::Md,
-                &theme,
-                cx.listener(|this, ix: &usize, _, cx| {
-                    this.set_composer_send_behavior(
-                        if *ix == 1 {
-                            ComposerSendBehavior::ModEnter
-                        } else {
-                            ComposerSendBehavior::Enter
-                        },
-                        cx,
-                    )
-                }),
-            ));
+        let send_shortcut = crate::button::segmented(
+            "general-send-shortcut",
+            vec![
+                crate::button::Segment::new("enter", "Enter"),
+                crate::button::Segment::new("mod-enter", format!("{modifier} Enter")),
+            ],
+            usize::from(send_behavior == ComposerSendBehavior::ModEnter),
+            CHOICE_WIDTH,
+            crate::button::ControlSize::Md,
+            &theme,
+            cx.listener(|this, ix: &usize, _, cx| {
+                this.set_composer_send_behavior(
+                    if *ix == 1 {
+                        ComposerSendBehavior::ModEnter
+                    } else {
+                        ComposerSendBehavior::Enter
+                    },
+                    cx,
+                )
+            }),
+        )
+        .aria_label("Send shortcut");
 
-        let follow_up_row = widgets::card_row(&theme, false)
-            .min_h(px(84.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .flex_col()
-                    .child(widgets::row_title(&theme, "Follow-up behavior"))
-                    .child(
-                        div()
-                            .mt(px(4.0))
-                            .max_w(px(430.0))
-                            .text_size(crate::typography::ui_rems(11.5))
-                            .line_height(crate::typography::ui_rems(17.0))
-                            .text_color(theme.readable_muted(0.65))
-                            .child(SharedString::from(
-                                "Choose what sending a message does during a live run. Cmd/Ctrl+Shift+Enter performs the opposite once; Shift+Enter remains a line break.",
-                            )),
-                    ),
-            )
-            .child(crate::button::segmented(
-                "general-follow-up-behavior",
-                vec![
-                    crate::button::Segment::new("queue", "Queue"),
-                    crate::button::Segment::new("steer", "Steer"),
-                ],
-                usize::from(follow_up_behavior == FollowUpBehavior::Steer),
-                168.0,
-                crate::button::ControlSize::Md,
+        let follow_up = crate::button::segmented(
+            "general-follow-up-behavior",
+            vec![
+                crate::button::Segment::new("queue", "Queue"),
+                crate::button::Segment::new("steer", "Steer"),
+            ],
+            usize::from(follow_up_behavior == FollowUpBehavior::Steer),
+            CHOICE_WIDTH,
+            crate::button::ControlSize::Md,
+            &theme,
+            cx.listener(|this, ix: &usize, _, cx| {
+                this.set_follow_up_behavior(
+                    if *ix == 1 {
+                        FollowUpBehavior::Steer
+                    } else {
+                        FollowUpBehavior::Queue
+                    },
+                    cx,
+                )
+            }),
+        )
+        .aria_label("Follow-up behavior");
+
+        let composer = widgets::section_card(&theme)
+            .child(widgets::section_header(
                 &theme,
-                cx.listener(|this, ix: &usize, _, cx| {
-                    this.set_follow_up_behavior(
-                        if *ix == 1 {
-                            FollowUpBehavior::Steer
-                        } else {
-                            FollowUpBehavior::Queue
-                        },
-                        cx,
-                    )
-                }),
-            ));
+                "Composer",
+                Some("How messages leave the conversation composer.".into()),
+                Vec::new(),
+            ))
+            .child(setting_row(
+                &theme,
+                "Send shortcut",
+                "Choose whether Enter sends or inserts a line break.",
+                send_shortcut.into_any_element(),
+            ))
+            .child(setting_row(
+                &theme,
+                "Follow-up behavior",
+                "Choose what sending a message does while a run is live.",
+                follow_up.into_any_element(),
+            ))
+            .child(self.switch_row(&theme, GeneralToggle::ContextUsage, cx));
+        let composer_footer = widgets::section_footer(
+            &theme,
+            format!(
+                "During a live run, {modifier} Shift Enter does the opposite of your \
+                 follow-up choice once. Shift Enter always inserts a line break."
+            ),
+        );
+
+        let links = widgets::section_card(&theme)
+            .child(widgets::section_header(
+                &theme,
+                "Links",
+                Some("Where links in a conversation open.".into()),
+                Vec::new(),
+            ))
+            .child(self.switch_row(&theme, GeneralToggle::OpenLinks, cx));
+
+        let running = widgets::section_card(&theme)
+            .child(widgets::section_header(
+                &theme,
+                "Running tasks",
+                Some("What LUNA does while an agent is working.".into()),
+                Vec::new(),
+            ))
+            .child(self.switch_row(&theme, GeneralToggle::AutomaticRetries, cx))
+            .when(cfg!(target_os = "macos"), |card| {
+                card.child(self.switch_row(&theme, GeneralToggle::KeepAwake, cx))
+            });
+
+        let confirmations = widgets::section_card(&theme)
+            .child(widgets::section_header(
+                &theme,
+                "Task confirmations",
+                Some("Ask before actions that move a task or remove it.".into()),
+                Vec::new(),
+            ))
+            .children(
+                TaskConfirmation::ALL
+                    .into_iter()
+                    .map(|action| {
+                        self.switch_row(&theme, GeneralToggle::TaskConfirmation(action), cx)
+                    })
+                    .collect::<Vec<_>>(),
+            );
 
         let scrollbar = popover::rail(self, "general-page-scrollbar", &theme, cx);
         div()
@@ -344,80 +375,16 @@ impl Render for GeneralPage {
                     .track_scroll(&self.scroll.scroll)
                     .child(
                         widgets::page_column()
-                            .child(widgets::page_header(&theme, "General", None))
-                            .child(
-                                widgets::page_subtitle(
-                                    &theme,
-                                    "Set default behavior for conversations and this device.",
-                                )
-                                .max_w(px(512.0))
-                                .line_height(crate::typography::ui_rems(20.0)),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(26.0))
-                                    .child(widgets::field_label(&theme, "Composer"))
-                                    .child(
-                                        widgets::section_card(&theme)
-                                            .mt(px(0.0))
-                                            .child(send_row)
-                                            .child(follow_up_row)
-                                            .child(self.switch_row(
-                                                &theme,
-                                                GeneralToggle::ContextUsage,
-                                                false,
-                                                cx,
-                                            )),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(26.0))
-                                    .child(widgets::field_label(&theme, "Links"))
-                                    .child(widgets::section_card(&theme).mt(px(0.0)).child(
-                                        self.switch_row(&theme, GeneralToggle::OpenLinks, true, cx),
-                                    )),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(26.0))
-                                    .child(widgets::field_label(&theme, "Running tasks"))
-                                    .child(
-                                        widgets::section_card(&theme)
-                                            .mt(px(0.0))
-                                            .child(self.switch_row(
-                                                &theme,
-                                                GeneralToggle::AutomaticRetries,
-                                                true,
-                                                cx,
-                                            ))
-                                            .when(cfg!(target_os = "macos"), |card| {
-                                                card.child(self.switch_row(
-                                                    &theme,
-                                                    GeneralToggle::KeepAwake,
-                                                    false,
-                                                    cx,
-                                                ))
-                                            }),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(26.0))
-                                    .child(widgets::field_label(&theme, "Task confirmations"))
-                                    .child(widgets::section_card(&theme).mt(px(0.0)).children(
-                                        TaskConfirmation::ALL.into_iter().enumerate().map(
-                                            |(index, action)| {
-                                                self.switch_row(
-                                                    &theme,
-                                                    GeneralToggle::TaskConfirmation(action),
-                                                    index == 0,
-                                                    cx,
-                                                )
-                                            },
-                                        ),
-                                    )),
-                            ),
+                            .child(widgets::page_title_bar(&theme, "General", None, Vec::new()))
+                            .child(widgets::page_subtitle(
+                                &theme,
+                                "Set default behavior for conversations and this device.",
+                            ))
+                            .child(composer)
+                            .child(composer_footer)
+                            .child(links)
+                            .child(running)
+                            .child(confirmations),
                     ),
             )
             .children(scrollbar)
