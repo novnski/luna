@@ -376,7 +376,7 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(agents["rightActive"] == "Agents", "Agents surface inactive: {agents}");
                     anyhow::ensure!(agents["total"] == 3, "expected the 3 root agents only: {agents}");
                     let a = row(&agents, "toolu_A")?;
-                    anyhow::ensure!(a["label"] == "Completed" && a["activity"] == "Parser mapped", "A row: {a}");
+                    anyhow::ensure!(a["label"] == "Done" && a["activity"] == "Parser mapped", "A row: {a}");
                     let metrics = a["metrics"].as_str().unwrap_or_default();
                     for expected in ["claude-haiku-4-5-20251001", "2,400 tokens", "3 tool uses", "9s"] {
                         anyhow::ensure!(metrics.contains(expected), "A metrics lack {expected}: {a}");
@@ -385,7 +385,7 @@ fn main() -> anyhow::Result<()> {
                     anyhow::ensure!(a["docRef"] == sub("toolu_A"), "A transcript ref: {a}");
                     let c = row(&agents, "toolu_C")?;
                     anyhow::ensure!(
-                        c["label"] == "Interrupted"
+                        c["label"] == "Stopped"
                             && c["activity"] == "Stopped: the Claude worker restarted"
                             && c["metrics"].as_str().is_some_and(|m| m.contains("background")),
                         "C row: {c}"

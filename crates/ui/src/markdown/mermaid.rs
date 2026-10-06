@@ -36,14 +36,19 @@ fn color(color: gpui::Hsla, background: gpui::Hsla) -> String {
 
 impl Palette {
     pub fn from_theme(theme: &Theme) -> Self {
+        // The diagram sits on its code frame's own fill (no box-in-box):
+        // nodes are a light ink over that fill with a hairline edge, edges in
+        // the tertiary tone, and the accent stays for highlights (audit TL-18).
+        let frame = crate::theme::flatten(theme.ink(0.035), theme.bg);
+        let node = crate::theme::flatten(theme.ink(0.06), frame);
         Self {
             dark: theme.appearance.is_dark(),
             font: theme.font_sans.to_string(),
-            background: color(theme.surface, theme.bg),
-            raised: color(theme.surface_raised, theme.bg),
+            background: color(frame, theme.bg),
+            raised: color(node, theme.bg),
             text: color(theme.text, theme.bg),
-            muted: color(theme.text_muted, theme.bg),
-            border: color(theme.border_strong, theme.bg),
+            muted: color(theme.content_faint, frame),
+            border: color(theme.hairline(0.10), frame),
             accent: color(theme.accent, theme.bg),
         }
     }
@@ -69,7 +74,7 @@ pub fn render(source: &str, palette: &Palette) -> Result<String, String> {
         };
         let theme = &mut options.theme;
         theme.font_family = palette.font.clone();
-        theme.font_size = 14.0;
+        theme.font_size = 13.0;
         theme.background = palette.background.clone();
         theme.primary_color = palette.raised.clone();
         theme.primary_text_color = palette.text.clone();

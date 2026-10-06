@@ -329,6 +329,32 @@ pub fn tooltip_card(theme: &Theme) -> gpui::Div {
         .shadow_md()
 }
 
+/// The one plain-text tooltip (UI polish audit CP-12, SH-21, DS-20): the
+/// shared [`tooltip_card`] with caption text. Build it with [`text_tooltip`].
+pub struct TextTooltip(pub SharedString);
+
+impl gpui::Render for TextTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::typography::{TextStyle, TypeStyleExt as _};
+        let theme = Theme::of(cx);
+        tooltip_card(theme)
+            .px(px(8.0))
+            .py(px(5.0))
+            .font_family(theme.font_sans.clone())
+            .type_style(TextStyle::Caption)
+            .text_color(theme.text)
+            .child(self.0.clone())
+    }
+}
+
+/// `.tooltip(text_tooltip("Copy"))` — the shared text tooltip builder.
+pub fn text_tooltip(
+    label: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut gpui::App) -> gpui::AnyView + 'static {
+    let label = label.into();
+    move |_, cx| cx.new(|_| TextTooltip(label.clone())).into()
+}
+
 pub fn popover_card(theme: &Theme) -> gpui::Div {
     div()
         .border_1()

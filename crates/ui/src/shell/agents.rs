@@ -351,12 +351,12 @@ pub(super) fn agent_rows(transcript: &[luna_doc::SessionMessageEntry]) -> (Vec<A
             _ => "Agent".into(),
         };
         let label = match subagent_status {
-            Some(SubagentStatus::Running) => "Working",
+            Some(SubagentStatus::Running) => "Running",
             Some(SubagentStatus::Waiting) => "Waiting",
             Some(SubagentStatus::Idle) => "Idle",
-            Some(SubagentStatus::Done) => "Completed",
+            Some(SubagentStatus::Done) => "Done",
             Some(SubagentStatus::Failed) => "Failed",
-            Some(SubagentStatus::Interrupted) => "Interrupted",
+            Some(SubagentStatus::Interrupted) => "Stopped",
             Some(SubagentStatus::Unobserved) | None => "Not observed",
         };
         let frozen = matches!(

@@ -12793,8 +12793,13 @@ impl Shell {
         } else {
             gpui::transparent_black()
         };
+        let ring = theme.focus_ring();
         let pill = div()
             .id(anim_key)
+            .role(gpui::Role::Button)
+            .aria_label("Scroll to bottom")
+            .tab_index(0)
+            .focus_visible(move |style| crate::theme::focus_ring(style, ring))
             .h(px(30.0))
             .rounded_full()
             .border_1()
@@ -12819,10 +12824,9 @@ impl Shell {
                     .pr(px(13.0))
                     .bg(wash)
                     .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(13.0))
-                            .text_color(theme.text_muted)
-                            .child(SharedString::from("↓")),
+                        crate::icons::icon(crate::icons::ARROW_DOWN)
+                            .size(px(crate::icons::size::SM))
+                            .text_color(theme.text_muted),
                     )
                     .child(
                         div()

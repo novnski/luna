@@ -328,7 +328,7 @@ impl Render for CodeBlockTooltip {
         div()
             .px(px(8.0))
             .py(px(6.0))
-            .rounded(px(6.0))
+            .rounded(px(crate::theme::radius::SM))
             .border_1()
             .border_color(theme.border_strong)
             .bg(theme.tooltip_surface())
@@ -440,7 +440,12 @@ pub fn render_tree(
         .gap(px(MD_BLOCK_GAP))
         .children(tree.blocks.iter().enumerate().map(|(ix, top)| {
             let document = highlight(ix);
-            render_block(
+            let extra = if ix > 0 {
+                heading_top_extra(&top.block)
+            } else {
+                0.0
+            };
+            let block = render_block(
                 &top.block,
                 ix,
                 ix,
@@ -450,7 +455,12 @@ pub fn render_tree(
                 document
                     .as_deref()
                     .map(|document| document.lines.as_slice()),
-            )
+            );
+            if extra > 0.0 {
+                div().pt(px(extra)).child(block).into_any_element()
+            } else {
+                block
+            }
         }))
         .into_any_element()
 }
@@ -604,7 +614,7 @@ pub fn render_block(
                             .accessibility_label(label)
                             .size(px(16.0))
                             .border_1()
-                            .rounded(px(3.0))
+                            .rounded(px(crate::theme::radius::XS))
                             .border_color(if task.checked {
                                 theme.accent
                             } else {
@@ -712,9 +722,21 @@ pub fn render_block(
 fn heading_metrics(level: u8) -> (f32, f32) {
     match level {
         1 => (19.0, 27.0),
-        2 => (16.0, 24.0),
+        2 => (17.0, 24.0),
         3 => (15.0, 22.0),
         _ => (14.0, 22.0),
+    }
+}
+
+/// Extra space above a heading on top of [`MD_BLOCK_GAP`], so a heading
+/// groups with the content below it (H1 28, H2 24, H3 20 in total).
+pub fn heading_top_extra(block: &Block) -> f32 {
+    match block {
+        Block::Heading { level: 1, .. } => 16.0,
+        Block::Heading { level: 2, .. } => 12.0,
+        Block::Heading { level: 3, .. } => 8.0,
+        Block::Heading { .. } => 4.0,
+        _ => 0.0,
     }
 }
 
@@ -1732,7 +1754,7 @@ fn text_element(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(4.0))
+                    .rounded(px(crate::theme::radius::XS))
                     .bg(crate::file_icons::well_bg(theme))
                     .child(
                         crate::file_icons::icon(
@@ -1932,7 +1954,7 @@ fn code_icon_action(
     let fade_key = id.to_string();
     code_action_button(id, label, theme)
         .size(px(CODE_ACTION_SIZE))
-        .rounded(px(6.0))
+        .rounded(px(crate::theme::radius::SM))
         .flex()
         .items_center()
         .justify_center()
@@ -1969,7 +1991,7 @@ pub(crate) fn copy_action(
     code_action_button(id, label, theme)
         .h(px(CODE_ACTION_SIZE))
         .px(px(6.0))
-        .rounded(px(5.0))
+        .rounded(px(crate::theme::radius::SM))
         .flex()
         .flex_row()
         .items_center()
@@ -2014,7 +2036,7 @@ fn code_copy_button(
         code_action_button(SharedString::from(fade_key.clone()), "Copy code", theme)
             .h(px(CODE_ACTION_SIZE))
             .px(px(6.0))
-            .rounded(px(5.0))
+            .rounded(px(crate::theme::radius::SM))
             .flex()
             .flex_row()
             .items_center()
@@ -2026,7 +2048,7 @@ fn code_copy_button(
                 crate::theme::ink(0.08),
             ))
             .on_hover(crate::motion::hover_listener(fade_key))
-            .text_size(crate::typography::ui_rems(10.5))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.content_muted)
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
@@ -2100,7 +2122,7 @@ fn code_block_frame(
         .min_w_0()
         .flex()
         .flex_col()
-        .rounded(px(10.0))
+        .rounded(px(crate::theme::radius::LG))
         .bg(crate::theme::ink(0.035))
         .border_1()
         .border_color(theme.border)
@@ -2210,7 +2232,7 @@ fn render_code_block_source_with_actions(
         let hover = crate::theme::ink(if fit_content { 0.13 } else { 0.08 });
         code_action_button(SharedString::from(fade_key.clone()), label, theme)
             .size(px(CODE_ACTION_SIZE))
-            .rounded(px(6.0))
+            .rounded(px(crate::theme::radius::SM))
             .flex()
             .items_center()
             .justify_center()

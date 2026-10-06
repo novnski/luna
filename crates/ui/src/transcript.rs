@@ -111,7 +111,8 @@ const ACTIVITY_TRUNK_X: f32 = 12.5;
 const ACTIVITY_BEND_RADIUS: f32 = 6.0;
 const ACTIVITY_BRANCH_END_X: f32 = 28.0;
 const ACTIVITY_ICON_LEFT: f32 = 32.0;
-const ACTIVITY_ICON_SIZE: f32 = 16.0;
+/// Rail glyphs sit on the 12–14 px icon ladder beside 12 px row text (TL-16).
+const ACTIVITY_ICON_SIZE: f32 = 14.0;
 const TOOL_TEXT_SIZE: f32 = 12.0;
 const TOOL_LABEL_SIZE: f32 = TOOL_TEXT_SIZE;
 const TOOL_LABEL_LINE_HEIGHT: f32 = 18.0;
@@ -130,6 +131,8 @@ const DISCLOSURE_CHEVRON_SIZE: f32 = 12.0;
 /// BoardUI task-list cadence: a slow light sweep keeps the active summary
 /// legible, while each newly appended row reveals quickly enough to read as a
 /// continuous log rather than a stack of discrete pop-ins.
+/// The hover action lane under a settled entry: 24 px buttons + 4 px lead.
+const META_LANE_HEIGHT: f32 = 28.0;
 const TOOL_GROUP_SHIMMER_DURATION: Duration = Duration::from_millis(3_400);
 /// Working-line verb/object size and the shared line box of that row.
 const WORKING_STATUS_SIZE: f32 = 12.0;
@@ -1935,7 +1938,14 @@ pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
         is_md(&p.kind) && is_md(&row.kind) && part_prefix(&p.id) == part_prefix(&row.id)
     });
     if same_part_markdown {
-        render::MD_BLOCK_GAP
+        let heading_extra = match &row.kind {
+            RowKind::Markdown { tree, block_ix } | RowKind::LiveMarkdown { tree, block_ix } => tree
+                .blocks
+                .get(*block_ix)
+                .map_or(0.0, |top| render::heading_top_extra(&top.block)),
+            _ => 0.0,
+        };
+        render::MD_BLOCK_GAP + heading_extra
     } else if matches!(row.kind, RowKind::ToolGroup { .. })
         || prev.is_some_and(|row| matches!(row.kind, RowKind::ToolGroup { .. }))
     {
@@ -2169,16 +2179,33 @@ fn detail_height_for(detail: &ToolDetail, theme: Option<&Theme>, ui_scale: f32) 
             let rows = lines.len() + usize::from(*truncated_by > 0);
             rows as f32 * OUTPUT_LINE_HEIGHT * ui_scale + OUTPUT_BODY_PAD
         }
-        ToolDetail::Diff { file, .. } => theme
-            .map_or_else(
-                || crate::changes::body_height(file),
-                |theme| tool_diff_height(file, theme),
-            )
-            .min(DIFF_VIEWPORT_MAX_HEIGHT),
+        ToolDetail::Diff { file, .. } => {
+            OUTPUT_CODE_HEADER_HEIGHT
+                + 2.0
+                + theme
+                    .map_or_else(
+                        || crate::changes::body_height(file),
+                        |theme| tool_diff_height(file, theme),
+                    )
+                    .min(DIFF_VIEWPORT_MAX_HEIGHT)
+        }
         ToolDetail::Stats { stats } => stats.len() as f32 * code_line_height + OUTPUT_BODY_PAD,
     };
     DETAIL_SEPARATOR + body
 }
+
+/// Code-surface details (output, diff) share one frame with the invocation
+/// above them; the merged frame saves one separator and two borders.
+fn segmented_details(invocation: Option<&ToolDetail>, detail: Option<&ToolDetail>) -> bool {
+    invocation.is_some_and(is_code_surface) && detail.is_some_and(is_code_surface)
+}
+
+fn is_code_surface(detail: &ToolDetail) -> bool {
+    matches!(detail, ToolDetail::Output { .. } | ToolDetail::Diff { .. })
+}
+
+/// Layout saved when two details render as segments of one frame.
+const SEGMENT_SAVING: f32 = 2.0;
 
 /// Height of the "Show full output/diff" affordance row appended below an
 /// open detail whose full payload lives in the sidecar (chat2-sync A3).
@@ -6177,7 +6204,11 @@ impl Transcript {
                 .toggled_at
                 .is_some_and(|at| at.elapsed() < Duration::from_millis(duration_ms + 200))
             && !motion::reduced_motion(cx);
-        let ellipsis = || div().h(px(line_height)).child("...");
+        // The continuation mark: a real ellipsis in the tertiary tone (a
+        // gradient fade would need an opaque backdrop the frosted window
+        // doesn't have).
+        let faint = theme.content_faint;
+        let ellipsis = move || div().h(px(line_height)).text_color(faint).child("…");
         let body: AnyElement = if animating {
             let from = fold.from;
             let to = if expanded { full_h } else { collapsed_h };
@@ -6229,53 +6260,54 @@ impl Transcript {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let toggle_key = row_id.clone();
-        let glyph = if expanded {
-            crate::icons::ALT_ARROW_UP
-        } else {
-            crate::icons::ALT_ARROW_DOWN
-        };
         let label = if expanded { "Show less" } else { "Show more" };
-        let button = div()
-            .id(SharedString::from(format!("{row_id}-expander")))
-            .group("user-message-toggle")
-            .role(gpui::Role::Button)
-            .aria_label(if expanded {
-                "Collapse message"
-            } else {
-                "Expand message"
-            })
-            .aria_expanded(expanded)
-            .tab_index(0)
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .focus_visible({
-                let ring = theme.focus_ring();
-                move |style| crate::theme::focus_ring(style, ring)
-            })
-            .flex()
-            .items_center()
-            .gap(px(5.0))
-            .text_size(crate::typography::ui_rems(14.0))
-            .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
-            .text_color(theme.content_muted)
-            .cursor_pointer()
-            .hover(|s| s.text_color(theme.text))
-            .child(label)
-            .child(
-                crate::icons::icon(glyph)
-                    .size(px(12.0))
-                    .text_color(theme.content_muted)
-                    .group_hover("user-message-toggle", |s| s.text_color(theme.text)),
-            )
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.toggle_user_fold(
-                    toggle_key.clone(),
-                    row_ix,
-                    collapsed_h,
-                    measured_h.get().max(collapsed_h),
-                    motion::reduced_motion(cx),
-                );
-                cx.notify();
-            }));
+        let button =
+            div()
+                .id(SharedString::from(format!("{row_id}-expander")))
+                .group("user-message-toggle")
+                .role(gpui::Role::Button)
+                .aria_label(if expanded {
+                    "Collapse message"
+                } else {
+                    "Expand message"
+                })
+                .aria_expanded(expanded)
+                .tab_index(0)
+                .rounded(px(Theme::CONTROL_RADIUS))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .text_size(crate::typography::ui_rems(13.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
+                .text_color(theme.content_muted)
+                .cursor_pointer()
+                .hover(|s| s.text_color(theme.text))
+                .child(label)
+                .child(
+                    // One glyph, turned over when expanded.
+                    crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+                        .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            if expanded { std::f32::consts::PI } else { 0.0 },
+                        )))
+                        .size(px(12.0))
+                        .text_color(theme.content_muted)
+                        .group_hover("user-message-toggle", |s| s.text_color(theme.text)),
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.toggle_user_fold(
+                        toggle_key.clone(),
+                        row_ix,
+                        collapsed_h,
+                        measured_h.get().max(collapsed_h),
+                        motion::reduced_motion(cx),
+                    );
+                    cx.notify();
+                }));
         div()
             .mt(px(USER_TOGGLE_GAP))
             .flex()
@@ -6310,7 +6342,7 @@ impl Transcript {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(12.0))
+            .rounded(px(crate::theme::radius::LG))
             .overflow_hidden()
             .bg(crate::theme::ink(0.045));
         match state {
@@ -6345,7 +6377,7 @@ impl Transcript {
                         gpui::img(loaded.image)
                             .size_full()
                             // The frame's overflow clip is rectangular; round the image itself.
-                            .rounded(px(12.0))
+                            .rounded(px(crate::theme::radius::LG))
                             .object_fit(gpui::ObjectFit::Contain),
                     )
                     .into_any_element()
@@ -6426,7 +6458,6 @@ impl Transcript {
                 let has_image = matches!(&state, AttachmentSnapshot::Loaded(_));
                 let theme = Theme::of(cx).clone();
                 let focus_ring = theme.focus_ring();
-                let accent = theme.accent;
                 let width = 240.0;
                 let mut card = div()
                     .id(SharedString::from(format!("{row_id}-appshot-{aix}")))
@@ -6436,7 +6467,7 @@ impl Transcript {
                     .flex()
                     .flex_col()
                     .items_center()
-                    .rounded(px(14.0))
+                    .rounded(px(crate::theme::radius::XL))
                     .p(px(8.0))
                     .gap(px(6.0))
                     .hover(|style| style.bg(crate::theme::ink(0.045)));
@@ -6447,7 +6478,10 @@ impl Transcript {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(6.0))
+                    .rounded(px(crate::theme::radius::inner(
+                        crate::theme::radius::XL,
+                        8.0,
+                    )))
                     .overflow_hidden();
                 card = match state {
                     AttachmentSnapshot::Loaded(image) => {
@@ -6477,7 +6511,7 @@ impl Transcript {
                                     img(image.image)
                                         .w_full()
                                         .h(px(126.0))
-                                        .rounded(px(5.0))
+                                        .rounded(px(crate::theme::radius::SM))
                                         .object_fit(ObjectFit::Contain),
                                 ),
                             )
@@ -6518,7 +6552,7 @@ impl Transcript {
                                 div()
                                     .size(px(24.0))
                                     .flex_none()
-                                    .rounded(px(6.0))
+                                    .rounded(px(crate::theme::radius::SM))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -6572,7 +6606,7 @@ impl Transcript {
                 .flex_none()
                 .w(px(ATT_THUMB_W))
                 .h(px(ATT_THUMB_H))
-                .rounded(px(8.0))
+                .rounded(px(crate::theme::radius::MD))
                 .overflow_hidden();
             let thumb: AnyElement = match state {
                 AttachmentSnapshot::Loaded(image) => {
@@ -6608,7 +6642,7 @@ impl Transcript {
                                 // rounding only clips rectangularly, so the
                                 // sprite must round its own corners (7 = the
                                 // frame's 8 minus its 1px border).
-                                .rounded(px(7.0))
+                                .rounded(px(crate::theme::radius::MD))
                                 .object_fit(ObjectFit::Cover),
                         )
                         .when(sending, |el| {
@@ -6635,7 +6669,7 @@ impl Transcript {
                                 div()
                                     .absolute()
                                     .inset_0()
-                                    .rounded(px(7.0))
+                                    .rounded(px(crate::theme::radius::MD))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -6833,77 +6867,77 @@ impl Transcript {
             recovery.failure,
             luna_proto::RecoveryFailure::AuthenticationExpired
         );
+        let checking = recovery.status == luna_proto::RecoveryStatus::CheckingDelivery;
+        let retrying = matches!(
+            recovery.status,
+            luna_proto::RecoveryStatus::Scheduled | luna_proto::RecoveryStatus::Running
+        );
+        let (tone, icon) = if checking {
+            (theme.warning, crate::icons::CLOCK_CIRCLE)
+        } else if retrying {
+            (theme.warning, crate::icons::REFRESH)
+        } else {
+            (theme.danger, crate::icons::DANGER_TRIANGLE)
+        };
+        let mut actions: Vec<AnyElement> = Vec::new();
+        if can_send {
+            actions.push(
+                trailer_action(
+                    "recovery-send-now",
+                    if recovery.status == luna_proto::RecoveryStatus::Held {
+                        "Continue"
+                    } else {
+                        "Send now"
+                    },
+                    true,
+                    &theme,
+                    |this, cx| this.recovery_command(true, cx),
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+        if show_accounts {
+            // The accounts live on Settings → Providers; name the page the
+            // user lands on.
+            actions.push(
+                trailer_action(
+                    "recovery-open-accounts",
+                    "Open Providers",
+                    !can_send,
+                    &theme,
+                    |_, cx| cx.emit(TranscriptEvent::OpenAccounts),
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+        if recovery.status.active() && recovery.status != luna_proto::RecoveryStatus::Running {
+            actions.push(
+                trailer_action(
+                    "recovery-cancel",
+                    "Cancel",
+                    false,
+                    &theme,
+                    |this, cx| this.recovery_command(false, cx),
+                    cx,
+                )
+                .into_any_element(),
+            );
+        }
+        let detail = (!recovery.detail.is_empty()).then(|| SharedString::from(recovery.detail));
         Some(
             div()
                 .id("turn-recovery")
-                .flex()
-                .flex_col()
-                .gap(px(Theme::SPACE_XS))
                 .pt(px(Theme::SPACE_LG))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(Theme::SPACE_SM))
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(
-                            if recovery.status == luna_proto::RecoveryStatus::CheckingDelivery {
-                                theme.warning
-                            } else {
-                                theme.danger
-                            },
-                        )
-                        .child(SharedString::from(headline))
-                        .when(show_accounts, |row| {
-                            // The accounts live on Settings → Providers; name
-                            // the page the user lands on.
-                            row.child(trailer_action(
-                                "recovery-open-accounts",
-                                "Open Providers",
-                                theme.accent,
-                                &theme,
-                                |_, cx| cx.emit(TranscriptEvent::OpenAccounts),
-                                cx,
-                            ))
-                        })
-                        .when(can_send, |row| {
-                            row.child(trailer_action(
-                                "recovery-send-now",
-                                if recovery.status == luna_proto::RecoveryStatus::Held {
-                                    "Continue"
-                                } else {
-                                    "Send now"
-                                },
-                                theme.accent,
-                                &theme,
-                                |this, cx| this.recovery_command(true, cx),
-                                cx,
-                            ))
-                        })
-                        .when(
-                            recovery.status.active()
-                                && recovery.status != luna_proto::RecoveryStatus::Running,
-                            |row| {
-                                row.child(trailer_action(
-                                    "recovery-cancel",
-                                    "Cancel",
-                                    theme.content_muted,
-                                    &theme,
-                                    |this, cx| this.recovery_command(false, cx),
-                                    cx,
-                                ))
-                            },
-                        ),
-                )
-                .child(
-                    div()
-                        .max_w(px(640.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .line_height(crate::typography::ui_rems(16.0))
-                        .text_color(theme.content_muted)
-                        .child(SharedString::from(recovery.detail)),
-                )
+                .child(transcript_notice(
+                    tone,
+                    icon,
+                    headline.into(),
+                    detail,
+                    actions,
+                    &theme,
+                ))
                 .into_any_element(),
         )
     }
@@ -6939,24 +6973,27 @@ impl Transcript {
             // the retry affordance, whatever the indicator fell back to.
             if self.state.read(cx).send_undelivered(&chat_id, now) {
                 let theme = Theme::of(cx).clone();
+                let retry = trailer_action(
+                    "undelivered-retry",
+                    "Retry",
+                    true,
+                    &theme,
+                    |this, cx| this.retry_send(cx),
+                    cx,
+                )
+                .aria_label("Message not delivered. Retry sending")
+                .into_any_element();
                 return Some(
                     div()
-                        .flex()
-                        .flex_row()
-                        .items_center()
                         .pt(px(Theme::SPACE_LG))
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .child(
-                            trailer_action(
-                                "undelivered-retry",
-                                "Not delivered — click to retry",
-                                theme.danger,
-                                &theme,
-                                |this, cx| this.retry_send(cx),
-                                cx,
-                            )
-                            .aria_label("Message not delivered. Retry sending"),
-                        )
+                        .child(transcript_notice(
+                            theme.danger,
+                            crate::icons::DANGER_TRIANGLE,
+                            "Not delivered".into(),
+                            None,
+                            vec![retry],
+                            &theme,
+                        ))
                         .into_any_element(),
                 );
             }
@@ -7165,7 +7202,6 @@ impl Transcript {
         };
         self.rendered_rows.insert(row.id.clone());
         let theme = Theme::of(cx).clone();
-        let focus_ring = theme.focus_ring();
         let workspace_root = {
             let state = self.state.read(cx);
             self.chat_id
@@ -7260,23 +7296,56 @@ impl Transcript {
                         // item can't shrink, `justify_end` pushes the overflow off the
                         // left edge, and long prompts render as one clipped line
                         // instead of wrapping inside the 80% column cap.
+                        // A pending send keeps full-contrast text (dimming it
+                        // read as disabled) and shows a quiet clock beside the
+                        // bubble; the right-aligned bubble never moves.
                         column = column.child(
-                            div().w_full().flex().justify_end().child(
-                                div()
-                                    .min_w_0()
-                                    .max_w(px(self.content_width * 0.8))
-                                    .bg(crate::theme::user_bubble_bg())
-                                    .rounded(px(Theme::BUBBLE_RADIUS))
-                                    .px(px(16.0))
-                                    .py(px(10.0))
-                                    .text_size(crate::typography::ui_rems(14.0))
-                                    .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
-                                    .text_color(theme.text)
-                                    .when(pending, |el| el.opacity(0.65))
-                                    .child(self.render_user_body(
-                                        &row.id, ix, text, mentions, &theme, window, cx,
-                                    )),
-                            ),
+                            div()
+                                .w_full()
+                                .flex()
+                                .justify_end()
+                                .items_end()
+                                .gap(px(8.0))
+                                .when(pending, |el| {
+                                    el.child(
+                                        div()
+                                            .flex_none()
+                                            .pb(px(12.0))
+                                            .id(SharedString::from(format!("{}-sending", row.id)))
+                                            .tooltip(crate::popover::text_tooltip("Sending…"))
+                                            .child(
+                                                crate::icons::icon(crate::icons::CLOCK_CIRCLE)
+                                                    .size(px(12.0))
+                                                    .text_color(theme.content_faint),
+                                            ),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .max_w(px(self.content_width * 0.8))
+                                        .bg(crate::theme::user_bubble_bg())
+                                        // Inset edge: no layout cost, so the
+                                        // measured bubble heights stay exact.
+                                        .when_some(crate::theme::user_bubble_edge(), |el, edge| {
+                                            el.shadow(vec![gpui::BoxShadow {
+                                                color: edge,
+                                                offset: gpui::point(px(0.0), px(0.0)),
+                                                blur_radius: px(0.0),
+                                                spread_radius: px(1.0),
+                                                inset: true,
+                                            }])
+                                        })
+                                        .rounded(px(Theme::BUBBLE_RADIUS))
+                                        .px(px(16.0))
+                                        .py(px(10.0))
+                                        .text_size(crate::typography::ui_rems(14.0))
+                                        .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
+                                        .text_color(theme.text)
+                                        .child(self.render_user_body(
+                                            &row.id, ix, text, mentions, &theme, window, cx,
+                                        )),
+                                ),
                         );
                     }
                     column.into_any_element()
@@ -7450,43 +7519,23 @@ impl Transcript {
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
                 .text_size(crate::typography::ui_rems(12.0))
-                .text_color(if theme.appearance.is_light() {
-                    theme.content_muted
-                } else {
-                    theme.content_muted.opacity(0.55)
-                })
+                .text_color(theme.content_faint)
                 .child(SharedString::from(format_timestamp(ms, &chrono::Local)));
             let copy = copy_text.clone().map(|text| {
                 let entry_id = copy_entry_id.clone();
-                let fade_key = format!("copy-message-hover-{entry_id}");
-                div()
-                    .id(SharedString::from(format!("copy-message-{entry_id}")))
-                    .size(px(Theme::SPACE_MD * 2.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(Theme::CONTROL_RADIUS))
-                    .cursor_pointer()
-                    // Same quiet icon-button treatment as the copy action
-                    // over transcript code blocks.
-                    .bg(motion::hover_blend(
-                        &fade_key,
-                        gpui::transparent_black(),
-                        crate::theme::ink(0.08),
-                    ))
-                    .on_hover(motion::hover_listener(fade_key))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.copy_message(entry_id.clone(), text.clone(), cx)
-                    }))
-                    .child(
-                        crate::icons::icon(if copied_message {
-                            crate::icons::CHECK
-                        } else {
-                            crate::icons::COPY
-                        })
-                        .size(px(14.0))
-                        .text_color(theme.content_muted),
-                    )
+                meta_action(
+                    SharedString::from(format!("copy-message-{entry_id}")),
+                    if copied_message {
+                        crate::icons::CHECK
+                    } else {
+                        crate::icons::COPY
+                    },
+                    if copied_message { "Copied" } else { "Copy" },
+                    &theme,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.copy_message(entry_id.clone(), text.clone(), cx)
+                }))
             });
             let side_action = copy_text.clone().and_then(|text| {
                 if !matches!(history_role, MessageRole::User | MessageRole::Assistant) {
@@ -7505,11 +7554,8 @@ impl Transcript {
                     .filter(|key| key.starts_with(&format!("{message}#")))
                     .and_then(|_| crate::markdown::selection::selected_text());
                 let text = selection.unwrap_or_else(|| text.to_string());
-                let label = if side.is_some() {
-                    "Send to main"
-                } else {
-                    "Side chat"
-                };
+                let handoff = side.is_some();
+                let label = if handoff { "Send to main" } else { "Side chat" };
                 let emit = move |cx: &mut Context<Self>| {
                     // A full side transcript also has a history task id. Its
                     // handoff action must take precedence over creating a side
@@ -7529,28 +7575,23 @@ impl Transcript {
                     }
                 };
                 Some(
-                    div()
-                        .id(SharedString::from(format!("side-action-{copy_entry_id}")))
-                        .role(gpui::Role::Button)
-                        .aria_label(if self.side_chat_handoff {
-                            "Insert this result into the parent draft"
+                    meta_action(
+                        SharedString::from(format!("side-action-{copy_entry_id}")),
+                        if handoff {
+                            crate::icons::RETURN
                         } else {
-                            "Reply to this message or selection in a side chat"
-                        })
-                        .tab_index(0)
-                        .px(px(6.0))
-                        .h(px(Theme::SPACE_MD * 2.0))
-                        .rounded(px(Theme::CONTROL_RADIUS))
-                        .flex()
-                        .items_center()
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.content_muted)
-                        .cursor_pointer()
-                        .hover(move |style| style.bg(crate::theme::ink(0.08)))
-                        .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
-                        .child(label)
-                        .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
-                        .on_key_down(crate::swallow_activation_key),
+                            crate::icons::CHAT_ROUND_LINE
+                        },
+                        label,
+                        &theme,
+                    )
+                    .aria_label(if self.side_chat_handoff {
+                        "Insert this result into the parent draft"
+                    } else {
+                        "Reply to this message or selection in a side chat"
+                    })
+                    .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
+                    .on_key_down(crate::swallow_activation_key),
                 )
             });
             let fork = history_task_id.clone().and_then(|task_id| {
@@ -7571,26 +7612,19 @@ impl Transcript {
                     } else {
                         ConversationForkBoundaryKind::AfterCompletedTurn
                     };
-                    div()
-                        .id(SharedString::from(format!("fork-message-{message_id}")))
-                        .size(px(Theme::SPACE_MD * 2.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .rounded(px(Theme::CONTROL_RADIUS))
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(TranscriptEvent::ForkMessage {
-                                task_id: task_id.clone(),
-                                message_id: message_id.clone(),
-                                boundary,
-                            });
-                        }))
-                        .child(
-                            crate::icons::icon(crate::icons::GIT_BRANCH)
-                                .size(px(14.0))
-                                .text_color(theme.content_muted),
-                        )
+                    meta_action(
+                        SharedString::from(format!("fork-message-{message_id}")),
+                        crate::icons::GIT_FORK,
+                        "Fork from here",
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(TranscriptEvent::ForkMessage {
+                            task_id: task_id.clone(),
+                            message_id: message_id.clone(),
+                            boundary,
+                        });
+                    }))
                 })
             });
             let edit = history_task_id.clone().and_then(|task_id| {
@@ -7601,26 +7635,19 @@ impl Transcript {
                     .then(|| {
                         let message_id = copy_entry_id.to_string();
                         let text = copy_text.clone().unwrap_or_default().to_string();
-                        div()
-                            .id(SharedString::from(format!("edit-message-{message_id}")))
-                            .size(px(Theme::SPACE_MD * 2.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(Theme::CONTROL_RADIUS))
-                            .cursor_pointer()
-                            .on_click(cx.listener(move |_, _, _, cx| {
-                                cx.emit(TranscriptEvent::EditEarlierMessage {
-                                    task_id: task_id.clone(),
-                                    message_id: message_id.clone(),
-                                    text: text.clone(),
-                                });
-                            }))
-                            .child(
-                                crate::icons::icon(crate::icons::PEN)
-                                    .size(px(14.0))
-                                    .text_color(theme.content_muted),
-                            )
+                        meta_action(
+                            SharedString::from(format!("edit-message-{message_id}")),
+                            crate::icons::PEN,
+                            "Edit message",
+                            &theme,
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(TranscriptEvent::EditEarlierMessage {
+                                task_id: task_id.clone(),
+                                message_id: message_id.clone(),
+                                text: text.clone(),
+                            });
+                        }))
                     })
             });
             let rewind = history_task_id.clone().and_then(|task_id| {
@@ -7644,33 +7671,22 @@ impl Transcript {
                                 text: text.clone(),
                             })
                         };
-                        div()
-                            .id(SharedString::from(format!(
-                                "rewind-message-{copy_entry_id}"
-                            )))
-                            .role(gpui::Role::Button)
-                            .aria_label(label)
-                            .tab_index(0)
-                            .px(px(6.0))
-                            .h(px(Theme::SPACE_MD * 2.0))
-                            .rounded(px(Theme::CONTROL_RADIUS))
-                            .flex()
-                            .items_center()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.content_muted)
-                            .cursor_pointer()
-                            .hover(|style| style.bg(crate::theme::ink(0.08)))
-                            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
-                            .child(label)
-                            .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
-                            .on_key_down(crate::swallow_activation_key)
+                        meta_action(
+                            SharedString::from(format!("rewind-message-{copy_entry_id}")),
+                            crate::icons::RESTART,
+                            label,
+                            &theme,
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
+                        .on_key_down(crate::swallow_activation_key)
                     })
             });
             let metadata = div()
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(Theme::SPACE_SM));
+                .gap(px(2.0))
+                .child(div().mr(px(6.0)));
             let metadata = metadata
                 .child(timestamp)
                 .children(side_action)
@@ -7678,9 +7694,11 @@ impl Transcript {
                 .children(edit)
                 .children(rewind)
                 .children(copy);
+            // The lane fits the 24 px action buttons plus a 4 px lead, so a
+            // finished reply doesn't trail a tall empty band (audit TL-20).
             div()
-                .h(px(Theme::SPACE_SM + Theme::SPACE_MD * 2.0))
-                .pt(px(Theme::SPACE_SM))
+                .h(px(META_LANE_HEIGHT))
+                .pt(px(META_LANE_HEIGHT - 24.0))
                 .w_full()
                 .flex()
                 .items_center()
@@ -7916,6 +7934,9 @@ impl Transcript {
     ) -> AnyElement {
         let mut fold = self.folds.get(row_id).copied().unwrap_or_default();
         let focus_ring = theme.focus_ring();
+        // Only a live run shows item spinners: once it ends, an unresolved
+        // tool is frozen (interrupted or errored), not running.
+        let run_live = self.chat_run_live(cx);
         // Agent/spawn chips never fold: they are their own row, always open,
         // no "Called N tools" header — a running subagent stays visible.
         let collapses = tool_group_collapses(tools);
@@ -8109,6 +8130,11 @@ impl Transcript {
                         })
                         + if affordance.is_some() {
                             BLOB_AFFORDANCE_HEIGHT
+                        } else {
+                            0.0
+                        }
+                        - if segmented_details(invocation.as_deref(), detail.as_deref()) {
+                            SEGMENT_SAVING
                         } else {
                             0.0
                         }
@@ -8367,7 +8393,7 @@ impl Transcript {
                     .flex_col()
                     .overflow_hidden()
                     .when(!collapses, |card| {
-                        card.rounded(px(9.0))
+                        card.rounded(px(crate::theme::radius::LG))
                             .border_1()
                             .border_color(crate::theme::hairline(0.07))
                             .bg(crate::theme::ink(0.03))
@@ -8429,61 +8455,112 @@ impl Transcript {
                                 .top(px(6.0 * (1.0 - body_alpha)))
                                 .opacity(body_alpha)
                         });
-                    if let Some(invocation) = invocation.as_deref() {
-                        panel = panel
-                            .child(
-                                div()
-                                    .h(px(DETAIL_SEPARATOR))
-                                    .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
-                            )
-                            .child(detail_body(
-                                invocation,
-                                None,
-                                theme,
-                                Some((copy_ui.clone(), 0, key.clone())),
-                                matches!(&tool.call, ToolCall::Exec { .. }),
-                            ));
-                    }
-                    if let Some(detail) = detail.as_deref() {
-                        panel = panel
-                            .child(
-                                div()
-                                    .h(px(DETAIL_SEPARATOR))
-                                    .flex_none()
-                                    .when(!collapses, |line| line.bg(crate::theme::hairline(0.06))),
-                            )
-                            .child(detail_body(
-                                detail,
-                                detail_highlights[ix].clone(),
-                                theme,
-                                Some((copy_ui.clone(), 1, key.clone())),
-                                false,
-                            ));
+                    let segmented = segmented_details(invocation.as_deref(), detail.as_deref());
+                    let separator = || {
+                        div()
+                            .h(px(DETAIL_SEPARATOR))
+                            .flex_none()
+                            .when(!collapses, |line| line.bg(crate::theme::hairline(0.06)))
+                    };
+                    let invocation_body = invocation.as_deref().map(|invocation| {
+                        detail_body(
+                            invocation,
+                            None,
+                            theme,
+                            Some((copy_ui.clone(), 0, key.clone())),
+                            matches!(&tool.call, ToolCall::Exec { .. }),
+                            !segmented,
+                        )
+                    });
+                    let detail_el = detail.as_deref().map(|detail| {
+                        detail_body(
+                            detail,
+                            detail_highlights[ix].clone(),
+                            theme,
+                            Some((copy_ui.clone(), 1, key.clone())),
+                            false,
+                            !segmented,
+                        )
+                    });
+                    if segmented {
+                        // What was asked and what came back, as two segments
+                        // of one code surface split by a single hairline.
+                        panel = panel.child(separator()).child(
+                            code_surface_frame(theme)
+                                .children(invocation_body)
+                                .child(div().h(px(DETAIL_SEPARATOR)).flex_none().bg(theme.border))
+                                .children(detail_el),
+                        );
+                    } else {
+                        if let Some(body) = invocation_body {
+                            panel = panel.child(separator()).child(body);
+                        }
+                        if let Some(body) = detail_el {
+                            panel = panel.child(separator()).child(body);
+                        }
                     }
                     if let Some(ChipAffordance { blob_ref, label }) = affordance {
                         let loading = matches!(
                             self.blob_details.get(&blob_ref),
                             Some(BlobFetch::Loading(_))
                         );
-                        let mut row = div()
-                            .id(SharedString::from(format!("{key}-blob")))
-                            .h(px(BLOB_AFFORDANCE_HEIGHT))
-                            .flex_none()
+                        // A real (ghost) button: icon, label, hover fade and
+                        // focus ring; the item spinner while it loads.
+                        let fade_key = format!("{key}-blob");
+                        let mut button = div()
+                            .id(SharedString::from(fade_key.clone()))
+                            .role(gpui::Role::Button)
+                            .aria_label(label.clone())
+                            .h(px(BLOB_AFFORDANCE_HEIGHT - 4.0))
+                            .px(px(8.0))
+                            .rounded(px(crate::theme::radius::SM))
                             .flex()
+                            .flex_row()
                             .items_center()
+                            .gap(px(6.0))
                             .text_size(crate::typography::ui_rems(TOOL_TEXT_SIZE))
-                            .text_color(theme.content_faint)
+                            .text_color(theme.content_muted)
+                            .bg(motion::hover_blend(
+                                &fade_key,
+                                crate::theme::ink(0.05),
+                                crate::theme::ink(0.09),
+                            ))
+                            .on_hover(motion::hover_listener(fade_key))
+                            .child(if loading {
+                                crate::loaders::mini_glyph_spinner(
+                                    format!("{key}-blob-spinner"),
+                                    2.0,
+                                    theme.glyph,
+                                    cx.entity_id(),
+                                    cx,
+                                )
+                                .into_any_element()
+                            } else {
+                                crate::icons::icon(crate::icons::ARROW_DOWN)
+                                    .size(px(12.0))
+                                    .text_color(theme.content_muted)
+                                    .into_any_element()
+                            })
                             .child(label);
                         if !loading {
-                            row = row
+                            button = button
+                                .tab_index(0)
+                                .focus_visible({
+                                    let ring = theme.focus_ring();
+                                    move |style| crate::theme::focus_ring(style, ring)
+                                })
                                 .cursor_pointer()
-                                .hover(|s| s.text_color(theme.content_muted))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.spawn_blob_fetch(blob_ref.clone(), cx);
                                     cx.notify();
                                 }));
                         }
+                        let row = div()
+                            .h(px(BLOB_AFFORDANCE_HEIGHT))
+                            .flex_none()
+                            .flex()
+                            .items_end()
+                            .child(button);
                         panel = panel.child(row);
                     }
                     card = card.child(panel);
@@ -8497,6 +8574,18 @@ impl Transcript {
                     .flex_row()
                     // Stretch the line alongside the expanded text.
                     .when(collapses, |row| {
+                        // A live, unresolved tool shows the item spinner in
+                        // its glyph slot; a finished row is its tool glyph.
+                        let running = (run_live && !tool.resolved && !tool.is_thought).then(|| {
+                            crate::loaders::mini_glyph_spinner(
+                                format!("{row_id}-running-{ix}"),
+                                2.0,
+                                theme.glyph,
+                                cx.entity_id(),
+                                cx,
+                            )
+                            .into_any_element()
+                        });
                         row.child(activity_rail(
                             tool,
                             ix > 0,
@@ -8505,6 +8594,7 @@ impl Transcript {
                             continuation_reveal,
                             base_row_height,
                             theme,
+                            running,
                         ))
                     })
                     .child(card.when(collapses && content_reveal < 1.0, |card| {
@@ -8750,57 +8840,48 @@ fn user_bubble_text(
 /// palette so old failures do not look like unresolved errors on every visit.
 fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
     let copy_message = message.clone();
-    let hover_color = theme.border;
+    let fade_key = "transcript-error-copy".to_string();
+    let ring = theme.focus_ring();
+    let copy = div()
+        .id("transcript-error-copy")
+        .role(gpui::Role::Button)
+        .aria_label("Copy error")
+        .tab_index(0)
+        .size(px(24.0))
+        .flex_none()
+        .rounded(px(crate::theme::radius::SM))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .bg(motion::hover_blend(
+            &fade_key,
+            gpui::transparent_black(),
+            crate::theme::ink(0.08),
+        ))
+        .on_hover(motion::hover_listener(fade_key))
+        .focus_visible(move |style| crate::theme::focus_ring(style, ring))
+        .tooltip(crate::popover::text_tooltip("Copy error"))
+        .on_click(move |_, _, cx| {
+            cx.write_to_clipboard(gpui::ClipboardItem::new_string(copy_message.to_string()));
+        })
+        .child(
+            crate::icons::icon(crate::icons::COPY)
+                .size(px(12.0))
+                .text_color(theme.content_muted),
+        )
+        .into_any_element();
     div()
         .py(px(4.0))
         .w_full()
-        .child(
-            div()
-                .w_full()
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(theme.surface_raised)
-                .px(px(10.0))
-                .py(px(8.0))
-                .flex()
-                .flex_col()
-                .gap(px(5.0))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.content_muted)
-                        .child(crate::icons::icon(crate::icons::DANGER_TRIANGLE).size(px(13.0)))
-                        .child("Run error")
-                        .child(div().flex_1())
-                        .child(
-                            div()
-                                .id("transcript-error-copy")
-                                .size(px(20.0))
-                                .rounded(px(5.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .hover(move |style| style.bg(hover_color))
-                                .on_click(move |_, _, cx| {
-                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                        copy_message.to_string(),
-                                    ));
-                                })
-                                .child(crate::icons::icon(crate::icons::COPY).size(px(12.0))),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text)
-                        .child(message),
-                ),
-        )
+        .child(transcript_notice(
+            theme.danger,
+            crate::icons::DANGER_TRIANGLE,
+            "Run error".into(),
+            Some(message),
+            vec![copy],
+            theme,
+        ))
         .into_any_element()
 }
 
@@ -8828,7 +8909,7 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
                 .items_center()
                 .gap(px(8.0))
                 .overflow_hidden()
-                .rounded(px(10.0))
+                .rounded(px(crate::theme::radius::LG))
                 .border_1()
                 .border_color(crate::theme::hairline(0.08))
                 .bg(crate::theme::ink(0.045))
@@ -8838,7 +8919,7 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
                     div()
                         .flex_none()
                         .size(px(20.0))
-                        .rounded(px(6.0))
+                        .rounded(px(crate::theme::radius::SM))
                         .bg(crate::theme::ink(0.09))
                         .flex()
                         .items_center()
@@ -8874,7 +8955,8 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
 fn tool_icon_path(call: &ToolCall) -> &'static str {
     match call {
         ToolCall::Exec { .. } => crate::icons::TERMINAL,
-        ToolCall::ReadFile { .. } | ToolCall::ApplyPatch { .. } => crate::icons::DOCUMENT,
+        ToolCall::ReadFile { .. } => crate::icons::DOCUMENT,
+        ToolCall::ApplyPatch { .. } => crate::icons::PEN_NEW_SQUARE,
         ToolCall::WriteFile { .. } => crate::icons::DOCUMENT_ADD,
         ToolCall::EditFile { .. } => crate::icons::PEN,
         ToolCall::Search { .. } => crate::icons::MAGNIFER,
@@ -8884,9 +8966,9 @@ fn tool_icon_path(call: &ToolCall) -> &'static str {
         ToolCall::Todo { .. } => crate::icons::CHECKLIST,
         call if is_agent_call(call) => crate::icons::BOT,
         ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::BOT,
-        ToolCall::Mcp { .. } | ToolCall::ComputerUse { .. } | ToolCall::Unknown { .. } => {
-            crate::icons::WIDGET
-        }
+        ToolCall::Mcp { .. } => crate::icons::PLUG_CIRCLE,
+        call if call.native_hook_name().is_some() => crate::icons::BOLT,
+        ToolCall::ComputerUse { .. } | ToolCall::Unknown { .. } => crate::icons::WIDGET,
     }
 }
 
@@ -8906,32 +8988,110 @@ fn file_badge_name(path: &str) -> &str {
 /// syntax runs — so an inline tool diff is indistinguishable from the
 /// checkout diff sidebar. Output renders as a code block: verbatim mono
 /// lines, indentation intact, counted-tail truncation.
+/// The code surface frame shared by tool output, invocation and diffs: the
+/// markdown code block's radius, fill and edge (audit TL-06).
+fn code_surface_frame(theme: &Theme) -> gpui::Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .overflow_hidden()
+        .rounded(px(crate::theme::radius::LG))
+        .border_1()
+        .border_color(theme.border)
+        .bg(crate::theme::ink(0.035))
+}
+
+/// The code surface header: 28 px, 11 px medium secondary label, actions
+/// trailing.
+fn code_surface_header(theme: &Theme) -> gpui::Div {
+    div()
+        .h(px(OUTPUT_CODE_HEADER_HEIGHT))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_between()
+        .pl(px(render::CODE_PADDING_X))
+        .pr(px(5.0))
+        .border_b_1()
+        .border_color(theme.border)
+        .bg(crate::theme::ink(0.02))
+        .font_family(theme.font_sans.clone())
+        .text_size(crate::typography::ui_rems(11.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(theme.content_muted)
+}
+
 fn detail_body(
     detail: &ToolDetail,
     diff_highlights: Option<Arc<crate::changes::DiffHighlights>>,
     theme: &Theme,
     copy: Option<(render::CopyUi, usize, SharedString)>,
     invocation_is_command: bool,
+    framed: bool,
 ) -> AnyElement {
     let body = div().w_full().min_w_0().flex().flex_col().overflow_hidden();
+    // A standalone code surface draws its own frame; a segment of a merged
+    // frame keeps the same box (transparent edges) so heights stay exact.
+    let frame = move |el: gpui::Div| {
+        if framed {
+            el.rounded(px(crate::theme::radius::LG))
+                .border_1()
+                .border_color(theme.border)
+                .bg(crate::theme::ink(0.035))
+        } else {
+            el.border_y_1().border_color(gpui::transparent_black())
+        }
+    };
     match detail {
         // No comment layer: an inline tool diff is a record of what the
         // agent already did, not a review surface.
-        ToolDetail::Diff { file, .. } => body
-            .id(copy
-                .as_ref()
-                .map(|(_, _, key)| format!("{key}-diff-scroll"))
-                .unwrap_or_else(|| format!("tool-diff-{}", file.path)))
-            .h(px(
-                tool_diff_height(file, theme).min(DIFF_VIEWPORT_MAX_HEIGHT)
-            ))
-            .overflow_y_scroll()
-            .child(crate::changes::render_file_body_with_syntax(
-                file,
-                diff_highlights,
-                theme,
-            ))
-            .into_any_element(),
+        ToolDetail::Diff { file, .. } => {
+            let name = file_badge_name(&file.path).to_owned();
+            let header = code_surface_header(theme)
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(div().min_w_0().truncate().child(SharedString::from(name)))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(theme.readable_tone(theme.diff_add, 1.0))
+                                .child(SharedString::from(format!("+{}", file.additions))),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_color(theme.readable_tone(theme.diff_del, 1.0))
+                                .child(SharedString::from(format!("−{}", file.deletions))),
+                        ),
+                )
+                .pr(px(render::CODE_PADDING_X));
+            frame(body)
+                .child(header)
+                .child(
+                    div()
+                        .id(copy
+                            .as_ref()
+                            .map(|(_, _, key)| format!("{key}-diff-scroll"))
+                            .unwrap_or_else(|| format!("tool-diff-{}", file.path)))
+                        .h(px(
+                            tool_diff_height(file, theme).min(DIFF_VIEWPORT_MAX_HEIGHT)
+                        ))
+                        .overflow_y_scroll()
+                        .child(crate::changes::render_file_body_with_syntax(
+                            file,
+                            diff_highlights,
+                            theme,
+                        )),
+                )
+                .into_any_element()
+        }
         ToolDetail::Stats { stats } => body
             .py(px(6.0))
             .font_family(theme.font_mono.clone())
@@ -8983,22 +9143,8 @@ fn detail_body(
                 .as_ref()
                 .map(|(_, ix, key)| format!("{key}-scroll-{ix}"))
                 .unwrap_or_else(|| "tool-output-scroll".into());
-            let header = div()
-                .h(px(OUTPUT_CODE_HEADER_HEIGHT))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_between()
-                .pl(px(render::CODE_PADDING_X))
-                .pr(px(5.0))
-                .border_b_1()
-                .border_color(theme.border)
-                .bg(crate::theme::ink(0.02))
-                .font_family(theme.font_sans.clone())
-                .text_size(crate::typography::ui_rems(11.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(theme.content_muted)
-                .child(match copy.as_ref().map(|(_, ix, _)| *ix) {
+            let header =
+                code_surface_header(theme).child(match copy.as_ref().map(|(_, ix, _)| *ix) {
                     Some(0) if invocation_is_command => "Command",
                     Some(0) => "Invocation",
                     _ => "Output",
@@ -9024,10 +9170,7 @@ fn detail_body(
             let rows = lines.len() + usize::from(*truncated_by > 0);
             let viewport = (rows as f32 * tool_code_line_height(theme) + OUTPUT_BODY_PAD)
                 .min(OUTPUT_VIEWPORT_MAX_HEIGHT);
-            body.rounded(px(10.0))
-                .border_1()
-                .border_color(theme.border)
-                .bg(crate::theme::ink(0.035))
+            frame(body)
                 .child(header)
                 .child(
                     // Long lines scroll sideways instead of ending in an
@@ -9101,7 +9244,7 @@ pub fn fixture_detail_panel(detail: &ToolDetail, theme: &Theme, ui_scale: f32) -
         .border_1()
         .border_color(theme.border)
         .font_family(theme.font_sans.clone())
-        .child(detail_body(detail, None, theme, None, false))
+        .child(detail_body(detail, None, theme, None, false, true))
         .into_any_element()
 }
 
@@ -9204,7 +9347,7 @@ fn child_status_label(status: Option<SubagentStatus>) -> &'static str {
         Some(SubagentStatus::Waiting) => "Waiting",
         Some(SubagentStatus::Done) => "Done",
         Some(SubagentStatus::Failed) => "Failed",
-        Some(SubagentStatus::Interrupted) => "Interrupted",
+        Some(SubagentStatus::Interrupted) => "Stopped",
         Some(SubagentStatus::Unobserved) => "Not observed",
         None => "Status unavailable",
     }
@@ -9343,14 +9486,14 @@ fn chip_header_row(
                 div()
                     .size(px(18.0))
                     .flex_none()
-                    .rounded(px(5.0))
+                    .rounded(px(crate::theme::radius::SM))
                     .bg(crate::theme::ink(0.08))
                     .flex()
                     .items_center()
                     .justify_center()
                     .child(
                         crate::icons::icon(if tool.is_thought {
-                            crate::icons::CHAT_ROUND_LINE
+                            crate::icons::LIGHTBULB
                         } else {
                             tool_icon_path(&tool.call)
                         })
@@ -9407,7 +9550,7 @@ fn chip_header_row(
                         .items_center()
                         .overflow_hidden()
                         .gap(px(6.0))
-                        .rounded(px(5.0))
+                        .rounded(px(crate::theme::radius::SM))
                         .bg(theme.ink(0.06))
                         .pl(px(1.0))
                         .pr(px(6.0))
@@ -9419,7 +9562,7 @@ fn chip_header_row(
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .rounded(px(4.0))
+                                .rounded(px(crate::theme::radius::XS))
                                 .bg(crate::file_icons::well_bg(theme))
                                 .child(
                                     crate::file_icons::icon(
@@ -9506,14 +9649,30 @@ fn chip_header_row(
         .when(
             is_agent_tool(tool) && tool.subagent_status.is_some(),
             |row| {
+                // One status badge everywhere (audit TL-22): a 6 px dot and
+                // an 11 px medium word; only a failure is red.
+                let dot = match tool.subagent_status {
+                    Some(SubagentStatus::Done) => theme.readable_tone(theme.success, 1.0),
+                    Some(SubagentStatus::Failed) => theme.readable_tone(theme.danger, 1.0),
+                    Some(SubagentStatus::Interrupted) => theme.readable_tone(theme.warning, 1.0),
+                    Some(SubagentStatus::Running) => theme.accent,
+                    _ => theme.content_faint,
+                };
                 row.child(
                     div()
                         .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
                         .text_size(crate::typography::ui_rems(11.0))
+                        .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(if failed {
-                            theme.danger
+                            theme.readable_tone(theme.danger, 1.0)
                         } else {
-                            theme.content_faint
+                            theme.content_muted
+                        })
+                        .when(!running, |badge| {
+                            badge.child(div().size(px(6.0)).flex_none().rounded_full().bg(dot))
                         })
                         .child(child_status_label(tool.subagent_status)),
                 )
@@ -9668,6 +9827,7 @@ fn activity_rail(
     continuation_reveal: f32,
     row_height: f32,
     theme: &Theme,
+    running: Option<AnyElement>,
 ) -> gpui::Div {
     let color = theme.hairline(0.12);
     let tint = if tool.is_error {
@@ -9722,9 +9882,20 @@ fn activity_rail(
             .absolute()
             .inset_0(),
         )
-        .child(
-            crate::icons::icon(if tool.is_thought {
-                crate::icons::CHAT_ROUND_LINE
+        .child(match running {
+            Some(spinner) => div()
+                .absolute()
+                .left(px(ACTIVITY_ICON_LEFT))
+                .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
+                .size(px(ACTIVITY_ICON_SIZE))
+                .flex()
+                .items_center()
+                .justify_center()
+                .opacity(branch_reveal)
+                .child(spinner)
+                .into_any_element(),
+            None => crate::icons::icon(if tool.is_thought {
+                crate::icons::LIGHTBULB
             } else if tool.is_error {
                 crate::icons::CLOSE_CIRCLE
             } else {
@@ -9735,8 +9906,9 @@ fn activity_rail(
             .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
             .size(px(ACTIVITY_ICON_SIZE))
             .opacity(branch_reveal)
-            .text_color(tint),
-        )
+            .text_color(tint)
+            .into_any_element(),
+        })
 }
 
 /// A clockwise ribbon contour. Nonzero fill unions intersecting contours,
@@ -9789,7 +9961,7 @@ fn tool_chip(
         .items_center()
         .overflow_hidden()
         .when(!rail, |card| {
-            card.rounded(px(9.0))
+            card.rounded(px(crate::theme::radius::LG))
                 .border_1()
                 .border_color(crate::theme::hairline(0.07))
                 .bg(crate::theme::ink(0.03))
@@ -9828,6 +10000,7 @@ fn tool_chip(
                 continuation_reveal,
                 row_height,
                 theme,
+                None,
             ))
         })
         .child(card)
@@ -9883,7 +10056,7 @@ fn subagent_chip(
                 .flex()
                 .items_center()
                 .overflow_hidden()
-                .rounded(px(9.0))
+                .rounded(px(crate::theme::radius::LG))
                 .border_1()
                 .border_color(crate::theme::hairline(0.07))
                 .bg(crate::theme::ink(0.03))
@@ -10085,29 +10258,151 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
 /// pointer-only text; GPUI's keyboard click activates them on Enter/Space.
 /// Focus paints a background rather than a border so tabbing onto one never
 /// reflows the trailer row.
-fn trailer_action(
-    id: &'static str,
+/// One action in a message's hover strip: a 24 px icon button with the
+/// shared hover fade, text tooltip, accessible name and focus ring.
+fn meta_action(
+    id: SharedString,
+    icon: &'static str,
     label: &'static str,
-    color: gpui::Hsla,
     theme: &Theme,
-    activate: impl Fn(&mut Transcript, &mut Context<Transcript>) + 'static,
-    cx: &mut Context<Transcript>,
 ) -> gpui::Stateful<gpui::Div> {
-    let focus_ring = theme.focus_ring();
+    let fade_key = id.to_string();
+    let ring = theme.focus_ring();
     div()
         .id(id)
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
-        .px(px(6.0))
-        .rounded(px(Theme::CONTROL_RADIUS))
-        .text_color(color)
+        .size(px(24.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(crate::theme::radius::SM))
         .cursor_pointer()
-        .hover(|style| style.bg(crate::theme::ink(0.08)))
+        .bg(motion::hover_blend(
+            &fade_key,
+            gpui::transparent_black(),
+            crate::theme::ink(0.08),
+        ))
+        .on_hover(motion::hover_listener(fade_key))
+        .focus_visible(move |style| crate::theme::focus_ring(style, ring))
+        .tooltip(crate::popover::text_tooltip(label))
+        .child(
+            crate::icons::icon(icon)
+                .size(px(14.0))
+                .text_color(theme.content_muted),
+        )
+}
+
+fn trailer_action(
+    id: &'static str,
+    label: &'static str,
+    primary: bool,
+    theme: &Theme,
+    activate: impl Fn(&mut Transcript, &mut Context<Transcript>) + 'static,
+    cx: &mut Context<Transcript>,
+) -> gpui::Stateful<gpui::Div> {
+    // Notice buttons (audit TL-08): 24 px, r6; the primary action is a solid
+    // plate, secondary actions are outlined.
+    let focus_ring = theme.focus_ring();
+    let (fill, hover, text, edge) = if primary {
+        (
+            theme.solid,
+            theme.solid.opacity(0.88),
+            theme.on_solid,
+            gpui::transparent_black(),
+        )
+    } else {
+        (
+            gpui::transparent_black(),
+            crate::theme::ink(0.06),
+            theme.text,
+            theme.border_strong,
+        )
+    };
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .flex_none()
+        .h(px(24.0))
+        .px(px(10.0))
+        .flex()
+        .items_center()
+        .rounded(px(crate::theme::radius::SM))
+        .border_1()
+        .border_color(edge)
+        .bg(fill)
+        .text_size(crate::typography::ui_rems(12.0))
+        .font_weight(gpui::FontWeight::MEDIUM)
+        .text_color(text)
+        .cursor_pointer()
+        .hover(move |style| style.bg(hover))
         .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, cx)))
         .on_key_down(crate::swallow_activation_key)
         .child(label)
+}
+
+/// The timeline's one notice (audit TL-08): a tinted r10 card with a 14 px
+/// glyph, a 13 px semibold title, optional 12 px secondary detail and
+/// trailing actions. Run errors, turn recovery and undelivered sends share it.
+fn transcript_notice(
+    tone: gpui::Hsla,
+    icon: &'static str,
+    title: SharedString,
+    detail: Option<SharedString>,
+    actions: Vec<AnyElement>,
+    theme: &Theme,
+) -> gpui::Div {
+    let glyph = theme.readable_tone(tone, 1.0);
+    div()
+        .w_full()
+        .rounded(px(crate::theme::radius::LG))
+        .border_1()
+        .border_color(tone.opacity(0.24))
+        .bg(tone.opacity(0.08))
+        .px(px(12.0))
+        .py(px(10.0))
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .min_h(px(24.0))
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    crate::icons::icon(icon)
+                        .size(px(14.0))
+                        .flex_none()
+                        .text_color(glyph),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex_1()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(title),
+                )
+                .children(actions),
+        )
+        .when_some(detail, |card, detail| {
+            card.child(
+                div()
+                    .pl(px(22.0))
+                    .max_w(px(680.0))
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .line_height(crate::typography::ui_rems(17.0))
+                    .text_color(theme.content_muted)
+                    .child(detail),
+            )
+        })
 }
 
 impl Render for Transcript {

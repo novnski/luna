@@ -2342,7 +2342,17 @@ pub fn glass_selected_bg() -> Hsla {
 pub fn user_bubble_bg() -> Hsla {
     match current_appearance() {
         Appearance::Dark => wash(0.08),
-        Appearance::Light => wash(0.04),
+        // Light needs a denser plate (and an edge, see
+        // [`user_bubble_edge`]) to separate from the white content plane.
+        Appearance::Light => wash(0.065),
+    }
+}
+
+/// The user bubble's hairline edge: light appearance only.
+pub fn user_bubble_edge() -> Option<Hsla> {
+    match current_appearance() {
+        Appearance::Dark => None,
+        Appearance::Light => Some(hairline(0.06)),
     }
 }
 
@@ -2422,6 +2432,42 @@ pub fn focus_ring(style: gpui::StyleRefinement, color: Hsla) -> gpui::StyleRefin
         spread_radius: gpui::px(2.0),
         inset: true,
     }])
+}
+
+/// Corner radius ladder (UI polish audit DS-10). Pick by role, and give a
+/// nested surface [`radius::inner`] of its container so corners stay
+/// concentric.
+pub mod radius {
+    /// Inline code, kbd hints, checkboxes, file wells, progress tracks.
+    pub const XS: f32 = 4.0;
+    /// Controls up to 24 pt, chips, icon buttons, tiles, badges.
+    pub const SM: f32 = super::Theme::CONTROL_RADIUS;
+    /// Controls 28–32 pt, menu rows, inputs.
+    pub const MD: f32 = 8.0;
+    /// Cards, code and output surfaces, popovers, notices, settings groups.
+    pub const LG: f32 = super::Theme::PANEL_RADIUS;
+    /// Dialogs, the command palette, message bubbles, sheets.
+    pub const XL: f32 = super::Theme::BUBBLE_RADIUS;
+
+    /// Radius of a surface inset `inset` pt inside one with radius `outer`.
+    pub fn inner(outer: f32, inset: f32) -> f32 {
+        (outer - inset).max(XS)
+    }
+}
+
+/// Spacing ladder on the 4 pt grid (UI polish audit DS-11). `S6` is the
+/// icon-to-label gap; `S10` a control's horizontal padding.
+pub mod space {
+    pub const S2: f32 = 2.0;
+    pub const S4: f32 = 4.0;
+    pub const S6: f32 = 6.0;
+    pub const S8: f32 = 8.0;
+    pub const S10: f32 = 10.0;
+    pub const S12: f32 = 12.0;
+    pub const S16: f32 = 16.0;
+    pub const S20: f32 = 20.0;
+    pub const S24: f32 = 24.0;
+    pub const S32: f32 = 32.0;
 }
 
 /// An exact achromatic tone from an 8-bit channel value (`grey(13)` ≡ `#0d0d0d`)

@@ -39,7 +39,7 @@ impl ChildChatStatus {
             Self::NeedsInput => "Needs input",
             Self::Running => "Running",
             Self::Failed => "Failed",
-            Self::Interrupted => "Interrupted",
+            Self::Interrupted => "Stopped",
             // A child's own turn ended; its owned background work (if any)
             // is the work view's, never implied done here.
             Self::Completed => "Turn completed",

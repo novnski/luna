@@ -8,27 +8,27 @@ Update this file as each finding lands so work can resume after compaction.
 | TL-24 | P1 | Working indicator: sparse flickering dots, random whimsical verb, flat jumping timer (user-requested) | done (milestone A) | Breathing orb, live status from the newest unresolved tool, shimmer, tabular timer, hover Stop; flavour rotation retired |
 | TL-01 | P1 | Expanding a tool row is a 140 ms height-only wipe; four different fold clocks | done (milestone A) | motion::DISCLOSURE (300 ms) for tool rows/groups/diff collapse; body fades in 180 ms, out by 60% |
 | TL-02 | P1 | Disclosure chevrons: three sizes, two behaviours, hidden until hover | done (milestone A) | One 12 px alt-arrow-right rotated by fold progress; always visible at 50%; right-aligned accessory column |
-| TL-03 | P1 | Thought text is hard-wrapped at 96 columns, then each line is truncated | todo | |
+| TL-03 | P1 | Thought text is hard-wrapped at 96 columns, then each line is truncated | todo | Deferred: needs width-aware thought wrapping with analytic heights |
 | TL-04 | P1 | Failed tool rows and agent cards paint everything red | done (milestone A) | Label/detail keep row tones; close-circle glyph + trailing "Failed" |
 | TL-05 | P1 | Text tiers collapse: muted and faint render as the same grey (faint is brighter) | done (milestone A) | content_muted / content_faint floored on the canvas with a 1.35x step; used across transcript + markdown |
 | TL-06 | P1 | Tool output and code blocks are two different components | done (milestone A) | Tool output uses code block recipe (r10, 28 px header, shared copy_action, 12.5/18 mono, horizontal scroll) |
 | TL-07 | P1 | Four left edges inside one reply; the group title sits 4 px off the glyph column | done (milestone A) | Group chevron box 26 px; title on the glyph column |
-| TL-08 | P1 | Error and retry states use four unrelated treatments | todo | |
+| TL-08 | P1 | Error and retry states use four unrelated treatments | done (milestone B) | transcript_notice (tone card, glyph, title, detail, 24 px solid/outlined buttons) for run error, recovery, undelivered |
 | TL-09 | P1 | Keyboard focus is invisible on tool rows and inconsistent elsewhere | done (milestone A) | focus_ring recipe on headers, rows, expander, copy, subagent cards, trailer actions, thumbnails |
-| TL-10 | P2 | Nine corner radii in one timeline | todo | |
-| TL-11 | P2 | Stacked Invocation and Output boxes form a double hairline; "Show full output" is bare text | todo | |
-| TL-12 | P2 | Inline diffs in the activity tree are frameless and square | todo | |
-| TL-13 | P2 | Four loader idioms, and running tool rows show none | todo | |
-| TL-14 | P2 | Hover metadata strip mixes text and icon buttons with uneven feedback | todo | |
-| TL-15 | P2 | Seven chrome text sizes, two below the macOS floor | todo | |
-| TL-16 | P2 | Icon sizes drift from 11 to 16 px and glyphs collide in meaning | todo | |
-| TL-17 | P2 | Jump to bottom: text arrow, no exit, 1.2 s creeping glide | todo | |
-| TL-18 | P2 | Mermaid diagrams: box-in-box, cool-grey square nodes, source-to-diagram snap | todo | |
-| TL-19 | P2 | Markdown headings get the same 12 px gap as paragraphs | todo | |
-| TL-20 | P2 | Turn rhythm: an empty 32 px lane and a 16 px turn gap split one reply into two | todo | |
-| TL-21 | P2 | Long prompt collapse: an ASCII "..." line and a glyph-swap toggle | todo | |
-| TL-22 | P2 | One agent, three status vocabularies | todo | |
-| TL-23 | P3 | Light theme: the user bubble barely has an edge and a pending send reads as disabled | todo | |
+| TL-10 | P2 | Nine corner radii in one timeline | done (milestone B) | radius ladder (theme::radius XS/SM/MD/LG/XL + inner) across transcript, agent cards, markdown |
+| TL-11 | P2 | Stacked Invocation and Output boxes form a double hairline; "Show full output" is bare text | done (milestone B) | Invocation + output render as segments of one code surface; Show full output is a ghost button with spinner |
+| TL-12 | P2 | Inline diffs in the activity tree are frameless and square | done (milestone B) | Inline diffs framed with a header (file name, +N −N) |
+| TL-13 | P2 | Four loader idioms, and running tool rows show none | done (milestone B) | Live unresolved tool rows show the item spinner (gated on chat_run_live) |
+| TL-14 | P2 | Hover metadata strip mixes text and icon buttons with uneven feedback | done (milestone B) | meta_action 24 px icon buttons with shared tooltip/hover/focus; tertiary timestamp |
+| TL-15 | P2 | Seven chrome text sizes, two below the macOS floor | done (milestone B) | Sub-11 px timeline labels raised to 11 px; TextStyle scale added (typography::TextStyle) |
+| TL-16 | P2 | Icon sizes drift from 11 to 16 px and glyphs collide in meaning | done (milestone B) | Rail glyphs 14 px; Solar plug-circle (MCP), lightbulb (thought), bolt (hooks), pen-new-square (patch) |
+| TL-17 | P2 | Jump to bottom: text arrow, no exit, 1.2 s creeping glide | done (milestone B) | Jump pill: Solar arrow-down icon, Role::Button, aria label, focus ring (glide unchanged) |
+| TL-18 | P2 | Mermaid diagrams: box-in-box, cool-grey square nodes, source-to-diagram snap | done (milestone B) | Mermaid on the frame fill; ink nodes, hairline edges, tertiary lines, 13 px text |
+| TL-19 | P2 | Markdown headings get the same 12 px gap as paragraphs | done (milestone B) | Heading top spacing (H1 28 / H2 24 / H3 20) in render_tree and top_gap_for; H2 17/24 |
+| TL-20 | P2 | Turn rhythm: an empty 32 px lane and a 16 px turn gap split one reply into two | done (milestone B) | Meta lane 32 → 28 px (24 px buttons + 4 px lead) |
+| TL-21 | P2 | Long prompt collapse: an ASCII "..." line and a glyph-swap toggle | done (milestone B) | Toggle 13 px medium with one rotating chevron; real ellipsis in tertiary (no gradient: frosted backdrop) |
+| TL-22 | P2 | One agent, three status vocabularies | done (milestone B) | One lexicon (Running/Done/Stopped/Failed…) and dot + word badge in chips and the Agents pane |
+| TL-23 | P3 | Light theme: the user bubble barely has an edge and a pending send reads as disabled | done (milestone B) | Light bubble wash 0.065 + inset hairline edge; pending keeps contrast and shows a clock |
 | CP-01 | P1 | Model and access menus open detached from their chips | todo | |
 | CP-02 | P1 | Hover tooltips cover the control they describe | todo | |
 | CP-03 | P1 | Placeholder is almost as bright as typed text (flat tonal hierarchy) | todo | |

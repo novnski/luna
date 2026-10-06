@@ -122,6 +122,76 @@ pub const fn ui_rems(pixels_at_default: f32) -> Rems {
     rems(pixels_at_default / 16.0)
 }
 
+/// The interface type scale (UI polish audit DS-01): every step pairs a size
+/// with its line height and default weight, in pt at the 16 px default, and
+/// scales with the Interface size setting. Set all three together with
+/// [`TypeStyleExt::type_style`] instead of a bare `text_size`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextStyle {
+    /// 10/13 — kbd hints, counts, uppercase badges only.
+    Caption2,
+    /// 11/14 — chrome labels, meta, chips, sidebar secondary.
+    Caption,
+    /// 12/16 — row descriptions, tool rows, menu secondary.
+    Footnote,
+    /// 13/18 — default UI text, row titles, buttons.
+    Body,
+    /// 14/21 — chat prose, composer input.
+    Prose,
+    /// 15/20 semibold — card and dialog titles.
+    Title3,
+    /// 17/22 semibold — section titles.
+    Title2,
+    /// 20/25 semibold — page titles.
+    Title1,
+    /// 26/32 bold — empty states, hero.
+    Display,
+}
+
+impl TextStyle {
+    /// (size, line height) in pt at the 16 px default.
+    pub const fn metrics(self) -> (f32, f32) {
+        match self {
+            Self::Caption2 => (10.0, 13.0),
+            Self::Caption => (11.0, 14.0),
+            Self::Footnote => (12.0, 16.0),
+            Self::Body => (13.0, 18.0),
+            Self::Prose => (14.0, 21.0),
+            Self::Title3 => (15.0, 20.0),
+            Self::Title2 => (17.0, 22.0),
+            Self::Title1 => (20.0, 25.0),
+            Self::Display => (26.0, 32.0),
+        }
+    }
+
+    pub const fn weight(self) -> gpui::FontWeight {
+        match self {
+            Self::Title3 | Self::Title2 | Self::Title1 => gpui::FontWeight::SEMIBOLD,
+            Self::Display => gpui::FontWeight::BOLD,
+            _ => gpui::FontWeight::NORMAL,
+        }
+    }
+
+    pub const fn size(self) -> Rems {
+        ui_rems(self.metrics().0)
+    }
+
+    pub const fn line_height(self) -> Rems {
+        ui_rems(self.metrics().1)
+    }
+}
+
+/// Apply a [`TextStyle`] step (size, line height and weight together).
+pub trait TypeStyleExt: gpui::Styled + Sized {
+    fn type_style(self, style: TextStyle) -> Self {
+        self.text_size(style.size())
+            .line_height(style.line_height())
+            .font_weight(style.weight())
+    }
+}
+
+impl<T: gpui::Styled> TypeStyleExt for T {}
+
 /// Tabular (fixed-width) figures for counters and timers, so ticking digits
 /// never shift the text after them.
 pub fn tabular_figures() -> gpui::FontFeatures {

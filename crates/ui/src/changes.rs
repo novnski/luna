@@ -53,7 +53,7 @@ use crate::history::{
     GitHistoryViewButton,
 };
 use crate::markdown::render;
-use crate::motion::{self, AnimationExt as _, CHEVRON, COLLAPSE};
+use crate::motion::{self, AnimationExt as _, CHEVRON};
 use crate::popover::{self, Popup};
 use crate::state::{AppState, EngineHandle};
 use crate::theme::Theme;
@@ -1580,7 +1580,7 @@ struct FileFold {
     toggled_at: Option<std::time::Instant>,
 }
 
-/// Tween arming window after a fold toggle (COLLAPSE's 180ms plus margin).
+/// Tween arming window after a fold toggle (DISCLOSURE's 300 ms plus margin).
 const FOLD_TWEEN_WINDOW: Duration = Duration::from_millis(400);
 
 /// Ceiling on how much body a fold tween's stand-in row materializes. A
@@ -3556,7 +3556,9 @@ impl Changes {
                     clipped
                         .with_animation(
                             SharedString::from(format!("fold-{}-{}", file_diff.path, fold.epoch)),
-                            COLLAPSE.animation(),
+                            // Diff files fold on the shared disclosure curve,
+                            // like tool rows (audit TL-01).
+                            motion::DISCLOSURE.animation(),
                             move |el, t| el.h(px(motion::lerp(from, to, t))),
                         )
                         .into_any_element()

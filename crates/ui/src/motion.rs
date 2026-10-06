@@ -384,7 +384,7 @@ pub const RESIZE: MotionSpec = MotionSpec::new(200, EASE_OUT);
 /// Terminal tab drag-reorder sliding transforms: 150ms (§1.10).
 pub const TAB_SLIDE: MotionSpec = MotionSpec::new(150, EASE_OUT);
 /// Diff-pane per-file collapse: 180ms height (§1.11).
-pub const COLLAPSE: MotionSpec = DISCLOSURE;
+pub const COLLAPSE: MotionSpec = MotionSpec::new(180, EASE_OUT);
 /// Reversible new-thread ↔ session handoff. The shared composer moves and
 /// morphs on a fast-starting, soft-landing curve while the canvas/transcript
 /// crossfade is staged around it. Slightly longer than a utility transition,
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!((SPLASH_OUT.duration_ms, SPLASH_OUT.delay_ms), (500, 150));
         assert_eq!(RESIZE.duration_ms, 200);
         assert_eq!(TAB_SLIDE.duration_ms, 150);
-        assert_eq!(COLLAPSE, DISCLOSURE);
+        assert_eq!(COLLAPSE.duration_ms, 180);
         assert_eq!(NEW_THREAD_TRANSITION.duration_ms, 420);
         assert_eq!(NEW_THREAD_TRANSITION.curve, EASE_RESORT);
         assert_eq!(CHEVRON.duration_ms, 200);

@@ -18,6 +18,18 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, Hsla, Result, SharedString, Styled as _, Svg, svg};
 
+/// Icon size ladder (UI polish audit DS-12), paired with the type scale.
+pub mod size {
+    /// Filled status glyphs beside caption text only.
+    pub const XS: f32 = 12.0;
+    /// Toolbars, chips, menus (caption / footnote text).
+    pub const SM: f32 = 14.0;
+    /// Buttons, settings tiles, rows (body text).
+    pub const MD: f32 = 16.0;
+    /// Titlebar, empty states (title text and up).
+    pub const LG: f32 = 20.0;
+}
+
 macro_rules! icon_assets {
     ($(($const_name:ident, $path:literal)),+ $(,)?) => {
         $(pub const $const_name: &str = concat!("icons/", $path, ".svg");)+
@@ -176,6 +188,9 @@ icon_assets![
     (GLOBAL, "global"),
     (CHECKLIST, "checklist"),
     (WIDGET, "widget"),
+    // Solar Linear via @solar-icons/cli (audit TL-16): MCP tools and thoughts.
+    (PLUG_CIRCLE, "plug-circle"),
+    (LIGHTBULB, "lightbulb-minimalistic"),
     (WIFI_OFF, "wifi-off"),
     (CLOSE_CIRCLE, "close-circle"),
     // Hand-drawn info glyph in the Solar Linear style (like the terminal/
