@@ -1904,6 +1904,18 @@ pub fn schedule_scrollbar_hide<T: 'static>(bar: &mut MenuScrollbarState, cx: &mu
 /// the list, and [`rail`] folds the whole treatment — activity note, hide
 /// scheduling, metrics, visuals, and all six pointer listeners — into one
 /// call.
+/// Rail geometry for a handle-less `ListState` (virtualized lists): the
+/// metrics plus the track's top edge, from the list's own scrollbar
+/// accessors.
+pub fn list_rail_geometry(list: &gpui::ListState) -> Option<(MenuScrollbarMetrics, Pixels)> {
+    let bounds = list.viewport_bounds();
+    let viewport = f32::from(bounds.size.height);
+    let max_scroll = f32::from(list.max_offset_for_scrollbar().y);
+    let offset = -f32::from(list.scroll_px_offset_for_scrollbar().y);
+    let metrics = MenuScrollbarMetrics::from_parts(viewport, viewport + max_scroll, offset)?;
+    Some((metrics, bounds.top()))
+}
+
 pub trait ScrollRailHost: 'static {
     /// The rail's hover/drag interaction state.
     fn rail_bar(&mut self) -> &mut MenuScrollbarState;

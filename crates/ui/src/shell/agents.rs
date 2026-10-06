@@ -55,7 +55,7 @@ impl Shell {
             content = content.child(section);
         }
         if rows.is_empty() && !has_native {
-            content = content.child(div().p(px(20.0)).text_color(theme.text_muted).child("No agents yet. Native subagents from this conversation appear here when the provider reports them."));
+            content = content.child(div().p(px(crate::surface_chrome::CONTENT_INSET)).text_color(theme.text_muted).child("No agents yet. Native subagents from this conversation appear here when the provider reports them."));
         }
         for (id, title, label, activity, metrics, doc_id, frozen) in rows {
             let parent = parent.clone();

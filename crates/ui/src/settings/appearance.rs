@@ -1729,7 +1729,7 @@ fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
                 .gap(px(6.0))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .font_family(theme.font_mono.clone())
                         .child(
                             div()
@@ -1741,7 +1741,7 @@ fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
                 )
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .font_family(theme.font_mono.clone())
                         .text_color(theme.syntax.string)
                         .child("  \"Theme mapping\""),
@@ -2558,7 +2558,7 @@ impl AppearancePage {
                     div()
                         .mt(px(4.0))
                         .ml(px(23.0))
-                        .text_size(crate::typography::ui_rems(10.5))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_muted)
                         .child(description),
                 )
@@ -2638,7 +2638,7 @@ impl AppearancePage {
                     .child(section_label("Detected themes").mb(px(0.0)))
                     .child(
                         div()
-                            .text_size(crate::typography::ui_rems(10.5))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_muted)
                             .child(SharedString::from(format!(
                                 "{} variant{}",
@@ -3322,7 +3322,7 @@ impl AppearancePage {
                     .pb(px(4.0))
                     .border_t_1()
                     .border_color(theme.border)
-                    .text_size(crate::typography::ui_rems(10.5))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.text_faint)
                     .child("IMPORTED")
@@ -3342,7 +3342,7 @@ impl AppearancePage {
                     .pb(px(4.0))
                     .border_t_1()
                     .border_color(theme.border)
-                    .text_size(crate::typography::ui_rems(10.5))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme.text_faint)
                     .child("LINKED")

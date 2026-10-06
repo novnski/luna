@@ -495,7 +495,7 @@ impl FilesSurface {
                             .flex()
                             .items_center()
                             .font_family(theme.font_sans.clone())
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_faint)
                             .child("Showing the first 200 matches"),
                     )

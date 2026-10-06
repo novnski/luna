@@ -596,7 +596,7 @@ impl Composer {
                     body = body.child(
                         div()
                             .pt(px(4.0))
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_faint)
                             .child(group.title()),
                     );

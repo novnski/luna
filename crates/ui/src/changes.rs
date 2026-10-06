@@ -53,7 +53,7 @@ use crate::history::{
     GitHistoryViewButton,
 };
 use crate::markdown::render;
-use crate::motion::{self, AnimationExt as _, CHEVRON};
+use crate::motion::{self, AnimationExt as _};
 use crate::popover::{self, Popup};
 use crate::state::{AppState, EngineHandle};
 use crate::theme::Theme;
@@ -79,8 +79,9 @@ pub const NOTICE_HEIGHT: f32 = 24.0;
 pub const BODY_BOTTOM_PAD: f32 = 8.0;
 /// Gutter width per line-number column.
 pub const GUTTER_WIDTH: f32 = 36.0;
-/// The +/−/· marker column between the gutters and the code.
-pub const MARKER_WIDTH: f32 = 28.0;
+/// The +/−/· marker column between the gutters and the code (narrowed from
+/// 28: the marker is a single glyph, audit SS-02).
+pub const MARKER_WIDTH: f32 = 16.0;
 /// Width of the coloured accent bar on the left edge of +/− rows.
 pub const ACCENT_BAR_WIDTH: f32 = 3.0;
 /// The marker column in split mode: each half pays for its own, so it is
@@ -1682,6 +1683,8 @@ pub struct Changes {
     /// once their tween window elapses.
     fold_settle: Option<Task<()>>,
     list: ListState,
+    /// The diff list's floating scrollbar (audit SS-03).
+    list_bar: crate::popover::MenuScrollbarState,
     /// What the pane diffs against (toolbar dropdown).
     scope: DiffScope,
     /// Unified or side-by-side (toolbar toggle, persisted per user).
@@ -1857,7 +1860,17 @@ impl Changes {
             fold_settle: None,
             // Rows are single lines now — a deep overdraw is cheap and keeps
             // fast wheel flicks from outrunning measurement.
-            list: ListState::new(0, ListAlignment::Top, px(1024.0)),
+            list: {
+                let list = ListState::new(0, ListAlignment::Top, px(1024.0));
+                let weak = cx.weak_entity();
+                list.set_scroll_handler(move |_, _, cx| {
+                    // The list repaints itself; the floating rail needs a
+                    // view pass.
+                    weak.update(cx, |_: &mut Self, cx| cx.notify()).ok();
+                });
+                list
+            },
+            list_bar: crate::popover::MenuScrollbarState::default(),
             scope: DiffScope::default(),
             base_ref: None,
             branches: Vec::new(),
@@ -3338,7 +3351,7 @@ impl Changes {
             DiffRow::Line {
                 file,
                 hunk,
-                line,
+                line: line_ix,
                 flat: _,
             } => {
                 let Some(file_diff) = files.get(file as usize) else {
@@ -3347,7 +3360,7 @@ impl Changes {
                 let Some(line) = file_diff
                     .hunks
                     .get(hunk as usize)
-                    .and_then(|h| h.lines.get(line as usize))
+                    .and_then(|h| h.lines.get(line_ix as usize))
                 else {
                     return gpui::Empty.into_any_element();
                 };
@@ -3356,8 +3369,14 @@ impl Changes {
                     .map(|highlights| highlights.spans(line))
                     .unwrap_or(&[]);
                 let gutter_px = gutter_width(file_diff);
+                let changed = file_diff
+                    .hunks
+                    .get(hunk as usize)
+                    .map(|h| word_changes(h, line_ix as usize))
+                    .unwrap_or_default();
                 let row = diff_line_row(
                     line,
+                    &changed,
                     spans,
                     &theme,
                     gutter_px,
@@ -3583,7 +3602,6 @@ impl Changes {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let collapsed = fold.collapsed;
-        let path = file.path.clone();
         let adds = file.additions;
         let dels = file.deletions;
         let sticky = presentation == FileHeaderPresentation::Sticky;
@@ -3599,34 +3617,34 @@ impl Changes {
             theme.ink(0.05)
         };
 
-        // Chevron (luna checkout-diff-sidebar): chevron-right closed,
-        // chevron-down open; gpui divs have no rotation transform at the
-        // pinned rev, so the glyph swap crossfades over the same 200 ms.
-        let chevron_icon = if collapsed {
-            crate::icons::ALT_ARROW_RIGHT
+        // One disclosure glyph rotated through the fold on the shared
+        // disclosure curve (audit SS-11): svg transforms rotate fine.
+        let open_progress = if fold.animating() {
+            let t = fold.toggled_at.map_or(1.0, |at| {
+                motion::DISCLOSURE
+                    .progress(at.elapsed().as_secs_f32() / motion::DISCLOSURE.total().as_secs_f32())
+            });
+            if collapsed { 1.0 - t } else { t }
+        } else if collapsed {
+            0.0
         } else {
-            crate::icons::ALT_ARROW_DOWN
+            1.0
         };
-        let chevron = div().flex_none().size(px(14.0)).child(
-            crate::icons::icon(chevron_icon)
-                .size(px(13.0))
-                .text_color(theme.readable_muted(0.7)),
-        );
-        let chevron: AnyElement = if fold.animating() {
-            chevron
-                .with_animation(
-                    SharedString::from(format!(
-                        "chev-{}-{path}-{}",
-                        presentation.key_prefix(),
-                        fold.epoch
-                    )),
-                    CHEVRON.animation(),
-                    |el, t| el.opacity(0.25 + 0.75 * t),
-                )
-                .into_any_element()
-        } else {
-            chevron.into_any_element()
-        };
+        let chevron: AnyElement = div()
+            .flex_none()
+            .size(px(14.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(
+                crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
+                    .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                        std::f32::consts::FRAC_PI_2 * open_progress,
+                    )))
+                    .size(px(12.0))
+                    .text_color(theme.readable_muted(0.7)),
+            )
+            .into_any_element();
 
         // Header row: chevron + mono path (one quiet tone) + right-aligned
         // +N / −N counts on a slightly raised wash. The header carries the
@@ -3681,7 +3699,7 @@ impl Changes {
                 el.child(
                     div()
                         .flex_none()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_faint)
                         .child(SharedString::from("BIN")),
                 )
@@ -3795,6 +3813,11 @@ impl Changes {
             .justify_center()
             .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
             .cursor_pointer()
+            .tab_index(0)
+            .focus_visible({
+                let ring = theme.focus_ring();
+                move |style| crate::theme::focus_ring(style, ring)
+            })
             // Latched: the blend is neither read nor driven, and its listener
             // would dirty the whole window on every enter/leave for nothing.
             .map(|el| {
@@ -3885,7 +3908,7 @@ impl Changes {
                         .items_center()
                         .bg(crate::theme::ink(0.05))
                         .font_family(theme.font_mono.clone())
-                        .text_size(crate::typography::ui_rems(10.5))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_muted)
                         .child(SharedString::from(short)),
                 )
@@ -4364,7 +4387,7 @@ impl Changes {
                     el.child(
                         div()
                             .flex_none()
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .px(px(6.0))
                             .py(px(2.0))
                             .rounded(px(4.0))
@@ -4400,7 +4423,13 @@ pub fn diff_hunk_text(theme: &Theme) -> gpui::Hsla {
 /// A diff row's tint: the added/deleted hue at ~5–6% over the pane tone,
 /// sampled from the reference.
 pub fn diff_row_wash(tone: gpui::Hsla) -> gpui::Hsla {
-    gpui::Hsla { a: 0.055, ..tone }
+    // A tint you can actually see (audit SS-02): 0.055 composited to about
+    // 1.1:1 against the canvas.
+    let a = match crate::theme::current_appearance() {
+        crate::theme::Appearance::Dark => 0.10,
+        crate::theme::Appearance::Light => 0.08,
+    };
+    gpui::Hsla { a, ..tone }
 }
 
 /// A row's marker, marker color, wash, accent bar and line-number color.
@@ -4416,15 +4445,18 @@ pub fn diff_row_paint(
     Option<gpui::Hsla>,
     gpui::Hsla,
 ) {
-    use crate::theme::{NON_TEXT_CONTRAST_TARGET, TEXT_CONTRAST_TARGET};
+    use crate::theme::TEXT_CONTRAST_TARGET;
+    // Two signals per changed row, not four (audit SS-02): the row tint and
+    // the coloured marker. No edge bar, and line numbers keep the quiet tone
+    // on every row.
     let tinted = |marker: &'static str, tone: gpui::Hsla| {
         let wash = diff_row_wash(tone);
         (
             marker,
             theme.readable_on(tone, wash, TEXT_CONTRAST_TARGET),
             Some(wash),
-            Some(theme.readable_on(tone.opacity(0.55), wash, NON_TEXT_CONTRAST_TARGET)),
-            theme.readable_on(tone.opacity(0.9), wash, TEXT_CONTRAST_TARGET),
+            None,
+            theme.readable_on(theme.readable_faint(0.8), wash, TEXT_CONTRAST_TARGET),
         )
     };
     match kind {
@@ -4478,10 +4510,12 @@ fn hunk_header_row(header: &str, theme: &Theme) -> AnyElement {
         .flex_none()
         .flex()
         .items_center()
-        .px(px(Theme::SPACE_LG))
+        // Content's 12 pt edge, and sized from the code font like the
+        // gutters (audit SS-14, SS-20) rather than the interface setting.
+        .px(px(crate::surface_chrome::CONTENT_INSET))
         .bg(theme.diff_hunk_bg)
         .font_family(theme.font_mono.clone())
-        .text_size(crate::typography::ui_rems(11.0))
+        .text_size(px(diff_text_size(theme) * (11.0 / DIFF_TEXT_SIZE)))
         .text_color(diff_hunk_text(theme))
         .child(SharedString::from(header.to_string()))
         .into_any_element()
@@ -4546,8 +4580,143 @@ fn code_text_viewport(
 /// One +/−/context/meta diff line: coloured accent bar, dual line-number
 /// gutters (`gutter_px` wide — see [`gutter_width`]), marker column, and
 /// paint-only syntax runs.
+/// Byte ranges of `hunk.lines[line_ix]` that changed against its partner in
+/// the same change block (the k-th deletion pairs with the k-th addition),
+/// for word-level highlights (audit SS-02). Unpaired, context and very long
+/// lines get none: the row tint already says the whole line changed.
+pub(crate) fn word_changes(hunk: &Hunk, line_ix: usize) -> Vec<std::ops::Range<usize>> {
+    const MAX_LINE: usize = 400;
+    let Some(line) = hunk.lines.get(line_ix) else {
+        return Vec::new();
+    };
+    let changed = |kind: LineKind| matches!(kind, LineKind::Add | LineKind::Del);
+    if !changed(line.kind) || line.text.len() > MAX_LINE {
+        return Vec::new();
+    }
+    let mut start = line_ix;
+    while start > 0 && changed(hunk.lines[start - 1].kind) {
+        start -= 1;
+    }
+    let mut end = line_ix + 1;
+    while end < hunk.lines.len() && changed(hunk.lines[end].kind) {
+        end += 1;
+    }
+    let block = &hunk.lines[start..end];
+    let of_kind = |kind: LineKind| {
+        block
+            .iter()
+            .enumerate()
+            .filter(move |(_, l)| l.kind == kind)
+            .map(|(ix, _)| ix)
+            .collect::<Vec<_>>()
+    };
+    let (dels, adds) = (of_kind(LineKind::Del), of_kind(LineKind::Add));
+    let here = line_ix - start;
+    let (old, new, mine_is_new) = if line.kind == LineKind::Del {
+        let Some(k) = dels.iter().position(|&ix| ix == here) else {
+            return Vec::new();
+        };
+        let Some(&partner) = adds.get(k) else {
+            return Vec::new();
+        };
+        (&line.text, &block[partner].text, false)
+    } else {
+        let Some(k) = adds.iter().position(|&ix| ix == here) else {
+            return Vec::new();
+        };
+        let Some(&partner) = dels.get(k) else {
+            return Vec::new();
+        };
+        (&block[partner].text, &line.text, true)
+    };
+    if old.len() > MAX_LINE || new.len() > MAX_LINE {
+        return Vec::new();
+    }
+    let diff = similar::TextDiff::from_words(old.as_str(), new.as_str());
+    let mut ranges: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut offset = 0usize;
+    for change in diff.iter_all_changes() {
+        let len = change.value().len();
+        let mine = match change.tag() {
+            similar::ChangeTag::Equal => {
+                offset += len;
+                continue;
+            }
+            similar::ChangeTag::Insert => mine_is_new,
+            similar::ChangeTag::Delete => !mine_is_new,
+        };
+        if !mine {
+            continue;
+        }
+        // Whitespace-only changes don't earn a highlight of their own.
+        if !change.value().trim().is_empty() {
+            match ranges.last_mut() {
+                Some(last) if last.end == offset => last.end = offset + len,
+                _ => ranges.push(offset..offset + len),
+            }
+        }
+        offset += len;
+    }
+    // Nothing in common: the whole line is new; skip the word layer.
+    let covered: usize = ranges.iter().map(|r| r.len()).sum();
+    let own_len = if mine_is_new { new.len() } else { old.len() };
+    if covered * 10 >= own_len * 9 {
+        return Vec::new();
+    }
+    ranges
+}
+
+/// Split `runs` so the given byte ranges carry `background`.
+fn with_word_backgrounds(
+    runs: Vec<gpui::TextRun>,
+    ranges: &[std::ops::Range<usize>],
+    background: gpui::Hsla,
+) -> Vec<gpui::TextRun> {
+    if ranges.is_empty() {
+        return runs;
+    }
+    let mut out = Vec::with_capacity(runs.len() + ranges.len() * 2);
+    let mut pos = 0usize;
+    for run in runs {
+        let run_end = pos + run.len;
+        let mut cursor = pos;
+        while cursor < run_end {
+            let inside = ranges.iter().find(|r| r.start <= cursor && cursor < r.end);
+            let next = match inside {
+                Some(r) => r.end.min(run_end),
+                None => ranges
+                    .iter()
+                    .filter(|r| r.start > cursor)
+                    .map(|r| r.start)
+                    .min()
+                    .unwrap_or(run_end)
+                    .min(run_end),
+            };
+            let mut piece = run.clone();
+            piece.len = next - cursor;
+            if inside.is_some() {
+                piece.background_color = Some(background);
+            }
+            out.push(piece);
+            cursor = next;
+        }
+        pos = run_end;
+    }
+    out
+}
+
+/// The word-level highlight wash for a changed row's tone.
+fn diff_word_wash(tone: gpui::Hsla) -> gpui::Hsla {
+    let a = match crate::theme::current_appearance() {
+        crate::theme::Appearance::Dark => 0.28,
+        crate::theme::Appearance::Light => 0.20,
+    };
+    gpui::Hsla { a, ..tone }
+}
+
 fn diff_line_row(
     line: &DiffLine,
+    changed: &[std::ops::Range<usize>],
     spans: &[luna_syntax::HighlightSpan],
     theme: &Theme,
     gutter_px: f32,
@@ -4586,6 +4755,11 @@ fn diff_line_row(
         diff_plain_text(theme),
         theme,
     );
+    let runs = match line.kind {
+        LineKind::Add => with_word_backgrounds(runs, changed, diff_word_wash(add_color(theme))),
+        LineKind::Del => with_word_backgrounds(runs, changed, diff_word_wash(del_color(theme))),
+        _ => runs,
+    };
     let content_width = match code_width {
         DiffCodeWidth::Clipped => None,
         DiffCodeWidth::Scrollable(metrics) => Some(metrics.unified_content_width(gutter_px)),
@@ -4879,13 +5053,15 @@ pub(crate) fn render_file_body_with_syntax(
     }
     for hunk in &file.hunks {
         children.push(hunk_header_row(&hunk.header, theme));
-        for line in &hunk.lines {
+        for (line_ix, line) in hunk.lines.iter().enumerate() {
             let spans = highlights
                 .as_deref()
                 .map(|highlights| highlights.spans(line))
                 .unwrap_or(&[]);
+            let changed = word_changes(hunk, line_ix);
             children.push(diff_line_row(
                 line,
+                &changed,
                 spans,
                 theme,
                 gutter_px,
@@ -4944,8 +5120,10 @@ fn render_file_body_upto(
                         if y >= max_px {
                             break 'build;
                         }
+                        let changed = word_changes(hunk, line_ix);
                         children.push(diff_line_row(
                             line,
+                            &changed,
                             spans_for(line),
                             theme,
                             gutter_px,
@@ -5016,6 +5194,51 @@ fn render_file_body_upto(
         .pb(px(BODY_BOTTOM_PAD))
         .children(children)
         .into_any_element()
+}
+
+impl crate::popover::ScrollRailHost for Changes {
+    fn rail_bar(&mut self) -> &mut crate::popover::MenuScrollbarState {
+        &mut self.list_bar
+    }
+
+    fn rail_metrics(&mut self) -> Option<crate::popover::MenuScrollbarMetrics> {
+        let (metrics, _) = crate::popover::list_rail_geometry(&self.list)?;
+        let offset = -f32::from(self.list.scroll_px_offset_for_scrollbar().y);
+        self.rail_bar().note_scroll_offset(offset);
+        Some(metrics)
+    }
+
+    fn rail_press(&mut self, pointer_y: gpui::Pixels) -> bool {
+        let Some((metrics, track_top)) = crate::popover::list_rail_geometry(&self.list) else {
+            return false;
+        };
+        self.list_bar.begin_press_in(&metrics, track_top, pointer_y);
+        self.apply_list_rail_target(&metrics, track_top, pointer_y)
+    }
+
+    fn rail_drag_to(&mut self, pointer_y: gpui::Pixels) -> bool {
+        let Some((metrics, track_top)) = crate::popover::list_rail_geometry(&self.list) else {
+            return false;
+        };
+        self.apply_list_rail_target(&metrics, track_top, pointer_y)
+    }
+}
+
+impl Changes {
+    fn apply_list_rail_target(
+        &mut self,
+        metrics: &crate::popover::MenuScrollbarMetrics,
+        track_top: gpui::Pixels,
+        pointer_y: gpui::Pixels,
+    ) -> bool {
+        let Some(fraction) = self.list_bar.drag_target_in(metrics, track_top, pointer_y) else {
+            return false;
+        };
+        let target = px(-fraction * metrics.max_scroll);
+        self.list
+            .set_offset_from_scrollbar(gpui::Point::new(px(0.0), target));
+        true
+    }
 }
 
 impl Render for Changes {
@@ -5120,6 +5343,8 @@ impl Render for Changes {
                 DiffPhase::List => {
                     if self.parsed.is_some() {
                         let sticky_header = self.render_sticky_file_header(&theme, cx);
+                        let list_rail =
+                            crate::popover::rail(self, "changes-list-scrollbar", &theme, cx);
                         div()
                             .flex_1()
                             .min_h_0()
@@ -5132,12 +5357,19 @@ impl Render for Changes {
                                     .flex_1()
                                     .min_h_0()
                                     .overflow_hidden()
+                                    .id("changes-list-host")
+                                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                                        if this.list_bar.set_list_hovered(*hovered) {
+                                            cx.notify();
+                                        }
+                                    }))
                                     .child(
                                         list(self.list.clone(), cx.processor(Self::render_row))
                                             .size_full()
                                             .with_sizing_behavior(gpui::ListSizingBehavior::Auto),
                                     )
-                                    .when_some(sticky_header, |el, header| el.child(header)),
+                                    .when_some(sticky_header, |el, header| el.child(header))
+                                    .children(list_rail),
                             )
                             .into_any_element()
                     } else {

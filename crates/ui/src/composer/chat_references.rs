@@ -746,7 +746,7 @@ fn conversation_type_badge(theme: &Theme, label: &'static str) -> gpui::Div {
         .items_center()
         .rounded(px(4.0))
         .bg(crate::theme::ink(0.06))
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::ui_rems(11.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text_muted)
         .child(label)

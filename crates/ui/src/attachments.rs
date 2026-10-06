@@ -952,6 +952,7 @@ pub(crate) fn lightbox_with_size(
     on_close: impl Fn(&mut gpui::Window, &mut gpui::App) + 'static,
     cx: &mut gpui::App,
 ) -> AnyElement {
+    use gpui::AnimationExt as _;
     let viewport = window.viewport_size();
     let max_h = px(f32::from(viewport.height) * 0.85);
     let max_w = px(f32::from(viewport.width) * 0.9);
@@ -979,8 +980,35 @@ pub(crate) fn lightbox_with_size(
     };
     let on_close = std::rc::Rc::new(on_close);
     let close_on_key = on_close.clone();
+    let close_on_button = on_close.clone();
     let press_state = preview.viewer.clone();
     let click_state = preview.viewer.clone();
+    // A visible way out (audit SS-09): a glass capsule top-right, besides
+    // Esc and clicking the backdrop.
+    let close_button = div()
+        .id("attachment-lightbox-close")
+        .role(gpui::Role::Button)
+        .aria_label("Close image")
+        .absolute()
+        .top(px(16.0))
+        .right(px(16.0))
+        .size(px(32.0))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(crate::theme::wash(0.14))
+        .hover(|style| style.bg(crate::theme::wash(0.22)))
+        .cursor_pointer()
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            close_on_button(window, cx);
+        })
+        .child(
+            crate::icons::icon(crate::icons::CLOSE)
+                .size(px(12.0))
+                .text_color(gpui::white()),
+        );
     gpui::deferred(
         gpui::anchored()
             .position(gpui::point(px(0.0), px(0.0)))
@@ -1015,14 +1043,28 @@ pub(crate) fn lightbox_with_size(
                         }
                     })
                     .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                    .child(div().w(max_w).h(max_h).child(content))
+                    .child(gpui::AnimationExt::with_animation(
+                        div().relative().w(max_w).h(max_h).child(content),
+                        "attachment-lightbox-image",
+                        crate::motion::MotionSpec::new(260, crate::motion::EASE_OUT_EXPO)
+                            .animation(),
+                        |el, t| el.opacity(t).top(px(10.0 * (1.0 - t))),
+                    ))
                     .child(
                         div()
                             .max_w(max_w)
                             .overflow_hidden()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(ink(0.45))
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(12.0))
+                            .text_color(ink(0.7))
                             .child(preview.name.clone()),
+                    )
+                    .child(close_button)
+                    // The backdrop fades in rather than snapping.
+                    .with_animation(
+                        "attachment-lightbox-in",
+                        crate::motion::MotionSpec::new(200, crate::motion::EASE_OUT).animation(),
+                        |el, t| el.opacity(t),
                     ),
             ),
     )

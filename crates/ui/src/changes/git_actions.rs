@@ -673,18 +673,42 @@ impl Changes {
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(id.into())
-            .px(px(8.0))
-            .py(px(5.0))
+            .role(gpui::Role::Button)
+            .aria_label(label)
+            .tab_index(0)
+            .h(px(26.0))
+            .px(px(10.0))
+            .flex()
+            .items_center()
             .rounded(px(Theme::CONTROL_RADIUS))
             .bg(theme.surface_raised)
             .border_1()
             .border_color(theme.border)
-            .text_size(crate::typography::ui_rems(11.0))
+            .text_size(crate::typography::ui_rems(12.0))
             .text_color(theme.text)
             .cursor_pointer()
             .hover(|style| style.bg(theme.surface_raised_hover))
-            .focus_visible(|style| style.border_color(theme.accent))
+            .focus_visible({
+                let ring = theme.focus_ring();
+                move |style| crate::theme::focus_ring(style, ring)
+            })
             .child(label)
+    }
+
+    /// The card's default action (audit SS-13): an accent plate, so the
+    /// primary path reads at a glance among the secondary buttons.
+    pub(super) fn git_primary_button(
+        id: impl Into<SharedString>,
+        label: &'static str,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        let fill = theme.accent_strong;
+        Self::git_button(id, label, theme)
+            .bg(fill)
+            .border_color(gpui::transparent_black())
+            .font_weight(gpui::FontWeight::MEDIUM)
+            .text_color(theme.on_accent)
+            .hover(move |style| style.bg(fill.opacity(0.88)))
     }
 
     fn render_pr_status(&self, theme: &Theme) -> AnyElement {
@@ -857,14 +881,16 @@ impl Changes {
                                 cx.listener(|this, _, _, cx| this.generate_git_message(cx)),
                             ),
                         )
-                        .child(Self::git_button("git-commit", "Commit", theme).on_click(
-                            cx.listener({
-                                let selected = selected.clone();
-                                move |this, _, _, cx| {
-                                    this.git_action(GitActionKind::Commit, selected.clone(), cx)
-                                }
-                            }),
-                        ))
+                        .child(
+                            Self::git_primary_button("git-commit", "Commit", theme).on_click(
+                                cx.listener({
+                                    let selected = selected.clone();
+                                    move |this, _, _, cx| {
+                                        this.git_action(GitActionKind::Commit, selected.clone(), cx)
+                                    }
+                                }),
+                            ),
+                        )
                         .child(
                             Self::git_button("git-push", "Push", theme).on_click(cx.listener(
                                 |this, _, _, cx| this.git_action(GitActionKind::Push, vec![], cx),
@@ -1032,7 +1058,7 @@ impl Changes {
                             .id("checkpoint-diff-view")
                             .max_h(px(140.0))
                             .overflow_y_scroll()
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .font_family(theme.font_mono.clone())
                             .text_color(theme.text)
                             .child(SharedString::from(snippet)),

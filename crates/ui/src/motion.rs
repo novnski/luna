@@ -391,8 +391,9 @@ pub const COLLAPSE: MotionSpec = MotionSpec::new(180, EASE_OUT);
 /// crossfade is staged around it. Slightly longer than a utility transition,
 /// but still short enough to acknowledge a send immediately.
 pub const NEW_THREAD_TRANSITION: MotionSpec = MotionSpec::new(420, EASE_RESORT);
-/// Diff-pane chevron rotate: 200ms (§1.11; approximated as a crossfade — gpui
-/// divs have no rotation transform at the pinned rev, same caveat as scale).
+/// Legacy chevron crossfade timing. Disclosure chevrons now rotate their svg
+/// (`Transformation::rotate`) on [`DISCLOSURE`]; keep this only for callers
+/// that still crossfade.
 pub const CHEVRON: MotionSpec = MotionSpec::new(200, EASE);
 /// Rail-tick / scroll-to-row glide: 500ms ease-in-out over the whole distance
 /// (Electron parity — the original rail rode the browser's native smooth

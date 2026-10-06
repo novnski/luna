@@ -53,16 +53,15 @@ pub(super) fn toolbar_button(id: &'static str, label: &'static str) -> gpui::Sta
         .cursor_pointer()
         .role(gpui::Role::Button)
         .aria_label(label)
+        .tab_index(0)
+        .focus_visible(crate::theme::focus_visible_ring)
         .occlude()
         .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
             window.prevent_default()
         })
         .hover(|style| style.bg(crate::theme::wash(0.14)))
-        .tooltip(move |_, cx| {
-            cx.new(|_| preview::FileEditorTooltip { text: label.into() })
-                .into()
-        })
-        .tooltip_show_delay(Duration::from_millis(350))
+        .tooltip(crate::popover::text_tooltip(label))
+        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
 }
 
 /// A workspace-relative file or directory dragged out of a Files surface.
@@ -214,48 +213,53 @@ impl Render for FilesSurface {
         let content = if !self.search_state.query.is_empty() {
             self.render_search_results(cx)
         } else if let Some(error) = self.error.clone().filter(|_| !self.tree_has_content()) {
-            div()
-                .flex_1()
+            let retry = div()
+                .id("files-retry-root")
+                .accessible_button("Retry loading workspace files", theme.accent)
+                .h(px(28.0))
+                .px(px(12.0))
+                .rounded(px(7.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(crate::theme::wash(0.04))
+                .hover(|style| style.bg(crate::theme::wash(0.09)))
+                .cursor_pointer()
                 .flex()
-                .flex_col()
                 .items_center()
-                .justify_center()
-                .gap(px(10.0))
-                .px(px(28.0))
-                .child(
-                    div()
-                        .text_center()
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.text_muted)
-                        .child(error),
-                )
-                .child(
-                    div()
-                        .id("files-retry-root")
-                        .accessible_button("Retry loading workspace files", theme.accent)
-                        .h(px(28.0))
-                        .px(px(12.0))
-                        .rounded(px(7.0))
-                        .border_1()
-                        .border_color(theme.border)
-                        .bg(crate::theme::wash(0.04))
-                        .hover(|style| style.bg(crate::theme::wash(0.09)))
-                        .cursor_pointer()
-                        .flex()
-                        .items_center()
-                        .text_size(crate::typography::ui_rems(11.5))
-                        .text_color(theme.text)
-                        .child("Retry")
-                        .on_click(cx.listener(|this, _, _, cx| this.retry_root(cx))),
-                )
-                .into_any_element()
+                .text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text)
+                .child("Retry")
+                .on_click(cx.listener(|this, _, _, cx| this.retry_root(cx)));
+            crate::surface_chrome::surface_state(
+                crate::surface_chrome::state_glyph(crate::icons::FOLDER, &theme),
+                "Files couldn't load",
+                Some(error.into()),
+                Some(retry.into_any_element()),
+                &theme,
+            )
+            .into_any_element()
         } else if !self.tree_has_content()
             && matches!(
                 phase.as_ref(),
                 Some(DirectoryLoadState::Unloaded | DirectoryLoadState::Loading { .. })
             )
         {
-            div().flex_1().into_any_element()
+            // A loader instead of a blank pane (audit SS-12).
+            crate::surface_chrome::surface_state(
+                crate::loaders::gradient_spinner(
+                    "files-root-loading",
+                    &theme,
+                    2.5,
+                    cx.entity_id(),
+                    cx,
+                )
+                .into_any_element(),
+                "Loading files…",
+                None,
+                None,
+                &theme,
+            )
+            .into_any_element()
         } else {
             self.render_tree(cx)
         };
@@ -281,7 +285,7 @@ impl Render for FilesSurface {
                         .flex()
                         .items_center()
                         .gap(px(6.0))
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_on(
                             theme.warning_muted,
                             theme.warning.opacity(0.045),

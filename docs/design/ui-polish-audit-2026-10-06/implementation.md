@@ -96,29 +96,29 @@ Update this file as each finding lands so work can resume after compaction.
 | DS-15 | P2 | Motion catalog fragmented: 16 durations, 6 curves, no spring | wip | Motion tokens MICRO/QUICK/STANDARD/EMPHASIZED/DISCLOSURE + curves added; call sites migrate per surface |
 | DS-16 | P2 | Five ways to show "selected"; no shared segmented control | todo | |
 | DS-17 | P2 | Seven focus treatments; most clickables are mouse-only | todo | |
-| DS-18 | P2 | Sub-11 pt text in everyday chrome | todo | |
+| DS-18 | P2 | Sub-11 pt text in everyday chrome | done (milestone E) | No ui_rems text below 11 pt remains in the UI crate |
 | DS-19 | P2 | 16–18 pt click targets | todo | |
 | DS-20 | P3 | Six tooltip delays, no warm-up, no fade | todo | |
 | DS-21 | P3 | One glyph, many meanings in Settings | todo | |
 | DS-22 | P3 | Page, group and row titles look alike | todo | |
-| SS-01 | P1 | Right pane content swaps to the surface picker (or blanks) while the pane closes | todo | |
-| SS-02 | P1 | Diff rows: no word-level highlight, near-invisible tint, four redundant add/remove signals | todo | |
-| SS-03 | P1 | The diff view and 12 other scroll regions have no scrollbar at all | todo | |
-| SS-04 | P1 | Usage meters: Codex is always red, the card shows "used" while the page shows "left", 0% draws a stub | todo | |
-| SS-05 | P1 | Terminal trackpad scrolling drops small deltas and jumps in whole lines | todo | |
-| SS-06 | P1 | The right pane's toolbar row sits about 6.5 pt above the canvas tab strip | todo | |
-| SS-07 | P1 | Three different tab recipes across canvas, right pane and terminal drawer | todo | |
-| SS-08 | P1 | No shared toast: feedback snaps into the left sidebar, one slot, four notice recipes | todo | |
-| SS-09 | P1 | The image lightbox snaps open and closed with no zoom origin, controls or readout | todo | |
-| SS-10 | P2 | File tree selection is a full-bleed band; focus and blur look the same; no indent guides | todo | |
-| SS-11 | P2 | Disclosure chevrons behave three different ways | todo | |
-| SS-12 | P2 | Empty, loading and error states: six recipes, one spinner, one blank pane | todo | |
-| SS-13 | P2 | Git card: four identical buttons, no primary action, a toggle with no state | todo | |
-| SS-14 | P2 | Pane content does not share the toolbar's left edge (8 vs 12 vs 16 vs 20 pt) | todo | |
-| SS-15 | P2 | Agents surface: a wall of engine diagnostics with two row recipes in one pane | todo | |
-| SS-16 | P2 | Keyboard focus is invisible on most secondary-surface controls | todo | |
-| SS-17 | P2 | Type and radius sprawl: 15 text sizes, 9 radii, px line-heights under rem text | todo | |
-| SS-18 | P2 | Files status text below the readable floor (10–10.5 px, 10.5 px icon) | todo | |
-| SS-19 | P2 | Editor breadcrumb truncates every segment and buries the file name | todo | |
-| SS-20 | P3 | Diff hunk headers sit on their own grid and scale with the wrong setting | todo | |
-| SS-21 | P3 | Browser toolbar: no load progress, Reload never becomes Stop, the error border shifts the field | todo | |
+| SS-01 | P1 | Right pane content swaps to the surface picker (or blanks) while the pane closes | done (milestone E) | Closing pane renders empty instead of flashing the surface picker |
+| SS-02 | P1 | Diff rows: no word-level highlight, near-invisible tint, four redundant add/remove signals | done (milestone E) | Row wash 0.10/0.08, word-level highlights (similar word diff, 0.28/0.20), no edge bar, marker 16, quiet line numbers |
+| SS-03 | P1 | The diff view and 12 other scroll regions have no scrollbar at all | done (milestone E) | Diff list gets the shared floating rail (popover::list_rail_geometry); other lists remain |
+| SS-04 | P1 | Usage meters: Codex is always red, the card shows "used" while the page shows "left", 0% draws a stub | done (milestone E) | usage_meter: fill = used, neutral/warning 75/danger 90, 6 pt capsule, no stub; card and page |
+| SS-05 | P1 | Terminal trackpad scrolling drops small deltas and jumps in whole lines | done (milestone E) | Terminal accumulates sub-line scroll remainder |
+| SS-06 | P1 | The right pane's toolbar row sits about 6.5 pt above the canvas tab strip | done (milestone E) | Right pane top padding = titlebar + 6 (canvas strip line) |
+| SS-07 | P1 | Three different tab recipes across canvas, right pane and terminal drawer | done (milestone E) | Terminal tab bar uses HEADER_HEIGHT 38 (tab geometry already 28/r8) |
+| SS-08 | P1 | No shared toast: feedback snaps into the left sidebar, one slot, four notice recipes | done (milestone E) | Canvas toast capsule above the composer (fade+rise, dismiss); sidebar copy only when no composer |
+| SS-09 | P1 | The image lightbox snaps open and closed with no zoom origin, controls or readout | done (milestone E) | Lightbox backdrop fade, image rise, close capsule, readable caption |
+| SS-10 | P2 | File tree selection is a full-bleed band; focus and blur look the same; no indent guides | done (milestone E) | Inset rounded tree selection; accent when focused; rotating chevron |
+| SS-11 | P2 | Disclosure chevrons behave three different ways | done (milestone E) | Diff header + tree chevrons rotate one ALT_ARROW_RIGHT (disclosure curve); stale CHEVRON comment fixed |
+| SS-12 | P2 | Empty, loading and error states: six recipes, one spinner, one blank pane | done (milestone E) | surface_chrome::surface_state + state_glyph; Files loading/error; preview states on the shared body |
+| SS-13 | P2 | Git card: four identical buttons, no primary action, a toggle with no state | done (milestone E) | git_primary_button (accent) for Commit; 26 pt buttons, 12 pt labels, Role::Button |
+| SS-14 | P2 | Pane content does not share the toolbar's left edge (8 vs 12 vs 16 vs 20 pt) | done (milestone E) | surface_chrome::CONTENT_INSET 12 for hunk headers, agents empty state, previews |
+| SS-15 | P2 | Agents surface: a wall of engine diagnostics with two row recipes in one pane | todo | todo: agents surface row recipe |
+| SS-16 | P2 | Keyboard focus is invisible on most secondary-surface controls | done (milestone E) | focus rings on files toolbar, diff header toggles, git buttons (theme::focus_visible_ring helper) |
+| SS-17 | P2 | Type and radius sprawl: 15 text sizes, 9 radii, px line-heights under rem text | done (milestone E) | All ui_rems text below 11 pt raised to 11 across the crate |
+| SS-18 | P2 | Files status text below the readable floor (10–10.5 px, 10.5 px icon) | done (milestone E) | Files status text raised to 11+ |
+| SS-19 | P2 | Editor breadcrumb truncates every segment and buries the file name | done (milestone E) | Breadcrumb leaf 12 pt medium primary, never shrinks first; chevron separators |
+| SS-20 | P3 | Diff hunk headers sit on their own grid and scale with the wrong setting | done (milestone E) | Hunk header sized from code font, content inset |
+| SS-21 | P3 | Browser toolbar: no load progress, Reload never becomes Stop, the error border shifts the field | done (milestone E) | Address field reserves its border; accent loading line; Go button r3 (Stop not implemented: no stop API) |

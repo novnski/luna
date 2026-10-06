@@ -329,7 +329,7 @@ impl Render for DevicesPage {
                     div()
                         .id(("device-id", ix))
                         .font_family(theme.font_mono.clone())
-                        .text_size(crate::typography::ui_rems(10.5))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(if id_copied {
                             theme.readable_tone(theme.success_muted, 0.9)
                         } else {
@@ -363,7 +363,7 @@ impl Render for DevicesPage {
                         el.child(
                             div()
                                 .flex_none()
-                                .text_size(crate::typography::ui_rems(10.5))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_muted)
                                 .child(if workspace_scope == Some(WorkspaceScope::Local) {
                                     "Local only"

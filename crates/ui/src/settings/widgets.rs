@@ -390,7 +390,7 @@ pub fn badge(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
         .rounded_full()
         .border_1()
         .border_color(theme.border)
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(theme.text_muted)
         .child(label.into())
 }
@@ -406,7 +406,7 @@ pub fn badge_active(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div 
         .py(px(2.0))
         .rounded_full()
         .bg(emerald.opacity(0.12))
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(theme.readable_tone(emerald_text, 0.9))
         .child(label.into())
 }

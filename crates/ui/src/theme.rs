@@ -2218,7 +2218,25 @@ fn scrollbar_thumb_colors(theme: &Theme) -> (Hsla, Hsla, Hsla) {
     )
 }
 
+thread_local! {
+    /// The installed theme's keyboard focus ring, for context-free control
+    /// helpers that have no `Theme` handy (see [`current_focus_ring`]).
+    static CURRENT_FOCUS_RING: std::cell::Cell<Hsla> =
+        std::cell::Cell::new(hsla(0.69, 0.87, 0.73, 1.0));
+}
+
+/// The installed theme's focus ring colour.
+pub fn current_focus_ring() -> Hsla {
+    CURRENT_FOCUS_RING.with(|ring| ring.get())
+}
+
+/// `.focus_visible(focus_visible_ring)` for helpers without a `Theme`.
+pub fn focus_visible_ring(style: gpui::StyleRefinement) -> gpui::StyleRefinement {
+    focus_ring(style, current_focus_ring())
+}
+
 fn sync_gpui_base_scrollbar(theme: &Theme, cx: &mut App) {
+    CURRENT_FOCUS_RING.with(|ring| ring.set(theme.focus_ring()));
     let (normal, hover, active) = scrollbar_thumb_colors(theme);
     gpui_base::Theme::global_mut(cx).scrollbar.styles = gpui_base::ScrollbarStyles::default()
         .thumb(|style| style.bg(normal))

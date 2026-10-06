@@ -1255,6 +1255,12 @@ impl Render for SurfaceTabTooltip {
             .child(self.text.clone())
     }
 }
+/// Toast capsule height.
+const TOAST_HEIGHT: f32 = 34.0;
+
+/// The canvas strip sits this far below the titlebar (its viewport inset);
+/// the right pane's toolbar matches it.
+const RIGHT_PANE_STRIP_INSET: f32 = 6.0;
 /// Drag marker for the terminal-panel height handle.
 struct TerminalResize;
 
@@ -9762,58 +9768,66 @@ impl Shell {
             })
             // Sidebar feedback is brief and readable; the action text carries
             // the error, while the tint distinguishes it from a status note.
-            .when_some(self.sidebar_notice.clone(), |el, notice| {
-                let notice_id = notice.id;
-                let is_status = notice.tone == SidebarNoticeTone::Status;
-                el.child(
-                    div()
-                        .id("sidebar-notice")
-                        .mx(px(Theme::SPACE_SM))
-                        .mb(px(Theme::SPACE_SM))
-                        .px(px(Theme::SPACE_SM))
-                        .py(px(4.0))
-                        .rounded(px(Theme::CONTROL_RADIUS))
-                        .border_1()
-                        .border_color(if is_status {
-                            theme.border
-                        } else {
-                            theme.danger.opacity(0.25)
-                        })
-                        .bg(if is_status {
-                            theme.accent_wash
-                        } else {
-                            theme.danger.opacity(0.05)
-                        })
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text)
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(div().flex_1().min_w_0().child(notice.message))
-                        .child(
-                            div()
-                                .id("sidebar-notice-dismiss")
-                                .role(gpui::Role::Button)
-                                .aria_label("Dismiss notice")
-                                .tab_index(0)
-                                .cursor_pointer()
-                                .flex_none()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child("Dismiss")
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    if this
-                                        .sidebar_notice
-                                        .as_ref()
-                                        .is_some_and(|current| current.id == notice_id)
-                                    {
-                                        this.sidebar_notice = None;
-                                        cx.notify();
-                                    }
-                                }))
-                                .on_key_down(crate::swallow_activation_key),
-                        ),
-                )
-            })
+            // With a composer on screen, feedback is a toast above it
+            // ([`Self::render_toast`]); the sidebar copy is the fallback for
+            // the empty app.
+            .when_some(
+                self.sidebar_notice
+                    .clone()
+                    .filter(|_| self.state.read(cx).spaces.is_empty()),
+                |el, notice| {
+                    let notice_id = notice.id;
+                    let is_status = notice.tone == SidebarNoticeTone::Status;
+                    el.child(
+                        div()
+                            .id("sidebar-notice")
+                            .mx(px(Theme::SPACE_SM))
+                            .mb(px(Theme::SPACE_SM))
+                            .px(px(Theme::SPACE_SM))
+                            .py(px(4.0))
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .border_1()
+                            .border_color(if is_status {
+                                theme.border
+                            } else {
+                                theme.danger.opacity(0.25)
+                            })
+                            .bg(if is_status {
+                                theme.accent_wash
+                            } else {
+                                theme.danger.opacity(0.05)
+                            })
+                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_color(theme.text)
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(div().flex_1().min_w_0().child(notice.message))
+                            .child(
+                                div()
+                                    .id("sidebar-notice-dismiss")
+                                    .role(gpui::Role::Button)
+                                    .aria_label("Dismiss notice")
+                                    .tab_index(0)
+                                    .cursor_pointer()
+                                    .flex_none()
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .child("Dismiss")
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if this
+                                            .sidebar_notice
+                                            .as_ref()
+                                            .is_some_and(|current| current.id == notice_id)
+                                        {
+                                            this.sidebar_notice = None;
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .on_key_down(crate::swallow_activation_key),
+                            ),
+                    )
+                },
+            )
             .when(!self.settings.usage_sidebar_hidden, |el| {
                 el.child(self.render_usage_card(theme, cx))
             })
@@ -12722,6 +12736,7 @@ impl Shell {
                                 .opacity(composer_opacity)
                                 .mx_auto()
                                 .child(self.composer.clone())
+                                .children(self.render_toast(cx))
                                 .children(if has_selection {
                                     self.render_jump_to_bottom(cx)
                                 } else {
@@ -12780,12 +12795,111 @@ impl Shell {
                 // Share the composer's measured translation, not its final
                 // bottom-stack target. Paint after the composer so it cannot
                 // pass over this control during docking.
-                .top(px(-36.0))
+                .top(px(if self.sidebar_notice.is_some() {
+                    -36.0 - TOAST_HEIGHT - 8.0
+                } else {
+                    -36.0
+                }))
                 .left_0()
                 .right(px(10.0))
                 .flex()
                 .justify_center()
                 .child(self.jump_pill("jump-to-bottom", "jump-pill", self.transcript.clone(), cx))
+                .into_any_element(),
+        )
+    }
+
+    /// Feedback as a toast (audit SS-08): a capsule centered above the
+    /// composer, visible whether or not the sidebar is open. It arrives with
+    /// a short fade and rise, keeps the notice's lifetime and offers Dismiss.
+    fn render_toast(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let notice = self.sidebar_notice.clone()?;
+        let theme = Theme::of(cx).for_popup();
+        let notice_id = notice.id;
+        let is_error = notice.tone == SidebarNoticeTone::Error;
+        let tone = if is_error {
+            theme.readable_tone(theme.danger, 1.0)
+        } else {
+            theme.accent
+        };
+        let ring = theme.focus_ring();
+        let capsule = div()
+            .id("toast")
+            .role(gpui::Role::Status)
+            .aria_label(notice.message.clone())
+            .h(px(TOAST_HEIGHT))
+            .max_w(px(520.0))
+            .pl(px(12.0))
+            .pr(px(4.0))
+            .rounded_full()
+            .border_1()
+            .border_color(theme.hairline(0.10))
+            .bg(theme.tooltip_surface())
+            .shadow(crate::theme::menu_shadows())
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .font_family(theme.font_sans.clone())
+            .text_size(crate::typography::ui_rems(12.5))
+            .text_color(theme.text)
+            .child(
+                icons::icon(if is_error {
+                    icons::DANGER_TRIANGLE
+                } else {
+                    icons::INFO_CIRCLE
+                })
+                .size(px(14.0))
+                .flex_none()
+                .text_color(tone),
+            )
+            .child(div().min_w_0().truncate().child(notice.message))
+            .child(
+                div()
+                    .id("toast-dismiss")
+                    .role(gpui::Role::Button)
+                    .aria_label("Dismiss notice")
+                    .tab_index(0)
+                    .size(px(24.0))
+                    .flex_none()
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(crate::theme::ink(0.08)))
+                    .focus_visible(move |style| crate::theme::focus_ring(style, ring))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this
+                            .sidebar_notice
+                            .as_ref()
+                            .is_some_and(|current| current.id == notice_id)
+                        {
+                            this.sidebar_notice = None;
+                            cx.notify();
+                        }
+                    }))
+                    .on_key_down(crate::swallow_activation_key)
+                    .child(
+                        icons::icon(icons::CLOSE)
+                            .size(px(10.0))
+                            .text_color(theme.text_muted),
+                    ),
+            );
+        let capsule = gpui::AnimationExt::with_animation(
+            div().relative().child(capsule),
+            SharedString::from(format!("toast-in-{notice_id}")),
+            motion::MotionSpec::new(220, motion::EASE_OUT_EXPO).animation(),
+            |el, t| el.opacity(t).top(px(8.0 * (1.0 - t))),
+        );
+        Some(
+            div()
+                .absolute()
+                .top(px(-(TOAST_HEIGHT + 8.0)))
+                .left_0()
+                .right_0()
+                .flex()
+                .justify_center()
+                .child(capsule)
                 .into_any_element(),
         )
     }
@@ -13178,6 +13292,11 @@ impl Shell {
                         .children(pill)
                         .into_any_element()
                 }
+                // Closing: the guarded surfaces above stop rendering (they
+                // start watches and loads), and flashing the picker in their
+                // place read as the pane changing its mind (audit SS-01).
+                // The pane slides out empty instead.
+                _ if !self.right_pane_open(cx) => gpui::Empty.into_any_element(),
                 _ => self.render_surface_picker(cx),
             }
         } else {
@@ -13204,8 +13323,10 @@ impl Shell {
             })
             .overflow_hidden()
             // The titlebar is a glass overlay over the full-height content
-            // row; the panel's own chrome starts below it.
-            .pt(px(Theme::TITLEBAR_HEIGHT))
+            // row; the panel's own chrome starts below it, on the same line
+            // as the canvas tab strip (titlebar + the canvas's 6 pt viewport
+            // inset), so both header rows share one centre (audit SS-06).
+            .pt(px(Theme::TITLEBAR_HEIGHT + RIGHT_PANE_STRIP_INSET))
             .child(content);
         let target = self.right_target(cx);
         let edge_offset = self.eval_resize_edge_bounce(

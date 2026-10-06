@@ -40,7 +40,9 @@ use super::view::{
 
 /// Fixed tab width — drag-reorder math stays analytic.
 pub const TAB_WIDTH: f32 = 118.0;
-pub const TAB_BAR_HEIGHT: f32 = 40.0;
+/// The shared header band height (audit SS-07): the canvas strip and the
+/// right pane toolbar are 38 too.
+pub const TAB_BAR_HEIGHT: f32 = crate::surface_chrome::HEADER_HEIGHT;
 const SELECTION_SCROLL_TICK_MS: u64 = 24;
 
 actions!(terminal, [ToggleTerminal]);
@@ -337,6 +339,9 @@ impl Render for TabGhost {
 pub struct TerminalPanel {
     state: Entity<AppState>,
     focus_handle: FocusHandle,
+    /// Sub-line remainder of trackpad scrolling (audit SS-05): small pixel
+    /// deltas accumulate into whole lines instead of rounding away.
+    scroll_remainder: f32,
     focus_pending: bool,
     chats: HashMap<String, ChatTabs>,
     hydrated_chats: HashSet<String>,
@@ -437,6 +442,7 @@ impl TerminalPanel {
             drag: None,
             last_selected: None,
             geometry: None,
+            scroll_remainder: 0.0,
             selection_drag: None,
             selection_scroll_task: None,
             rail_tab_key: None,
@@ -2003,8 +2009,17 @@ impl Render for TerminalPanel {
                                 f32::from(delta.y) / line_h
                             }
                         };
-                        let step = lines.round() as i32;
-                        this.scroll_active(step, cx);
+                        // Accumulate fractional lines; a direction change
+                        // starts fresh so a reversal responds at once.
+                        if (this.scroll_remainder > 0.0) != (lines > 0.0) {
+                            this.scroll_remainder = 0.0;
+                        }
+                        this.scroll_remainder += lines;
+                        let step = this.scroll_remainder.trunc();
+                        this.scroll_remainder -= step;
+                        if step != 0.0 {
+                            this.scroll_active(step as i32, cx);
+                        }
                     }))
                     .child(TerminalElement::new(cx.entity(), focused))
                     .children(scrollbar),

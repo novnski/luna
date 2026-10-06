@@ -423,7 +423,7 @@ impl Render for HistoryColumnGhost {
             .border_color(theme.border_strong)
             .bg(theme.surface_raised)
             .shadow_md()
-            .text_size(crate::typography::ui_rems(10.5))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .opacity(0.9)
             .child(self.label.clone())
@@ -1889,7 +1889,7 @@ impl Render for GitHistoryCount {
                                             comparison.child(
                                                 div()
                                                     .whitespace_nowrap()
-                                                    .text_size(crate::typography::ui_rems(10.5))
+                                                    .text_size(crate::typography::ui_rems(11.0))
                                                     .line_height(crate::typography::ui_rems(13.0))
                                                     .text_color(theme.readable_tone(theme.accent, 0.88))
                                                     .child(SharedString::from(format!(
@@ -1900,7 +1900,7 @@ impl Render for GitHistoryCount {
                                         .when(ahead > 0 && behind > 0, |comparison| {
                                             comparison.child(
                                                 div()
-                                                    .text_size(crate::typography::ui_rems(10.0))
+                                                    .text_size(crate::typography::ui_rems(11.0))
                                                     .text_color(theme.text_faint)
                                                     .child("·"),
                                             )
@@ -1909,7 +1909,7 @@ impl Render for GitHistoryCount {
                                             comparison.child(
                                                 div()
                                                     .whitespace_nowrap()
-                                                    .text_size(crate::typography::ui_rems(10.5))
+                                                    .text_size(crate::typography::ui_rems(11.0))
                                                     .line_height(crate::typography::ui_rems(13.0))
                                                     .text_color(theme.readable_tone(theme.warning, 0.82))
                                                     .child(SharedString::from(format!(
@@ -3718,7 +3718,7 @@ impl GitHistory {
             .gap(px(2.0))
             .rounded(px(4.0))
             .bg(color.opacity(0.07))
-            .text_size(crate::typography::ui_rems(10.0))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.readable_tone(color, 0.9))
             .child(
                 crate::icons::icon(icon)
@@ -3768,7 +3768,7 @@ impl GitHistory {
                     div()
                         .id(("history-ref-overflow", row_index))
                         .flex_none()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_faint)
                         .child(SharedString::from(format!("+{hidden_count}")))
                         .tooltip(move |_, cx| {
@@ -3832,7 +3832,7 @@ impl GitHistory {
                                     .w_full()
                                     .text_center()
                                     .font_family(theme.font_sans.clone())
-                                    .text_size(crate::typography::ui_rems(9.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .line_height(crate::typography::ui_rems(18.0))
                                     .relative()
                                     .top(px(0.5))
@@ -3869,7 +3869,7 @@ impl GitHistory {
             .items_center()
             .truncate()
             .pr(px(8.0))
-            .text_size(crate::typography::ui_rems(10.5))
+            .text_size(crate::typography::ui_rems(11.0))
             .opacity(opacity)
             .text_color(theme.text_muted)
             .child(SharedString::from(format_date(authored_at)))
@@ -3910,7 +3910,7 @@ impl GitHistory {
                     .cursor_pointer()
                     .hover(|style| style.bg(crate::theme::ink(0.07)))
                     .font_family(theme.font_mono.clone())
-                    .text_size(crate::typography::ui_rems(10.5))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(if copied {
                         theme.accent
                     } else {
@@ -4488,7 +4488,7 @@ impl Render for GitHistory {
                                     .items_center()
                                     .border_b_1()
                                     .border_color(crate::theme::hairline(0.06))
-                                    .text_size(crate::typography::ui_rems(9.5))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .text_color(header_theme.text_faint)
                                     .child(graph_spacer)
                                     .child(div().flex_1().min_w(px(80.0)).child("Commit"))

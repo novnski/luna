@@ -11755,7 +11755,7 @@ impl Composer {
                             .gap(px(10.0))
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(10.5))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     .text_color(theme.readable_muted(0.6))
                                     .child(SharedString::from(crate::popover::tracked_upper(
@@ -11771,7 +11771,7 @@ impl Composer {
                                         .items_center()
                                         .rounded(px(6.0))
                                         .bg(crate::theme::ink(0.06))
-                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .text_size(crate::typography::ui_rems(11.0))
                                         .font_weight(gpui::FontWeight::MEDIUM)
                                         .text_color(theme.readable_muted(0.6))
                                         .child(SharedString::from(counter)),
@@ -11812,7 +11812,7 @@ impl Composer {
                                     .gap(px(2.0))
                                     .child(
                                         div()
-                                            .text_size(crate::typography::ui_rems(10.5))
+                                            .text_size(crate::typography::ui_rems(11.0))
                                             .text_color(theme.readable_muted(0.65))
                                             .child(label),
                                     )

@@ -30,6 +30,54 @@ fn provider_mark(provider: UsageProvider) -> &'static str {
     }
 }
 
+/// One usage meter for the card and the Usage page (audit SS-04): the fill
+/// is what's USED, neutral until 75%, warning from 75%, danger from 90%; a
+/// 6 pt capsule; nothing drawn below 0.5% (no false stub). Provider identity
+/// lives in the mark, not the bar colour.
+fn usage_meter(used_percent: f32, theme: &Theme) -> gpui::Div {
+    let track = if theme.appearance.is_dark() {
+        crate::theme::ink(0.08)
+    } else {
+        crate::theme::ink(0.10)
+    };
+    usage_meter_with(
+        used_percent,
+        [
+            theme.text_muted,
+            theme.readable_tone(theme.warning, 1.0),
+            theme.readable_tone(theme.danger, 1.0),
+        ],
+        track,
+    )
+}
+
+/// [`usage_meter`] with explicit `[neutral, warning, danger]` fills.
+fn usage_meter_with(used_percent: f32, tones: [gpui::Hsla; 3], track: gpui::Hsla) -> gpui::Div {
+    let used = used_percent.clamp(0.0, 100.0);
+    let fill = if used >= 90.0 {
+        tones[2]
+    } else if used >= 75.0 {
+        tones[1]
+    } else {
+        tones[0]
+    };
+    div()
+        .h(px(6.0))
+        .flex_1()
+        .min_w_0()
+        .rounded_full()
+        .bg(track)
+        .when(used >= 0.5, |bar| {
+            bar.child(
+                div()
+                    .h_full()
+                    .w(gpui::relative(used / 100.0))
+                    .rounded_full()
+                    .bg(fill),
+            )
+        })
+}
+
 fn provider_tone(provider: UsageProvider, theme: &Theme) -> gpui::Hsla {
     match provider {
         UsageProvider::Codex => theme.text,
@@ -59,7 +107,6 @@ struct CompactUsagePalette {
     badge: gpui::Hsla,
     badge_text: gpui::Hsla,
     track: gpui::Hsla,
-    codex_fill: gpui::Hsla,
     other_fill: gpui::Hsla,
     status: gpui::Hsla,
     dot: gpui::Hsla,
@@ -87,7 +134,6 @@ impl CompactUsagePalette {
             badge: theme.surface_raised,
             badge_text: theme.text_muted,
             track: theme.surface_raised,
-            codex_fill: theme.danger,
             other_fill: theme.text_muted,
             status: theme.warning,
             dot: theme.danger,
@@ -892,7 +938,6 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                 .sum::<f32>()
                 / reported.len() as f32;
             let remaining = (100.0 - used).round();
-            let color = provider_tone(provider, theme);
             let next_reset = reported
                 .iter()
                 .filter_map(|(limit, window)| {
@@ -932,34 +977,16 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                         reset_label(limit.reset_state(window, now_ms), now_ms)
                     );
                     segments = segments.child(
-                        div()
+                        usage_meter(window.used_percent, &theme)
                             .id(SharedString::from(format!(
                                 "usage-limit-{}-{window_id}-{}",
                                 provider.label(),
                                 account
                             )))
-                            .flex_1()
-                            .min_w_0()
-                            .h(px(9.0))
-                            .rounded(px(4.0))
-                            .bg(theme.border)
-                            .tooltip(move |_, cx| {
-                                cx.new(|_| super::SurfaceTabTooltip {
-                                    text: detail.clone().into(),
-                                })
-                                .into()
-                            })
-                            .child(
-                                div()
-                                    .h_full()
-                                    .w(gpui::relative(left / 100.0))
-                                    .rounded(px(4.0))
-                                    .bg(color),
-                            ),
+                            .tooltip(crate::popover::text_tooltip(detail)),
                     );
                 } else {
-                    segments =
-                        segments.child(div().flex_1().h(px(9.0)).rounded(px(4.0)).bg(theme.border));
+                    segments = segments.child(usage_meter(0.0, &theme));
                 }
             }
             let status = if ready.iter().all(|limit| limit.is_fresh(now_ms)) {
@@ -1223,11 +1250,6 @@ fn compact_limit_row(
         } else {
             (50.0, 43.0)
         };
-        let fill = if limit.provider == UsageProvider::Codex {
-            palette.codex_fill
-        } else {
-            palette.other_fill
-        };
         row = row.child(
             div()
                 .mt(px(3.0))
@@ -1244,21 +1266,11 @@ fn compact_limit_row(
                         .truncate()
                         .child(compact_window_label(limit, window)),
                 )
-                .child(
-                    div()
-                        .h(px(4.0))
-                        .flex_1()
-                        .min_w_0()
-                        .rounded(px(2.0))
-                        .bg(palette.track)
-                        .child(
-                            div()
-                                .h_full()
-                                .w(gpui::relative((used / 100.0).max(0.012)))
-                                .rounded(px(2.0))
-                                .bg(fill),
-                        ),
-                )
+                .child(usage_meter_with(
+                    used,
+                    [palette.other_fill, palette.status, palette.dot],
+                    palette.track,
+                ))
                 .child(
                     div()
                         .w(crate::typography::ui_rems(30.0))

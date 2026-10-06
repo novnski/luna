@@ -589,7 +589,7 @@ impl AccountsPage {
                             el.child(
                                 div()
                                     .flex_none()
-                                    .text_size(crate::typography::ui_rems(10.5))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .text_color(theme.readable_muted(0.35))
                                     .child(SharedString::from("You")),
                             )

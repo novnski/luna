@@ -4063,7 +4063,7 @@ impl Pickers {
                                     el.child(
                                         div()
                                             .flex_none()
-                                            .text_size(crate::typography::ui_rems(10.0))
+                                            .text_size(crate::typography::ui_rems(11.0))
                                             .text_color(theme.text_muted)
                                             .child(SharedString::from("You")),
                                     )
@@ -5666,7 +5666,7 @@ impl Pickers {
                                         el.child(
                                             div()
                                                 .flex_none()
-                                                .text_size(crate::typography::ui_rems(10.0))
+                                                .text_size(crate::typography::ui_rems(11.0))
                                                 .text_color(theme.text_muted)
                                                 .child(SharedString::from("switching…")),
                                         )
@@ -5677,7 +5677,7 @@ impl Pickers {
                                             el.child(
                                                 div()
                                                     .flex_none()
-                                                    .text_size(crate::typography::ui_rems(10.0))
+                                                    .text_size(crate::typography::ui_rems(11.0))
                                                     .text_color(theme.text_muted)
                                                     .child(SharedString::from(tag)),
                                             )
@@ -5798,7 +5798,7 @@ impl Pickers {
                             )
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(10.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .text_color(if warning && supported {
                                         theme.warning.opacity(0.72)
                                     } else {
@@ -5985,7 +5985,7 @@ impl Pickers {
                         .child(
                             div()
                                 .flex_none()
-                                .text_size(crate::typography::ui_rems(10.5))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_muted)
                                 .child("Account"),
                         )
@@ -5994,7 +5994,7 @@ impl Pickers {
                 .when_some(error, |el, error| {
                     el.child(
                         div()
-                            .text_size(crate::typography::ui_rems(10.5))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                             .child(SharedString::from(error)),
                     )
@@ -6391,7 +6391,7 @@ impl Pickers {
                 .when_some(self.context_error.clone(), |panel, error| {
                     panel.child(
                         div()
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .line_height(px(16.0))
                             .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                             .child(SharedString::from(error)),
@@ -6768,7 +6768,7 @@ impl Pickers {
             .when_some(self.context_error.clone(), |panel, error| {
                 panel.child(
                     div()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .line_height(px(16.0))
                         .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(SharedString::from(error)),
@@ -7324,7 +7324,7 @@ impl Pickers {
                 div()
                     .px(px(8.0))
                     .pb(px(3.0))
-                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_faint)
                     .child("CONTEXT · PROVIDER-OWNED"),
             )
@@ -7334,7 +7334,7 @@ impl Pickers {
                     div()
                         .px(px(8.0))
                         .pb(px(3.0))
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_faint)
                         .child(SharedString::from(reason)),
                 )
@@ -7346,7 +7346,7 @@ impl Pickers {
                     div()
                         .px(px(8.0))
                         .pt(px(3.0))
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_tone(theme.danger_muted, 1.0))
                         .child(SharedString::from(error)),
                 )
@@ -7975,7 +7975,7 @@ impl popover::ScrollRailHost for Pickers {
 fn default_badge(theme: &Theme) -> gpui::Div {
     div()
         .flex_none()
-        .text_size(crate::typography::ui_rems(10.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(theme.for_popup().text_muted)
         .child(SharedString::from("Default"))

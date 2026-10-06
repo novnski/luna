@@ -17,6 +17,8 @@ use crate::{
 
 pub const TREE_ROW_HEIGHT: f32 = 27.0;
 const TREE_INDENT: f32 = 14.0;
+/// Horizontal inset of a row's selection pill inside the tree.
+const TREE_ROW_INSET: f32 = 6.0;
 
 /// Keep the viewport attached to a path rather than an index when rows move.
 pub(super) fn sync_list_rows(
@@ -75,13 +77,7 @@ pub(super) fn sync_list_rows(
 fn tree_rail_geometry(
     list: &gpui::ListState,
 ) -> Option<(popover::MenuScrollbarMetrics, gpui::Pixels)> {
-    let bounds = list.viewport_bounds();
-    let viewport = f32::from(bounds.size.height);
-    let max_scroll = f32::from(list.max_offset_for_scrollbar().y);
-    let offset = -f32::from(list.scroll_px_offset_for_scrollbar().y);
-    let metrics =
-        popover::MenuScrollbarMetrics::from_parts(viewport, viewport + max_scroll, offset)?;
-    Some((metrics, bounds.top()))
+    popover::list_rail_geometry(list)
 }
 
 /// The file tree's share of the shared floating rail: it owns no scroll
@@ -220,18 +216,27 @@ impl FilesSurface {
                     .aria_label(node.entry.name.clone())
                     .aria_selected(selected)
                     .when(is_directory, |element| element.aria_expanded(expanded))
+                    // An inset, rounded selection pill rather than a
+                    // full-bleed band (audit SS-10).
                     .h(px(TREE_ROW_HEIGHT))
-                    .w_full()
+                    .mx(px(TREE_ROW_INSET))
+                    .rounded(px(crate::theme::radius::SM))
                     .flex_none()
-                    .pl(px(padding))
-                    .pr(px(8.0))
+                    .pl(px((padding - TREE_ROW_INSET).max(2.0)))
+                    .pr(px(8.0 - TREE_ROW_INSET / 2.0))
                     .flex()
                     .items_center()
                     .gap(px(4.0))
                     .cursor_pointer()
                     .when(node.entry.ignored, |element| element.opacity(0.52))
+                    // Focused selection takes the accent, like a key
+                    // window's sidebar; a blurred tree keeps a quiet wash.
                     .when(selected, |element| {
-                        element.bg(crate::theme::wash(if focused { 0.12 } else { 0.08 }))
+                        element.bg(if focused {
+                            theme.accent.opacity(0.22)
+                        } else {
+                            crate::theme::wash(0.08)
+                        })
                     })
                     .when(!selected, |element| {
                         element.hover(|style| style.bg(crate::theme::wash(0.055)))
@@ -271,14 +276,18 @@ impl FilesSurface {
                             .items_center()
                             .justify_center()
                             .when(is_directory, |element| {
+                                // One glyph, turned (audit SS-11).
                                 element.child(
-                                    icon(if expanded {
-                                        icons::ALT_ARROW_DOWN
-                                    } else {
-                                        icons::ALT_ARROW_RIGHT
-                                    })
-                                    .size(px(11.0))
-                                    .text_color(theme.text_faint),
+                                    icon(icons::ALT_ARROW_RIGHT)
+                                        .with_transformation(gpui::Transformation::rotate(
+                                            gpui::radians(if expanded {
+                                                std::f32::consts::FRAC_PI_2
+                                            } else {
+                                                0.0
+                                            }),
+                                        ))
+                                        .size(px(12.0))
+                                        .text_color(theme.text_faint),
                                 )
                             }),
                     )
@@ -338,7 +347,7 @@ impl FilesSurface {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(10.5))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_tone(theme.danger, 0.82))
                         .child(format!("{message} — Retry")),
                 )
@@ -359,7 +368,7 @@ impl FilesSurface {
                 }))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(10.5))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_muted)
                         .child("Load more…"),
                 )
@@ -490,7 +499,7 @@ fn status_row(
         .flex()
         .items_center()
         .font_family(theme.font_sans.clone())
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(color)
         .child(label)
         .into_any_element()

@@ -528,7 +528,7 @@ impl Transcript {
                         .when(bucket_len > 1, |el| {
                             el.child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(10.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .text_color(theme.text_muted)
                                     .child(SharedString::from(format!("{bucket_len} prompts"))),
                             )

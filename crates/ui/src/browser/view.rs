@@ -274,7 +274,7 @@ impl BrowserSurface {
             .id("browser-previews")
             .size_full()
             .overflow_y_scroll()
-            .p(px(16.0))
+            .p(px(crate::surface_chrome::CONTENT_INSET))
             .flex()
             .flex_col()
             .items_center()
@@ -386,7 +386,7 @@ impl BrowserSurface {
                             .when(!has_error, |el| {
                                 el.child(
                                     div()
-                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .text_size(crate::typography::ui_rems(11.0))
                                         .text_color(theme.text_faint)
                                         .child(if cfg!(target_os = "macos") {
                                             "⌘L"
@@ -440,10 +440,30 @@ impl Render for BrowserSurface {
         .when(has_page, |el| {
             el.on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
         });
+        // The edge is always reserved, so an error tints it without nudging
+        // the field (audit SS-21); a thin accent line rides the bottom edge
+        // while the page loads.
+        let loading = self.page.loading;
         let address = surface_chrome::input()
             .id("browser-address")
-            .when(self.validation.is_some(), |el| {
-                el.border_1().border_color(theme.danger)
+            .relative()
+            .border_1()
+            .border_color(if self.validation.is_some() {
+                theme.danger
+            } else {
+                gpui::transparent_black()
+            })
+            .when(loading, |el| {
+                el.child(
+                    div()
+                        .absolute()
+                        .left(px(6.0))
+                        .right(px(6.0))
+                        .bottom_0()
+                        .h(px(2.0))
+                        .rounded_full()
+                        .bg(theme.accent.opacity(0.85)),
+                )
             })
             .on_mouse_down(
                 MouseButton::Left,
@@ -476,7 +496,7 @@ impl Render for BrowserSurface {
                         .id("browser-go")
                         .size(px(18.0))
                         .flex_none()
-                        .rounded(px(4.0))
+                        .rounded(px(3.0))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -649,7 +669,7 @@ impl Render for BrowserSurface {
                 .child("Localhost opens on this device. Open a detected preview from a new tab to reach your other device.")))
             .child(body)
             .when(external, |el| el.child(div().h(px(26.0)).px(px(10.0)).flex().items_center().gap(px(5.0)).border_t_1().border_color(theme.border)
-                .text_size(crate::typography::ui_rems(10.0)).text_color(theme.text_faint)
+                .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_faint)
                 .child(icons::icon(icons::ARROW_UP_RIGHT).size(px(11.0))).child("Opens in your default browser")))
     }
 }

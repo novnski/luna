@@ -674,7 +674,7 @@ impl Render for FileEditorTooltip {
             .border_color(theme.border)
             .bg(theme.tooltip_surface())
             .font_family(theme.font_sans.clone())
-            .text_size(crate::typography::ui_rems(10.5))
+            .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .child(self.text.clone());
         crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
@@ -2395,27 +2395,29 @@ impl FilesSurface {
             .flex()
             .items_center()
             .overflow_hidden();
+        // The file name leads (audit SS-19): the leaf keeps its full width in
+        // the primary tone at 12 pt medium; parent folders shrink first and
+        // separators are a quiet chevron glyph.
         for (index, part) in parts.iter().enumerate() {
+            let leaf = index + 1 == parts.len();
             if index > 0 {
                 crumbs = crumbs.child(
-                    div()
-                        .mx(px(4.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.readable_faint(0.65))
-                        .child("›"),
+                    div().flex_none().mx(px(3.0)).child(
+                        crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
+                            .size(px(10.0))
+                            .text_color(theme.readable_faint(0.65)),
+                    ),
                 );
             }
             crumbs = crumbs.child(
                 div()
-                    .min_w_0()
+                    .when(leaf, |el| el.flex_shrink_0().max_w_full())
+                    .when(!leaf, |el| el.min_w(px(16.0)).flex_shrink(1.0))
                     .truncate()
                     .font_family(theme.font_sans.clone())
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(if index + 1 == parts.len() {
-                        theme.text_muted
-                    } else {
-                        theme.text_faint
-                    })
+                    .text_size(crate::typography::ui_rems(if leaf { 12.0 } else { 11.0 }))
+                    .when(leaf, |el| el.font_weight(gpui::FontWeight::MEDIUM))
+                    .text_color(if leaf { theme.text } else { theme.text_faint })
                     .child((*part).to_string()),
             );
         }
@@ -2824,7 +2826,7 @@ impl FilesSurface {
                         .bg(theme.warning.opacity(0.045))
                         .flex()
                         .items_center()
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.readable_on(
                             theme.warning_muted,
                             theme.warning.opacity(0.045),
@@ -3453,16 +3455,23 @@ fn banner_action(
 }
 
 fn centered_state(message: impl Into<SharedString>, color: gpui::Hsla) -> AnyElement {
+    // The shared surface-state body (audit SS-12): 12 pt on the content
+    // inset, capped to a readable width.
     div()
         .flex_1()
         .flex()
         .items_center()
         .justify_center()
-        .px(px(24.0))
-        .text_center()
-        .text_size(crate::typography::ui_rems(11.5))
-        .text_color(color)
-        .child(message.into())
+        .px(px(crate::surface_chrome::CONTENT_INSET))
+        .child(
+            div()
+                .max_w(px(280.0))
+                .text_center()
+                .text_size(crate::typography::ui_rems(12.0))
+                .line_height(crate::typography::ui_rems(18.0))
+                .text_color(color)
+                .child(message.into()),
+        )
         .into_any_element()
 }
 

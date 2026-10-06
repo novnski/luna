@@ -136,7 +136,7 @@ impl BadgeCard {
                             .items_center()
                             .gap(px(6.0))
                             .font_family(theme.font_mono.clone())
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_faint)
                             .child(
                                 div()
