@@ -19,7 +19,7 @@
 use gpui::{AnyElement, Context, Pixels, ScrollHandle, SharedString, div, prelude::*, px};
 
 use crate::popover::{self, MenuScrollbarMetrics, MenuScrollbarState, ScrollRailHost};
-use crate::theme::{Theme, ink};
+use crate::theme::Theme;
 
 /// Owned scroll + floating-scrollbar state for one settings page.
 ///
@@ -637,7 +637,7 @@ pub fn toggle_switch(theme: &Theme, on: bool, key: &str) -> gpui::Div {
     let track_off = if theme.appearance.is_light() {
         theme.text_muted.opacity(0.45)
     } else {
-        ink(0.18)
+        theme.fill(crate::theme::FillTier::Primary)
     };
     let t = crate::motion::follow(
         &format!("switch-{key}"),

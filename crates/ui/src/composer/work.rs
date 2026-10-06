@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::AccessibleButton as _;
-use crate::interaction::HoverFill as _;
 use crate::task_work::{
     MAX_STOP, StopAnswer, WorkGroup, WorkStatus, kind_label, selectable, state_label,
     stop_status_label,
