@@ -703,6 +703,38 @@ pub fn switch_control<V: 'static>(
         .child(toggle_switch(theme, on, &key))
 }
 
+/// [`switch_control`] while it can't be changed (its parent setting is off):
+/// the same switch, still announced with its name, value and `reason`, but
+/// with no focus stop, pointer cursor or handlers. It keeps the live switch's
+/// geometry and motion key, so a row never shifts when it becomes available.
+pub fn switch_control_disabled(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<SharedString>,
+    on: bool,
+    reason: impl Into<SharedString>,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    let id: gpui::ElementId = id.into();
+    let key = id.to_string();
+    div()
+        .id(id)
+        .role(gpui::Role::Switch)
+        .aria_label(label)
+        .aria_toggled(if on {
+            gpui::Toggled::True
+        } else {
+            gpui::Toggled::False
+        })
+        .aria_description(reason)
+        .flex_none()
+        .m(px(-2.0))
+        .rounded_full()
+        .border_2()
+        .border_color(gpui::transparent_black())
+        .cursor_default()
+        .child(toggle_switch(theme, on, &key))
+}
+
 /// The Settings control-column action: a medium ghost button from the shared
 /// kit (audit DS-02), with its faint resting plate, eased hover, focus ring
 /// and disabled look. The caller adds the label, accessible name and click.

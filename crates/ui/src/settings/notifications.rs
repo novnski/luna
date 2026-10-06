@@ -5,7 +5,7 @@
 //! emits [`NotificationsEvent::Changed`], and the shell persists it. Nothing
 //! here talks RPC — all preferences are device-local UI settings.
 
-use gpui::{AnyElement, Context, EventEmitter, SharedString, Window, div, prelude::*, px};
+use gpui::{AnyElement, Context, EventEmitter, SharedString, Window, div, prelude::*};
 
 use crate::popover;
 use crate::settings::widgets;
@@ -252,24 +252,14 @@ impl NotificationsPage {
             })
             .into_any_element();
         }
-        div()
-            .id(id)
-            .role(gpui::Role::Switch)
-            .aria_label(label)
-            .aria_toggled(if on {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .aria_description("Unavailable while its parent setting is off")
-            .flex_none()
-            .m(px(-2.0))
-            .rounded_full()
-            .border_2()
-            .border_color(gpui::transparent_black())
-            .cursor_default()
-            .child(widgets::toggle_switch(theme, on, id))
-            .into_any_element()
+        widgets::switch_control_disabled(
+            id,
+            label,
+            on,
+            "Unavailable while its parent setting is off",
+            theme,
+        )
+        .into_any_element()
     }
 
     /// A master switch for a section header's actions slot, centred on the
@@ -456,7 +446,8 @@ impl Render for NotificationsPage {
                 "Tasks",
                 Some(
                     "Choose which alerts each task on this device sends. Keep awake stops \
-                     this device from sleeping while that task is selected and working."
+                     this device from sleeping while that task is selected and working; \
+                     General → Prevent sleep while running covers every task."
                         .into(),
                 ),
                 Vec::new(),
