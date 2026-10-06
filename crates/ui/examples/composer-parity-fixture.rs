@@ -28,9 +28,12 @@
 //! 9. The fork's tab header is not the ordinary one-line strip (fork
 //!    identity and a link to its source), or shows an End, lease, expiry or
 //!    read-only state.
-//! 10. Groups never shrink below their 320 px minimum, so the old forced
-//!    240 px right pane is replaced by a fork group at that minimum (the
-//!    canvas scrolls): its controls row must still fit, yielding whole.
+//! 10. A very wide right sidebar squeezes the fork's group below the
+//!    advisory 320 px minimum. Since the fit-to-window workbench, groups
+//!    share the viewport in their saved proportions with no outer scroll
+//!    (the canvas no longer holds 320 px groups and scrolls): the groups
+//!    must fill the viewport without a scroll range, and the fork's controls
+//!    row must still fit, yielding whole.
 //! 11. Context usage renders under the pill instead of in the controls row
 //!    after Goal (Main and fork alike), the row's budget ignores it (a chip
 //!    truncates or overlaps), or the pill does not sit lower in the frame
@@ -702,7 +705,7 @@ fn main() -> anyhow::Result<()> {
                             // Leave room to create two 320px groups with the
                             // rounded viewport inset; later steps shrink them.
                             // The wide baseline includes the in-row context
-                            // share; later steps still exercise 320px groups.
+                            // share; c11 squeezes the fork below 320px.
                             size(px(1600.), px(900.)),
                         ))),
                         show: false,
@@ -831,9 +834,8 @@ fn main() -> anyhow::Result<()> {
                     row_fits("main", &main)?;
                     record.insert("c04".into(), serde_json::json!({"main": main["chips"], "pane": pane["chips"]}));
 
-                    // c05-c07. A wider right sidebar narrows both groups; at
-                    // 760 px they sit at their 320 px minimum (the canvas
-                    // scrolls).
+                    // c05-c07. A wider right sidebar narrows both groups,
+                    // which share the viewport (nothing scrolls).
                     let mut widths = serde_json::Map::new();
                     for (label, width) in [("c05-pane-360", 360.0), ("c06-pane-300", 300.0), ("c07-pane-760", 760.0)] {
                         window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(width, cx))?;
@@ -846,9 +848,10 @@ fn main() -> anyhow::Result<()> {
                         row_fits("pane", &pane)?;
                         widths.insert(label.into(), serde_json::json!({"main": main["controlsRow"], "pane": pane["controlsRow"], "mainSurface": main["surface"], "paneSurface": pane["surface"]}));
                     }
-                    // c11. Failure case 10: the fork's group at its 320 px
-                    // minimum (a very wide right sidebar): the effort, then
-                    // the name, yield whole — never an ellipsis.
+                    // c11. Failure case 10: a very wide right sidebar squeezes
+                    // the fork's group below the advisory 320 px minimum. The
+                    // groups share the viewport with no outer scroll, and the
+                    // effort, then the name, yield whole — never an ellipsis.
                     window.update(cx, |shell, _, cx| shell.fixture_set_right_pane_width(900.0, cx))?;
                     settle(cx, 700).await;
                     capture(window, cx, output.join("c11-group-minimum.png"))?;
@@ -858,7 +861,19 @@ fn main() -> anyhow::Result<()> {
                     row_fits("pane", &pane)?;
                     let minimum = window.update(cx, |shell, _, cx| shell.fixture_workbench_readback(cx))?;
                     let group = pane_width(&minimum, &side);
-                    anyhow::ensure!(group.is_some_and(|width| (319.5..=330.0).contains(&width)), "the fork's group sits at its 320 px minimum: {group:?} in {minimum}");
+                    let main_group = minimum["main"].as_str().and_then(|main| pane_width(&minimum, main));
+                    anyhow::ensure!(group.is_some_and(|width| width > 0.0 && width < 320.0), "the fork's group is squeezed below the advisory 320 px minimum: {group:?} in {minimum}");
+                    let scroll = &minimum["canvasScroll"];
+                    anyhow::ensure!(
+                        f(&scroll["maxX"]) < 0.5 && f(&scroll["maxY"]) < 0.5 && f(&scroll["x"]).abs() < 0.5,
+                        "the squeezed groups leave no outer scroll range: {minimum}"
+                    );
+                    // The two groups and the 1 px seam fill the viewport.
+                    let filled = group.zip(main_group).map(|(fork, main)| fork + main + 1.0);
+                    anyhow::ensure!(
+                        filled.is_some_and(|filled| (filled - f(&minimum["rootBounds"]["w"])).abs() <= 2.0),
+                        "the groups share the viewport: {filled:?} in {minimum}"
+                    );
                     widths.insert("c11-group-minimum".into(), serde_json::json!({"pane": pane["controlsRow"], "paneSurface": pane["surface"], "chips": pane["chips"], "groupWidth": group}));
                     record.insert("widths".into(), serde_json::Value::Object(widths));
 
@@ -1829,7 +1844,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("composer-parity.pass"),
-                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group at its 320 px minimum, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast; execution summaries decode from WatchChats, running settings and access show with Running / Requested / how it applies while a turn runs, clear on the next turn, read Loaded when warm, never promise context transfer on a new binding, stay out of the fork's composer, fall back to legacy chips and Steer when missing/old/other-task, Steer follows the engine's native/after-turn/unavailable decision with its reason, and the Execution card follows the focused fork tab, refuses a late response for the previous focus and labels adapter declarations as unverified; Send findings goes only from a fork to its living source, previews without writing, stores a Planned receipt without starting a turn or touching the draft, refuses a stale or earlier-connection preview, shows a lost answer as unknown and settles it by Check status without resending, refreshes to only new findings; the provider switch has no default choice, drops a preview on a target change, stores a handoff without a turn; Details read without error; receipts survive the fork's deletion; Start new task with context previews into a reserved id kept across refreshes, creates nothing on preview or Cancel, and on apply (a lost answer recovered by Check status) creates exactly one ordinary task on the source's config with a Planned context copy, no child, no native session or turn, opens it, and leaves the source's draft untouched; apply and Check status answers arriving after the engine connection changed settle, open or notify nothing; Refresh and re-targeting refuse while an apply is in flight or unknown, keeping its command id\n",
+                                "PASS: headless production Shell on the production engine boundary; a fork from New side chat, moved into a split beside Main, has the ordinary tab header linking its source (no End/lease/expiry/read-only); Main and fork composers share one two-row geometry (equal heights, level bottoms) at 1440 px with 520/360/300/760/480 px right sidebars and the fork group squeezed below 320 px sharing the viewport with no outer scroll, in dark and light; every controls row fits its measured budget (no truncation); access renders as an icon (Full access = open lock); Fast renders as a bolt beside the model name; Main reasoning/speed changes leave the fork unchanged; hovering a Main chip leaves the fork's chip at rest; the model menu offers Speed: Standard / Fast; execution summaries decode from WatchChats, running settings and access show with Running / Requested / how it applies while a turn runs, clear on the next turn, read Loaded when warm, never promise context transfer on a new binding, stay out of the fork's composer, fall back to legacy chips and Steer when missing/old/other-task, Steer follows the engine's native/after-turn/unavailable decision with its reason, and the Execution card follows the focused fork tab, refuses a late response for the previous focus and labels adapter declarations as unverified; Send findings goes only from a fork to its living source, previews without writing, stores a Planned receipt without starting a turn or touching the draft, refuses a stale or earlier-connection preview, shows a lost answer as unknown and settles it by Check status without resending, refreshes to only new findings; the provider switch has no default choice, drops a preview on a target change, stores a handoff without a turn; Details read without error; receipts survive the fork's deletion; Start new task with context previews into a reserved id kept across refreshes, creates nothing on preview or Cancel, and on apply (a lost answer recovered by Check status) creates exactly one ordinary task on the source's config with a Planned context copy, no child, no native session or turn, opens it, and leaves the source's draft untouched; apply and Check status answers arriving after the engine connection changed settle, open or notify nothing; Refresh and re-targeting refuse while an apply is in flight or unknown, keeping its command id\n",
                             )
                         });
                         if let Err(error) = written {
