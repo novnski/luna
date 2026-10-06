@@ -1,6 +1,14 @@
 //! Advanced controls embedded below the three provider cards: model catalog
-//! refresh, instructions, integration inventory, runtime contract, and title
-//! preferences. Device scope follows the parent Providers page.
+//! refresh, title preferences, the skill and MCP inventory, instructions,
+//! the runtime contract and the Claude cards. Device scope follows the parent
+//! Providers page.
+//!
+//! Every card follows the Settings spec
+//! (`docs/design/settings-polish-2026-10-06/spec.md`): one `section_card`
+//! whose `section_header` carries the title, description and the section's
+//! own actions; rows on the `card_row` anatomy with trailing kit controls;
+//! wide content (editors, lists, chip groups) in a full-width block; loading
+//! as skeleton rows; errors and warnings as strips inside their section.
 
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, Render, SharedString, Subscription, Task,
@@ -22,39 +30,108 @@ use luna_proto::{
 };
 use luna_rpc::methods;
 
-use crate::AccessibleButton as _;
+use crate::button::{self, ButtonKind, ControlSize, Segment};
 use crate::popover::{self, Loadable};
 use crate::settings::widgets;
 use crate::state::AppState;
-use crate::theme::Theme;
+use crate::theme::{FillTier, Theme};
+use crate::typography::ui_rems;
 
 mod mcp;
 #[cfg(feature = "appshots-fixture")]
 pub use mcp::fixture as mcp_fixture;
 mod claude_sessions;
 
-fn meta_text(theme: &Theme, value: impl Into<SharedString>) -> gpui::Div {
-    widgets::meta_line(
-        theme,
-        vec![
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(value.into())
-                .into_any_element(),
-        ],
-    )
-}
-
-fn skill_button(
+/// A kit push button with its accessible name and visible text. GPUI
+/// synthesizes one keyboard click on key-up for a focused `on_click`
+/// control, so callers wire only the click (and only when enabled).
+pub(super) fn kit_button(
     theme: &Theme,
     id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
+    kind: ButtonKind,
+    size: ControlSize,
+    aria: impl Into<SharedString>,
+    text: impl Into<SharedString>,
     enabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
-    // GPUI synthesizes one keyboard click on key-up for a focused on_click
-    // control. Keep keyboard behavior there rather than adding key handlers.
-    widgets::ghost_action(id, enabled, theme).aria_label(label.into())
+    button::button(id, kind, size, enabled, theme)
+        .aria_label(aria.into())
+        .child(text.into())
+}
+
+/// A section header action: a medium secondary button with a leading glyph.
+pub(super) fn section_action(
+    theme: &Theme,
+    id: impl Into<SharedString>,
+    glyph: &'static str,
+    aria: impl Into<SharedString>,
+    text: impl Into<SharedString>,
+    enabled: bool,
+) -> gpui::Stateful<gpui::Div> {
+    button::button(id, ButtonKind::Secondary, ControlSize::Md, enabled, theme)
+        .aria_label(aria.into())
+        .child(button::glyph(glyph, ControlSize::Md))
+        .child(text.into())
+}
+
+/// A row holding one full-width element (a strip, a skeleton, a panel).
+pub(super) fn full_row(theme: &Theme, child: impl IntoElement) -> gpui::Div {
+    widgets::card_row(theme, false).child(div().w_full().min_w_0().child(child))
+}
+
+/// A row whose only content is secondary copy: an empty state or a status.
+pub(super) fn note_row(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
+    widgets::card_row(theme, false).child(widgets::row_description(theme, copy).flex_1())
+}
+
+/// An error or warning strip as a row of its section.
+pub(super) fn strip_row(theme: &Theme, strip: gpui::Div) -> gpui::Div {
+    full_row(theme, strip.mt_0())
+}
+
+/// Pulsing skeleton rows in place of a section's rows while it loads.
+pub(super) fn skeleton_row(
+    theme: &Theme,
+    id: &'static str,
+    count: usize,
+    view: gpui::EntityId,
+    cx: &mut App,
+) -> gpui::Div {
+    full_row(theme, popover::skeleton_rows(id, theme, count, view, cx))
+}
+
+/// A full-width vertical list under a row's text (facts, lines, editors).
+pub(super) fn block_list() -> gpui::Div {
+    widgets::row_block()
+        .flex_col()
+        .items_stretch()
+        .gap(ui_rems(6.0))
+}
+
+/// The framed text area around a multi-line [`ComposerInput`] editor, on the
+/// theme's well fill.
+fn editor_frame(theme: &Theme, input: AnyElement) -> gpui::Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .px(ui_rems(12.0))
+        .py(ui_rems(8.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(theme.separator(false))
+        .bg(theme.fill(FillTier::Quaternary))
+        .text_size(ui_rems(13.0))
+        .line_height(ui_rems(19.0))
+        .child(input)
+}
+
+/// The first `len` characters of an opaque revision, without slicing inside
+/// a character or past the end.
+fn short_revision(revision: &str, len: usize) -> &str {
+    revision
+        .char_indices()
+        .nth(len)
+        .map_or(revision, |(end, _)| &revision[..end])
 }
 
 /// One row of the Execution card's settings table.
@@ -83,11 +160,15 @@ pub struct HarnessesPage {
     harnesses: Loadable<Vec<HarnessDescriptor>>,
     /// Which device the parent Providers page selected.
     target_device: Option<String>,
-    error: Option<String>,
+    /// A failed title-settings save, shown in the Session titles card.
+    title_error: Option<String>,
+    /// A failed instruction save, shown in the LUNA instructions card.
+    instruction_error: Option<String>,
     load_task: Option<Task<()>>,
     model_refresh_task: Option<Task<()>>,
     model_refresh_running: bool,
-    model_refresh_result: Option<String>,
+    /// The last refresh's outcome: `(all catalogs updated, message)`.
+    model_refresh_result: Option<(bool, String)>,
     instructions: Loadable<InstructionSettingsView>,
     inventory: Loadable<IntegrationInventoryView>,
     integration_provider: HarnessId,
@@ -177,7 +258,8 @@ impl HarnessesPage {
             state,
             harnesses: Loadable::Idle,
             target_device: None,
-            error: None,
+            title_error: None,
+            instruction_error: None,
             load_task: None,
             model_refresh_task: None,
             model_refresh_running: false,
@@ -247,7 +329,8 @@ impl HarnessesPage {
         self.title_menu = None;
         self.title_saving = false;
         self.target_device = target;
-        self.error = None;
+        self.title_error = None;
+        self.instruction_error = None;
         self.harnesses = Loadable::Idle;
         self.instructions = Loadable::Idle;
         self.inventory = Loadable::Idle;
@@ -319,7 +402,7 @@ impl HarnessesPage {
                 Err(error) => {
                     this.update(cx, |page, cx| {
                         if saving {
-                            page.error = Some(error);
+                            page.title_error = Some(error);
                         } else {
                             page.title_settings = Loadable::Error(error);
                         }
@@ -339,7 +422,7 @@ impl HarnessesPage {
                     Loadable::Idle
                 };
                 page.title_saving = false;
-                page.error = None;
+                page.title_error = None;
                 cx.notify();
             })
             .ok();
@@ -480,14 +563,14 @@ impl HarnessesPage {
                 // A global write returns a global-only view. Reload the
                 // selected project and its new revision instead of installing
                 // that response over the project's editor.
-                self.error = None;
+                self.instruction_error = None;
                 if self.target_device.is_none() {
                     self.load_instructions(cx);
                     self.load_runtime_contract(cx);
                 }
             }
             Err(error) => {
-                self.error = Some(error);
+                self.instruction_error = Some(error);
                 // Keep unsaved input for a same-scope retry. A changed scope
                 // must show the newly selected project's own content.
                 if !same_scope && self.target_device.is_none() {
@@ -1037,7 +1120,10 @@ impl HarnessesPage {
         theme: &Theme,
         summary: &TaskExecutionSummary,
     ) -> gpui::Stateful<gpui::Div> {
-        let muted = theme.readable_muted(0.7);
+        /// The Setting column: wide enough for "Reasoning" and its pending
+        /// dot at every Interface size (it is a rem like the text).
+        const SETTING_COLUMN: f32 = 96.0;
+        let muted = theme.readable_muted(0.85);
         let heading = summary
             .running
             .as_ref()
@@ -1049,10 +1135,19 @@ impl HarnessesPage {
         let header = div()
             .flex()
             .flex_row()
-            .gap(px(12.0))
-            .text_size(crate::typography::ui_rems(11.0))
+            .gap(ui_rems(12.0))
+            .pb(ui_rems(4.0))
+            .border_b_1()
+            .border_color(theme.border)
+            .text_size(ui_rems(11.0))
+            .line_height(ui_rems(14.0))
             .text_color(muted)
-            .child(div().w(px(84.0)).flex_none().child("Setting"))
+            .child(
+                div()
+                    .w(ui_rems(SETTING_COLUMN))
+                    .flex_none()
+                    .child("Setting"),
+            )
             .child(cell(heading.into(), muted))
             .child(cell("Requested".into(), muted));
         let rows = self.execution_rows(summary).into_iter().map(|row| {
@@ -1060,21 +1155,28 @@ impl HarnessesPage {
                 .id(SharedString::from(format!("execution-row-{}", row.setting)))
                 .flex()
                 .flex_row()
-                .gap(px(12.0))
-                .py(px(3.0))
-                .text_size(crate::typography::ui_rems(12.0))
+                .gap(ui_rems(12.0))
+                .py(ui_rems(3.0))
+                .text_size(ui_rems(12.0))
+                .line_height(ui_rems(16.0))
                 .child(
                     div()
-                        .w(px(84.0))
+                        .w(ui_rems(SETTING_COLUMN))
                         .flex_none()
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(ui_rems(6.0))
                         .text_color(muted)
                         .child(row.setting)
                         .when(row.pending, |el| {
-                            el.child(div().size(px(6.0)).rounded_full().bg(theme.warning))
+                            el.child(
+                                div()
+                                    .flex_none()
+                                    .size(ui_rems(6.0))
+                                    .rounded_full()
+                                    .bg(theme.warning),
+                            )
                         }),
                 )
                 .child(cell(
@@ -1086,109 +1188,136 @@ impl HarnessesPage {
                     if row.pending { theme.text } else { muted },
                 ))
         });
-        let mut section = div()
-            .id("execution-summary")
-            .mt(px(10.0))
-            .flex()
-            .flex_col()
-            .gap(px(6.0))
-            .child(meta_text(
-                theme,
-                format!(
-                    "State: {}",
-                    crate::execution_view::phase_label(summary.phase)
-                ),
-            ));
-        if let Some(note) = summary
-            .observation_note
-            .as_deref()
-            .filter(|note| !note.trim().is_empty())
-        {
-            section = section.child(meta_text(theme, note.to_string()));
-        }
-        section = section
-            .child(header)
-            .child(div().flex().flex_col().children(rows));
+        let mut lines: Vec<String> = Vec::new();
         if summary.pending.contains(&ExecutionSettingField::Workspace) {
-            section = section.child(meta_text(theme, "A workspace change is pending."));
+            lines.push("A workspace change is pending.".into());
         }
         if !summary.pending.is_empty() {
-            for line in crate::execution_view::transition_lines(&summary.transition) {
-                section = section.child(meta_text(theme, line));
-            }
+            lines.extend(crate::execution_view::transition_lines(&summary.transition));
         }
-        section = section.child(meta_text(
-            theme,
-            format!(
-                "Steering: {}",
-                crate::execution_view::steer_label(&summary.steer)
-            ),
+        lines.push(format!(
+            "Steering: {}",
+            crate::execution_view::steer_label(&summary.steer)
         ));
-        if let Some(declared) = Self::execution_declared(summary) {
-            section = section.child(meta_text(theme, declared));
-        }
-        section
+        lines.extend(Self::execution_declared(summary));
+        div()
+            .id("execution-summary")
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(ui_rems(8.0))
+            .when_some(
+                summary
+                    .observation_note
+                    .as_deref()
+                    .filter(|note| !note.trim().is_empty())
+                    .map(str::to_owned),
+                |el, note| el.child(widgets::row_description(theme, note)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(header)
+                    .child(div().pt(ui_rems(2.0)).flex().flex_col().children(rows)),
+            )
+            .child(
+                div().flex().flex_col().gap(ui_rems(2.0)).children(
+                    lines
+                        .into_iter()
+                        .map(|line| widgets::row_description(theme, line)),
+                ),
+            )
     }
 
     fn render_runtime_contract(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
-            .child(widgets::row_title(theme, "Execution"))
-            .child(widgets::page_subtitle(theme,
-                "What the focused chat runs with, as its engine reports it. Instruction text, credentials and provider identifiers are never shown here."))
-            .child(widgets::ghost_action("refresh-effective-session", true, theme)
-                .accessible_button("Refresh execution details", theme.accent)
-                .mt(px(8.0))
-                .on_click(cx.listener(|page, _, _, cx| { page.load_runtime_contract(cx); cx.notify(); }))
-                .child("Refresh"));
+        let refresh = section_action(
+            theme,
+            "refresh-effective-session",
+            crate::icons::REFRESH,
+            "Refresh execution details",
+            "Refresh",
+            true,
+        )
+        .on_click(cx.listener(|page, _, _, cx| {
+            page.load_runtime_contract(cx);
+            cx.notify();
+        }));
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            "Execution",
+            Some(
+                "What the focused chat runs with, as its engine reports it. Instruction text, \
+                 credentials and provider identifiers are never shown here."
+                    .into(),
+            ),
+            vec![refresh.into_any_element()],
+        ));
         let focus = self.state.read(cx).execution_focus_chat();
         let Some(focus) = focus else {
             return card
-                .child(meta_text(
+                .child(note_row(
                     theme,
                     "Select a chat to inspect what it runs with.",
                 ))
                 .into_any_element();
         };
-        card = card.child(meta_text(
-            theme,
-            format!("Chat: {}", self.chat_title(&focus, cx)),
-        ));
+        // The focused chat by title (never its id), with its live phase.
+        let phase = self
+            .execution_summary(cx)
+            .map(|(summary, _)| crate::execution_view::phase_label(summary.phase));
+        card = card.child(
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    self.chat_title(&focus, cx),
+                    Some("Focused chat".into()),
+                ))
+                .when_some(phase, |row, phase| {
+                    row.child(
+                        widgets::row_controls()
+                            .child(widgets::badge(theme, format!("State: {phase}"))),
+                    )
+                }),
+        );
         #[cfg(feature = "appshots-fixture")]
         self.qa_bounds.borrow_mut().remove("summary");
-        card = match self.execution_summary(cx) {
+        let summary_row = match self.execution_summary(cx) {
             Some((summary, _)) => {
                 let section = self.render_execution_summary(theme, summary);
                 #[cfg(feature = "appshots-fixture")]
                 let section = section.relative().child(self.qa_measure("summary"));
-                card.child(section)
+                full_row(theme, section)
             }
-            None => card.child(meta_text(
+            None => note_row(
                 theme,
-                "This chat's host doesn't report execution details. Nothing is inferred from this device.",
-            )),
+                "This chat's host doesn't report execution details. Nothing is inferred from \
+                 this device.",
+            ),
         };
+        card = card.child(summary_row);
         if let Some(line) = self.background_work_line(&focus, cx) {
-            card = card.child(meta_text(theme, format!("Background work: {line}")));
+            card = card.child(widgets::card_row(theme, false).child(widgets::row_text(
+                theme,
+                "Background work",
+                Some(line.into()),
+            )));
         }
         if let Some(line) = self.last_transfer_line(&focus, cx) {
-            card = card.child(meta_text(theme, format!("Last context transfer: {line}")));
+            card = card.child(widgets::card_row(theme, false).child(widgets::row_text(
+                theme,
+                "Last context transfer",
+                Some(line.into()),
+            )));
         }
         // The runtime contract (instructions and tools), as before.
-        card = card.child(
-            div()
-                .mt(px(10.0))
-                .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.readable_muted(0.7))
-                .child("Technical · last read from the engine, not live"),
-        );
         let connection_changed = self.runtime_generation != self.state.read(cx).engine_generation();
+        let mut contract: Vec<AnyElement> = Vec::new();
+        let line = |text: String| widgets::row_description(theme, text).into_any_element();
         match &self.runtime_contract {
-            Loadable::Ready(_) if connection_changed => {
-                card = card.child(meta_text(
-                    theme,
-                    "The engine connection changed. Refreshing session evidence…",
-                ));
-            }
+            Loadable::Ready(_) if connection_changed => contract.push(line(
+                "The engine connection changed. Refreshing session evidence…".into(),
+            )),
             Loadable::Ready(view)
                 if !matches_selected_contract(
                     view,
@@ -1196,63 +1325,72 @@ impl HarnessesPage {
                     self.target_device.as_deref(),
                 ) =>
             {
-                card = card.child(meta_text(
-                    theme,
-                    "The focused chat changed. Refreshing session evidence…",
-                ));
+                contract.push(line(
+                    "The focused chat changed. Refreshing session evidence…".into(),
+                ))
             }
             Loadable::Ready(view) => {
                 if let Some(effective) = &view.effective {
-                    card = card.child(meta_text(
-                        theme,
-                        format!(
-                            "Contract v{} · {} · {:?} · {}",
-                            effective.contract_version,
-                            effective.contract_hash,
-                            effective.delivery,
-                            if effective.restart_required {
-                                "restart required"
-                            } else {
-                                "current at last provider acknowledgment"
-                            },
-                        ),
-                    ));
+                    contract.push(line(format!(
+                        "Contract v{} · {} · {:?} · {}",
+                        effective.contract_version,
+                        effective.contract_hash,
+                        effective.delivery,
+                        if effective.restart_required {
+                            "restart required"
+                        } else {
+                            "current at last provider acknowledgment"
+                        },
+                    )));
                     for instruction in &effective.instructions {
-                        card = card.child(div().mt(px(6.0)).child(meta_text(
-                            theme,
-                            format!(
-                                "{} · {} characters · {}",
-                                instruction.name,
-                                instruction.character_count,
-                                instruction.provenance
-                            ),
+                        contract.push(line(format!(
+                            "{} · {} characters · {}",
+                            instruction.name, instruction.character_count, instruction.provenance
                         )));
                     }
                     for tool in &effective.attached_tools {
-                        card = card.child(div().mt(px(6.0)).child(meta_text(
-                            theme,
-                            format!("Tool attached: {}@{}", tool.name, tool.version),
+                        contract.push(line(format!(
+                            "Tool attached: {}@{}",
+                            tool.name, tool.version
                         )));
                     }
                     for tool in &effective.omitted_tools {
-                        card = card.child(div().mt(px(6.0)).child(meta_text(
-                            theme,
-                            format!("Tool unavailable: {} · {}", tool.name, tool.reason),
+                        contract.push(line(format!(
+                            "Tool unavailable: {} · {}",
+                            tool.name, tool.reason
                         )));
                     }
                 } else {
-                    card = card.child(meta_text(
-                        theme,
-                        view.unavailable_reason.clone().unwrap_or_else(|| {
-                            "No provider session has acknowledged a LUNA contract.".into()
-                        }),
-                    ));
+                    contract.push(line(view.unavailable_reason.clone().unwrap_or_else(|| {
+                        "No provider session has acknowledged a LUNA contract.".into()
+                    })));
                 }
             }
-            Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
+            Loadable::Error(error) => contract.push(
+                widgets::error_strip(theme, error.clone())
+                    .mt_0()
+                    .into_any_element(),
+            ),
             Loadable::Idle => {}
-            Loadable::Loading => card = card.child(meta_text(theme, "Loading session evidence…")),
+            Loadable::Loading => contract.push(popover::skeleton_rows(
+                "runtime-contract-skeleton",
+                theme,
+                2,
+                cx.entity_id(),
+                cx,
+            )),
         }
+        card = card.child(
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    "Runtime contract",
+                    Some("Technical · last read from the engine, not live".into()),
+                ))
+                .when(!contract.is_empty(), |row| {
+                    row.child(block_list().gap(ui_rems(2.0)).children(contract))
+                }),
+        );
         #[cfg(feature = "appshots-fixture")]
         let card = card.relative().child(self.qa_measure("card"));
         card.into_any_element()
@@ -1311,15 +1449,53 @@ impl HarnessesPage {
     }
 
     fn render_integrations(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
-            .child(widgets::row_title(theme, "Skill library and MCP"))
-            .child(widgets::page_subtitle(theme,
-                "Browse provider-owned skills by global or project scope. Check provider reads Codex's native catalog or Claude's own MCP server readback; file presence and selected-session attachment are separate checks."))
-            .child(skill_button(theme, "refresh-integrations", "Check provider skill and MCP catalog", !self.skill_busy)
-                .mt(px(8.0))
-                .when(!self.skill_busy, |el| el
-                    .on_click(cx.listener(|page, _, _, cx| { page.load_inventory(true, cx); cx.notify(); })))
-                .child("Check provider"));
+        let busy = self.skill_busy;
+        let check = section_action(
+            theme,
+            "refresh-integrations",
+            crate::icons::REFRESH,
+            "Check provider skill and MCP catalog",
+            "Check provider",
+            !busy,
+        )
+        .when(!busy, |el| {
+            el.on_click(cx.listener(|page, _, _, cx| {
+                page.load_inventory(true, cx);
+                cx.notify();
+            }))
+        });
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            "Skills and MCP",
+            Some(
+                "Browse provider-owned skills by global or project scope. Check provider reads \
+                 Codex's native catalog or Claude's own MCP server readback; file presence and \
+                 selected-session attachment are separate checks."
+                    .into(),
+            ),
+            vec![check.into_any_element()],
+        ));
+
+        // Provider: whose catalog the rows below show, and where it was read.
+        let context: SharedString = match &self.inventory {
+            Loadable::Ready(view) => {
+                let mut context = format!("Device: {}.", view.machine_id);
+                if let Some(task_id) = self.state.read(cx).selected_chat.as_deref() {
+                    context.push_str(&format!(
+                        " Selected chat: {}. Skill attachment reflects only exact provider \
+                         session evidence; unknown means no verified readback.",
+                        self.chat_title(task_id, cx)
+                    ));
+                }
+                context.into()
+            }
+            _ => "Whose skills and MCP servers to show.".into(),
+        };
+        let mut provider_row = widgets::card_row(theme, false).child(widgets::row_text(
+            theme,
+            "Provider",
+            Some(context),
+        ));
         if let Loadable::Ready(harnesses) = &self.harnesses {
             // A segmented control for the provider (audit DS-16).
             let providers: Vec<(HarnessId, SharedString)> = harnesses
@@ -1337,211 +1513,305 @@ impl HarnessesPage {
                 .position(|(id, _)| *id == self.integration_provider)
                 .unwrap_or(0);
             let ids: Vec<HarnessId> = providers.iter().map(|(id, _)| *id).collect();
-            let busy = self.skill_busy;
-            let picker = div().mt(px(10.0)).child(crate::button::segmented(
-                "integration-provider",
-                providers
-                    .iter()
-                    .map(|(id, name)| crate::button::Segment::new(format!("{id:?}"), name.clone()))
-                    .collect(),
-                selected,
-                120.0 * providers.len().max(1) as f32,
-                crate::button::ControlSize::Md,
-                theme,
-                cx.listener(move |page, ix: &usize, _, cx| {
-                    let Some(id) = ids.get(*ix).copied() else {
-                        return;
-                    };
-                    if busy || id == page.integration_provider {
-                        return;
-                    }
-                    page.integration_provider = id;
-                    page.clear_skill_editor();
-                    page.load_inventory(false, cx);
-                    cx.notify();
-                }),
-            ));
-            card = card.child(picker);
+            if !providers.is_empty() {
+                provider_row = provider_row.child(
+                    widgets::row_controls().child(button::segmented(
+                        "integration-provider",
+                        providers
+                            .iter()
+                            .map(|(id, name)| Segment::new(format!("{id:?}"), name.clone()))
+                            .collect(),
+                        selected,
+                        104.0 * providers.len() as f32,
+                        ControlSize::Md,
+                        theme,
+                        cx.listener(move |page, ix: &usize, _, cx| {
+                            let Some(id) = ids.get(*ix).copied() else {
+                                return;
+                            };
+                            if page.skill_busy || id == page.integration_provider {
+                                return;
+                            }
+                            page.integration_provider = id;
+                            page.clear_skill_editor();
+                            page.load_inventory(false, cx);
+                            cx.notify();
+                        }),
+                    )),
+                );
+            }
         }
+        card = card.child(provider_row);
+
         let has_project = self.selected_skill_project_id(cx).is_some();
         card = card.child(
-            div()
-                .mt(px(10.0))
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(6.0))
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    "New skill",
+                    Some(
+                        "Create a SKILL.md in the provider's global folder, or in the selected \
+                         project's folder."
+                            .into(),
+                    ),
+                ))
                 .child(
-                    skill_button(
-                        theme,
-                        "create-global-skill",
-                        "New global skill",
-                        !self.skill_busy,
-                    )
-                    .when(!self.skill_busy, |el| {
-                        el.on_click(cx.listener(|page, _, _, cx| {
-                            page.create_skill(IntegrationSkillScope::Global, cx)
-                        }))
-                    })
-                    .child("New global skill"),
-                )
-                .when(has_project, |row| {
-                    row.child(
-                        skill_button(
-                            theme,
-                            "create-project-skill",
-                            "New project skill",
-                            !self.skill_busy,
-                        )
-                        .when(!self.skill_busy, |el| {
-                            el.on_click(cx.listener(|page, _, _, cx| {
-                                page.create_skill(IntegrationSkillScope::Project, cx)
-                            }))
+                    widgets::row_controls()
+                        .when(has_project, |controls| {
+                            controls.child(
+                                kit_button(
+                                    theme,
+                                    "create-project-skill",
+                                    ButtonKind::Secondary,
+                                    ControlSize::Md,
+                                    "New project skill",
+                                    "New project skill",
+                                    !busy,
+                                )
+                                .when(!busy, |el| {
+                                    el.on_click(cx.listener(|page, _, _, cx| {
+                                        page.create_skill(IntegrationSkillScope::Project, cx)
+                                    }))
+                                }),
+                            )
                         })
-                        .child("New project skill"),
-                    )
-                }),
+                        .child(
+                            kit_button(
+                                theme,
+                                "create-global-skill",
+                                ButtonKind::Secondary,
+                                ControlSize::Md,
+                                "New global skill",
+                                "New global skill",
+                                !busy,
+                            )
+                            .when(!busy, |el| {
+                                el.on_click(cx.listener(|page, _, _, cx| {
+                                    page.create_skill(IntegrationSkillScope::Global, cx)
+                                }))
+                            }),
+                        ),
+                ),
         );
+
+        let mut footer = None;
         match &self.inventory {
             Loadable::Ready(view) => {
-                card = card.child(meta_text(theme, format!("Device: {}", view.machine_id)));
-                if let Some(task_id) = self.state.read(cx).selected_chat.as_deref() {
-                    card = card.child(meta_text(theme, format!("Selected task: {task_id}. Skill attachment reflects only exact provider session evidence; unknown means no verified readback.")));
-                }
                 if let Some(reason) = &view.unavailable_reason {
-                    card = card.child(meta_text(theme, reason.clone()));
+                    card = card.child(strip_row(
+                        theme,
+                        widgets::warning_strip(theme, reason.clone()),
+                    ));
+                } else if view.items.is_empty() {
+                    card = card.child(note_row(
+                        theme,
+                        format!(
+                            "No skills or MCP servers found for {}.",
+                            self.provider_name(self.integration_provider)
+                        ),
+                    ));
                 }
                 for item in &view.items {
-                    let kind = if item.kind == IntegrationKind::Skill {
-                        "Skill"
-                    } else {
-                        "MCP"
-                    };
-                    let available = match item.available {
-                        Some(true) => "available",
-                        Some(false) => "unavailable",
-                        None => "availability unknown",
-                    };
-                    let attached = match item.attached {
-                        Some(true) => "attached",
-                        Some(false) => "not attached",
-                        None => "attachment unknown",
-                    };
-                    card = card.child(
-                        div()
-                            .mt(px(12.0))
-                            .child(widgets::row_title(theme, format!("{kind} · {}", item.name)))
-                            .child(meta_text(
-                                theme,
-                                format!(
-                                    "{} · {} · configured · {available} · {attached}",
-                                    item.source, item.scope
-                                ),
-                            ))
-                            .when_some(item.reason.clone(), |el, reason| {
-                                el.child(meta_text(theme, reason))
-                            })
-                            .when_some(item.actions.reason.clone(), |el, reason| {
-                                el.child(meta_text(theme, reason))
-                            })
-                            .when_some(item.mcp.as_ref(), |el, details| {
-                                el.child(self.render_mcp_details(theme, item, details, cx))
-                            })
-                            .when(
-                                item.kind == IntegrationKind::Skill && item.identity.is_some(),
-                                |el| {
-                                    let identity = item.identity.clone().unwrap_or_default();
-                                    el.child(
-                                        skill_button(
-                                            theme,
-                                            SharedString::from(format!("inspect-skill-{identity}")),
-                                            format!("Inspect {} {} skill", item.scope, item.name),
-                                            !self.skill_busy,
-                                        )
-                                        .mt(px(6.0))
-                                        .when(!self.skill_busy, |button| {
-                                            button.on_click(cx.listener(move |page, _, _, cx| {
-                                                page.open_skill(identity.clone(), cx)
-                                            }))
-                                        })
-                                        .child("Inspect / edit"),
-                                    )
-                                },
-                            ),
-                    );
+                    card = card.child(self.render_inventory_item(theme, item, cx));
                 }
                 if let Some(panel) = self.render_mcp_panel(theme) {
                     card = card.child(panel);
                 }
-                card = card.child(div().mt(px(8.0)).child(meta_text(theme, view.help.clone())));
+                footer = Some(view.help.clone());
             }
-            Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
-            _ => card = card.child(meta_text(theme, "Loading provider inventory…")),
+            Loadable::Error(error) => {
+                card = card.child(strip_row(theme, widgets::error_strip(theme, error.clone())))
+            }
+            _ => {
+                card = card.child(skeleton_row(
+                    theme,
+                    "integrations-skeleton",
+                    3,
+                    cx.entity_id(),
+                    cx,
+                ))
+            }
         }
-        card.into_any_element()
+        div()
+            .flex()
+            .flex_col()
+            .child(card)
+            .when_some(footer, |el, help| {
+                el.child(widgets::section_footer(theme, help))
+            })
+            .into_any_element()
+    }
+
+    /// One skill or MCP server: identity and state at the left, its actions
+    /// trailing, provider facts (MCP badges, errors, app views) underneath.
+    fn render_inventory_item(
+        &self,
+        theme: &Theme,
+        item: &luna_proto::IntegrationInventoryItem,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let kind = if item.kind == IntegrationKind::Skill {
+            "Skill"
+        } else {
+            "MCP"
+        };
+        let available = match item.available {
+            Some(true) => "available",
+            Some(false) => "unavailable",
+            None => "availability unknown",
+        };
+        let attached = match item.attached {
+            Some(true) => "attached",
+            Some(false) => "not attached",
+            None => "attachment unknown",
+        };
+        let text = widgets::row_text(
+            theme,
+            item.name.clone(),
+            Some(
+                format!(
+                    "{kind} · {} · {} · configured · {available} · {attached}",
+                    item.source, item.scope
+                )
+                .into(),
+            ),
+        )
+        .when_some(item.reason.clone(), |el, reason| {
+            el.child(widgets::row_description(theme, reason))
+        })
+        .when_some(item.actions.reason.clone(), |el, reason| {
+            el.child(widgets::row_description(theme, reason))
+        });
+        let (facts, mut actions) = match item.mcp.as_ref() {
+            Some(details) => self.mcp_row_parts(theme, item, details, cx),
+            None => (Vec::new(), Vec::new()),
+        };
+        if item.kind == IntegrationKind::Skill
+            && let Some(identity) = item.identity.clone()
+        {
+            let enabled = !self.skill_busy;
+            actions.push(
+                kit_button(
+                    theme,
+                    SharedString::from(format!("inspect-skill-{identity}")),
+                    ButtonKind::Secondary,
+                    ControlSize::Sm,
+                    format!("Inspect {} {} skill", item.scope, item.name),
+                    "Inspect / edit",
+                    enabled,
+                )
+                .when(enabled, |button| {
+                    button.on_click(
+                        cx.listener(move |page, _, _, cx| page.open_skill(identity.clone(), cx)),
+                    )
+                })
+                .into_any_element(),
+            );
+        }
+        widgets::card_row(theme, false)
+            .child(text)
+            .when(!actions.is_empty(), |row| {
+                row.child(widgets::row_controls().children(actions))
+            })
+            .when(!facts.is_empty(), |row| {
+                row.child(block_list().children(facts))
+            })
     }
 
     fn render_skill_editor(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
-            .child(widgets::row_title(theme, "Skill details"))
-            .child(widgets::page_subtitle(theme,
-                "LUNA edits the provider's SKILL.md in its selected global or project folder. Existing sessions may need a fresh turn to discover a change."))
-            .child(skill_button(theme, "close-skill-editor", "Close skill details", !self.skill_busy)
-                .mt(px(8.0))
-                .when(!self.skill_busy, |el| el
-                    .on_click(cx.listener(|page, _, _, cx| { page.clear_skill_editor(); cx.notify(); })))
-                .child("Close"));
+        let busy = self.skill_busy;
+        let title: SharedString = if self.skill_creating {
+            if self.skill_scope == IntegrationSkillScope::Global {
+                "New global skill".into()
+            } else {
+                "New project skill".into()
+            }
+        } else if let Loadable::Ready(document) = &self.skill_document {
+            document.name.clone().into()
+        } else {
+            "Skill details".into()
+        };
+        let close = section_action(
+            theme,
+            "close-skill-editor",
+            crate::icons::CLOSE,
+            "Close skill details",
+            "Close",
+            !busy,
+        )
+        .when(!busy, |el| {
+            el.on_click(cx.listener(|page, _, _, cx| {
+                page.clear_skill_editor();
+                cx.notify();
+            }))
+        });
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            title,
+            Some(
+                "LUNA edits the provider's SKILL.md in its selected global or project folder. \
+                 Existing sessions may need a fresh turn to discover a change."
+                    .into(),
+            ),
+            vec![close.into_any_element()],
+        ));
         if let Some(error) = &self.skill_error {
-            card = card.child(widgets::error_strip(theme, error.clone()));
+            card = card.child(strip_row(theme, widgets::error_strip(theme, error.clone())));
         }
         if let Some(notice) = &self.skill_notice {
-            card = card.child(div().mt(px(8.0)).child(meta_text(theme, notice.clone())));
+            card = card.child(
+                note_row(theme, notice.clone())
+                    .id("skill-notice")
+                    .role(gpui::Role::Status),
+            );
         }
         if self.skill_creating {
-            let scope = if self.skill_scope == IntegrationSkillScope::Global {
-                "Global"
-            } else {
-                "Project"
-            };
-            card = card
-                .child(div().mt(px(12.0)).child(widgets::row_title(theme, format!("New {scope} skill"))))
-                .child(meta_text(theme, "Use a lowercase name with digits or single hyphens. Edit the description and instructions before saving."))
-                .child(div().mt(px(8.0)).child(popover::dialog_field(self.skill_name_input.clone().into_any_element())));
+            card = card.child(
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
+                        theme,
+                        "Name",
+                        Some(
+                            "Use a lowercase name with digits or single hyphens. Edit the \
+                             description and instructions before saving."
+                                .into(),
+                        ),
+                    ))
+                    .child(widgets::row_block().child(editor_frame(
+                        theme,
+                        self.skill_name_input.clone().into_any_element(),
+                    ))),
+            );
         }
         match &self.skill_document {
             Loadable::Loading => {
                 return card
-                    .child(meta_text(theme, "Loading skill…"))
+                    .child(skeleton_row(theme, "skill-skeleton", 3, cx.entity_id(), cx))
                     .into_any_element();
             }
             Loadable::Error(error) => {
                 return card
-                    .child(widgets::error_strip(theme, error.clone()))
+                    .child(strip_row(theme, widgets::error_strip(theme, error.clone())))
                     .into_any_element();
             }
             Loadable::Ready(document) => {
                 let scope = if document.scope == IntegrationSkillScope::Global {
-                    "global"
+                    "Global"
                 } else {
-                    "project"
+                    "Project"
                 };
-                card = card
-                    .child(
-                        div()
-                            .mt(px(12.0))
-                            .child(widgets::row_title(theme, document.name.clone())),
-                    )
-                    .child(meta_text(
-                        theme,
+                let mut text = widgets::row_text(
+                    theme,
+                    "Location",
+                    Some(
                         format!(
-                            "{scope} · {:?} · revision {}",
-                            document.provider,
-                            &document.revision[..12]
-                        ),
-                    ))
-                    .when_some(document.read_only_reason.clone(), |el, reason| {
-                        el.child(meta_text(theme, reason))
-                    });
+                            "{scope} · {} · revision {}",
+                            self.provider_name(document.provider),
+                            short_revision(&document.revision, 12)
+                        )
+                        .into(),
+                    ),
+                );
                 if !document.supporting_files.is_empty() {
                     let names = document
                         .supporting_files
@@ -1551,7 +1821,7 @@ impl HarnessesPage {
                         .collect::<Vec<_>>()
                         .join(", ");
                     let more = document.supporting_files.len().saturating_sub(12);
-                    card = card.child(meta_text(
+                    text = text.child(widgets::row_description(
                         theme,
                         format!(
                             "Supporting files: {names}{}",
@@ -1563,275 +1833,362 @@ impl HarnessesPage {
                         ),
                     ));
                 }
+                card = card.child(widgets::card_row(theme, false).child(text).when_some(
+                    document.read_only_reason.clone(),
+                    |row, reason| {
+                        row.child(
+                            widgets::row_block()
+                                .child(widgets::warning_strip(theme, reason).mt_0().w_full()),
+                        )
+                    },
+                ));
             }
             Loadable::Idle if !self.skill_creating => return card.into_any_element(),
             Loadable::Idle => {}
         }
-        let save_enabled = !self.skill_busy
+        let save_enabled = !busy
             && (self.skill_creating
                 || matches!(&self.skill_document, Loadable::Ready(document) if document.read_only_reason.is_none()));
-        card = card
-            .child(
-                div()
-                    .mt(px(12.0))
-                    .child(widgets::row_title(theme, "SKILL.md")),
-            )
-            .child(div().mt(px(6.0)).child(popover::dialog_field(
-                self.skill_content_input.clone().into_any_element(),
-            )))
-            .child(
-                skill_button(
-                    theme,
-                    "save-skill-document",
-                    if self.skill_creating {
-                        "Create skill"
-                    } else {
-                        "Save skill"
-                    },
-                    save_enabled,
+        let save_label = if self.skill_creating {
+            "Create skill"
+        } else {
+            "Save skill"
+        };
+        card = card.child(
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(theme, "SKILL.md", None))
+                .child(
+                    widgets::row_controls().child(
+                        kit_button(
+                            theme,
+                            "save-skill-document",
+                            ButtonKind::Primary,
+                            ControlSize::Md,
+                            save_label,
+                            if busy {
+                                "Saving or installing…"
+                            } else {
+                                save_label
+                            },
+                            save_enabled,
+                        )
+                        .when(save_enabled, |el| {
+                            el.on_click(cx.listener(|page, _, _, cx| page.save_skill(cx)))
+                        }),
+                    ),
                 )
-                .mt(px(8.0))
-                .when(save_enabled, |el| {
-                    el.on_click(cx.listener(|page, _, _, cx| page.save_skill(cx)))
-                })
-                .when(!save_enabled, |el| el.opacity(0.5))
-                .child(if self.skill_busy {
-                    "Saving or installing…"
-                } else if self.skill_creating {
-                    "Create skill"
-                } else {
-                    "Save skill"
-                }),
-            );
+                .child(widgets::row_block().child(editor_frame(
+                    theme,
+                    self.skill_content_input.clone().into_any_element(),
+                ))),
+        );
 
         if let Loadable::Ready(document) = &self.skill_document {
-            card = card
-                .child(div().mt(px(18.0)).child(widgets::row_title(theme, "Install a copy")))
-                .child(meta_text(theme, "Copy this skill and its supporting files to another provider or scope. An existing skill with the same name is never replaced."));
-            let mut providers = div().mt(px(8.0)).flex().flex_row().flex_wrap().gap(px(6.0));
-            for (provider, label) in [
+            let writable = document.read_only_reason.is_none();
+            // Destination provider and scope: fixed short choices, so
+            // segmented controls (spec §5).
+            let providers = [
                 (HarnessId::Codex, "Codex"),
                 (HarnessId::ClaudeCode, "Claude Code"),
                 (HarnessId::Opencode, "OpenCode"),
-            ] {
-                providers = providers.child(
-                    skill_button(
-                        theme,
-                        SharedString::from(format!("skill-install-provider-{provider:?}")),
-                        format!("Install to {label}"),
-                        !self.skill_busy,
-                    )
-                    .aria_toggled(if self.skill_install_provider == provider {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .when(self.skill_install_provider == provider, |el| {
-                        el.bg(theme.accent_wash)
-                    })
-                    .when(!self.skill_busy, |el| {
-                        el.on_click(cx.listener(move |page, _, _, cx| {
-                            page.skill_install_provider = provider;
-                            cx.notify();
-                        }))
-                    })
-                    .child(label),
-                );
+            ];
+            let provider_ix = providers
+                .iter()
+                .position(|(provider, _)| *provider == self.skill_install_provider)
+                .unwrap_or(0);
+            let mut scopes = vec![(IntegrationSkillScope::Global, "Global")];
+            if self.selected_skill_project_id(cx).is_some() {
+                scopes.push((IntegrationSkillScope::Project, "Current project"));
             }
-            card = card.child(providers);
-            let mut scopes = div().mt(px(8.0)).flex().flex_row().flex_wrap().gap(px(6.0));
-            for (scope, label) in [
-                (IntegrationSkillScope::Global, "Global"),
-                (IntegrationSkillScope::Project, "Current project"),
-            ] {
-                if scope == IntegrationSkillScope::Project
-                    && self.selected_skill_project_id(cx).is_none()
-                {
-                    continue;
-                }
-                scopes = scopes.child(
-                    skill_button(
-                        theme,
-                        SharedString::from(format!("skill-install-scope-{scope:?}")),
-                        format!("Install to {label}"),
-                        !self.skill_busy,
-                    )
-                    .aria_toggled(if self.skill_install_scope == scope {
-                        gpui::Toggled::True
-                    } else {
-                        gpui::Toggled::False
-                    })
-                    .when(self.skill_install_scope == scope, |el| {
-                        el.bg(theme.accent_wash)
-                    })
-                    .when(!self.skill_busy, |el| {
-                        el.on_click(cx.listener(move |page, _, _, cx| {
-                            page.skill_install_scope = scope;
-                            cx.notify();
-                        }))
-                    })
-                    .child(label),
-                );
-            }
-            card = card.child(scopes);
+            let scope_ix = scopes
+                .iter()
+                .position(|(scope, _)| *scope == self.skill_install_scope)
+                .unwrap_or(0);
             let install_valid = self.skill_install_provider != document.provider
                 || self.skill_install_scope != document.scope;
+            let install_enabled = install_valid && !busy && writable;
+            let scope_choices: Vec<IntegrationSkillScope> =
+                scopes.iter().map(|(scope, _)| *scope).collect();
             card = card.child(
-                skill_button(
-                    theme,
-                    "install-skill-copy",
-                    format!("Install copy of {}", document.name),
-                    install_valid && !self.skill_busy && document.read_only_reason.is_none(),
-                )
-                .mt(px(8.0))
-                .when(
-                    install_valid && !self.skill_busy && document.read_only_reason.is_none(),
-                    |el| el.on_click(cx.listener(|page, _, _, cx| page.install_skill(cx))),
-                )
-                .when(
-                    !install_valid || self.skill_busy || document.read_only_reason.is_some(),
-                    |el| el.opacity(0.5),
-                )
-                .child("Install copy"),
-            );
-            card = card
-                .child(
-                    div()
-                        .mt(px(18.0))
-                        .child(widgets::row_title(theme, "Remove skill")),
-                )
-                .child(meta_text(
-                    theme,
-                    format!(
-                        "Removing deletes SKILL.md and {} supporting entries from this {} folder.",
-                        document.supporting_files.len(),
-                        if document.scope == IntegrationSkillScope::Global {
-                            "global"
-                        } else {
-                            "project"
-                        }
-                    ),
-                ))
-                .child(
-                    skill_button(
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
                         theme,
-                        "remove-skill",
-                        if self.skill_remove_armed {
-                            "Confirm remove skill and files"
-                        } else {
-                            "Remove skill"
-                        },
-                        !self.skill_busy && document.read_only_reason.is_none(),
+                        "Install a copy",
+                        Some(
+                            "Copy this skill and its supporting files to another provider or \
+                             scope. An existing skill with the same name is never replaced."
+                                .into(),
+                        ),
+                    ))
+                    .child(
+                        widgets::row_controls().child(
+                            kit_button(
+                                theme,
+                                "install-skill-copy",
+                                ButtonKind::Secondary,
+                                ControlSize::Md,
+                                format!("Install copy of {}", document.name),
+                                "Install copy",
+                                install_enabled,
+                            )
+                            .when(install_enabled, |el| {
+                                el.on_click(cx.listener(|page, _, _, cx| page.install_skill(cx)))
+                            }),
+                        ),
                     )
-                    .mt(px(8.0))
-                    .when(
-                        !self.skill_busy && document.read_only_reason.is_none(),
-                        |el| el.on_click(cx.listener(|page, _, _, cx| page.remove_skill(cx))),
-                    )
-                    .when(
-                        self.skill_busy || document.read_only_reason.is_some(),
-                        |el| el.opacity(0.5),
-                    )
-                    .child(if self.skill_remove_armed {
-                        "Confirm remove skill and files"
-                    } else {
-                        "Remove…"
-                    }),
-                );
+                    .child(
+                        widgets::row_block()
+                            .child(button::segmented(
+                                "skill-install-provider",
+                                providers
+                                    .iter()
+                                    .map(|(provider, label)| {
+                                        Segment::new(format!("{provider:?}"), *label)
+                                    })
+                                    .collect(),
+                                provider_ix,
+                                312.0,
+                                ControlSize::Md,
+                                theme,
+                                cx.listener(move |page, ix: &usize, _, cx| {
+                                    if page.skill_busy {
+                                        return;
+                                    }
+                                    if let Some((provider, _)) = providers.get(*ix) {
+                                        page.skill_install_provider = *provider;
+                                        cx.notify();
+                                    }
+                                }),
+                            ))
+                            .child(button::segmented(
+                                "skill-install-scope",
+                                scopes
+                                    .iter()
+                                    .map(|(scope, label)| {
+                                        Segment::new(format!("{scope:?}"), *label)
+                                    })
+                                    .collect(),
+                                scope_ix,
+                                128.0 * scopes.len() as f32,
+                                ControlSize::Md,
+                                theme,
+                                cx.listener(move |page, ix: &usize, _, cx| {
+                                    if page.skill_busy {
+                                        return;
+                                    }
+                                    if let Some(scope) = scope_choices.get(*ix) {
+                                        page.skill_install_scope = *scope;
+                                        cx.notify();
+                                    }
+                                }),
+                            )),
+                    ),
+            );
+            let remove_enabled = !busy && writable;
+            let armed = self.skill_remove_armed;
+            card = card.child(
+                widgets::card_row(theme, false)
+                    .child(widgets::row_text(
+                        theme,
+                        "Remove skill",
+                        Some(
+                            format!(
+                                "Removing deletes SKILL.md and {} supporting entries from this {} \
+                                 folder.",
+                                document.supporting_files.len(),
+                                if document.scope == IntegrationSkillScope::Global {
+                                    "global"
+                                } else {
+                                    "project"
+                                }
+                            )
+                            .into(),
+                        ),
+                    ))
+                    .child(
+                        widgets::row_controls().child(
+                            // Secondary until armed; the confirm is the
+                            // only destructive-looking control (spec §5).
+                            kit_button(
+                                theme,
+                                "remove-skill",
+                                if armed {
+                                    ButtonKind::Danger
+                                } else {
+                                    ButtonKind::Secondary
+                                },
+                                ControlSize::Md,
+                                if armed {
+                                    "Confirm remove skill and files"
+                                } else {
+                                    "Remove skill"
+                                },
+                                if armed {
+                                    "Confirm remove skill and files"
+                                } else {
+                                    "Remove…"
+                                },
+                                remove_enabled,
+                            )
+                            .when(remove_enabled, |el| {
+                                el.on_click(cx.listener(|page, _, _, cx| page.remove_skill(cx)))
+                            }),
+                        ),
+                    ),
+            );
         }
         card.into_any_element()
     }
 
+    /// One instructions editor: its title and scope copy, the Save action
+    /// trailing, the editor underneath.
+    #[allow(clippy::too_many_arguments)]
+    fn instruction_row(
+        &self,
+        theme: &Theme,
+        title: &'static str,
+        description: SharedString,
+        input: &Entity<ComposerInput>,
+        id: &'static str,
+        aria: &'static str,
+        project: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let enabled = !self.instruction_saving;
+        widgets::card_row(theme, false)
+            .child(widgets::row_text(theme, title, Some(description)))
+            .child(
+                widgets::row_controls().child(
+                    kit_button(
+                        theme,
+                        id,
+                        ButtonKind::Secondary,
+                        ControlSize::Md,
+                        aria,
+                        if enabled { "Save" } else { "Saving…" },
+                        enabled,
+                    )
+                    .when(enabled, |el| {
+                        el.on_click(
+                            cx.listener(move |page, _, _, cx| page.save_instructions(project, cx)),
+                        )
+                    }),
+                ),
+            )
+            .child(
+                widgets::row_block().child(editor_frame(theme, input.clone().into_any_element())),
+            )
+    }
+
     fn render_instructions(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
-            .child(widgets::row_title(theme, "LUNA instructions"))
-            .child(widgets::page_subtitle(theme,
-                "Global instructions precede project instructions. Provider-native files remain with their provider. Changes apply at the next safe turn or a new provider session."))
-            .child(widgets::ghost_action("reload-luna-instructions", true, theme)
-                .accessible_button("Reload LUNA instructions", theme.accent)
-                .mt(px(8.0))
-                .on_click(cx.listener(|page, _, _, cx| { page.load_instructions(cx); cx.notify(); }))
-                .child("Reload"));
+        let reload = section_action(
+            theme,
+            "reload-luna-instructions",
+            crate::icons::REFRESH,
+            "Reload LUNA instructions",
+            "Reload",
+            true,
+        )
+        .on_click(cx.listener(|page, _, _, cx| {
+            page.load_instructions(cx);
+            cx.notify();
+        }));
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            "LUNA instructions",
+            Some(
+                "Global instructions precede project instructions. Provider-native files remain \
+                 with their provider. Changes apply at the next safe turn or a new provider \
+                 session."
+                    .into(),
+            ),
+            vec![reload.into_any_element()],
+        ));
+        if let Some(error) = &self.instruction_error {
+            card = card.child(strip_row(theme, widgets::error_strip(theme, error.clone())));
+        }
         match &self.instructions {
             Loadable::Ready(view) => {
-                card = card
-                    .child(
-                        div()
-                            .mt(px(12.0))
-                            .child(widgets::row_title(theme, "Global")),
-                    )
-                    .child(div().mt(px(6.0)).child(popover::dialog_field(
-                        self.global_input.clone().into_any_element(),
-                    )))
-                    .child(
-                        widgets::ghost_action(
-                            "save-global-instructions",
-                            !self.instruction_saving,
-                            theme,
-                        )
-                        .when(!self.instruction_saving, |el| {
-                            el.accessible_button("Save global instructions", theme.accent)
-                        })
-                        .mt(px(8.0))
-                        .when(!self.instruction_saving, |el| {
-                            el.on_click(
-                                cx.listener(|page, _, _, cx| page.save_instructions(false, cx)),
-                            )
-                        })
-                        .child("Save global"),
-                    );
+                card = card.child(self.instruction_row(
+                    theme,
+                    "Global",
+                    "Every LUNA task, in every project.".into(),
+                    &self.global_input,
+                    "save-global-instructions",
+                    "Save global instructions",
+                    false,
+                    cx,
+                ));
                 if view.project_id.is_some() {
-                    card = card
-                        .child(
-                            div()
-                                .mt(px(16.0))
-                                .child(widgets::row_title(theme, "Current project")),
-                        )
-                        .child(div().mt(px(6.0)).child(popover::dialog_field(
-                            self.project_input.clone().into_any_element(),
-                        )))
-                        .child(
-                            widgets::ghost_action(
-                                "save-project-instructions",
-                                !self.instruction_saving,
-                                theme,
-                            )
-                            .when(!self.instruction_saving, |el| {
-                                el.accessible_button("Save project instructions", theme.accent)
-                            })
-                            .mt(px(8.0))
-                            .when(!self.instruction_saving, |el| {
-                                el.on_click(
-                                    cx.listener(|page, _, _, cx| page.save_instructions(true, cx)),
-                                )
-                            })
-                            .child("Save project"),
-                        );
+                    let project = self
+                        .state
+                        .read(cx)
+                        .selected_space_row()
+                        .map(|space| space.display_name().to_owned());
+                    card = card.child(self.instruction_row(
+                        theme,
+                        "Current project",
+                        match project {
+                            Some(name) => {
+                                format!("Tasks in {name}, after the global instructions.").into()
+                            }
+                            None => "Tasks in this project, after the global instructions.".into(),
+                        },
+                        &self.project_input,
+                        "save-project-instructions",
+                        "Save project instructions",
+                        true,
+                        cx,
+                    ));
                 } else {
-                    card = card.child(meta_text(
+                    card = card.child(note_row(
                         theme,
                         "Select a project to edit its LUNA instructions.",
                     ));
                 }
             }
-            Loadable::Error(error) => card = card.child(widgets::error_strip(theme, error.clone())),
-            _ => card = card.child(meta_text(theme, "Loading instructions…")),
+            Loadable::Error(error) => {
+                card = card.child(strip_row(theme, widgets::error_strip(theme, error.clone())))
+            }
+            _ => {
+                card = card.child(skeleton_row(
+                    theme,
+                    "instructions-skeleton",
+                    2,
+                    cx.entity_id(),
+                    cx,
+                ))
+            }
         }
         card.into_any_element()
     }
 
     fn render_titles(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut card = widgets::section_card(theme).mt(px(20.0)).p(px(16.0))
-            .child(widgets::row_title(theme, "Session titles"))
-            .child(widgets::page_subtitle(theme, "Choose the agent and model for automatic titles on this device. Claude Code and Codex support restricted title generation."));
-        let Loadable::Ready(settings) = &self.title_settings else {
-            let message = match &self.title_settings {
-                Loadable::Error(error) => error.clone(),
-                _ => "Loading title settings…".into(),
-            };
-            return card
-                .child(div().mt(px(8.0)).child(message))
-                .into_any_element();
+        let mut card = widgets::section_card(theme).child(widgets::section_header(
+            theme,
+            "Session titles",
+            Some(
+                "Choose the agent and model for automatic titles on this device. Claude Code and \
+                 Codex support restricted title generation."
+                    .into(),
+            ),
+            Vec::new(),
+        ));
+        if let Some(error) = &self.title_error {
+            card = card.child(strip_row(theme, widgets::error_strip(theme, error.clone())));
+        }
+        let settings = match &self.title_settings {
+            Loadable::Ready(settings) => settings,
+            Loadable::Error(error) => {
+                return card
+                    .child(strip_row(theme, widgets::error_strip(theme, error.clone())))
+                    .into_any_element();
+            }
+            _ => {
+                return card
+                    .child(skeleton_row(theme, "title-skeleton", 2, cx.entity_id(), cx))
+                    .into_any_element();
+            }
         };
         for is_model in [false, true] {
             let label = if is_model {
@@ -1861,53 +2218,62 @@ impl HarnessesPage {
                     .unwrap_or_else(|| "Automatic (session agent when supported)".into())
             };
             let interactive = !self.title_saving && (!is_model || settings.harness.is_some());
-            let title_aria = format!(
-                "{}: {label}",
-                if is_model {
-                    "Title model"
+            let row_title = if is_model {
+                "Title model"
+            } else {
+                "Title agent"
+            };
+            let description = if is_model {
+                if settings.harness.is_some() {
+                    "The model the title agent uses."
                 } else {
-                    "Title harness"
+                    "Choose a title agent to pick its model."
                 }
-            );
-            let mut row = div()
-                .mt(px(12.0))
-                .child(widgets::row_title(
+            } else {
+                "Writes the automatic title for each new chat."
+            };
+            let title_aria = format!("{row_title}: {label}");
+            let open = self.title_menu == Some(is_model);
+            let mut row = widgets::card_row(theme, false)
+                .child(widgets::row_text(
                     theme,
-                    if is_model {
-                        "Title model"
-                    } else {
-                        "Title harness"
-                    },
+                    row_title,
+                    Some(description.into()),
                 ))
                 .child(
-                    crate::button::select(
-                        if is_model {
-                            "title-model"
-                        } else {
-                            "title-harness"
-                        },
-                        label,
-                        crate::button::ControlSize::Md,
-                        self.title_menu == Some(is_model),
-                        interactive,
-                        theme,
-                    )
-                    .min_w(px(160.0))
-                    .when(interactive, |el| {
-                        el.accessible_button(title_aria.clone(), theme.accent)
-                    })
-                    .when(interactive, |el| {
-                        el.on_click(cx.listener(move |page, _, _, cx| {
-                            page.title_menu = if page.title_menu == Some(is_model) {
-                                None
+                    widgets::row_controls().child(
+                        button::select(
+                            if is_model {
+                                "title-model"
                             } else {
-                                Some(is_model)
-                            };
-                            cx.notify();
-                        }))
-                    }),
+                                "title-harness"
+                            },
+                            label,
+                            ControlSize::Md,
+                            open,
+                            interactive,
+                            theme,
+                        )
+                        .min_w(ui_rems(200.0))
+                        .max_w(ui_rems(280.0))
+                        .aria_label(title_aria)
+                        .when(interactive, |el| {
+                            // The inline list has no key handling of its own:
+                            // keep Enter/Space from reaching ancestors, as
+                            // GPUI's keyboard click already toggles it.
+                            el.on_key_down(crate::swallow_activation_key)
+                                .on_click(cx.listener(move |page, _, _, cx| {
+                                    page.title_menu = if page.title_menu == Some(is_model) {
+                                        None
+                                    } else {
+                                        Some(is_model)
+                                    };
+                                    cx.notify();
+                                }))
+                        }),
+                    ),
                 );
-            if self.title_menu == Some(is_model) {
+            if open {
                 let mut choices = vec![(
                     "Automatic".to_string(),
                     TitleSettings {
@@ -1948,16 +2314,24 @@ impl HarnessesPage {
                             }),
                     );
                 }
-                row =
-                    row.child(
+                // The open choice list sits under the row, in a well.
+                row = row.child(
+                    widgets::row_block().child(
                         div()
                             .id(if is_model {
                                 "title-model-options"
                             } else {
                                 "title-harness-options"
                             })
-                            .max_h(px(240.0))
+                            .role(gpui::Role::List)
+                            .w_full()
+                            .max_h(ui_rems(240.0))
                             .overflow_y_scroll()
+                            .p(ui_rems(4.0))
+                            .rounded(px(8.0))
+                            .border_1()
+                            .border_color(theme.separator(false))
+                            .bg(theme.fill(FillTier::Quaternary))
                             .children(choices.into_iter().enumerate().map(
                                 |(ix, (label, choice))| {
                                     popover::menu_row(
@@ -1972,12 +2346,13 @@ impl HarnessesPage {
                                     .child(label)
                                 },
                             )),
-                    );
+                    ),
+                );
             }
             card = card.child(row);
         }
         if let Loadable::Error(error) = &self.title_models {
-            card = card.child(widgets::error_strip(theme, error.clone()));
+            card = card.child(strip_row(theme, widgets::error_strip(theme, error.clone())));
         }
         card.into_any_element()
     }
@@ -1998,7 +2373,8 @@ impl HarnessesPage {
             .map(|item| item.id)
             .collect();
         if harnesses.is_empty() {
-            self.model_refresh_result = Some("No enabled agents on the selected device.".into());
+            self.model_refresh_result =
+                Some((false, "No enabled agents on the selected device.".into()));
             cx.notify();
             return;
         }
@@ -2108,10 +2484,11 @@ impl HarnessesPage {
                 } else {
                     format!("Updated {updated}/{total}. {}", failures.join(" · "))
                 };
+                let clean = failures.is_empty() && account_warning.is_none();
                 if let Some(warning) = account_warning {
                     message.push_str(&format!(" Codex account listing failed: {warning}"));
                 }
-                page.model_refresh_result = Some(message);
+                page.model_refresh_result = Some((clean, message));
                 if updated > 0 {
                     crate::pickers::bump_harness_catalog(cx);
                 }
@@ -2123,61 +2500,86 @@ impl HarnessesPage {
     }
 
     fn render_model_cache(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let running = self.model_refresh_running;
+        let refresh = section_action(
+            theme,
+            "refresh-model-cache",
+            crate::icons::REFRESH,
+            "Refresh model cache",
+            if running {
+                "Refreshing…"
+            } else {
+                "Refresh models"
+            },
+            !running,
+        )
+        .when(!running, |el| {
+            el.on_click(cx.listener(|page, _, _, cx| page.refresh_model_cache(cx)))
+        });
         widgets::section_card(theme)
-            .mt(px(20.0))
-            .p(px(16.0))
-            .child(widgets::row_title(theme, "Model cache"))
-            .child(widgets::page_subtitle(
+            .child(widgets::section_header(
                 theme,
-                "LUNA saves model lists on each device and refreshes them in the background after launch. Refresh now to check the selected device for new models without restarting.",
+                "Models",
+                Some(
+                    "LUNA saves model lists on each device and refreshes them in the background \
+                     after launch. Refresh now to check the selected device for new models \
+                     without restarting."
+                        .into(),
+                ),
+                vec![refresh.into_any_element()],
             ))
-            .child(
-                widgets::ghost_action("refresh-model-cache", !self.model_refresh_running, theme)
-                    .when(!self.model_refresh_running, |el| el.accessible_button("Refresh model cache", theme.accent))
-                    .mt(px(8.0))
-                    .when(!self.model_refresh_running, |element| {
-                        element
-                            .on_click(cx.listener(|page, _, _, cx| {
-                                page.refresh_model_cache(cx);
-                            }))
-                    })
-                    .child(if self.model_refresh_running {
-                        "Refreshing…"
-                    } else {
-                        "Refresh models"
-                    }),
-            )
-            .when_some(self.model_refresh_result.clone(), |element, result| {
-                element.child(div().mt(px(8.0)).child(meta_text(theme, result)))
+            .when(running, |card| {
+                card.child(skeleton_row(
+                    theme,
+                    "model-refresh-skeleton",
+                    1,
+                    cx.entity_id(),
+                    cx,
+                ))
             })
+            .when_some(
+                self.model_refresh_result.clone(),
+                |card, (clean, message)| {
+                    card.child(
+                        if clean {
+                            note_row(theme, message)
+                        } else {
+                            strip_row(theme, widgets::warning_strip(theme, message))
+                        }
+                        .id("model-refresh-result")
+                        .role(gpui::Role::Status),
+                    )
+                },
+            )
             .into_any_element()
     }
 
+    /// The advanced sections, grouped by topic: models and titles (the only
+    /// cards for a remote device), then skills and MCP with the open skill,
+    /// instructions, execution, and the Claude-specific cards. Each card
+    /// carries its own top gap ([`widgets::SECTION_GAP`]).
     pub(crate) fn render_advanced_sections(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let local = self.target_device.is_none();
+        let skill_open = self.skill_creating
+            || !matches!(&self.skill_document, Loadable::Idle)
+            || self.skill_notice.is_some();
         div()
+            .w_full()
             .flex()
             .flex_col()
-            .gap(px(16.0))
-            .when_some(self.error.clone(), |el, error| {
-                el.child(widgets::error_strip(&theme, error))
-            })
             .child(self.render_model_cache(&theme, cx))
+            .child(self.render_titles(&theme, cx))
             .when(local, |el| {
                 el.child(self.render_integrations(&theme, cx))
-                    .when(
-                        self.skill_creating
-                            || !matches!(&self.skill_document, Loadable::Idle)
-                            || self.skill_notice.is_some(),
-                        |el| el.child(self.render_skill_editor(&theme, cx)),
-                    )
-                    .child(self.native_extensions.clone())
+                    .when(skill_open, |el| {
+                        el.child(self.render_skill_editor(&theme, cx))
+                    })
                     .child(self.render_instructions(&theme, cx))
                     .child(self.render_runtime_contract(&theme, cx))
+                    .child(self.native_extensions.clone())
                     .child(self.render_claude_advanced(&theme, cx))
             })
-            .child(self.render_titles(&theme, cx))
             .into_any_element()
     }
 }

@@ -6,17 +6,19 @@
 
 use gpui::{
     AnyElement, Context, Entity, IntoElement, Render, SharedString, Subscription, Task, Window,
-    div, prelude::*, px,
+    div, prelude::*,
 };
 use luna_proto::{
     HarnessId, NativeCommandKind, NativeExtensionsView, NativeSettingsScope, PermissionMode,
 };
 use luna_rpc::methods;
 
-use crate::popover::Loadable;
+use crate::button::{self, ButtonKind, ControlSize};
+use crate::popover::{self, Loadable};
 use crate::settings::widgets;
 use crate::state::AppState;
 use crate::theme::Theme;
+use crate::typography::ui_rems;
 
 pub struct NativeExtensionsPanel {
     state: Entity<AppState>,
@@ -44,47 +46,56 @@ fn mode_label(mode: PermissionMode) -> &'static str {
     }
 }
 
-fn action(
-    theme: &Theme,
-    id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
-    enabled: bool,
-) -> gpui::Stateful<gpui::Div> {
-    widgets::ghost_action(id, enabled, theme).aria_label(label.into())
-}
-
-fn heading(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
-    div()
-        .mt(px(16.0))
-        .text_size(crate::typography::ui_rems(11.0))
-        .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(theme.text_muted)
-        .child(label.into())
-}
-
+/// One fact line in a row's list: the value (a path, a hook, a command)
+/// with its badges, wrapping as a unit at narrow widths.
 fn line(theme: &Theme, title: impl Into<SharedString>, badges: Vec<gpui::Div>) -> gpui::Div {
-    let mut row = div()
-        .mt(px(6.0))
+    div()
+        .w_full()
+        .min_w_0()
         .flex()
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap(px(8.0))
+        .gap_x(ui_rems(8.0))
+        .gap_y(ui_rems(4.0))
         .child(
             div()
                 .min_w_0()
-                .text_size(crate::typography::ui_rems(12.5))
+                .text_size(ui_rems(12.0))
+                .line_height(ui_rems(16.0))
                 .text_color(theme.text)
                 .child(title.into()),
-        );
-    for badge in badges {
-        row = row.child(badge);
-    }
-    row
+        )
+        .children(badges)
 }
 
-fn note(theme: &Theme, text: impl Into<SharedString>) -> gpui::Div {
-    widgets::meta_line(theme, vec![div().child(text.into()).into_any_element()])
+/// A row titled `title` with optional trailing badges, whose facts list
+/// sits under its text.
+fn list_row(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: Option<SharedString>,
+    trailing: Vec<gpui::Div>,
+    items: Vec<AnyElement>,
+) -> gpui::Div {
+    widgets::card_row(theme, false)
+        .child(widgets::row_text(theme, title, description))
+        .when(!trailing.is_empty(), |row| {
+            row.child(widgets::row_controls().children(trailing))
+        })
+        .when(!items.is_empty(), |row| {
+            row.child(
+                widgets::row_block()
+                    .flex_col()
+                    .items_stretch()
+                    .gap(ui_rems(6.0))
+                    .children(items),
+            )
+        })
+}
+
+fn note(theme: &Theme, text: impl Into<SharedString>) -> AnyElement {
+    widgets::row_description(theme, text).into_any_element()
 }
 
 impl NativeExtensionsPanel {
@@ -171,15 +182,9 @@ impl NativeExtensionsPanel {
         matches!(self.view, Loadable::Loading)
     }
 
-    fn render_controls(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
+    /// The launch-mode preview: one segmented control (audit DS-16).
+    fn render_mode_row(&self, theme: &Theme, cx: &mut Context<Self>) -> gpui::Div {
         let busy = self.is_loading();
-        let mut row = div()
-            .mt(px(10.0))
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .items_center()
-            .gap(px(6.0));
         let modes = [
             ("task", "Task mode", None),
             ("ask", "Ask", Some(PermissionMode::Ask)),
@@ -190,89 +195,105 @@ impl NativeExtensionsPanel {
             .iter()
             .position(|(_, _, mode)| *mode == self.mode)
             .unwrap_or(0);
-        // One segmented control for the launch mode (audit DS-16).
-        row = row.child(crate::button::segmented(
-            "native-ext-mode",
-            modes
-                .iter()
-                .map(|(key, label, _)| crate::button::Segment::new(*key, *label))
-                .collect(),
-            selected,
-            360.0,
-            crate::button::ControlSize::Md,
-            theme,
-            cx.listener(move |panel, ix: &usize, _, cx| {
-                if !busy && let Some((_, _, mode)) = modes.get(*ix) {
-                    panel.set_mode(*mode, cx);
-                }
-            }),
-        ));
-        row.child(
-            action(
+        widgets::card_row(theme, false)
+            .child(widgets::row_text(
                 theme,
-                "native-ext-refresh",
-                "Re-check extensions with Claude",
-                !busy,
+                "Launch mode",
+                Some(
+                    "Preview a launch in another permission mode. Task mode follows the selected \
+                     task's own mode."
+                        .into(),
+                ),
+            ))
+            .child(
+                widgets::row_controls().child(button::segmented(
+                    "native-ext-mode",
+                    modes
+                        .iter()
+                        .map(|(key, label, _)| button::Segment::new(*key, *label))
+                        .collect(),
+                    selected,
+                    328.0,
+                    ControlSize::Md,
+                    theme,
+                    cx.listener(move |panel, ix: &usize, _, cx| {
+                        if !busy && let Some((_, _, mode)) = modes.get(*ix) {
+                            panel.set_mode(*mode, cx);
+                        }
+                    }),
+                )),
             )
-            .when(!busy, |el| {
-                el.on_click(cx.listener(|panel, _, _, cx| panel.load(true, cx)))
-            })
-            .child(if busy {
-                "Checking…"
-            } else {
-                "Re-check with Claude"
-            }),
-        )
     }
 
-    fn render_view(&self, theme: &Theme, view: &NativeExtensionsView) -> AnyElement {
-        let mut body = div().flex().flex_col();
+    /// The loaded view as rows of the card: the launch, then each kind of
+    /// extension with its facts listed under the row's text.
+    fn render_rows(&self, theme: &Theme, view: &NativeExtensionsView) -> Vec<AnyElement> {
+        let mut rows: Vec<AnyElement> = Vec::new();
         let verified = view.native_verified;
-        body = body.child(
-            line(
-                theme,
-                format!("{} launch", mode_label(view.permission_mode)),
-                vec![if verified {
+        rows.push(
+            widgets::card_row(theme, false)
+                .child(widgets::row_text(
+                    theme,
+                    format!("{} launch", mode_label(view.permission_mode)),
+                    Some(view.launch_policy.clone().into()),
+                ))
+                .child(widgets::row_controls().child(if verified {
                     widgets::badge_active(theme, "Verified with Claude")
                 } else {
                     widgets::badge(theme, "Not verified")
-                }],
-            )
-            .mt(px(12.0)),
+                }))
+                .when_some(view.native_error.clone(), |row, error| {
+                    row.child(
+                        widgets::row_block().child(
+                            widgets::warning_strip(
+                                theme,
+                                format!(
+                                    "Claude's own readback failed: {error}. Rows below are \
+                                     configured, not verified."
+                                ),
+                            )
+                            .mt_0()
+                            .w_full(),
+                        ),
+                    )
+                })
+                .into_any_element(),
         );
-        body = body.child(note(theme, view.launch_policy.clone()));
-        if let Some(error) = &view.native_error {
-            body = body.child(widgets::warning_strip(
-                theme,
-                format!("Claude's own readback failed: {error}. Rows below are configured, not verified."),
-            ));
-        }
 
-        body = body.child(heading(
-            theme,
-            "Settings sources (highest precedence first)",
-        ));
-        for source in &view.sources {
-            let state = if source.loaded {
-                widgets::badge_active(theme, "loaded")
-            } else {
-                widgets::badge(
-                    theme,
-                    source.reason.clone().unwrap_or_else(|| "not loaded".into()),
-                )
-            };
-            let mut badges = vec![widgets::badge(theme, source.scope.label()), state];
-            if source.loaded
-                && let Some(reason) = &source.reason
-            {
-                badges.push(widgets::badge(theme, reason.clone()));
-            }
-            body = body.child(line(theme, source.display_path.clone(), badges));
-        }
+        let sources = view
+            .sources
+            .iter()
+            .map(|source| {
+                let state = if source.loaded {
+                    widgets::badge_active(theme, "loaded")
+                } else {
+                    widgets::badge(
+                        theme,
+                        source.reason.clone().unwrap_or_else(|| "not loaded".into()),
+                    )
+                };
+                let mut badges = vec![widgets::badge(theme, source.scope.label()), state];
+                if source.loaded
+                    && let Some(reason) = &source.reason
+                {
+                    badges.push(widgets::badge(theme, reason.clone()));
+                }
+                line(theme, source.display_path.clone(), badges).into_any_element()
+            })
+            .collect();
+        rows.push(
+            list_row(
+                theme,
+                "Settings sources",
+                Some("Highest precedence first.".into()),
+                Vec::new(),
+                sources,
+            )
+            .into_any_element(),
+        );
 
         let style = &view.output_style;
-        body = body.child(heading(theme, "Output style"));
-        let mut badges = vec![widgets::badge(
+        let mut style_badges = vec![widgets::badge(
             theme,
             style
                 .configured_scope
@@ -281,33 +302,29 @@ impl NativeExtensionsPanel {
         )];
         match &style.native {
             Some(native) if *native == style.configured_effective => {
-                badges.push(widgets::badge_active(theme, "Claude agrees"))
+                style_badges.push(widgets::badge_active(theme, "Claude agrees"))
             }
-            Some(native) => badges.push(widgets::badge(theme, format!("Claude reports {native}"))),
-            None => badges.push(widgets::badge(theme, "unverified")),
+            Some(native) => {
+                style_badges.push(widgets::badge(theme, format!("Claude reports {native}")))
+            }
+            None => style_badges.push(widgets::badge(theme, "unverified")),
         }
-        body = body.child(line(
-            theme,
-            format!(
-                "In effect: {}",
-                style
-                    .native
-                    .as_deref()
-                    .unwrap_or(&style.configured_effective)
-            ),
-            badges,
-        ));
-        for value in style.configured.iter().filter(|value| !value.applied) {
-            body = body.child(note(
-                theme,
-                format!(
-                    "{}: {} — {}",
-                    value.scope.label(),
-                    value.value,
-                    value.reason.clone().unwrap_or_else(|| "not applied".into())
-                ),
-            ));
-        }
+        let mut style_notes: Vec<AnyElement> = style
+            .configured
+            .iter()
+            .filter(|value| !value.applied)
+            .map(|value| {
+                note(
+                    theme,
+                    format!(
+                        "{}: {} — {}",
+                        value.scope.label(),
+                        value.value,
+                        value.reason.clone().unwrap_or_else(|| "not applied".into())
+                    ),
+                )
+            })
+            .collect();
         let available = style
             .available
             .iter()
@@ -317,109 +334,198 @@ impl NativeExtensionsPanel {
             })
             .collect::<Vec<_>>()
             .join(", ");
-        body = body.child(note(theme, format!("Available: {available}")));
+        style_notes.push(note(theme, format!("Available: {available}")));
+        rows.push(
+            list_row(
+                theme,
+                "Output style",
+                Some(
+                    format!(
+                        "In effect: {}",
+                        style
+                            .native
+                            .as_deref()
+                            .unwrap_or(&style.configured_effective)
+                    )
+                    .into(),
+                ),
+                style_badges,
+                style_notes,
+            )
+            .into_any_element(),
+        );
 
         let effective_hooks = view.hooks.iter().filter(|hook| hook.effective).count();
-        body = body.child(heading(
-            theme,
-            format!("Hooks · {effective_hooks} of {} run", view.hooks.len()),
-        ));
-        if view.hooks.is_empty() {
-            body = body.child(note(theme, "No hooks configured in the scanned settings."));
-        }
-        for hook in &view.hooks {
-            let title = match &hook.matcher {
-                Some(matcher) => format!("{} ({matcher}) · {}", hook.event, hook.handler),
-                None => format!("{} · {}", hook.event, hook.handler),
-            };
-            body = body.child(line(
+        let hooks: Vec<AnyElement> = if view.hooks.is_empty() {
+            vec![note(theme, "No hooks configured in the scanned settings.")]
+        } else {
+            view.hooks
+                .iter()
+                .map(|hook| {
+                    let title = match &hook.matcher {
+                        Some(matcher) => format!("{} ({matcher}) · {}", hook.event, hook.handler),
+                        None => format!("{} · {}", hook.event, hook.handler),
+                    };
+                    line(
+                        theme,
+                        title,
+                        vec![
+                            widgets::badge(theme, hook.scope.label()),
+                            if hook.effective {
+                                widgets::badge_active(theme, "runs")
+                            } else {
+                                widgets::badge(
+                                    theme,
+                                    hook.reason.clone().unwrap_or_else(|| "off".into()),
+                                )
+                            },
+                        ],
+                    )
+                    .into_any_element()
+                })
+                .collect()
+        };
+        rows.push(
+            list_row(
                 theme,
-                title,
-                vec![
-                    widgets::badge(theme, hook.scope.label()),
-                    if hook.effective {
-                        widgets::badge_active(theme, "runs")
-                    } else {
-                        widgets::badge(theme, hook.reason.clone().unwrap_or_else(|| "off".into()))
-                    },
-                ],
-            ));
-        }
+                "Hooks",
+                Some(format!("{effective_hooks} of {} run", view.hooks.len()).into()),
+                Vec::new(),
+                hooks,
+            )
+            .into_any_element(),
+        );
 
         let in_effect = view
             .commands
             .iter()
             .filter(|command| command.native.unwrap_or(command.configured_effective))
             .count();
-        body = body.child(heading(
-            theme,
-            format!("Commands and skills · {in_effect} in effect"),
-        ));
-        if view.commands.is_empty() {
-            body = body.child(note(theme, "No custom commands or skills found."));
-        }
-        for command in &view.commands {
-            let kind = match command.kind {
-                NativeCommandKind::Command => "command",
-                NativeCommandKind::Skill => "skill",
-            };
-            let effective = command.native.unwrap_or(command.configured_effective);
-            let state = if effective {
-                widgets::badge_active(
-                    theme,
-                    if command.native == Some(true) {
-                        "in effect · Claude lists it"
+        let commands: Vec<AnyElement> = if view.commands.is_empty() {
+            vec![note(theme, "No custom commands or skills found.")]
+        } else {
+            view.commands
+                .iter()
+                .map(|command| {
+                    let kind = match command.kind {
+                        NativeCommandKind::Command => "command",
+                        NativeCommandKind::Skill => "skill",
+                    };
+                    let effective = command.native.unwrap_or(command.configured_effective);
+                    let state = if effective {
+                        widgets::badge_active(
+                            theme,
+                            if command.native == Some(true) {
+                                "in effect · Claude lists it"
+                            } else {
+                                "in effect (configured)"
+                            },
+                        )
                     } else {
-                        "in effect (configured)"
-                    },
-                )
-            } else {
-                widgets::badge(
-                    theme,
-                    command
-                        .reason
-                        .clone()
-                        .unwrap_or_else(|| "not loaded".into()),
-                )
-            };
-            body = body.child(line(
+                        widgets::badge(
+                            theme,
+                            command
+                                .reason
+                                .clone()
+                                .unwrap_or_else(|| "not loaded".into()),
+                        )
+                    };
+                    line(
+                        theme,
+                        format!("/{}", command.name),
+                        vec![
+                            widgets::badge(theme, format!("{} {kind}", command.scope.label())),
+                            state,
+                        ],
+                    )
+                    .into_any_element()
+                })
+                .collect()
+        };
+        rows.push(
+            list_row(
                 theme,
-                format!("/{}", command.name),
-                vec![
-                    widgets::badge(theme, format!("{} {kind}", command.scope.label())),
-                    state,
-                ],
-            ));
-        }
-        for limitation in &view.limitations {
-            body = body.child(note(theme, limitation.clone()).mt(px(10.0)));
-        }
-        body.into_any_element()
+                "Commands and skills",
+                Some(format!("{in_effect} in effect").into()),
+                Vec::new(),
+                commands,
+            )
+            .into_any_element(),
+        );
+        rows
     }
 }
 
 impl Render for NativeExtensionsPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        let busy = self.is_loading();
+        let recheck = button::button(
+            "native-ext-refresh",
+            ButtonKind::Secondary,
+            ControlSize::Md,
+            !busy,
+            &theme,
+        )
+        .aria_label("Re-check extensions with Claude")
+        .child(button::glyph(crate::icons::REFRESH, ControlSize::Md))
+        .child(if busy {
+            "Checking…"
+        } else {
+            "Re-check with Claude"
+        })
+        .when(!busy, |el| {
+            el.on_click(cx.listener(|panel, _, _, cx| panel.load(true, cx)))
+        });
         let mut card = widgets::section_card(&theme)
-            .mt(px(20.0))
-            .p(px(16.0))
             .id("native-extensions")
             .role(gpui::Role::Group)
             .aria_label("Claude extensions in effect")
-            .child(widgets::row_title(&theme, "Claude extensions in effect"))
-            .child(widgets::page_subtitle(
+            .child(widgets::section_header(
                 &theme,
-                "What a Claude launch for the selected task or project loads: settings sources, output style, hooks, commands and skills, with scope and precedence. Ask and Auto launch in restricted mode.",
+                "Claude extensions in effect",
+                Some(
+                    "What a Claude launch for the selected task or project loads: settings \
+                     sources, output style, hooks, commands and skills, with scope and \
+                     precedence. Ask and Auto launch in restricted mode."
+                        .into(),
+                ),
+                vec![recheck.into_any_element()],
             ))
-            .child(self.render_controls(&theme, cx));
-        card = match &self.view {
-            Loadable::Ready(view) => card.child(self.render_view(&theme, view)),
-            Loadable::Error(error) => card.child(widgets::error_strip(&theme, error.clone())),
-            _ => {
-                card.child(note(&theme, "Reading Claude's settings for this launch…").mt(px(12.0)))
+            .child(self.render_mode_row(&theme, cx));
+        let mut limitations = Vec::new();
+        match &self.view {
+            Loadable::Ready(view) => {
+                card = card.children(self.render_rows(&theme, view));
+                limitations = view.limitations.clone();
             }
-        };
-        card
+            Loadable::Error(error) => {
+                card = card.child(
+                    widgets::card_row(&theme, false).child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .child(widgets::error_strip(&theme, error.clone()).mt_0()),
+                    ),
+                );
+            }
+            _ => {
+                card = card.child(widgets::card_row(&theme, false).child(
+                    div().w_full().min_w_0().child(popover::skeleton_rows(
+                        "native-extensions-skeleton",
+                        &theme,
+                        4,
+                        cx.entity_id(),
+                        cx,
+                    )),
+                ));
+            }
+        }
+        // Limitations are fine print under the card (spec §2).
+        div().flex().flex_col().child(card).children(
+            limitations
+                .into_iter()
+                .map(|limitation| widgets::section_footer(&theme, limitation)),
+        )
     }
 }
