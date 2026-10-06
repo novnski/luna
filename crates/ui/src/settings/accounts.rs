@@ -1259,8 +1259,8 @@ impl AccountsPage {
 
     /// One usage window (luna settings.agents.tsx `UsageMeter`): label · bar
     /// (indigo → amber ≥80% → red ≥95%) · "NN% used" · quiet reset time. The
-    /// label and percentage columns hold fixed widths so stacked meters line
-    /// up.
+    /// label, percentage and reset columns hold fixed widths so stacked
+    /// meters line up.
     fn usage_meter(
         label: &str,
         fraction: f32,
@@ -1321,15 +1321,16 @@ impl AccountsPage {
                         (fraction * 100.0).round() as u32
                     ))),
             )
-            .when_some(reset, |el, reset| {
-                el.child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .text_color(theme.readable_muted(0.65))
-                        .child(SharedString::from(reset)),
-                )
-            })
+            // The reset column always holds its width, even when a window has
+            // no reset time, so the bars of stacked meters end together.
+            .child(
+                div()
+                    .w(ui_rems(96.0))
+                    .flex_none()
+                    .truncate()
+                    .text_color(theme.readable_muted(0.65))
+                    .child(SharedString::from(reset.unwrap_or_default())),
+            )
             .into_any_element()
     }
 
@@ -1395,7 +1396,6 @@ impl AccountsPage {
             .flex_none()
             .flex()
             .flex_row()
-            .flex_wrap()
             .items_center()
             .gap(ui_rems(6.0))
             .when(account.active, |el| {

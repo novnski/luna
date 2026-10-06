@@ -1412,6 +1412,18 @@ impl AutomationsPanel {
             None => "Active · nothing scheduled".into(),
         }
     }
+
+    /// The status line as the row shows it: the row's badge already says
+    /// "Active", so an active definition leads with its next run instead.
+    fn status_detail(record: &AutomationRecord) -> String {
+        if record.deleted || !record.enabled {
+            return Self::status_line(record);
+        }
+        match record.next_due_ms {
+            Some(next) => format!("Next run {}", when(next, &record.definition.timezone)),
+            None => "Nothing scheduled".into(),
+        }
+    }
 }
 
 impl ScrollRailHost for AutomationsPanel {
@@ -1791,7 +1803,7 @@ impl AutomationsPanel {
                     .child(status_badge),
             )
             .child(
-                widgets::row_description(theme, Self::status_line(record)).text_color(theme.text),
+                widgets::row_description(theme, Self::status_detail(record)).text_color(theme.text),
             )
             .child(widgets::row_description(
                 theme,

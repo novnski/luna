@@ -2327,6 +2327,19 @@ thread_local! {
         std::cell::Cell::new(hsla(0.69, 0.87, 0.73, 1.0));
 }
 
+thread_local! {
+    /// The installed theme's secondary glyph tone (see [`current_glyph_tone`]).
+    static CURRENT_GLYPH_TONE: std::cell::Cell<Hsla> =
+        std::cell::Cell::new(hsla(0.0, 0.0, 0.7, 1.0));
+}
+
+/// The installed theme's secondary glyph tone, for context-free builders.
+/// GPUI paints an SVG only with its OWN text colour (it doesn't inherit the
+/// parent's), so every glyph needs one.
+pub fn current_glyph_tone() -> Hsla {
+    CURRENT_GLYPH_TONE.with(|tone| tone.get())
+}
+
 /// The installed theme's focus ring colour.
 pub fn current_focus_ring() -> Hsla {
     CURRENT_FOCUS_RING.with(|ring| ring.get())
@@ -2340,6 +2353,7 @@ pub fn focus_visible_ring(style: gpui::StyleRefinement) -> gpui::StyleRefinement
 fn sync_gpui_base_scrollbar(theme: &Theme, cx: &mut App) {
     CURRENT_FOCUS_RING.with(|ring| ring.set(theme.focus_ring()));
     CURRENT_FILL_TINT.with(|tint| tint.set(fill_tint(theme.text)));
+    CURRENT_GLYPH_TONE.with(|tone| tone.set(theme.readable_muted(0.95)));
     let (normal, hover, active) = scrollbar_thumb_colors(theme);
     gpui_base::Theme::global_mut(cx).scrollbar.styles = gpui_base::ScrollbarStyles::default()
         .thumb(|style| style.bg(normal))

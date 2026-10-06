@@ -478,15 +478,16 @@ impl ShortcutsPage {
                 .child(SharedString::from("Press keys…"))
                 .aria_description(RECORDING_HINT)
         } else {
-            let frame = button::button(chip_id, ButtonKind::Secondary, ControlSize::Md, true, theme)
-                .px(ui_rems(6.0))
-                .gap(ui_rems(3.0))
-                .aria_toggled(gpui::Toggled::False)
-                .when_some(notice, |frame, notice| {
-                    frame
-                        .border_color(theme.warning.opacity(0.7))
-                        .aria_description(notice)
-                });
+            let frame =
+                button::button(chip_id, ButtonKind::Secondary, ControlSize::Md, true, theme)
+                    .px(ui_rems(6.0))
+                    .gap(ui_rems(3.0))
+                    .aria_toggled(gpui::Toggled::False)
+                    .when_some(notice, |frame, notice| {
+                        frame
+                            .border_color(theme.warning.opacity(0.7))
+                            .aria_description(notice)
+                    });
             if combo.is_empty() {
                 frame.child(
                     div()
@@ -958,10 +959,11 @@ impl ShortcutsPage {
                 card.child(
                     widgets::card_row(theme, false)
                         .child(widgets::row_text(theme, title, None))
-                        .child(
-                            widgets::row_controls()
-                                .child(static_keycaps(theme, ("fixed-shortcut", ix), combo)),
-                        ),
+                        .child(widgets::row_controls().child(static_keycaps(
+                            theme,
+                            ("fixed-shortcut", ix),
+                            combo,
+                        ))),
                 )
             },
         )
@@ -1035,9 +1037,8 @@ impl Render for ShortcutsPage {
                                  and stay on this device.",
                             ))
                             .when_some(orphan_notice, |column, notice| {
-                                column.child(
-                                    widgets::warning_strip(&theme, notice).mt(ui_rems(16.0)),
-                                )
+                                column
+                                    .child(widgets::warning_strip(&theme, notice).mt(ui_rems(16.0)))
                             })
                             .children(sections),
                     ),

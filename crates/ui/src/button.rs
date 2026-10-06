@@ -232,9 +232,16 @@ pub fn icon_button(
     theme: &Theme,
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
+    // The glyph brightens with the hover like a label would; an SVG takes
+    // only its own colour, so it rides the same fade explicitly.
+    let tone = if enabled {
+        motion::hover_blend(&id, theme.readable_muted(0.95), theme.text)
+    } else {
+        theme.readable_muted(0.95)
+    };
     let frame = control_frame(ElementId::from(id.clone()), size, enabled, theme)
         .w(crate::typography::ui_rems(size.height()))
-        .child(glyph(glyph_path, size));
+        .child(glyph(glyph_path, size).text_color(tone));
     if enabled {
         frame.hover_fill_fg(
             id,
@@ -248,11 +255,15 @@ pub fn icon_button(
     }
 }
 
-/// A leading glyph sized for `size`, tinted by the control's text colour.
+/// A leading glyph sized for `size`, in the theme's secondary glyph tone.
+/// GPUI paints an SVG only with its own text colour, never the button's, so
+/// the glyph carries one: inside a Primary or Danger button, chain
+/// `.text_color(theme.on_solid)` / `.text_color(theme.on_danger())`.
 pub fn glyph(path: &'static str, size: ControlSize) -> gpui::Svg {
     crate::icons::icon(path)
         .size(crate::typography::ui_rems(size.glyph()))
         .flex_none()
+        .text_color(crate::theme::current_glyph_tone())
 }
 
 /// A pop-up button: a secondary control showing the current choice and one
@@ -487,7 +498,11 @@ pub fn segmented(
                 })
                 .on_click(move |_, window, cx| on_select(&ix, window, cx))
                 .when_some(segment.glyph, |el, path| {
-                    el.child(glyph(path, ControlSize::Sm))
+                    el.child(glyph(path, ControlSize::Sm).text_color(if chosen {
+                        theme.text
+                    } else {
+                        theme.readable_muted(0.9)
+                    }))
                 })
                 .child(div().min_w_0().truncate().child(segment.label))
                 .into_any_element()

@@ -459,14 +459,16 @@ pub fn row_description(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Di
 }
 
 /// A row's trailing control column: controls on one line at the right,
-/// vertically centred. When the row wraps it stays right-aligned.
+/// vertically centred. When the row wraps it stays right-aligned. The group
+/// itself never wraps: a wrapping box that doesn't grow measures at its
+/// narrowest and would stack its controls; the ROW moves the whole group
+/// under the text instead.
 pub fn row_controls() -> gpui::Div {
     div()
         .flex_none()
         .ml_auto()
         .flex()
         .flex_row()
-        .flex_wrap()
         .items_center()
         .justify_end()
         .gap(crate::typography::ui_rems(8.0))
@@ -668,8 +670,9 @@ pub fn toggle_switch(theme: &Theme, on: bool, key: &str) -> gpui::Div {
 /// [`toggle_switch`] as a complete control: an announced, focusable Switch
 /// labelled `label`. GPUI's keyboard click delivers Enter/Space to the same
 /// `toggle` as the pointer, exactly once. The focus ring is a transparent 2px
-/// border pulled back by a matching negative margin, so focusing the switch
-/// never moves its row.
+/// border that is always part of the box, so focusing the switch never moves
+/// its row. It is not pulled back with a negative margin: taffy then measures
+/// the trailing column at zero width and the switch paints over the row text.
 pub fn switch_control<V: 'static>(
     id: impl Into<gpui::ElementId>,
     label: impl Into<SharedString>,
@@ -692,7 +695,7 @@ pub fn switch_control<V: 'static>(
         })
         .tab_index(0)
         .flex_none()
-        .m(px(-2.0))
+        .flex()
         .rounded_full()
         .border_2()
         .border_color(gpui::transparent_black())
@@ -727,7 +730,7 @@ pub fn switch_control_disabled(
         })
         .aria_description(reason)
         .flex_none()
-        .m(px(-2.0))
+        .flex()
         .rounded_full()
         .border_2()
         .border_color(gpui::transparent_black())

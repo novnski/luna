@@ -158,7 +158,11 @@ impl ShortcutsPage {
         // A permission's kit action: "Allow …" asks the system once; after
         // that the same slot opens the system's settings pane.
         let action = |id: &'static str, prompted: bool, label: &'static str| {
-            let label = if prompted { "Open System Settings" } else { label };
+            let label = if prompted {
+                "Open System Settings"
+            } else {
+                label
+            };
             button::button(id, ButtonKind::Secondary, ControlSize::Md, true, &theme)
                 .aria_label(label)
                 .child(SharedString::from(label))
@@ -292,15 +296,19 @@ impl ShortcutsPage {
                     })
                     .child(
                         widgets::page_column()
-                            .child(widgets::page_title_bar(&theme, "Appshots", None, Vec::new()))
+                            .child(widgets::page_title_bar(
+                                &theme,
+                                "Appshots",
+                                None,
+                                Vec::new(),
+                            ))
                             .child(widgets::page_subtitle(
                                 &theme,
                                 capabilities.setup_description(),
                             ))
                             .when_some(orphan_notice, |column, notice| {
-                                column.child(
-                                    widgets::warning_strip(&theme, notice).mt(ui_rems(16.0)),
-                                )
+                                column
+                                    .child(widgets::warning_strip(&theme, notice).mt(ui_rems(16.0)))
                             })
                             .child(capture_card)
                             .child(permissions_card),

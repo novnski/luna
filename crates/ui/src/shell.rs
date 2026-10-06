@@ -10251,7 +10251,10 @@ impl Shell {
                         &theme,
                     )
                     .aria_label("View latest LUNA release on GitHub")
-                    .child(crate::button::glyph(icons::ARROW_UP_RIGHT, ControlSize::Md))
+                    .child(
+                        crate::button::glyph(icons::ARROW_UP_RIGHT, ControlSize::Md)
+                            .text_color(theme.on_solid),
+                    )
                     .child("View release on GitHub")
                     .on_click(cx.listener(|_, _, _, cx| {
                         cx.open_url("https://github.com/novnski/luna/releases/latest");

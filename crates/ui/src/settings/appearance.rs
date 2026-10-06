@@ -80,7 +80,9 @@ impl FontKind {
 
     fn description(self) -> &'static str {
         match self {
-            Self::Ui => "Menus, sidebars, and conversation text. The size scales the whole interface.",
+            Self::Ui => {
+                "Menus, sidebars, and conversation text. The size scales the whole interface."
+            }
             Self::Terminal => "Terminal panes and shell output. Fixed-width families only.",
             Self::Code => "Code blocks, diffs, and workspace file editors.",
         }
@@ -2809,7 +2811,9 @@ impl AppearancePage {
             .iter()
             .any(|entry| entry.id == id && entry.source.is_linked());
         let body = if linked {
-            format!("\u{201c}{name}\u{201d} leaves your theme library. Its source file stays where it is.")
+            format!(
+                "\u{201c}{name}\u{201d} leaves your theme library. Its source file stays where it is."
+            )
         } else {
             format!(
                 "\u{201c}{name}\u{201d} leaves your theme library. Import it again to get it back."
@@ -3230,8 +3234,12 @@ impl Render for AppearancePage {
         let ui_size = self.render_size_picker(FontKind::Ui, &theme, fixed.clone(), cx);
         let terminal_size = self.render_size_picker(FontKind::Terminal, &theme, fixed.clone(), cx);
         let code_size = self.render_size_picker(FontKind::Code, &theme, fixed, cx);
-        let mut text_section = widgets::section_card(&theme)
-            .child(widgets::section_header(&theme, "Text", None, Vec::new()));
+        let mut text_section = widgets::section_card(&theme).child(widgets::section_header(
+            &theme,
+            "Text",
+            None,
+            Vec::new(),
+        ));
         for (kind, picker, size_control) in [
             (FontKind::Ui, ui_picker, ui_size),
             (FontKind::Terminal, terminal_picker, terminal_size),
@@ -3335,7 +3343,12 @@ impl Render for AppearancePage {
             }),
         );
         let code_section = widgets::section_card(&theme)
-            .child(widgets::section_header(&theme, "Code & diffs", None, Vec::new()))
+            .child(widgets::section_header(
+                &theme,
+                "Code & diffs",
+                None,
+                Vec::new(),
+            ))
             .child(setting_row(
                 &theme,
                 false,
