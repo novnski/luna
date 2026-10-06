@@ -18,15 +18,17 @@ use luna_theme::{
 };
 
 use crate::appearance::{self, AppearanceMode};
+use crate::button::{ButtonKind, ControlSize, Segment};
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::icons;
-use crate::interaction::HoverFill as _;
 use crate::popover::{self, Popup};
 use crate::settings::widgets;
 use crate::settings::{DiffColorScheme, SavePolicy};
-use crate::theme::{Appearance, Theme};
+use crate::theme::{Appearance, FillTier, Theme};
 use crate::theme_library;
-use crate::typography::{self, FontAvailability, UiFontFamily, UiFontSize};
+use crate::typography::{
+    self, FontAvailability, TextStyle, TypeStyleExt as _, UiFontFamily, UiFontSize, ui_rems,
+};
 
 struct ImportDialog {
     input: Entity<ComposerInput>,
@@ -78,7 +80,7 @@ impl FontKind {
 
     fn description(self) -> &'static str {
         match self {
-            Self::Ui => "Menus, sidebars, and conversation text.",
+            Self::Ui => "Menus, sidebars, and conversation text. The size scales the whole interface.",
             Self::Terminal => "Terminal panes and shell output. Fixed-width families only.",
             Self::Code => "Code blocks, diffs, and workspace file editors.",
         }
@@ -170,6 +172,26 @@ impl FontKind {
 /// (terminal 13, code 12.5) are rungs, so today's rendering is reachable.
 const MONO_FONT_SIZES: [f32; 10] = [10.0, 11.0, 12.0, 12.5, 13.0, 14.0, 15.0, 16.0, 18.0, 20.0];
 
+// Control widths, in points at the default 16 px Interface size. Each is an
+// interface rem ([`ui_rems`]) so a control keeps room for its label at every
+// Interface size. A font row's family + size pickers and the conversation
+// width control are about the same total width, so their right-aligned
+// controls line up and wrap under their text at the same window widths.
+const FAMILY_PICKER_WIDTH: f32 = 200.0;
+const FAMILY_MENU_WIDTH: f32 = 240.0;
+const FAMILY_MENU_MAX_HEIGHT: f32 = 280.0;
+const SIZE_PICKER_WIDTH: f32 = 92.0;
+const SIZE_MENU_WIDTH: f32 = 112.0;
+const THEME_PICKER_WIDTH: f32 = 220.0;
+const THEME_MENU_WIDTH: f32 = 260.0;
+const WIDTH_SLIDER_WIDTH: f32 = 196.0;
+const WIDTH_TRACK: f32 = 4.0;
+const WIDTH_KNOB: f32 = 14.0;
+/// Segmented controls: two short options, and the three Glass options.
+const SEGMENTED_PAIR_WIDTH: f32 = 220.0;
+const SEGMENTED_GLASS_WIDTH: f32 = 300.0;
+const SEGMENTED_EFFECT_WIDTH: f32 = 360.0;
+
 fn nearest_mono_ix(size: f32) -> usize {
     MONO_FONT_SIZES
         .iter()
@@ -190,9 +212,7 @@ impl Render for TranscriptWidthDrag {
 
 pub struct AppearancePage {
     width_focus: FocusHandle,
-    width_hovered: bool,
     width_pressed: bool,
-    width_keyboard_active: bool,
     width_bounds: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     pending_width: Option<f32>,
     width_frame_pending: bool,
@@ -240,6 +260,12 @@ pub struct AppearancePage {
     library_error: Option<SharedString>,
     background_error: Option<SharedString>,
     reset_confirmation_open: bool,
+    /// The library entry (id, name) awaiting the Remove confirmation.
+    remove_confirmation: Option<(String, SharedString)>,
+    /// Focus for the reset and remove confirmations, taken when one opens so
+    /// Escape reaches the card instead of the control behind the scrim.
+    confirm_focus: FocusHandle,
+    confirm_focus_pending: bool,
 }
 
 impl AppearancePage {
@@ -363,8 +389,11 @@ impl AppearancePage {
         let Some(bounds) = self.width_bounds.get() else {
             return;
         };
-        let fraction =
-            (f32::from(x - bounds.left()) - 7.0) / (f32::from(bounds.size.width) - 14.0).max(1.0);
+        // The knob is an interface rem, so its half-width (the track's inset
+        // at either end) follows the window's rem.
+        let inset = f32::from(window.rem_size()) * (WIDTH_KNOB / 2.0) / 16.0;
+        let fraction = (f32::from(x - bounds.left()) - inset)
+            / (f32::from(bounds.size.width) - 2.0 * inset).max(1.0);
         self.queue_width(
             crate::settings::TRANSCRIPT_WIDTH_MIN
                 + fraction.clamp(0.0, 1.0)
@@ -375,12 +404,11 @@ impl AppearancePage {
         );
     }
 
-    fn render_transcript_width(
-        &self,
-        theme: &Theme,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    /// The conversation-width control for its row's trailing column: the
+    /// slider, its live value, and a reset that is enabled only away from the
+    /// default. Every dimension is an interface rem, so the control keeps its
+    /// proportions at every Interface size.
+    fn render_width_control(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         use crate::settings::{
             TRANSCRIPT_WIDTH_DEFAULT, TRANSCRIPT_WIDTH_MAX, TRANSCRIPT_WIDTH_MIN,
             TRANSCRIPT_WIDTH_STEP,
@@ -388,12 +416,14 @@ impl AppearancePage {
         let width = self
             .pending_width
             .unwrap_or_else(|| crate::settings::transcript_width(cx));
-        let fraction =
-            (width - TRANSCRIPT_WIDTH_MIN) / (TRANSCRIPT_WIDTH_MAX - TRANSCRIPT_WIDTH_MIN);
+        let fraction = ((width - TRANSCRIPT_WIDTH_MIN)
+            / (TRANSCRIPT_WIDTH_MAX - TRANSCRIPT_WIDTH_MIN))
+            .clamp(0.0, 1.0);
         let bounds = self.width_bounds.clone();
-        let show_details = self.width_hovered
-            || self.width_pressed
-            || (self.width_keyboard_active && self.width_focus.is_focused(window));
+        let ring = theme.focus_ring();
+        let half = WIDTH_KNOB / 2.0;
+        let track = WIDTH_TRACK;
+        let height = ControlSize::Md.height();
         let slider = div()
             .id("transcript-width-slider")
             .role(gpui::Role::Slider)
@@ -402,15 +432,17 @@ impl AppearancePage {
             .tab_index(0)
             .track_focus(&self.width_focus)
             .relative()
-            .w(px(240.0))
-            .h(px(28.0))
+            .flex_none()
+            .w(typography::ui_rems(WIDTH_SLIDER_WIDTH))
+            .h(typography::ui_rems(height))
+            .rounded(px(6.0))
             .cursor_pointer()
+            .focus_visible(move |style| crate::theme::focus_ring(style, ring))
             .on_mouse_down(
                 gpui::MouseButton::Left,
                 cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
                     window.focus(&this.width_focus, cx);
                     this.width_pressed = true;
-                    this.width_keyboard_active = false;
                     cx.notify();
                     cx.stop_propagation();
                     this.drag_width(event.position.x, window, cx);
@@ -431,8 +463,6 @@ impl AppearancePage {
                     "end" => TRANSCRIPT_WIDTH_MAX,
                     _ => return,
                 };
-                this.width_keyboard_active = true;
-                cx.notify();
                 cx.stop_propagation();
                 window.prevent_default();
                 this.queue_width(next, window, cx);
@@ -445,10 +475,10 @@ impl AppearancePage {
             .child(
                 div()
                     .absolute()
-                    .left(px(7.0))
-                    .right(px(7.0))
-                    .top(px(12.0))
-                    .h(px(4.0))
+                    .left(typography::ui_rems(half))
+                    .right(typography::ui_rems(half))
+                    .top(typography::ui_rems((height - track) / 2.0))
+                    .h(typography::ui_rems(track))
                     .rounded_full()
                     .bg(theme.border)
                     .child(
@@ -462,92 +492,49 @@ impl AppearancePage {
                         div()
                             .absolute()
                             .left(gpui::relative(fraction))
-                            .ml(px(-7.0))
-                            .top(px(-5.0))
-                            .size(px(14.0))
+                            .ml(typography::ui_rems(-half))
+                            .top(typography::ui_rems((track - WIDTH_KNOB) / 2.0))
+                            .size(typography::ui_rems(WIDTH_KNOB))
                             .rounded_full()
                             .bg(theme.accent),
                     ),
             );
+        let at_default = (width - TRANSCRIPT_WIDTH_DEFAULT).abs() < 0.5;
+        let reset = crate::button::icon_button(
+            "reset-transcript-width",
+            icons::RESTART,
+            ControlSize::Sm,
+            !at_default,
+            theme,
+        )
+        .aria_label("Reset conversation width")
+        .tooltip(popover::text_tooltip(format!(
+            "Reset to {TRANSCRIPT_WIDTH_DEFAULT:.0} px"
+        )))
+        .when(!at_default, |reset| {
+            reset.on_click(cx.listener(|this, _, _, cx| {
+                this.pending_width = None;
+                crate::settings::set_transcript_width(TRANSCRIPT_WIDTH_DEFAULT, cx);
+                cx.notify();
+            }))
+        });
         div()
             .flex()
-            .flex_wrap()
+            .flex_row()
             .items_center()
-            .gap(px(20.0))
+            .gap(typography::ui_rems(8.0))
+            .child(slider)
             .child(
                 div()
-                    .flex_1()
-                    .min_w(px(200.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(widgets::field_label(theme, "Conversation width"))
-                    .child(
-                        div()
-                            .text_size(typography::ui_rems(12.0))
-                            .line_height(crate::typography::ui_rems(18.0))
-                            .text_color(theme.text_muted)
-                            .child("Maximum width of messages. Adapts to smaller windows."),
-                    ),
-            )
-            .child(
-                div()
-                    .id("transcript-width-control")
-                    .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                        this.width_hovered = *hovered;
-                        if *hovered {
-                            this.width_keyboard_active = false;
-                        }
-                        cx.notify();
-                    }))
-                    // Details occupy the surrounding whitespace, so the
-                    // slider keeps the same row rhythm as the font controls.
-                    .my(px(-12.0))
                     .flex_none()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .when(!show_details, |el| el.invisible())
-                            .flex()
-                            .justify_between()
-                            .text_size(typography::ui_rems(12.0))
-                            .line_height(crate::typography::ui_rems(16.0))
-                            .child(format!("{width:.0} px"))
-                            .child(
-                                div()
-                                    .id("reset-transcript-width")
-                                    .cursor_pointer()
-                                    .hover_fg(
-                                        "reset-transcript-width",
-                                        theme.text_muted,
-                                        theme.text,
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.pending_width = None;
-                                        crate::settings::set_transcript_width(
-                                            TRANSCRIPT_WIDTH_DEFAULT,
-                                            cx,
-                                        );
-                                        cx.notify();
-                                    }))
-                                    .child("Reset"),
-                            ),
-                    )
-                    .child(slider)
-                    .child(
-                        div()
-                            .when(!show_details, |el| el.invisible())
-                            .flex()
-                            .justify_between()
-                            .text_size(typography::ui_rems(11.0))
-                            .line_height(crate::typography::ui_rems(14.0))
-                            .text_color(theme.text_muted)
-                            .child("560 px")
-                            .child("1,200 px"),
-                    ),
+                    .w(typography::ui_rems(56.0))
+                    .text_right()
+                    .type_style(TextStyle::Footnote)
+                    .font_features(typography::tabular_figures())
+                    .text_color(theme.readable_muted(0.9))
+                    .child(SharedString::from(format!("{width:.0} px"))),
             )
+            .child(reset)
             .into_any_element()
     }
 
@@ -564,9 +551,7 @@ impl AppearancePage {
         });
         Self {
             width_focus: cx.focus_handle(),
-            width_hovered: false,
             width_pressed: false,
-            width_keyboard_active: false,
             width_bounds: Rc::default(),
             pending_width: None,
             width_frame_pending: false,
@@ -607,6 +592,9 @@ impl AppearancePage {
             library_error: None,
             background_error: None,
             reset_confirmation_open: false,
+            remove_confirmation: None,
+            confirm_focus: cx.focus_handle(),
+            confirm_focus_pending: false,
         }
     }
 
@@ -966,7 +954,7 @@ impl AppearancePage {
         &mut self,
         kind: FontKind,
         event: &KeyDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let last = kind.size_count() - 1;
@@ -1375,33 +1363,26 @@ fn surface_helper(surface: SurfacePreference, resolved: SurfaceTreatment) -> Str
     }
 }
 
-fn preference_row(
+/// One settings row (spec §3): the wrapping title and description at the
+/// left, the controls in the trailing column at the right. When the controls
+/// no longer fit beside the text they wrap under it, right-aligned.
+fn setting_row(
     theme: &Theme,
     first: bool,
-    icon: &'static str,
-    title: &'static str,
-    description: &'static str,
-    control: AnyElement,
-) -> AnyElement {
+    title: impl Into<SharedString>,
+    description: impl Into<SharedString>,
+    controls: Vec<AnyElement>,
+) -> gpui::Div {
     widgets::card_row(theme, first)
-        .child(widgets::row_tile(theme, icon))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .child(widgets::row_title(theme, title))
-                .child(widgets::meta_line(
-                    theme,
-                    vec![
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(description)
-                            .into_any_element(),
-                    ],
-                )),
-        )
-        .child(div().flex_none().ml(px(10.0)).child(control))
+        .child(widgets::row_text(theme, title, Some(description.into())))
+        .child(widgets::row_controls().children(controls))
+}
+
+/// An error or warning strip as the last row of the section it belongs to
+/// (spec §7), spanning the row's content width.
+fn strip_row(theme: &Theme, strip: gpui::Div) -> AnyElement {
+    widgets::card_row(theme, false)
+        .child(strip.mt(px(0.0)).flex_1().min_w_0())
         .into_any_element()
 }
 
@@ -1518,8 +1499,8 @@ fn model_appearance(appearance: Appearance) -> luna_theme::Appearance {
 fn palette_preview(theme: &Theme) -> gpui::Div {
     div()
         .flex_none()
-        .w(px(30.0))
-        .h(px(18.0))
+        .w(ui_rems(30.0))
+        .h(ui_rems(18.0))
         .rounded(px(5.0))
         .overflow_hidden()
         .border_1()
@@ -1530,20 +1511,64 @@ fn palette_preview(theme: &Theme) -> gpui::Div {
         .child(div().w_1_3().h_full().bg(theme.accent))
 }
 
+/// A labelled kit button: `Md` in rows and section headers, `Sm` in dense
+/// list rows, `Lg` in dialogs (spec §5).
+fn labelled_button(
+    theme: &Theme,
+    kind: ButtonKind,
+    size: ControlSize,
+    label: &str,
+    id: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    crate::button::button(id, kind, size, true, theme)
+        .aria_label(SharedString::from(label.to_string()))
+        .child(SharedString::from(label.to_string()))
+}
+
+/// The Secondary row action.
 fn compact_action(
     theme: &Theme,
     label: &str,
     id: impl Into<SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    crate::button::button(
-        id,
-        crate::button::ButtonKind::Secondary,
-        crate::button::ControlSize::Md,
-        true,
-        theme,
-    )
-    .aria_label(SharedString::from(label.to_string()))
-    .child(SharedString::from(label.to_string()))
+    labelled_button(theme, ButtonKind::Secondary, ControlSize::Md, label, id)
+}
+
+/// The Secondary dialog action (Cancel, Browse…).
+fn dialog_action(
+    theme: &Theme,
+    label: &str,
+    id: impl Into<SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    labelled_button(theme, ButtonKind::Secondary, ControlSize::Lg, label, id)
+}
+
+/// A dialog card sized in interface rems, but never wider or taller than the
+/// window, so a large Interface size cannot push it off screen.
+fn sized_dialog(theme: &Theme, viewport: gpui::Size<gpui::Pixels>, width: f32) -> gpui::Div {
+    popover::dialog_card(theme)
+        .w(ui_rems(width))
+        .p(ui_rems(20.0))
+        .max_w(px((f32::from(viewport.width) - 48.0).max(280.0)))
+        .max_h(px((f32::from(viewport.height) - 48.0).max(240.0)))
+}
+
+/// A dialog's button row: the actions at the right, wrapping when a narrow
+/// window or a large Interface size cannot fit them on one line.
+fn dialog_footer() -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .justify_end()
+        .gap(ui_rems(8.0))
+}
+
+/// A sub-heading inside a dialog ("Source", "Detected themes"): the row title
+/// style, so dialogs share the settings type ladder.
+fn dialog_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
+    widgets::row_title(theme, label)
 }
 
 fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
@@ -1552,14 +1577,17 @@ fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
         AccentSelection::ThemeDefault,
         SurfacePreference::ThemeDefault,
     );
+    // The colours here are the imported variant's own: this is a preview of
+    // that theme, not page chrome. The sizes are interface rems so the code
+    // sample never clips at a large Interface size.
     div()
         .w_full()
-        .h(px(86.0))
+        .h(ui_rems(86.0))
         .flex()
-        .gap(px(8.0))
+        .gap(ui_rems(8.0))
         .child(
             div()
-                .w(px(152.0))
+                .w(ui_rems(152.0))
                 .h_full()
                 .overflow_hidden()
                 .rounded(px(8.0))
@@ -1572,17 +1600,18 @@ fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
                 .flex_1()
                 .min_w_0()
                 .h_full()
+                .overflow_hidden()
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.bg)
-                .p(px(9.0))
+                .p(ui_rems(9.0))
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
+                .gap(ui_rems(6.0))
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(ui_rems(11.0))
                         .font_family(theme.font_mono.clone())
                         .child(
                             div()
@@ -1594,7 +1623,7 @@ fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
                 )
                 .child(
                     div()
-                        .text_size(crate::typography::ui_rems(11.0))
+                        .text_size(ui_rems(11.0))
                         .font_family(theme.font_mono.clone())
                         .text_color(theme.syntax.string)
                         .child("  \"Theme mapping\""),
@@ -1602,7 +1631,8 @@ fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
                 .child(
                     div()
                         .mt_auto()
-                        .h(px(12.0))
+                        .h(ui_rems(12.0))
+                        .flex_none()
                         .flex()
                         .rounded(px(3.0))
                         .overflow_hidden()
@@ -1618,29 +1648,34 @@ fn import_scene_preview(variant: &luna_theme::ThemeVariant) -> AnyElement {
         )
         .child(
             div()
-                .w(px(84.0))
+                .w(ui_rems(84.0))
                 .h_full()
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.surface)
-                .p(px(8.0))
+                .p(ui_rems(8.0))
                 .flex()
                 .flex_col()
-                .gap(px(6.0))
+                .gap(ui_rems(6.0))
                 .child(
                     div()
-                        .h(px(12.0))
+                        .h(ui_rems(12.0))
                         .rounded(px(3.0))
                         .bg(theme.diff_add.opacity(0.35)),
                 )
                 .child(
                     div()
-                        .h(px(12.0))
+                        .h(ui_rems(12.0))
                         .rounded(px(3.0))
                         .bg(theme.diff_del.opacity(0.35)),
                 )
-                .child(div().h(px(12.0)).rounded(px(3.0)).bg(theme.accent_wash)),
+                .child(
+                    div()
+                        .h(ui_rems(12.0))
+                        .rounded(px(3.0))
+                        .bg(theme.accent_wash),
+                ),
         )
         .into_any_element()
 }
@@ -1660,48 +1695,48 @@ fn report_panel(theme: &Theme, report: &ImportReport) -> gpui::Stateful<gpui::Di
             "theme-report-{}",
             report.source_hash
         )))
-        .mt(px(8.0))
+        .mt(ui_rems(8.0))
         .w_full()
-        .max_h(px(168.0))
+        .max_h(ui_rems(168.0))
         .overflow_y_scroll()
         .rounded(px(8.0))
         .border_1()
         .border_color(theme.border)
-        .bg(theme.surface_raised.opacity(0.35))
-        .p(px(10.0))
-        .text_size(crate::typography::ui_rems(11.0))
-        .line_height(crate::typography::ui_rems(16.0))
-        .text_color(theme.text_muted)
+        .bg(theme.fill(FillTier::Quaternary))
+        .p(ui_rems(10.0))
+        .type_style(TextStyle::Caption)
+        .line_height(ui_rems(16.0))
+        .text_color(theme.readable_muted(0.85))
         .child(div().text_color(theme.text).child(summary))
         .children(report.adjustments.iter().map(|adjustment| {
-            div().mt(px(4.0)).child(SharedString::from(format!(
+            div().mt(ui_rems(4.0)).child(SharedString::from(format!(
                 "Adjusted · {} {} → {} · {}",
                 adjustment.luna_role, adjustment.original, adjustment.resolved, adjustment.reason
             )))
         }))
         .children(report.fallbacks.iter().map(|message| {
             div()
-                .mt(px(4.0))
+                .mt(ui_rems(4.0))
                 .child(SharedString::from(format!("Fallback · {message}")))
         }))
         .children(report.warnings.iter().map(|message| {
             div()
-                .mt(px(4.0))
+                .mt(ui_rems(4.0))
                 .child(SharedString::from(format!("Warning · {message}")))
         }))
         .children(report.validation.iter().map(|issue| {
-            div().mt(px(4.0)).child(SharedString::from(format!(
+            div().mt(ui_rems(4.0)).child(SharedString::from(format!(
                 "Validation {:?} {:?} · {}",
                 issue.category, issue.severity, issue.message
             )))
         }))
         .children(report.dropped.iter().map(|message| {
             div()
-                .mt(px(4.0))
+                .mt(ui_rems(4.0))
                 .child(SharedString::from(format!("Unsupported · {message}")))
         }))
         .children(report.mappings.iter().map(|mapping| {
-            div().mt(px(4.0)).child(SharedString::from(format!(
+            div().mt(ui_rems(4.0)).child(SharedString::from(format!(
                 "{} ← {}",
                 mapping.luna_role, mapping.vscode_key
             )))
@@ -1719,6 +1754,8 @@ fn accent_swatch(
         selection,
         page_theme.surface_preference,
     );
+    // Swatch geometry is in interface rems so the row of swatches keeps its
+    // proportion to the row text at every Interface size.
     let sample = match selection {
         AccentSelection::ThemeDefault => div()
             .size_full()
@@ -1727,25 +1764,25 @@ fn accent_swatch(
             .flex()
             .items_center()
             .justify_center()
-            .gap(px(2.0))
+            .gap(ui_rems(2.0))
             .child(
                 div()
-                    .w(px(4.0))
-                    .h(px(13.0))
+                    .w(ui_rems(4.0))
+                    .h(ui_rems(13.0))
                     .rounded(px(2.0))
                     .bg(swatch_theme.glyph.light),
             )
             .child(
                 div()
-                    .w(px(4.0))
-                    .h(px(16.0))
+                    .w(ui_rems(4.0))
+                    .h(ui_rems(16.0))
                     .rounded(px(2.0))
                     .bg(swatch_theme.glyph.mid),
             )
             .child(
                 div()
-                    .w(px(4.0))
-                    .h(px(11.0))
+                    .w(ui_rems(4.0))
+                    .h(ui_rems(11.0))
                     .rounded(px(2.0))
                     .bg(swatch_theme.glyph.deep),
             ),
@@ -1770,17 +1807,18 @@ fn accent_swatch(
         })
         // A ring, not a tab-style underline, marks the chosen accent
         // (audit DS-16); the ring takes the swatch's own accent.
+        .tooltip(popover::text_tooltip(selection.label()))
         .child(crate::button::selection_ring(
             selected,
             8.0,
             &swatch_theme,
             div()
-                .size(px(30.0))
-                .p(px(2.0))
+                .size(ui_rems(30.0))
+                .p(ui_rems(2.0))
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(page_theme.border)
-                .bg(page_theme.surface_raised.opacity(0.42))
+                .bg(page_theme.fill(FillTier::Quaternary))
                 .child(sample),
         ))
 }
@@ -1891,10 +1929,10 @@ impl AppearancePage {
 
         let list: AnyElement = if rows.is_empty() {
             div()
-                .px(px(8.0))
-                .py(px(6.0))
-                .text_size(crate::typography::ui_rems(12.0))
-                .text_color(theme.for_popup().text_faint)
+                .px(ui_rems(8.0))
+                .py(ui_rems(6.0))
+                .type_style(TextStyle::Footnote)
+                .text_color(theme.for_popup().readable_muted(0.85))
                 .child(SharedString::from(if filtered {
                     "No matching fonts"
                 } else {
@@ -1917,7 +1955,7 @@ impl AppearancePage {
                 }))
                 .child(
                     popover::menu_scroll_list(list_id, &scroll)
-                        .max_h(px(280.0))
+                        .max_h(ui_rems(FAMILY_MENU_MAX_HEIGHT))
                         .flex()
                         .flex_col()
                         .gap(px(2.0))
@@ -1931,7 +1969,7 @@ impl AppearancePage {
         // into the filter input, and `PaletteSearch` lets arrows/Enter/Escape
         // bubble to exactly this ancestor.
         let menu = popover::popover_card(theme)
-            .w(px(220.0))
+            .w(ui_rems(FAMILY_MENU_WIDTH))
             .font_family(fixed)
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| this.dismiss_font_menu(kind, cx)))
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
@@ -1953,14 +1991,14 @@ impl AppearancePage {
         // One pop-up recipe for every picker on the page (audit DS-02).
         crate::button::select_frame(
             format!("{slug}-font-dropdown"),
-            crate::button::ControlSize::Md,
+            ControlSize::Md,
             open,
             true,
             theme,
         )
         .aria_label(format!("{} family: {}", kind.label(), effective.label()))
         .relative()
-        .w(px(220.0))
+        .w(ui_rems(FAMILY_PICKER_WIDTH))
         .track_focus(self.font_focus(kind))
         // Only the closed state: once open, the card above owns these keys
         // and stops their propagation before they reach us.
@@ -2029,7 +2067,7 @@ impl AppearancePage {
             .collect();
 
         let menu = popover::popover_card(theme)
-            .w(px(128.0))
+            .w(ui_rems(SIZE_MENU_WIDTH))
             .font_family(fixed)
             .on_mouse_down_out(cx.listener(move |this, _, _, cx| this.dismiss_size_menu(kind, cx)))
             .flex()
@@ -2042,14 +2080,14 @@ impl AppearancePage {
         let closing = self.size_menu(kind).closing_since();
         crate::button::select_frame(
             format!("{slug}-font-size-dropdown"),
-            crate::button::ControlSize::Md,
+            ControlSize::Md,
             open,
             true,
             theme,
         )
         .aria_label(format!("{} size: {}", kind.label(), labels[current]))
         .relative()
-        .w(px(128.0))
+        .w(ui_rems(SIZE_PICKER_WIDTH))
         .track_focus(self.size_focus(kind))
         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
             this.on_size_key_down(kind, event, window, cx)
@@ -2064,7 +2102,13 @@ impl AppearancePage {
                 this.toggle_size_menu(kind, cx);
             }),
         )
-        .child(div().flex_1().child(labels[current].clone()))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .child(labels[current].clone()),
+        )
         .child(crate::button::select_chevron(theme))
         .when_some(self.size_menu(kind).get(), |trigger, _| {
             trigger.child(popover::anchored_menu_below(
@@ -2081,6 +2125,7 @@ impl AppearancePage {
         appearance_kind: Appearance,
         selections: &ThemeSelection,
         theme: &Theme,
+        viewport: gpui::Size<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let registry = ThemeRegistry::active();
@@ -2112,10 +2157,10 @@ impl AppearancePage {
                     "dark"
                 }
             ),
-            crate::button::ControlSize::Md,
+            ControlSize::Md,
             open,
             true,
-            &theme,
+            theme,
         )
         .aria_label(format!(
             "{} theme: {}",
@@ -2127,7 +2172,7 @@ impl AppearancePage {
             selected_variant.name
         ))
         .relative()
-        .w(px(218.0))
+        .w(ui_rems(THEME_PICKER_WIDTH))
         .on_mouse_down(
             gpui::MouseButton::Left,
             cx.listener(move |this, _, _, _| {
@@ -2161,7 +2206,7 @@ impl AppearancePage {
                 .truncate()
                 .child(SharedString::from(selected_variant.name.clone())),
         )
-        .child(crate::button::select_chevron(&theme));
+        .child(crate::button::select_chevron(theme));
 
         if self.theme_menu(appearance_kind).get().is_some() {
             let closing = self.theme_menu(appearance_kind).closing_since();
@@ -2170,8 +2215,24 @@ impl AppearancePage {
             } else {
                 "Dark themes"
             };
+            // A family with many variants (20 dark themes today) grows taller
+            // than a short window at a large Interface size: the menu scrolls
+            // rather than running off screen. The anchored layer snaps it
+            // inside the window's 8 px margin, so the budget leaves room for
+            // that margin and the trigger.
+            let max_height = px((f32::from(viewport.height) - 96.0).max(160.0));
             let menu = popover::popover_card(theme)
-                .w(px(260.0))
+                .id(SharedString::from(format!(
+                    "appearance-{}-theme-menu-card",
+                    if appearance_kind.is_light() {
+                        "light"
+                    } else {
+                        "dark"
+                    }
+                )))
+                .w(ui_rems(THEME_MENU_WIDTH))
+                .max_h(max_height)
+                .overflow_y_scroll()
                 .on_mouse_down_out(cx.listener(move |this, _, _, cx| {
                     this.close_theme_menu(appearance_kind, cx);
                     cx.notify();
@@ -2231,7 +2292,8 @@ impl AppearancePage {
                             .when(active, |row| {
                                 row.child(
                                     icons::icon(icons::CHECK)
-                                        .size(px(14.0))
+                                        .size(ui_rems(14.0))
+                                        .flex_none()
                                         .text_color(theme.selected_row_icon(theme.accent)),
                                 )
                             })
@@ -2278,182 +2340,105 @@ impl AppearancePage {
         let review_variant = dialog.review_variant.clone();
         let error = dialog.error.clone();
         let ready = compilation.is_some() && !selected.is_empty();
-        let hairline = crate::theme::hairline(0.08);
 
-        let mode_control = |label: &'static str, description: &'static str, value: InstallMode| {
-            let active = mode == value;
-            div()
-                .id(SharedString::from(format!(
-                    "theme-import-mode-{}",
-                    slug(label)
-                )))
-                .role(gpui::Role::Button)
-                .aria_label(label)
-                .aria_toggled(if active {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .tab_index(0)
-                .flex_1()
-                .min_w_0()
-                .p(px(10.0))
-                .rounded(px(9.0))
-                .border_1()
-                .border_color(if active { theme.accent } else { theme.border })
-                .cursor_pointer()
-                .hover_fill(
-                    format!("theme-import-mode-{}", slug(label)),
-                    if active {
-                        theme.accent_wash
-                    } else {
-                        theme.fill(crate::theme::FillTier::Quaternary)
-                    },
-                    if active {
-                        theme.accent_wash
-                    } else {
-                        theme.fill(crate::theme::FillTier::Tertiary)
-                    },
-                )
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(dialog) = this.import_dialog.as_mut() {
-                        dialog.mode = value;
-                    }
-                    cx.notify();
-                }))
-                .on_key_down(crate::swallow_activation_key)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(7.0))
-                        .child(
-                            div()
-                                .size(px(16.0))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(if active {
-                                    theme.accent
-                                } else {
-                                    theme.border_strong
-                                })
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .when(active, |dot| {
-                                    dot.child(div().size(px(8.0)).rounded_full().bg(theme.accent))
-                                }),
-                        )
-                        .child(
-                            div()
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .text_color(if active { theme.text } else { theme.text_muted })
-                                .child(label),
-                        ),
-                )
-                .child(
-                    div()
-                        .mt(px(4.0))
-                        .ml(px(23.0))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
-                        .child(description),
-                )
-        };
-
-        let section_label = |label: &'static str| {
-            div()
-                .mb(px(7.0))
-                .text_size(crate::typography::ui_rems(11.0))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(theme.text_muted)
-                .child(label)
-        };
+        // How the import stays current: a two-option choice, so a segmented
+        // control (spec §5), with the chosen option explained underneath.
+        let modes = [
+            (
+                InstallMode::Snapshot,
+                "Import a copy",
+                "Works independently from the original file.",
+            ),
+            (
+                InstallMode::Link,
+                "Link to source",
+                "Reloads changes from the file on disk.",
+            ),
+        ];
+        let mode_ix = modes
+            .iter()
+            .position(|(value, _, _)| *value == mode)
+            .unwrap_or(0);
+        let mode_control = crate::button::segmented(
+            "theme-import-mode",
+            modes
+                .iter()
+                .map(|(_, label, _)| Segment::new(slug(label), *label))
+                .collect(),
+            mode_ix,
+            320.0,
+            ControlSize::Lg,
+            theme,
+            cx.listener(move |this, ix: &usize, _, cx| {
+                if let Some(dialog) = this.import_dialog.as_mut() {
+                    dialog.mode = modes[(*ix).min(modes.len() - 1)].0;
+                }
+                cx.notify();
+            }),
+        );
 
         let mut main = div()
             .id("theme-import-main")
-            .max_h(px(520.0))
+            .min_h_0()
             .overflow_y_scroll()
-            .px(px(20.0))
-            .pb(px(18.0))
+            .px(ui_rems(20.0))
+            .pb(ui_rems(20.0))
             .flex()
             .flex_col()
-            .child(section_label("Source"))
+            .gap(ui_rems(8.0))
+            .child(dialog_label(theme, "Source"))
             .child(
                 div()
                     .flex()
+                    .flex_row()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(ui_rems(8.0))
                     .child(
                         popover::dialog_field(input.into_any_element())
                             .flex_1()
                             .min_w_0()
-                            .h(px(36.0))
+                            .min_h(ui_rems(ControlSize::Lg.height()))
                             .py(px(0.0))
                             .flex()
                             .items_center(),
                     )
                     .child(
-                        compact_action(theme, "Browse…", "theme-import-browse")
-                            .h(px(36.0))
-                            .px(px(12.0))
-                            .flex_none()
+                        dialog_action(theme, "Browse…", "theme-import-browse")
                             .on_click(cx.listener(|this, _, _, cx| this.choose_import_source(cx))),
                     ),
             )
-            .child(
-                div()
-                    .mt(px(16.0))
-                    .child(section_label("Keep it up to date"))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(8.0))
-                            .child(mode_control(
-                                "Import a copy",
-                                "Works independently from the original file.",
-                                InstallMode::Snapshot,
-                            ))
-                            .child(mode_control(
-                                "Link to source",
-                                "Reload changes from the file on disk.",
-                                InstallMode::Link,
-                            )),
-                    ),
-            );
+            .child(dialog_label(theme, "Keep it up to date").mt(ui_rems(12.0)))
+            .child(mode_control)
+            .child(widgets::row_description(theme, modes[mode_ix].2));
 
         if let Some(ref compilation) = compilation {
+            let count = compilation.family.variants.len();
             main = main.child(
                 div()
-                    .mt(px(18.0))
-                    .pt(px(16.0))
-                    .border_t_1()
-                    .border_color(hairline)
+                    .mt(ui_rems(12.0))
                     .flex()
+                    .flex_row()
+                    .flex_wrap()
                     .items_baseline()
                     .justify_between()
-                    .child(section_label("Detected themes").mb(px(0.0)))
+                    .gap_x(ui_rems(12.0))
+                    .child(dialog_label(theme, "Detected themes"))
                     .child(
                         div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted)
+                            .type_style(TextStyle::Caption)
+                            .text_color(theme.readable_muted(0.85))
                             .child(SharedString::from(format!(
-                                "{} variant{}",
-                                compilation.family.variants.len(),
-                                if compilation.family.variants.len() == 1 {
-                                    ""
-                                } else {
-                                    "s"
-                                }
+                                "{count} variant{}",
+                                if count == 1 { "" } else { "s" }
                             ))),
                     ),
             );
-            for variant in &compilation.family.variants {
+            let mut list = widgets::section_card(theme).mt(px(0.0));
+            for (ix, variant) in compilation.family.variants.iter().enumerate() {
                 let variant_id = variant.id.clone();
                 let selected_now = selected.contains(&variant_id);
                 let review_open = review_variant.as_deref() == Some(variant_id.as_str());
-                let appearance = if variant.appearance.is_dark() {
+                let appearance_label = if variant.appearance.is_dark() {
                     "Dark"
                 } else {
                     "Light"
@@ -2464,224 +2449,135 @@ impl AppearancePage {
                     AccentSelection::ThemeDefault,
                     SurfacePreference::ThemeDefault,
                 );
-                main = main.child(
-                    div()
-                        .id(SharedString::from(format!("theme-import-row-{variant_id}")))
-                        .mt(px(8.0))
-                        .p(px(11.0))
-                        .rounded(px(10.0))
-                        .border_1()
-                        .border_color(if selected_now {
-                            theme.accent.opacity(0.7)
-                        } else {
-                            theme.border
-                        })
-                        .bg(if selected_now {
-                            theme.accent_wash.opacity(0.42)
-                        } else {
-                            theme.surface_raised.opacity(0.22)
-                        })
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(9.0))
-                                .child(
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "theme-import-select-{variant_id}"
-                                        )))
-                                        .role(gpui::Role::Switch)
-                                        .aria_label(format!("Import {}", variant.name))
-                                        .aria_toggled(if selected_now {
-                                            gpui::Toggled::True
-                                        } else {
-                                            gpui::Toggled::False
-                                        })
-                                        .tab_index(0)
-                                        .size(px(18.0))
-                                        .rounded(px(5.0))
-                                        .border_1()
-                                        .border_color(if selected_now {
-                                            theme.accent
-                                        } else {
-                                            theme.border_strong
-                                        })
-                                        .bg(if selected_now { theme.accent } else { theme.bg })
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .cursor_pointer()
-                                        .when(selected_now, |item| {
-                                            item.child(
-                                                icons::icon(icons::CHECK)
-                                                    .size(px(12.0))
-                                                    .text_color(theme.on_accent),
-                                            )
-                                        })
-                                        .on_click(cx.listener({
-                                            let variant_id = variant_id.clone();
-                                            move |this, _, _, cx| {
-                                                this.toggle_import_variant(&variant_id, cx)
-                                            }
-                                        }))
-                                        .on_key_down(crate::swallow_activation_key),
-                                )
-                                .child(palette_preview(&sample))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .text_size(crate::typography::ui_rems(12.5))
-                                                .font_weight(gpui::FontWeight::MEDIUM)
-                                                .text_color(theme.text)
-                                                .child(SharedString::from(variant.name.clone())),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_size(crate::typography::ui_rems(11.0))
-                                                .text_color(theme.text_muted)
-                                                .child(appearance),
-                                        ),
-                                )
-                                .child(
-                                    compact_action(
-                                        theme,
-                                        if review_open {
-                                            "Hide details"
-                                        } else {
-                                            "Details"
-                                        },
-                                        format!("theme-import-review-{variant_id}"),
-                                    )
-                                    .on_click(cx.listener({
-                                        let variant_id = variant_id.clone();
-                                        move |this, _, _, cx| {
-                                            if let Some(dialog) = this.import_dialog.as_mut() {
-                                                dialog.review_variant =
-                                                    if dialog.review_variant.as_deref()
-                                                        == Some(variant_id.as_str())
-                                                    {
-                                                        None
-                                                    } else {
-                                                        Some(variant_id.clone())
-                                                    };
-                                            }
-                                            cx.notify();
-                                        }
-                                    })),
-                                ),
-                        )
+                let details = labelled_button(
+                    theme,
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    if review_open {
+                        "Hide details"
+                    } else {
+                        "Details"
+                    },
+                    format!("theme-import-review-{variant_id}"),
+                )
+                .aria_expanded(review_open)
+                .on_click(cx.listener({
+                    let variant_id = variant_id.clone();
+                    move |this, _, _, cx| {
+                        if let Some(dialog) = this.import_dialog.as_mut() {
+                            dialog.review_variant =
+                                if dialog.review_variant.as_deref() == Some(variant_id.as_str()) {
+                                    None
+                                } else {
+                                    Some(variant_id.clone())
+                                };
+                        }
+                        cx.notify();
+                    }
+                }));
+                let toggle = widgets::switch_control(
+                    SharedString::from(format!("theme-import-select-{variant_id}")),
+                    format!("Import {}", variant.name),
+                    selected_now,
+                    theme,
+                    cx,
+                    {
+                        let variant_id = variant_id.clone();
+                        move |this, cx| this.toggle_import_variant(&variant_id, cx)
+                    },
+                );
+                list = list.child(
+                    widgets::card_row(theme, ix == 0)
+                        .child(palette_preview(&sample))
+                        .child(widgets::row_text(
+                            theme,
+                            variant.name.clone(),
+                            Some(appearance_label.into()),
+                        ))
+                        .child(widgets::row_controls().child(details).child(toggle))
                         .when(review_open, |row| {
                             row.child(
-                                div()
-                                    .mt(px(10.0))
-                                    .pt(px(10.0))
-                                    .border_t_1()
-                                    .border_color(hairline)
-                                    .child(import_scene_preview(variant)),
+                                widgets::row_block()
+                                    .flex_col()
+                                    .child(import_scene_preview(variant))
+                                    .when_some(report, |block, report| {
+                                        block.child(report_panel(theme, report))
+                                    }),
                             )
-                            .when_some(report, |row, report| row.child(report_panel(theme, report)))
                         }),
                 );
             }
+            main = main.child(list);
             for failure in &compilation.failures {
                 main = main.child(
-                    div()
-                        .mt(px(8.0))
-                        .p(px(10.0))
-                        .rounded(px(8.0))
-                        .bg(theme.warning.opacity(0.08))
-                        .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.readable_on(
-                            theme.warning,
-                            theme.warning.opacity(0.08),
-                            crate::theme::TEXT_CONTRAST_TARGET,
-                        ))
-                        .child(SharedString::from(format!(
+                    widgets::warning_strip(
+                        theme,
+                        format!(
                             "{} could not be compiled · {}",
                             failure.name, failure.message
-                        ))),
+                        ),
+                    )
+                    .mt(px(0.0)),
                 );
             }
         } else {
             main = main.child(
                 div()
-                    .mt(px(14.0))
+                    .mt(ui_rems(4.0))
                     .flex()
+                    .flex_row()
                     .items_start()
-                    .gap(px(7.0))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(crate::typography::ui_rems(16.0))
-                    .text_color(theme.text_muted)
+                    .gap(ui_rems(6.0))
+                    .type_style(TextStyle::Footnote)
+                    .text_color(theme.readable_muted(0.85))
                     .child(
                         icons::icon(icons::INFO_CIRCLE)
-                            .size(px(13.0))
-                            .mt(px(1.0))
+                            .size(ui_rems(14.0))
+                            .mt(ui_rems(1.0))
                             .flex_none(),
                     )
-                    .child("LUNA finds light and dark variants automatically."),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child("LUNA finds light and dark variants automatically."),
+                    ),
             );
         }
 
         if let Some(error) = error {
-            main = main.child(
-                div()
-                    .mt(px(12.0))
-                    .p(px(10.0))
-                    .rounded(px(8.0))
-                    .bg(theme.danger.opacity(0.08))
-                    .flex()
-                    .items_start()
-                    .gap(px(7.0))
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .line_height(crate::typography::ui_rems(16.0))
-                    .text_color(theme.readable_on(
-                        theme.danger,
-                        theme.danger.opacity(0.08),
-                        crate::theme::TEXT_CONTRAST_TARGET,
-                    ))
-                    .child(
-                        icons::icon(icons::DANGER_TRIANGLE)
-                            .size(px(13.0))
-                            .flex_none()
-                            .mt(px(1.0)),
-                    )
-                    .child(div().flex_1().min_w_0().truncate().child(error)),
-            );
+            main = main.child(widgets::error_strip(theme, error).mt(ui_rems(4.0)));
         }
 
         let header = div()
-            .px(px(20.0))
-            .pt(px(18.0))
-            .pb(px(16.0))
+            .flex_none()
+            .px(ui_rems(20.0))
+            .pt(ui_rems(18.0))
+            .pb(ui_rems(16.0))
             .flex()
+            .flex_row()
             .items_start()
-            .gap(px(16.0))
+            .gap(ui_rems(16.0))
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(ui_rems(4.0))
                     .child(popover::dialog_title(theme, "Add a theme"))
-                    .child(
-                        popover::dialog_body(
-                            theme,
-                            "Import a local theme into your library or keep it linked to its source.",
-                        )
-                        .mt(px(4.0)),
-                    ),
+                    .child(popover::dialog_body(
+                        theme,
+                        "Import a local VS Code theme into your library, or keep it linked to its source.",
+                    )),
             )
             .child(
                 crate::button::icon_button(
                     "theme-import-close",
                     icons::CLOSE,
-                    crate::button::ControlSize::Md,
+                    ControlSize::Md,
                     true,
-                    &theme,
+                    theme,
                 )
                 .aria_label("Close theme import")
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -2690,74 +2586,58 @@ impl AppearancePage {
                 })),
             );
 
-        let footer = div()
+        let action_label = if compilation.is_some() {
+            "Import selected"
+        } else {
+            "Analyze theme"
+        };
+        // Importing needs at least one selected variant; until then the
+        // action shows the kit's disabled state and takes no clicks.
+        let action_enabled = compilation.is_none() || ready;
+        let footer = dialog_footer()
+            .flex_none()
             .border_t_1()
-            .border_color(hairline)
-            .bg(theme.surface_raised.opacity(0.18))
-            .px(px(20.0))
-            .py(px(12.0))
-            .flex()
-            .items_center()
-            .justify_end()
-            .gap(px(8.0))
+            .border_color(theme.border)
+            .px(ui_rems(20.0))
+            .py(ui_rems(12.0))
             .child(
-                compact_action(theme, "Cancel", "theme-import-cancel")
-                    .h(px(34.0))
-                    .px(px(13.0))
-                    .on_click(cx.listener(|this, _, _, cx| {
+                dialog_action(theme, "Cancel", "theme-import-cancel").on_click(cx.listener(
+                    |this, _, _, cx| {
                         this.import_dialog = None;
                         cx.notify();
-                    }))
-                    .on_key_down(crate::swallow_activation_key),
+                    },
+                )),
             )
             .child(
-                popover::btn_primary(
+                crate::button::button(
+                    "theme-import-action",
+                    ButtonKind::Primary,
+                    ControlSize::Lg,
+                    action_enabled,
                     theme,
-                    if compilation.is_some() {
-                        "Import selected"
-                    } else {
-                        "Analyze theme"
-                    },
                 )
-                .id("theme-import-action")
-                .role(gpui::Role::Button)
-                .aria_label(if compilation.is_some() {
-                    "Import selected"
-                } else {
-                    "Analyze theme"
-                })
-                .tab_index(0)
-                .h(px(34.0))
-                .px(px(14.0))
-                .py(px(0.0))
-                .flex()
-                .items_center()
-                .when(compilation.is_some() && !ready, |button| {
-                    button.opacity(0.45)
-                })
-                .when(compilation.is_none() || ready, |button| {
-                    button
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if this
-                                .import_dialog
-                                .as_ref()
-                                .is_some_and(|dialog| dialog.compilation.is_some())
-                            {
-                                this.finish_import(cx);
-                            } else {
-                                this.compile_import(cx);
-                            }
-                        }))
-                        // A key-down Analyze followed by GPUI's key-up click
-                        // imported the theme before it could be reviewed.
-                        .on_key_down(crate::swallow_activation_key)
+                .aria_label(action_label)
+                .child(action_label)
+                .when(action_enabled, |button| {
+                    // The kit swallows the Enter/Space key-down, so GPUI's
+                    // key-up click is the only activation: a key-down Analyze
+                    // followed by the click used to import before review.
+                    button.on_click(cx.listener(move |this, _, _, cx| {
+                        if this
+                            .import_dialog
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.compilation.is_some())
+                        {
+                            this.finish_import(cx);
+                        } else {
+                            this.compile_import(cx);
+                        }
+                    }))
                 }),
             );
 
-        let card = popover::dialog_card(theme)
+        let card = sized_dialog(theme, viewport, 560.0)
             .id("theme-import-card")
-            .w(px(600.0))
-            .max_h(px(760.0))
             .p(px(0.0))
             .overflow_hidden()
             .track_focus(&focus)
@@ -2807,7 +2687,7 @@ impl AppearancePage {
         let entry = theme_library::entries(cx)
             .into_iter()
             .find(|entry| &entry.id == entry_id)?;
-        let mut card = popover::dialog_card(theme)
+        let mut card = sized_dialog(theme, viewport, 620.0)
             .id("theme-review-card")
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
@@ -2815,22 +2695,18 @@ impl AppearancePage {
                     cx.notify();
                 }
             }))
-            .w(px(660.0))
-            .max_h(px(720.0))
             .overflow_y_scroll()
             .child(popover::dialog_title(theme, "Theme mapping"))
             .child(
                 popover::dialog_body(theme, format!("{} · {}", entry.name, entry.source.label()))
-                    .mt(px(6.0)),
+                    .mt(ui_rems(6.0)),
             );
         for variant in &entry.family.variants {
             card = card
                 .child(
-                    div()
-                        .mt(px(14.0))
-                        .text_size(crate::typography::ui_rems(12.5))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .child(SharedString::from(variant.name.clone())),
+                    dialog_label(theme, variant.name.clone())
+                        .mt(ui_rems(16.0))
+                        .mb(ui_rems(8.0)),
                 )
                 .child(import_scene_preview(variant));
             if let Some(report) = entry.reports.get(&variant.id) {
@@ -2838,17 +2714,14 @@ impl AppearancePage {
             }
         }
         card = card.child(
-            div().mt(px(16.0)).flex().justify_end().child(
+            dialog_footer().mt(ui_rems(20.0)).child(
                 popover::btn_primary(theme, "Done")
                     .id("theme-review-close")
-                    .role(gpui::Role::Button)
                     .aria_label("Done reviewing theme")
-                    .tab_index(0)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.review_entry = None;
                         cx.notify();
-                    }))
-                    .on_key_down(crate::swallow_activation_key),
+                    })),
             ),
         );
         Some(popover::modal(
@@ -2858,18 +2731,27 @@ impl AppearancePage {
         ))
     }
 
+    /// Move focus into a confirmation card the first frame it shows.
+    fn take_confirm_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.confirm_focus_pending) {
+            window.focus(&self.confirm_focus, cx);
+        }
+    }
+
     fn render_reset_dialog(
         &mut self,
         viewport: gpui::Size<gpui::Pixels>,
         theme: &Theme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         if !self.reset_confirmation_open {
             return None;
         }
-        let card = popover::dialog_card(theme)
+        self.take_confirm_focus(window, cx);
+        let card = sized_dialog(theme, viewport, 440.0)
             .id("appearance-reset-card")
-            .w(px(480.0))
+            .track_focus(&self.confirm_focus)
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" {
                     this.reset_confirmation_open = false;
@@ -2882,32 +2764,26 @@ impl AppearancePage {
                     theme,
                     "Restore the first-install themes, fonts, accent, glass, width, wrapping, and diff choices. The new-thread image is removed. Imported themes stay in your library.",
                 )
-                .mt(px(8.0)),
+                .mt(ui_rems(8.0)),
             )
             .child(
-                div()
-                    .mt(px(20.0))
-                    .flex()
-                    .justify_end()
-                    .gap(px(8.0))
+                dialog_footer()
+                    .mt(ui_rems(20.0))
                     .child(
-                        compact_action(theme, "Cancel", "appearance-reset-cancel")
-                            .on_click(cx.listener(|this, _, _, cx| {
+                        dialog_action(theme, "Cancel", "appearance-reset-cancel").on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.reset_confirmation_open = false;
                                 cx.notify();
-                            }))
-                            .on_key_down(crate::swallow_activation_key),
+                            }),
+                        ),
                     )
                     .child(
                         popover::btn_primary(theme, "Reset appearance")
                             .id("appearance-reset-confirm")
-                            .role(gpui::Role::Button)
                             .aria_label("Reset appearance to first-install defaults")
-                            .tab_index(0)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.reset_to_defaults(window, cx);
-                            }))
-                            .on_key_down(crate::swallow_activation_key),
+                            })),
                     ),
             );
         Some(popover::modal(
@@ -2917,6 +2793,72 @@ impl AppearancePage {
         ))
     }
 
+    /// Confirmation for removing a library theme (spec §5: a destructive
+    /// action is a Secondary button with a confirm). An imported snapshot is
+    /// gone for good once removed.
+    fn render_remove_dialog(
+        &mut self,
+        viewport: gpui::Size<gpui::Pixels>,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (id, name) = self.remove_confirmation.clone()?;
+        self.take_confirm_focus(window, cx);
+        let linked = theme_library::entries(cx)
+            .iter()
+            .any(|entry| entry.id == id && entry.source.is_linked());
+        let body = if linked {
+            format!("\u{201c}{name}\u{201d} leaves your theme library. Its source file stays where it is.")
+        } else {
+            format!(
+                "\u{201c}{name}\u{201d} leaves your theme library. Import it again to get it back."
+            )
+        };
+        let card = sized_dialog(theme, viewport, 420.0)
+            .id("theme-remove-card")
+            .track_focus(&self.confirm_focus)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    this.remove_confirmation = None;
+                    cx.notify();
+                }
+            }))
+            .child(popover::dialog_title(theme, "Remove theme?"))
+            .child(popover::dialog_body(theme, body).mt(ui_rems(8.0)))
+            .child(
+                dialog_footer()
+                    .mt(ui_rems(20.0))
+                    .child(
+                        dialog_action(theme, "Cancel", "theme-remove-cancel").on_click(
+                            cx.listener(|this, _, _, cx| {
+                                this.remove_confirmation = None;
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .child(
+                        popover::btn_danger(theme, "Remove theme")
+                            .id("theme-remove-confirm")
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.remove_confirmation = None;
+                                this.library_error = theme_library::remove(&id, cx)
+                                    .err()
+                                    .map(|error| error.to_string().into());
+                                cx.notify();
+                            })),
+                    ),
+            );
+        Some(popover::modal(
+            "theme-remove-dialog",
+            viewport,
+            card.into_any_element(),
+        ))
+    }
+
+    /// One library theme as a list row (spec §3): identity tile · name and
+    /// source line · trailing `Sm` actions. The source line is user data (a
+    /// path), so it truncates and carries the full text as a tooltip.
     fn render_library_entry(
         &mut self,
         entry: CustomThemeEntry,
@@ -2924,13 +2866,16 @@ impl AppearancePage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let id = entry.id.clone();
+        let name = SharedString::from(entry.name.clone());
         let linked = entry.source.is_linked();
+        let has_location = entry.source.path().is_some();
         let source = entry
             .source
             .path()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "Self-contained snapshot".into());
-        let status = match &entry.status {
+        let warning = matches!(entry.status, CustomThemeStatus::Warning { .. });
+        let status = SharedString::from(match &entry.status {
             CustomThemeStatus::Ready => format!(
                 "{} · {} variant{} · {}",
                 entry.source.label(),
@@ -2945,7 +2890,103 @@ impl AppearancePage {
             CustomThemeStatus::Warning { message } => {
                 format!("Using last known good · {message}")
             }
+        });
+
+        let action = |label: &str, id: String| {
+            labelled_button(theme, ButtonKind::Secondary, ControlSize::Sm, label, id)
         };
+        let mut actions: Vec<AnyElement> = Vec::new();
+        if linked {
+            actions.push(
+                action("Reload", format!("theme-reload-{id}"))
+                    .tooltip(popover::text_tooltip("Reload from the source file"))
+                    .on_click(cx.listener({
+                        let id = id.clone();
+                        move |this, _, _, cx| {
+                            this.library_error = theme_library::reload(&id, cx)
+                                .err()
+                                .map(|error| error.to_string().into());
+                            cx.notify();
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
+        if has_location {
+            actions.push(
+                action("Reveal", format!("theme-reveal-{id}"))
+                    .tooltip(popover::text_tooltip("Show the source in Finder"))
+                    .on_click(cx.listener({
+                        let id = id.clone();
+                        move |this, _, _, cx| {
+                            this.library_error = theme_library::reveal(&id, cx)
+                                .err()
+                                .map(|error| error.to_string().into());
+                            cx.notify();
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
+        actions.push(
+            action("Review", format!("theme-review-{id}"))
+                .tooltip(popover::text_tooltip("Review how its colors were mapped"))
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        this.review_entry = Some(id.clone());
+                        cx.notify();
+                    }
+                }))
+                .into_any_element(),
+        );
+        actions.push(
+            action("Duplicate", format!("theme-duplicate-{id}"))
+                .aria_label("Duplicate as editable")
+                .tooltip(popover::text_tooltip("Duplicate as an editable copy"))
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    move |this, _, _, cx| {
+                        this.library_error = theme_library::duplicate_as_editable(&id, cx)
+                            .err()
+                            .map(|error| error.to_string().into());
+                        cx.notify();
+                    }
+                }))
+                .into_any_element(),
+        );
+        if linked {
+            actions.push(
+                action("Unlink", format!("theme-unlink-{id}"))
+                    .tooltip(popover::text_tooltip(
+                        "Keep a copy and stop following the source",
+                    ))
+                    .on_click(cx.listener({
+                        let id = id.clone();
+                        move |this, _, _, cx| {
+                            this.library_error = theme_library::unlink(&id, cx)
+                                .err()
+                                .map(|error| error.to_string().into());
+                            cx.notify();
+                        }
+                    }))
+                    .into_any_element(),
+            );
+        }
+        actions.push(
+            action("Remove", format!("theme-remove-{id}"))
+                .on_click(cx.listener({
+                    let id = id.clone();
+                    let name = name.clone();
+                    move |this, _, _, cx| {
+                        this.remove_confirmation = Some((id.clone(), name.clone()));
+                        this.confirm_focus_pending = true;
+                        cx.notify();
+                    }
+                }))
+                .into_any_element(),
+        );
+
         widgets::card_row(theme, false)
             .child(widgets::row_tile(
                 theme,
@@ -2958,188 +2999,60 @@ impl AppearancePage {
             .child(
                 div()
                     .flex_1()
-                    .min_w_0()
-                    .child(widgets::row_title(theme, &entry.name))
+                    .min_w(ui_rems(widgets::ROW_TEXT_MIN))
+                    .flex()
+                    .flex_col()
+                    .gap(ui_rems(2.0))
+                    .child(widgets::row_title(theme, name))
                     .child(
                         div()
+                            .id(SharedString::from(format!("theme-status-{id}")))
+                            .min_w_0()
                             .truncate()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(
-                                if matches!(entry.status, CustomThemeStatus::Warning { .. }) {
-                                    theme.warning
-                                } else {
-                                    theme.text_muted
-                                },
-                            )
-                            .child(SharedString::from(status)),
+                            .text_size(ui_rems(widgets::ROW_DESCRIPTION_SIZE))
+                            .line_height(ui_rems(16.0))
+                            .text_color(if warning {
+                                theme.readable_tone(theme.warning, 1.0)
+                            } else {
+                                theme.readable_muted(0.85)
+                            })
+                            .tooltip(popover::text_tooltip(status.clone()))
+                            .child(status),
                     ),
             )
-            .child(
-                div()
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .when(linked, |actions| {
-                        actions.child(
-                            compact_action(theme, "Reload", format!("theme-reload-{id}")).on_click(
-                                cx.listener({
-                                    let id = id.clone();
-                                    move |_, _, _, cx| {
-                                        let _ = theme_library::reload(&id, cx);
-                                        cx.notify();
-                                    }
-                                }),
-                            ),
-                        )
-                    })
-                    .child(
-                        compact_action(theme, "Reveal", format!("theme-reveal-{id}")).on_click(
-                            cx.listener({
-                                let id = id.clone();
-                                move |this, _, _, cx| {
-                                    if let Err(error) = theme_library::reveal(&id, cx) {
-                                        this.library_error = Some(error.to_string().into());
-                                    }
-                                    cx.notify();
-                                }
-                            }),
-                        ),
-                    )
-                    .child(
-                        compact_action(theme, "Review", format!("theme-review-{id}")).on_click(
-                            cx.listener({
-                                let id = id.clone();
-                                move |this, _, _, cx| {
-                                    this.review_entry = Some(id.clone());
-                                    cx.notify();
-                                }
-                            }),
-                        ),
-                    )
-                    .child(
-                        compact_action(
-                            theme,
-                            "Duplicate as editable",
-                            format!("theme-duplicate-{id}"),
-                        )
-                        .on_click(cx.listener({
-                            let id = id.clone();
-                            move |this, _, _, cx| {
-                                if let Err(error) = theme_library::duplicate_as_editable(&id, cx) {
-                                    this.library_error = Some(error.to_string().into());
-                                }
-                                cx.notify();
-                            }
-                        })),
-                    )
-                    .when(linked, |actions| {
-                        actions.child(
-                            compact_action(theme, "Unlink", format!("theme-unlink-{id}")).on_click(
-                                cx.listener({
-                                    let id = id.clone();
-                                    move |this, _, _, cx| {
-                                        if let Err(error) = theme_library::unlink(&id, cx) {
-                                            this.library_error = Some(error.to_string().into());
-                                        }
-                                        cx.notify();
-                                    }
-                                }),
-                            ),
-                        )
-                    })
-                    .child(
-                        compact_action(theme, "Remove", format!("theme-remove-{id}"))
-                            .text_color(theme.readable_tone(theme.danger, 1.0))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Err(error) = theme_library::remove(&id, cx) {
-                                    this.library_error = Some(error.to_string().into());
-                                }
-                                cx.notify();
-                            })),
-                    ),
-            )
+            .child(widgets::row_controls().children(actions))
             .into_any_element()
     }
 
+    /// The library's rows: imported snapshots first, then linked themes (the
+    /// tile and source line tell them apart), or one empty-state row.
     fn render_theme_library_rows(
         &mut self,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let entries = theme_library::entries(cx);
+        if entries.is_empty() {
+            return vec![
+                widgets::card_row(theme, false)
+                    .child(
+                        widgets::row_description(
+                            theme,
+                            "No custom themes yet. Add a theme file or an extension folder.",
+                        )
+                        .flex_1(),
+                    )
+                    .into_any_element(),
+            ];
+        }
         let (linked, imported): (Vec<_>, Vec<_>) = entries
             .into_iter()
             .partition(|entry| entry.source.is_linked());
-        let mut rows = vec![
-            widgets::card_row(theme, false)
-                .child(widgets::row_tile(theme, icons::FOLDER_WITH_FILES))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(theme, "Theme library"))
-                        .child(widgets::meta_line(
-                            theme,
-                            vec![
-                                div()
-                                    .child("Import or link custom themes.")
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    popover::btn_primary(theme, "Add theme")
-                        .id("theme-library-add")
-                        .role(gpui::Role::Button)
-                        .aria_label("Add theme")
-                        .tab_index(0)
-                        .on_click(cx.listener(|this, _, _, cx| this.open_import(cx)))
-                        .on_key_down(crate::swallow_activation_key),
-                )
-                .into_any_element(),
-        ];
-        if !imported.is_empty() {
-            rows.push(
-                div()
-                    .px(px(16.0))
-                    .pt(px(12.0))
-                    .pb(px(4.0))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text_faint)
-                    .child("IMPORTED")
-                    .into_any_element(),
-            );
-            rows.extend(
-                imported
-                    .into_iter()
-                    .map(|entry| self.render_library_entry(entry, theme, cx)),
-            );
-        }
-        if !linked.is_empty() {
-            rows.push(
-                div()
-                    .px(px(16.0))
-                    .pt(px(12.0))
-                    .pb(px(4.0))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .text_size(crate::typography::ui_rems(11.0))
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme.text_faint)
-                    .child("LINKED")
-                    .into_any_element(),
-            );
-            rows.extend(
-                linked
-                    .into_iter()
-                    .map(|entry| self.render_library_entry(entry, theme, cx)),
-            );
-        }
-        rows
+        imported
+            .into_iter()
+            .chain(linked)
+            .map(|entry| self.render_library_entry(entry, theme, cx))
+            .collect()
     }
 }
 
@@ -3150,6 +3063,7 @@ impl Render for AppearancePage {
         let theme = Theme::of(cx).clone();
         let availability = typography::availability(cx);
         let fixed = theme.font_sans.clone();
+        let viewport = window.viewport_size();
         let current_mode = appearance::mode(cx);
         let current_themes = appearance::themes(cx);
         let current_accent = appearance::accent(cx);
@@ -3157,6 +3071,8 @@ impl Render for AppearancePage {
         let ui_settings = crate::settings::current(cx);
         let current_background = ui_settings.new_thread_composer_background;
         let current_background_effect = ui_settings.new_thread_background_effect;
+
+        // ── Theme ────────────────────────────────────────────────────────
         let cards = AppearanceMode::ALL
             .into_iter()
             .map(|mode| {
@@ -3183,42 +3099,10 @@ impl Render for AppearancePage {
                 .on_key_down(crate::swallow_activation_key)
             })
             .collect::<Vec<_>>();
-
-        let mut theme_rows = Vec::new();
-        for (index, appearance_kind) in [Appearance::Light, Appearance::Dark]
-            .into_iter()
-            .enumerate()
-        {
-            let (label, mode) = if appearance_kind.is_light() {
-                ("Light theme", AppearanceMode::Light)
-            } else {
-                ("Dark theme", AppearanceMode::Dark)
-            };
-            let selector = self.render_theme_selector(appearance_kind, &current_themes, &theme, cx);
-            theme_rows.push(
-                widgets::card_row(&theme, index == 0)
-                    .child(widgets::row_tile(&theme, mode.icon()))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(widgets::row_title(&theme, label))
-                            .child(widgets::meta_line(
-                                &theme,
-                                vec![
-                                    div()
-                                        .child(SharedString::from(
-                                            "Used whenever this appearance is active.",
-                                        ))
-                                        .into_any_element(),
-                                ],
-                            )),
-                    )
-                    .child(selector)
-                    .into_any_element(),
-            );
-        }
-
+        let light_selector =
+            self.render_theme_selector(Appearance::Light, &current_themes, &theme, viewport, cx);
+        let dark_selector =
+            self.render_theme_selector(Appearance::Dark, &current_themes, &theme, viewport, cx);
         let mut accent_choices = vec![AccentSelection::ThemeDefault];
         accent_choices.extend(AccentPreset::ALL.map(AccentSelection::Preset));
         let accent_controls = accent_choices
@@ -3239,7 +3123,7 @@ impl Render for AppearancePage {
             SurfacePreference::ALL
                 .into_iter()
                 .map(|surface| {
-                    crate::button::Segment::new(
+                    Segment::new(
                         surface_label(surface).to_lowercase().replace(' ', "-"),
                         surface_label(surface),
                     )
@@ -3249,233 +3133,94 @@ impl Render for AppearancePage {
                 .iter()
                 .position(|surface| *surface == current_surface)
                 .unwrap_or(0),
-            300.0,
-            crate::button::ControlSize::Md,
+            SEGMENTED_GLASS_WIDTH,
+            ControlSize::Md,
             &theme,
             cx.listener(|_, ix: &usize, _, cx| {
                 appearance::set_surface(SurfacePreference::ALL[*ix], cx);
                 cx.notify();
             }),
         );
-        let mut settings_rows = theme_rows;
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(widgets::row_tile(&theme, icons::PALETTE))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(&theme, "Accent color"))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(accent_helper(current_accent)))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .ml(px(10.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .children(accent_controls),
-                )
-                .into_any_element(),
-        );
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(widgets::row_tile(&theme, icons::WIDGET))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(&theme, "Glass"))
-                        .child(widgets::meta_line(
-                            &theme,
-                            vec![
-                                div()
-                                    .child(SharedString::from(surface_helper(
-                                        current_surface,
-                                        theme.surface_treatment,
-                                    )))
-                                    .into_any_element(),
-                            ],
-                        )),
-                )
-                .child(div().flex_none().ml(px(10.0)).child(surface_control))
-                .into_any_element(),
-        );
-        let background_available = current_background
-            .as_ref()
-            .is_some_and(|background| Path::new(&background.path).is_file());
-        let background_tile: AnyElement = if let Some(background) =
-            current_background.as_ref().filter(|_| background_available)
-        {
-            div()
-                .flex_none()
-                .size(px(36.0))
-                .rounded(px(10.0))
-                .overflow_hidden()
-                .border_1()
-                .border_color(crate::theme::hairline(0.10))
-                .child(
-                    img(PathBuf::from(background.path.clone()))
-                        .size(px(34.0))
-                        .rounded(px(9.0))
-                        .object_fit(ObjectFit::Cover),
-                )
-                .into_any_element()
-        } else {
-            widgets::row_tile(&theme, icons::FILE_IMAGE).into_any_element()
-        };
-        let background_meta = match current_background.as_ref() {
-            Some(background) if background_available => vec![
-                div()
-                    .child(SharedString::from(background.name.clone()))
-                    .into_any_element(),
-                div()
-                    .child("Softened automatically on frosted themes.")
-                    .into_any_element(),
-            ],
-            Some(_) => vec![
-                div().child("Image unavailable").into_any_element(),
-                div()
-                    .child("Choose a replacement or remove it.")
-                    .into_any_element(),
-            ],
-            None => vec![
-                div()
-                    .child("Add an image behind the composer on empty new threads.")
-                    .into_any_element(),
-            ],
-        };
-        settings_rows.push(
-            widgets::card_row(&theme, false)
-                .child(background_tile)
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(widgets::row_title(&theme, "New thread composer background"))
-                        .child(widgets::meta_line(&theme, background_meta)),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .ml(px(10.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .when(current_background.is_some(), |actions| {
-                            actions
-                                .child(
-                                    compact_action(
-                                        &theme,
-                                        "Replace image",
-                                        "new-thread-background-replace",
-                                    )
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.choose_new_thread_background(cx)
-                                    }))
-                                    .on_key_down(crate::swallow_activation_key),
-                                )
-                                .child(
-                                    compact_action(
-                                        &theme,
-                                        "Remove",
-                                        "new-thread-background-remove",
-                                    )
-                                    .text_color(theme.readable_tone(theme.danger, 1.0))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.remove_new_thread_background(cx)
-                                    }))
-                                    .on_key_down(crate::swallow_activation_key),
-                                )
-                        })
-                        .when(current_background.is_none(), |actions| {
-                            actions.child(
-                                compact_action(
-                                    &theme,
-                                    "Choose image",
-                                    "new-thread-background-choose",
-                                )
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.choose_new_thread_background(cx)
-                                }))
-                                .on_key_down(crate::swallow_activation_key),
-                            )
-                        }),
-                )
-                .into_any_element(),
-        );
-        if background_available {
-            let effects = crate::settings::NewThreadBackgroundEffect::ALL;
-            let effect_control = crate::button::segmented(
-                "new-thread-background-effect",
-                effects
-                    .into_iter()
-                    .map(|effect| {
-                        crate::button::Segment::new(effect.label().to_lowercase(), effect.label())
-                    })
-                    .collect(),
-                effects
-                    .iter()
-                    .position(|effect| *effect == current_background_effect)
-                    .unwrap_or(0),
-                360.0,
-                crate::button::ControlSize::Md,
-                &theme,
-                cx.listener(move |_, ix: &usize, _, cx| {
-                    crate::settings::set_new_thread_background_effect(effects[*ix], cx);
-                    cx.notify();
-                }),
-            );
-            settings_rows.push(
+        let theme_section = widgets::section_card(&theme)
+            .child(widgets::section_header(&theme, "Theme", None, Vec::new()))
+            .child(
                 widgets::card_row(&theme, false)
-                    .child(widgets::row_tile(&theme, icons::MAGIC_WAND_3))
+                    .child(widgets::row_text(
+                        &theme,
+                        "Appearance",
+                        Some("Follow macOS, or keep LUNA light or dark.".into()),
+                    ))
+                    .child(widgets::row_block().child(widgets::option_card_row().children(cards))),
+            )
+            .child(setting_row(
+                &theme,
+                false,
+                "Light theme",
+                "Used whenever LUNA is light.",
+                vec![light_selector],
+            ))
+            .child(setting_row(
+                &theme,
+                false,
+                "Dark theme",
+                "Used whenever LUNA is dark.",
+                vec![dark_selector],
+            ))
+            .child(
+                widgets::card_row(&theme, false)
+                    .child(widgets::row_text(
+                        &theme,
+                        "Accent color",
+                        Some(accent_helper(current_accent).into()),
+                    ))
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(widgets::row_title(&theme, "Background effect"))
-                            .child(widgets::meta_line(
-                                &theme,
-                                vec![
-                                    div()
-                                        .child(current_background_effect.description())
-                                        .into_any_element(),
-                                ],
-                            )),
-                    )
-                    .child(div().flex_none().ml(px(10.0)).child(effect_control))
-                    .into_any_element(),
-            );
-        }
-        if let Some(error) = self.background_error.clone() {
-            settings_rows.push(
-                div()
-                    .px(px(20.0))
-                    .py(px(10.0))
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(widgets::error_strip(&theme, error))
-                    .into_any_element(),
-            );
-        }
-        settings_rows.extend(self.render_theme_library_rows(&theme, cx));
-        let library_warning = self
+                        widgets::row_block()
+                            .gap(ui_rems(6.0))
+                            .children(accent_controls),
+                    ),
+            )
+            .child(setting_row(
+                &theme,
+                false,
+                "Glass",
+                surface_helper(current_surface, theme.surface_treatment),
+                vec![surface_control.into_any_element()],
+            ));
+
+        // ── Theme library ────────────────────────────────────────────────
+        let library_notice = self
             .library_error
             .clone()
-            .or_else(|| theme_library::load_warning(cx).map(SharedString::from));
-        let modal = self
-            .render_import_dialog(window.viewport_size(), &theme, window, cx)
-            .or_else(|| self.render_review_dialog(window.viewport_size(), &theme, cx))
-            .or_else(|| self.render_reset_dialog(window.viewport_size(), &theme, cx));
+            .map(|error| widgets::error_strip(&theme, error))
+            .or_else(|| {
+                theme_library::load_warning(cx)
+                    .map(|warning| widgets::warning_strip(&theme, warning))
+            });
+        let add_theme = crate::button::button(
+            "theme-library-add",
+            ButtonKind::Secondary,
+            ControlSize::Md,
+            true,
+            &theme,
+        )
+        .aria_label("Add theme")
+        .child(crate::button::glyph(icons::PLUS, ControlSize::Md))
+        .child("Add theme")
+        .on_click(cx.listener(|this, _, _, cx| this.open_import(cx)));
+        let library_rows = self.render_theme_library_rows(&theme, cx);
+        let library_section = widgets::section_card(&theme)
+            .child(widgets::section_header(
+                &theme,
+                "Theme library",
+                Some("Imported and linked themes appear in the Light and Dark theme menus.".into()),
+                vec![add_theme.into_any_element()],
+            ))
+            .children(library_rows)
+            .when_some(library_notice, |section, strip| {
+                section.child(strip_row(&theme, strip))
+            });
 
+        // ── Text ─────────────────────────────────────────────────────────
         let ui_picker =
             self.render_font_picker(FontKind::Ui, &theme, &availability, fixed.clone(), cx);
         let terminal_picker =
@@ -3484,175 +3229,98 @@ impl Render for AppearancePage {
             self.render_font_picker(FontKind::Code, &theme, &availability, fixed.clone(), cx);
         let ui_size = self.render_size_picker(FontKind::Ui, &theme, fixed.clone(), cx);
         let terminal_size = self.render_size_picker(FontKind::Terminal, &theme, fixed.clone(), cx);
-        let code_size = self.render_size_picker(FontKind::Code, &theme, fixed.clone(), cx);
-
-        let mut font_section = div()
-            .mt(px(36.0))
-            .flex()
-            .flex_col()
-            .gap(px(18.0))
-            .font_family(fixed.clone());
+        let code_size = self.render_size_picker(FontKind::Code, &theme, fixed, cx);
+        let mut text_section = widgets::section_card(&theme)
+            .child(widgets::section_header(&theme, "Text", None, Vec::new()));
         for (kind, picker, size_control) in [
             (FontKind::Ui, ui_picker, ui_size),
             (FontKind::Terminal, terminal_picker, terminal_size),
             (FontKind::Code, code_picker, code_size),
         ] {
-            font_section = font_section.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .justify_between()
-                    .gap(px(24.0))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(4.0))
-                            .child(widgets::field_label(&theme, kind.label()))
-                            .child(
-                                div()
-                                    .max_w(px(520.0))
-                                    .text_size(typography::ui_rems(12.0))
-                                    .line_height(crate::typography::ui_rems(18.0))
-                                    .text_color(theme.text_muted)
-                                    .child(kind.description()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(picker)
-                            .child(size_control),
+            let (requested, effective) = (kind.requested(cx), kind.effective(cx));
+            // A family missing on this device is a fallback, not a failure:
+            // an amber note under the row it affects.
+            let fallback = (requested != effective).then(|| {
+                widgets::warning_strip(
+                    &theme,
+                    format!(
+                        "{} \u{201c}{}\u{201d} isn't available on this device. Using {}.",
+                        kind.label(),
+                        requested.label(),
+                        effective.label()
                     ),
+                )
+                .mt(px(0.0))
+                .flex_1()
+                .min_w_0()
+            });
+            text_section = text_section.child(
+                setting_row(
+                    &theme,
+                    false,
+                    kind.label(),
+                    kind.description(),
+                    vec![picker, size_control],
+                )
+                .when_some(fallback, |row, strip| {
+                    row.child(widgets::row_block().child(strip))
+                }),
             );
         }
-        font_section = font_section.child(self.render_transcript_width(&theme, window, cx));
-        for kind in FontKind::ALL {
-            let (requested, effective) = (kind.requested(cx), kind.effective(cx));
-            if requested != effective {
-                font_section = font_section.child(
-                    widgets::error_strip(
-                        &theme,
-                        format!(
-                            "{} \"{}\" isn't available on this device. Using {}.",
-                            kind.label(),
-                            requested.label(),
-                            effective.label()
-                        ),
-                    )
-                    .font_family(fixed.clone()),
-                );
-            }
-        }
+        text_section = text_section.child(setting_row(
+            &theme,
+            false,
+            "Conversation width",
+            "Maximum width of messages. Adapts to smaller windows.",
+            vec![self.render_width_control(&theme, cx)],
+        ));
 
-        let mut code_rows = Vec::new();
-        let focus_color = theme.accent;
-        code_rows.push(preference_row(
-            &theme,
-            true,
-            icons::WRAP_TEXT,
+        // ── Code & diffs ─────────────────────────────────────────────────
+        let chat_wrap = widgets::switch_control(
+            "appearance-chat-code-wrap",
             "Chat code wrapping",
-            "Fit long code lines to the conversation instead of scrolling sideways.",
-            widgets::toggle_switch(
-                &theme,
-                ui_settings.code_fences_fit_content,
-                "appearance-chat-code-wrap",
-            )
-            .id("appearance-chat-code-wrap")
-            .role(gpui::Role::Switch)
-            .aria_label("Chat code wrapping")
-            .aria_toggled(if ui_settings.code_fences_fit_content {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .tab_index(0)
-            .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
-            .cursor_pointer()
-            .on_click(cx.listener(|this, _, _, cx| this.toggle_chat_code_wrap(cx)))
-            .on_key_down(crate::swallow_activation_key)
-            .into_any_element(),
-        ));
-        code_rows.push(preference_row(
+            ui_settings.code_fences_fit_content,
             &theme,
-            false,
-            icons::WRAP_TEXT,
-            "Diff wrapping",
-            "Wrap long source lines in open and future diff panes.",
-            widgets::toggle_switch(&theme, ui_settings.diff_wrap, "appearance-diff-wrap")
-                .id("appearance-diff-wrap")
-                .role(gpui::Role::Switch)
-                .aria_label("Diff wrapping")
-                .aria_toggled(if ui_settings.diff_wrap {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_diff_wrap(cx)))
-                .on_key_down(crate::swallow_activation_key)
-                .into_any_element(),
-        ));
-        code_rows.push(preference_row(
-            &theme,
-            false,
-            icons::FILE_CODE,
+            cx,
+            |this, cx| this.toggle_chat_code_wrap(cx),
+        );
+        let file_wrap = widgets::switch_control(
+            "appearance-file-wrap",
             "Workspace file wrapping",
-            "Wrap long lines in open and future file editors and previews.",
-            widgets::toggle_switch(&theme, ui_settings.files_word_wrap, "appearance-file-wrap")
-                .id("appearance-file-wrap")
-                .role(gpui::Role::Switch)
-                .aria_label("Workspace file wrapping")
-                .aria_toggled(if ui_settings.files_word_wrap {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .tab_index(0)
-                .focus_visible(move |style| crate::theme::focus_ring(style, focus_color))
-                .cursor_pointer()
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_file_wrap(cx)))
-                .on_key_down(crate::swallow_activation_key)
-                .into_any_element(),
-        ));
+            ui_settings.files_word_wrap,
+            &theme,
+            cx,
+            |this, cx| this.toggle_file_wrap(cx),
+        );
+        let diff_wrap = widgets::switch_control(
+            "appearance-diff-wrap",
+            "Diff wrapping",
+            ui_settings.diff_wrap,
+            &theme,
+            cx,
+            |this, cx| this.toggle_diff_wrap(cx),
+        );
         let layout_controls = crate::button::segmented(
             "appearance-diff-layout",
             vec![
-                crate::button::Segment::new("unified", "Unified"),
-                crate::button::Segment::new("split", "Side by side"),
+                Segment::new("unified", "Unified"),
+                Segment::new("split", "Side by side"),
             ],
             usize::from(ui_settings.diff_split),
-            220.0,
-            crate::button::ControlSize::Md,
+            SEGMENTED_PAIR_WIDTH,
+            ControlSize::Md,
             &theme,
             cx.listener(|this, ix: &usize, _, cx| this.set_diff_layout(*ix == 1, cx)),
         );
-        code_rows.push(preference_row(
-            &theme,
-            false,
-            icons::LIST,
-            "Diff layout",
-            "Show changes in one column or compare old and new side by side.",
-            layout_controls.into_any_element(),
-        ));
         let color_controls = crate::button::segmented(
             "appearance-diff-colors",
             vec![
-                crate::button::Segment::new("red-green", "Red & green"),
-                crate::button::Segment::new("blue-orange", "Blue & orange"),
+                Segment::new("red-green", "Red & green"),
+                Segment::new("blue-orange", "Blue & orange"),
             ],
             usize::from(ui_settings.diff_color_scheme == DiffColorScheme::BlueOrange),
-            240.0,
-            crate::button::ControlSize::Md,
+            SEGMENTED_PAIR_WIDTH,
+            ControlSize::Md,
             &theme,
             cx.listener(|_, ix: &usize, _, cx| {
                 appearance::set_diff_color_scheme(
@@ -3666,39 +3334,173 @@ impl Render for AppearancePage {
                 cx.notify();
             }),
         );
-        code_rows.push(preference_row(
+        let code_section = widgets::section_card(&theme)
+            .child(widgets::section_header(&theme, "Code & diffs", None, Vec::new()))
+            .child(setting_row(
+                &theme,
+                false,
+                "Chat code wrapping",
+                "Fit long code lines to the conversation instead of scrolling sideways.",
+                vec![chat_wrap.into_any_element()],
+            ))
+            .child(setting_row(
+                &theme,
+                false,
+                "Workspace file wrapping",
+                "Wrap long lines in open and future file editors and previews.",
+                vec![file_wrap.into_any_element()],
+            ))
+            .child(setting_row(
+                &theme,
+                false,
+                "Diff layout",
+                "Show changes in one column or compare old and new side by side.",
+                vec![layout_controls.into_any_element()],
+            ))
+            .child(setting_row(
+                &theme,
+                false,
+                "Diff wrapping",
+                "Wrap long source lines in open and future diff panes.",
+                vec![diff_wrap.into_any_element()],
+            ))
+            .child(setting_row(
+                &theme,
+                false,
+                "Diff colors",
+                "Choose an addition and deletion pair that is easy for you to distinguish.",
+                vec![color_controls.into_any_element()],
+            ));
+
+        // ── New thread background ────────────────────────────────────────
+        let background_available = current_background
+            .as_ref()
+            .is_some_and(|background| Path::new(&background.path).is_file());
+        let background_tile: AnyElement = if let Some(background) =
+            current_background.as_ref().filter(|_| background_available)
+        {
+            div()
+                .flex_none()
+                .size(ui_rems(36.0))
+                .rounded(px(8.0))
+                .overflow_hidden()
+                .border_1()
+                .border_color(theme.border)
+                .child(
+                    img(PathBuf::from(background.path.clone()))
+                        .size_full()
+                        .rounded(px(7.0))
+                        .object_fit(ObjectFit::Cover),
+                )
+                .into_any_element()
+        } else {
+            widgets::row_tile(&theme, icons::FILE_IMAGE).into_any_element()
+        };
+        let (background_title, background_description): (SharedString, SharedString) =
+            match current_background.as_ref() {
+                Some(background) if background_available => (
+                    background.name.clone().into(),
+                    "Softened automatically on frosted themes.".into(),
+                ),
+                Some(background) => (
+                    "Image unavailable".into(),
+                    format!(
+                        "\u{201c}{}\u{201d} can't be found. Choose a replacement or remove it.",
+                        background.name
+                    )
+                    .into(),
+                ),
+                None => ("No image".into(), "Choose a picture from this Mac.".into()),
+            };
+        let background_actions: Vec<AnyElement> = if current_background.is_some() {
+            vec![
+                compact_action(&theme, "Remove", "new-thread-background-remove")
+                    .on_click(cx.listener(|this, _, _, cx| this.remove_new_thread_background(cx)))
+                    .into_any_element(),
+                compact_action(&theme, "Replace image", "new-thread-background-replace")
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_new_thread_background(cx)))
+                    .into_any_element(),
+            ]
+        } else {
+            vec![
+                compact_action(&theme, "Choose image", "new-thread-background-choose")
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_new_thread_background(cx)))
+                    .into_any_element(),
+            ]
+        };
+        let mut background_section = widgets::section_card(&theme)
+            .child(widgets::section_header(
+                &theme,
+                "New thread background",
+                Some("An image behind the composer on empty new threads.".into()),
+                Vec::new(),
+            ))
+            .child(
+                widgets::card_row(&theme, false)
+                    .child(background_tile)
+                    .child(widgets::row_text(
+                        &theme,
+                        background_title,
+                        Some(background_description),
+                    ))
+                    .child(widgets::row_controls().children(background_actions)),
+            );
+        if background_available {
+            let effects = crate::settings::NewThreadBackgroundEffect::ALL;
+            let effect_control = crate::button::segmented(
+                "new-thread-background-effect",
+                effects
+                    .into_iter()
+                    .map(|effect| Segment::new(effect.label().to_lowercase(), effect.label()))
+                    .collect(),
+                effects
+                    .iter()
+                    .position(|effect| *effect == current_background_effect)
+                    .unwrap_or(0),
+                SEGMENTED_EFFECT_WIDTH,
+                ControlSize::Md,
+                &theme,
+                cx.listener(move |_, ix: &usize, _, cx| {
+                    crate::settings::set_new_thread_background_effect(effects[*ix], cx);
+                    cx.notify();
+                }),
+            );
+            background_section = background_section.child(setting_row(
+                &theme,
+                false,
+                "Effect",
+                current_background_effect.description(),
+                vec![effect_control.into_any_element()],
+            ));
+        }
+        if let Some(error) = self.background_error.clone() {
+            background_section =
+                background_section.child(strip_row(&theme, widgets::error_strip(&theme, error)));
+        }
+
+        // ── Reset ────────────────────────────────────────────────────────
+        // A single-row section: its row title carries the meaning (spec §2).
+        let reset_section = widgets::section_card(&theme).child(setting_row(
             &theme,
-            false,
-            icons::SPLIT_COLUMNS,
-            "Diff colors",
-            "Choose an addition and deletion pair that is easy for you to distinguish.",
-            color_controls.into_any_element(),
+            true,
+            "Reset appearance",
+            "Restore the first-install look without deleting imported themes.",
+            vec![
+                compact_action(&theme, "Restore defaults", "appearance-reset-open")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.reset_confirmation_open = true;
+                        this.confirm_focus_pending = true;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
+            ],
         ));
 
-        let reset_section = div()
-            .mt(px(36.0))
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(widgets::field_label(&theme, "Reset"))
-            .child(
-                widgets::section_card(&theme)
-                    .mt(px(0.0))
-                    .child(preference_row(
-                        &theme,
-                        true,
-                        icons::RESTART,
-                        "Reset appearance",
-                        "Restore the first-install look without deleting imported themes.",
-                        compact_action(&theme, "Restore defaults", "appearance-reset-open")
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.reset_confirmation_open = true;
-                                cx.notify();
-                            }))
-                            .on_key_down(crate::swallow_activation_key)
-                            .into_any_element(),
-                    )),
-            );
+        let modal = self
+            .render_import_dialog(viewport, &theme, window, cx)
+            .or_else(|| self.render_review_dialog(viewport, &theme, cx))
+            .or_else(|| self.render_reset_dialog(viewport, &theme, window, cx))
+            .or_else(|| self.render_remove_dialog(viewport, &theme, window, cx));
 
         let scrollbar = popover::rail(self, "appearance-page-scrollbar", &theme, cx);
         div()
@@ -3739,53 +3541,22 @@ impl Render for AppearancePage {
                     .track_scroll(&self.scroll.scroll)
                     .child(
                         widgets::page_column()
-                            .child(widgets::page_header(&theme, "Appearance", None))
-                            .child(
-                                widgets::page_subtitle(
-                                    &theme,
-                                    "Choose how LUNA looks. These settings stay on this device.",
-                                )
-                                .max_w(px(512.0))
-                                .line_height(crate::typography::ui_rems(20.0)),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(32.0))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(12.0))
-                                    .child(widgets::field_label(&theme, "Appearance"))
-                                    .child(widgets::option_card_row().children(cards)),
-                            )
-                            .child(
-                                widgets::section_card(&theme)
-                                    .mt(px(0.0))
-                                    .children(settings_rows),
-                            )
-                            .child(font_section)
-                            .child(
-                                div()
-                                    .mt(px(36.0))
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(12.0))
-                                    .child(widgets::field_label(&theme, "Code & diffs"))
-                                    .child(
-                                        widgets::section_card(&theme)
-                                            .mt(px(0.0))
-                                            .children(code_rows),
-                                    ),
-                            )
-                            .child(reset_section)
-                            .when_some(library_warning, |page, warning| {
-                                page.child(
-                                    div()
-                                        .mt(px(8.0))
-                                        .text_size(crate::typography::ui_rems(11.5))
-                                        .text_color(theme.readable_tone(theme.warning, 1.0))
-                                        .child(warning),
-                                )
-                            }),
+                            .child(widgets::page_title_bar(
+                                &theme,
+                                "Appearance",
+                                None,
+                                Vec::new(),
+                            ))
+                            .child(widgets::page_subtitle(
+                                &theme,
+                                "Choose how LUNA looks. These settings stay on this device.",
+                            ))
+                            .child(theme_section)
+                            .child(library_section)
+                            .child(text_section)
+                            .child(code_section)
+                            .child(background_section)
+                            .child(reset_section),
                     ),
             )
             .children(scrollbar)
