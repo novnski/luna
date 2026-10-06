@@ -5954,3 +5954,229 @@ async fn codex_settled_terminal_turns_keep_checkpoints_and_history_prefixes() {
         core.shutdown().await;
     }
 }
+
+/// The UI's run/queue payload as JSON with `modelOptions` in a chosen key
+/// order. Under the GUI's `preserve_order` serde_json (mirrored by this
+/// crate's dev-dependency) that order survives into `serde_json::Map`, while
+/// the doc reads the row back in Loro's hash order. Sending both orders makes
+/// one of them disagree with Loro whatever its iteration order is.
+fn unsorted_model_options() -> [serde_json::Value; 2] {
+    [
+        serde_json::json!({ "fastMode": "off", "contextWindow": "1m" }),
+        serde_json::json!({ "contextWindow": "1m", "fastMode": "off" }),
+    ]
+}
+
+/// 2026-10-06: the first prompt in a re-added project sat on "Sending…", then
+/// "Not delivered", and Retry never helped. The engine accepted the run,
+/// granted local authority over the row it built, then quarantined that same
+/// row as "untrusted synced command" because its Loro read-back hashed with
+/// a different `modelOptions` key order.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_with_unsorted_model_options_dispatches_after_doc_round_trip() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    for (index, options) in unsorted_model_options().into_iter().enumerate() {
+        let mut run = serde_json::to_value(request("unsorted model options")).unwrap();
+        run["modelOptions"] = options;
+        let command_id = format!("unsorted-options-run-{index}");
+        let receipt = execute(
+            &client,
+            envelope(
+                &command_id,
+                &task_id,
+                Some(&snapshot(&client, &task_id).await),
+                serde_json::json!({
+                    "kind": "session",
+                    "command": {
+                        "kind": "run",
+                        "request": run,
+                        "messageId": format!("{command_id}-message")
+                    }
+                }),
+            ),
+        )
+        .await;
+        assert!(matches!(
+            receipt.status,
+            CommandReceiptStatus::Pending | CommandReceiptStatus::Applied
+        ));
+        wait_for_receipt(&client, &command_id, CommandReceiptStatus::Applied).await;
+        wait_for_run_count(&runs, index + 1).await;
+        wait_for_no_live_run(&core, &task_id).await;
+    }
+    core.shutdown().await;
+}
+
+/// Same fingerprint guards queued rows (`execution.modelOptions`); a
+/// quarantined head would also block every message queued behind it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn queued_message_with_unsorted_execution_options_dispatches() {
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    for (index, options) in unsorted_model_options().into_iter().enumerate() {
+        let receipt = execute(
+            &client,
+            envelope(
+                &format!("unsorted-options-queue-{index}"),
+                &task_id,
+                Some(&snapshot(&client, &task_id).await),
+                serde_json::json!({
+                    "kind": "queueMessage",
+                    "messageId": format!("unsorted-options-queued-{index}"),
+                    "text": "queued with unsorted model options",
+                    "execution": {
+                        "harness": "mock",
+                        "providerAccountId": null,
+                        "model": "synthetic",
+                        "reasoning": "medium",
+                        "modelOptions": options,
+                        "sandbox": "workspace-write",
+                        "permissionMode": "ask",
+                        "effectivePermissionMode": "ask"
+                    }
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(receipt.status, CommandReceiptStatus::Applied);
+        wait_for_run_count(&runs, index + 1).await;
+        wait_for_no_live_run(&core, &task_id).await;
+    }
+    let handle = core.doc_host.open(&task_id).unwrap();
+    assert!(
+        handle.doc().read_queue().unwrap().is_empty(),
+        "a queued row stayed behind local authority"
+    );
+    core.shutdown().await;
+}
+
+/// A locally accepted run whose doc row no longer matches its local grant
+/// (here: a foreign chat2 edit lands while the run waits on attachment bytes)
+/// was provably never dispatched. Leaving its receipt pending kept the UI on
+/// "Sending…" with a Retry that re-quarantined forever; the honest outcome is
+/// a rejected receipt so the composer restores the draft. The forged payload
+/// never runs.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn receipted_run_that_fails_local_authority_is_rejected_not_left_sending() {
+    use loro::ToJson;
+    use luna_sync::chat_client::ChatDocSink;
+
+    let root = tempfile::tempdir().unwrap();
+    let runs = Arc::new(AtomicUsize::new(0));
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let core = assemble(root.path(), runs.clone(), false);
+    let client = luna_rpc::memory_client(core.rpc_service());
+    create_task(&client, &task_id, &core.device_id).await;
+    let command_id = "tampered-run";
+    let mut run = request("local prompt");
+    run.attachments = vec!["pending://never-lands/photo.png".into()];
+    let receipt = execute(
+        &client,
+        envelope(
+            command_id,
+            &task_id,
+            Some(&snapshot(&client, &task_id).await),
+            serde_json::json!({
+                "kind": "session",
+                "command": {
+                    "kind": "run",
+                    "request": run,
+                    "messageId": format!("{command_id}-message")
+                }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(receipt.status, CommandReceiptStatus::Pending);
+    let handle = core.doc_host.open(&task_id).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !handle
+            .doc()
+            .read_commands()
+            .unwrap()
+            .iter()
+            .any(|row| row.id == command_id)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("accepted run reached the doc");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        runs.load(Ordering::SeqCst),
+        0,
+        "run waits on its attachment"
+    );
+
+    let foreign = loro::LoroDoc::new();
+    foreign
+        .import(&handle.doc().export_snapshot().unwrap())
+        .unwrap();
+    let before = foreign.oplog_vv();
+    let commands = foreign.get_list("commands");
+    let mut forged = false;
+    for index in 0..commands.len() {
+        let Some(loro::ValueOrContainer::Container(loro::Container::Map(row))) =
+            commands.get(index)
+        else {
+            continue;
+        };
+        if matches!(
+            row.get("id"),
+            Some(loro::ValueOrContainer::Value(loro::LoroValue::String(id))) if id.as_str() == command_id
+        ) {
+            let payload = serde_json::json!({
+                "kind": "run",
+                "request": request("forged prompt"),
+                "messageId": format!("{command_id}-message")
+            });
+            row.insert("payload", loro::LoroValue::from_json(&payload.to_string()))
+                .unwrap();
+            forged = true;
+        }
+    }
+    assert!(forged, "fixture located the accepted row");
+    foreign.commit();
+    let update = foreign.export(loro::ExportMode::updates(&before)).unwrap();
+    let sink = luna_engine::chat2_host::EngineChatSink::new(
+        &handle.doc_arc(),
+        core.store.clone(),
+        &task_id,
+    );
+    assert!(matches!(
+        sink.apply_row(&update, 1),
+        luna_sync::chat_client::RowImportOutcome::Applied
+    ));
+
+    let rejected = wait_for_receipt(&client, command_id, CommandReceiptStatus::Rejected).await;
+    assert!(
+        rejected
+            .reason
+            .as_ref()
+            .is_some_and(|reason| reason.message.contains("nothing was sent")),
+        "rejection must say the message was not sent: {:?}",
+        rejected.reason
+    );
+    let row = handle
+        .doc()
+        .read_commands()
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == command_id)
+        .unwrap();
+    assert_eq!(row.status, luna_doc::SessionCommandStatus::Rejected);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(runs.load(Ordering::SeqCst), 0, "forged payload dispatched");
+    drop(sink);
+    core.shutdown().await;
+}

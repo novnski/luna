@@ -99,6 +99,10 @@ const ATTACHMENT_WAIT_MAX_MS: i64 = ATTACHMENT_WAIT_MAX.as_millis() as i64;
 /// (the happy path is event-driven — UploadCommit kicks the drain — this
 /// timer only covers the give-up transition and missed kicks).
 const ATTACHMENT_WAIT_RECHECK: std::time::Duration = std::time::Duration::from_secs(30);
+/// Receipt reason for an accepted command whose doc row no longer matches the
+/// grant this device recorded at admission (its content or workspace
+/// association changed). The drain never dispatched it.
+const UNVERIFIED_LOCAL_COMMAND: &str = "This message no longer matches what this device accepted, so nothing was sent. Review the preserved draft and send it again.";
 
 /// Transfer attempt outcome: transient failures retry (the link may heal),
 /// permanent ones stop (the host actively refused, or the bytes are gone).
@@ -568,8 +572,40 @@ struct PreparedQueueProjection<T> {
     unreceipted_new_commands: Vec<(String, String)>,
 }
 
-pub(crate) fn executable_row_hash<T: Serialize>(row: &T) -> Result<String, EngineError> {
-    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(row)?)))
+/// Local-authority fingerprint of an executable doc row. It must survive the
+/// Loro round trip and agree across builds: Loro stores maps as hash maps, and
+/// the GUI build compiles serde_json with `preserve_order` (via GPUI), so a
+/// `serde_json::Map` field such as `modelOptions` can read back from the doc
+/// in a different order than the row admitted locally. Rebuilding the row from
+/// key-sorted JSON makes every map iterate sorted while struct fields keep
+/// declaration order — the bytes builds without `preserve_order` always
+/// produced, so grants already on disk keep matching.
+pub(crate) fn executable_row_hash<T: Serialize + serde::de::DeserializeOwned>(
+    row: &T,
+) -> Result<String, EngineError> {
+    fn sort_keys(value: serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                let mut entries: Vec<_> = map.into_iter().collect();
+                entries.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+                serde_json::Value::Object(
+                    entries
+                        .into_iter()
+                        .map(|(key, value)| (key, sort_keys(value)))
+                        .collect(),
+                )
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.into_iter().map(sort_keys).collect())
+            }
+            other => other,
+        }
+    }
+    let canonical: T = serde_json::from_value(sort_keys(serde_json::to_value(row)?))?;
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(serde_json::to_vec(&canonical)?)
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7127,8 +7163,12 @@ impl DocHost {
             // A chat2 row (including replay/checkpoint data) can set any
             // `issued_by` string. Only a locally persisted exact entry grants
             // dispatch. Reject an uncorrelated row before processed-ledger or
-            // provider work; a collision with a local receipt stays pending
-            // for manual reconciliation rather than rejecting that receipt.
+            // provider work. A foreign twin of a locally authorized row stays
+            // pending for manual reconciliation rather than rejecting that
+            // receipt; a receipted local row that lost its grant was never
+            // dispatched and resolves as rejected (below).
+            let mut authorized_ids: HashSet<&str> = HashSet::new();
+            let mut untrusted = Vec::new();
             for entry in &commands {
                 if entry.status != SessionCommandStatus::Pending || skipped.contains(&entry.id) {
                     continue;
@@ -7155,10 +7195,15 @@ impl DocHost {
                     }
                 };
                 if authorized {
-                    continue;
+                    authorized_ids.insert(&entry.id);
+                } else {
+                    untrusted.push(entry);
                 }
+            }
+            for entry in untrusted {
                 tracing::warn!(chat = %handle.chat_id, command = %entry.id,
                     "untrusted synced command quarantined before execution");
+                skipped.insert(entry.id.clone());
                 let receipt = match self.task_command_receipt(&entry.id) {
                     Ok(receipt) => receipt,
                     Err(error) => {
@@ -7167,7 +7212,7 @@ impl DocHost {
                         return;
                     }
                 };
-                if receipt.is_none() {
+                let Some(receipt) = receipt else {
                     if let Err(error) = handle.doc.set_command_status(
                         &entry.id,
                         SessionCommandStatus::Rejected,
@@ -7176,8 +7221,44 @@ impl DocHost {
                         tracing::warn!(chat = %handle.chat_id, command = %entry.id, %error,
                             "untrusted command rejection could not be published");
                     }
+                    continue;
+                };
+                // Our own accepted row: the grant exists (admission finished
+                // before the row became visible), no twin row passes it, and
+                // the processed ledger proves no provider dispatch. Left
+                // pending, the composer sat on "Sending…" and Retry
+                // re-quarantined it forever (2026-10-06); a rejected receipt
+                // returns the draft instead.
+                if authorized_ids.contains(entry.id.as_str()) {
+                    continue;
                 }
-                skipped.insert(entry.id.clone());
+                let granted = match self.inner.store.local_executable_authority(
+                    &handle.chat_id,
+                    LocalExecutableKind::Command,
+                    &entry.id,
+                ) {
+                    Ok(grant) => grant.is_some(),
+                    Err(error) => {
+                        tracing::warn!(chat = %handle.chat_id, command = %entry.id, %error,
+                            "command authority unavailable; stopping drain");
+                        return;
+                    }
+                };
+                if granted
+                    && receipt.task_id == handle.chat_id
+                    && receipt.status == CommandReceiptStatus::Pending
+                    && !self.inner.store.is_processed(&entry.id).unwrap_or(true)
+                    && !lock(&self.inner.executing).contains_key(&entry.id)
+                {
+                    tracing::warn!(chat = %handle.chat_id, command = %entry.id,
+                        "accepted command no longer matches its local grant; rejecting unsent");
+                    self.resolve_command(
+                        handle,
+                        &entry.id,
+                        SessionCommandStatus::Rejected,
+                        Some(UNVERIFIED_LOCAL_COMMAND),
+                    );
+                }
             }
             let is_processed = |id: &str| self.inner.store.is_processed(id).unwrap_or(false);
             // Dead-command sweep: Pending in the doc, consumed by the ledger,
@@ -8886,6 +8967,49 @@ mod part_segment_tests {
         assert_eq!(encode_part_segment("m1#c1"), "m1%23c1");
         assert_eq!(encode_part_segment("tool:call_9"), "tool%3Acall_9");
         assert_eq!(encode_part_segment("plain-id_0.diff~"), "plain-id_0.diff~");
+    }
+}
+
+#[cfg(test)]
+mod executable_row_hash_tests {
+    use super::executable_row_hash;
+    use luna_doc::SessionCommandEntry;
+    use sha2::{Digest, Sha256};
+
+    /// The admitted row and its Loro read-back differ only in `modelOptions`
+    /// key order (2026-10-06: the app's first Opus 5.5 send sat on "Sending…"
+    /// because its own row hashed differently after the round trip).
+    fn row(model_options: &str) -> SessionCommandEntry {
+        serde_json::from_str(&format!(
+            r#"{{"id":"cmd-1","payload":{{"kind":"run","request":{{"prompt":"Yo","harness":"claude-code","model":"claude-opus-5-5","reasoning":"xhigh","modelOptions":{model_options},"cwd":"/tmp/project","sandbox":"workspace-write","autoApprove":false,"permissionMode":"full","resume":null}},"messageId":"cmd-1"}},"issuedBy":"device-1","issuedAt":1791313453763,"basedOn":null,"expiresAt":1791399853763,"status":"pending","resolution":null}}"#
+        ))
+        .unwrap()
+    }
+
+    /// Struct fields in declaration order, map keys sorted: the bytes every
+    /// build without `preserve_order` produced, so grants already on disk
+    /// keep matching.
+    const LEGACY: &str = r#"{"id":"cmd-1","payload":{"kind":"run","request":{"prompt":"Yo","harness":"claude-code","model":"claude-opus-5-5","reasoning":"xhigh","modelOptions":{"contextWindow":"1m","fastMode":"off"},"cwd":"/tmp/project","sandbox":"workspace-write","autoApprove":false,"permissionMode":"full","resume":null},"messageId":"cmd-1"},"issuedBy":"device-1","issuedAt":1791313453763,"basedOn":null,"expiresAt":1791399853763,"status":"pending","resolution":null}"#;
+
+    #[test]
+    fn map_key_order_never_changes_the_grant_and_legacy_bytes_are_kept() {
+        let reversed = row(r#"{"fastMode":"off","contextWindow":"1m"}"#);
+        assert_ne!(
+            serde_json::to_vec(&reversed).unwrap(),
+            LEGACY.as_bytes(),
+            "engine tests must build serde_json with preserve_order, like the GUI app"
+        );
+        let legacy = format!("{:x}", Sha256::digest(LEGACY.as_bytes()));
+        assert_eq!(executable_row_hash(&reversed).unwrap(), legacy);
+        assert_eq!(
+            executable_row_hash(&row(r#"{"contextWindow":"1m","fastMode":"off"}"#)).unwrap(),
+            legacy
+        );
+        assert_ne!(
+            executable_row_hash(&row(r#"{"fastMode":"on","contextWindow":"1m"}"#)).unwrap(),
+            legacy,
+            "a different payload must never share a grant"
+        );
     }
 }
 

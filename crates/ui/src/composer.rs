@@ -7962,6 +7962,13 @@ impl Composer {
                 composer.draft_receipt_tasks.remove(&receipt_key);
                 composer.draft_submitting.remove(&draft_key);
                 if !applied {
+                    // Same cleanup as a synchronous rejection: the restored
+                    // draft is the message now, so its echo and the
+                    // "Sending…"/"Not delivered — Retry" overlay must go.
+                    composer.state.update(cx, |state, _| {
+                        state.remove_echo(&task_id, &receipt_key);
+                        state.end_pending_send(&task_id, &receipt_key);
+                    });
                     let restore_key = if retain_setup_task {
                         task_id.clone()
                     } else {

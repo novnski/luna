@@ -55,6 +55,11 @@ tokio-tungstenite.workspace = true
 tracing-subscriber.workspace = true
 # In-process registry server for the two-engine workspace integration tests.
 luna-sync = { workspace = true, features = ["mock-server"] }
+# The GUI app compiles serde_json with `preserve_order` (GPUI enables it), so
+# `serde_json::Map` keeps insertion order there but sorts in `-p luna-engine`
+# builds. Engine tests must see the app's map semantics: an order-sensitive
+# authority hash quarantined the app's own sends (2026-10-06).
+serde_json = { workspace = true, features = ["preserve_order"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 mimalloc.workspace = true
