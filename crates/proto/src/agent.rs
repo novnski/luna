@@ -786,6 +786,26 @@ pub struct SlashCommand {
     /// Placeholder hint for the command's argument, when it takes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_hint: Option<String>,
+    /// Command or skill. The composer offers skills under `$` and commands
+    /// under `/`; hosts that predate the field report everything as commands.
+    #[serde(default, skip_serializing_if = "SlashCommandKind::is_command")]
+    pub kind: SlashCommandKind,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SlashCommandKind {
+    Skill,
+    /// The default, and the fallback for kinds a newer host may add.
+    #[default]
+    #[serde(other)]
+    Command,
+}
+
+impl SlashCommandKind {
+    pub fn is_command(&self) -> bool {
+        matches!(self, Self::Command)
+    }
 }
 
 /// A file modification carried inline on a tool result (ACP

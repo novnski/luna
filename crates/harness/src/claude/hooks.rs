@@ -70,6 +70,7 @@ pub(crate) fn slash_commands(entries: &[Value]) -> Vec<SlashCommand> {
                     .map(str::trim)
                     .filter(|hint| !hint.is_empty())
                     .map(str::to_owned),
+                kind: Default::default(),
             })
         })
         .collect()

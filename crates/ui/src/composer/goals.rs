@@ -1,11 +1,14 @@
 //! Codex goals in the composer, matching Codex's own app:
 //!
-//! - **Goal mode.** A "Goal" switch beside the access chip (Codex chats only),
-//!   or `/goal <objective>`, makes Send start a native goal instead of a
-//!   message. The engine runs Codex's own sequence (`thread/goal/clear`, then
-//!   `thread/goal/set {status: active}`) on a loaded runtime, starting or
-//!   waking it like a send, so Codex begins working immediately. The message
-//!   is marked "Sent as goal" in the transcript.
+//! - **Goal mode.** `/goal <objective>` sends that objective as a native goal;
+//!   a bare `/goal` turns goal mode on so the next Send starts a goal instead
+//!   of a message. Only that explicit command does: while goal mode is on, a
+//!   "Goal" badge beside the access chip shows it and turns it off when
+//!   clicked, and nothing else shows the badge. The engine runs Codex's own
+//!   sequence (`thread/goal/clear`, then `thread/goal/set {status: active}`)
+//!   on a loaded runtime, starting or waking it like a send, so Codex begins
+//!   working immediately. The message is marked "Sent as goal" in the
+//!   transcript.
 //! - **The goal bar.** While a goal is unfinished, a strip stacked on the
 //!   composer reads "Pursuing goal · objective · live timer" with Edit,
 //!   Pause/Resume and Clear. Edit opens an inline editor (objective, budget,
@@ -107,6 +110,12 @@ impl GoalUi {
     pub(super) fn has_work_in_flight(&self) -> bool {
         self.pending.is_some() || self.task.as_ref().is_some_and(|task| !task.is_ready())
     }
+
+    /// Goal mode is per profile like the drafts it applies to: an engine or
+    /// profile switch drops every key's.
+    pub(super) fn reset_modes(&mut self) {
+        self.mode.clear();
+    }
 }
 
 /// One in-flight goal change. Every goal control is disabled while it exists.
@@ -173,6 +182,7 @@ pub(super) fn goal_slash_command(provider: GoalProvider) -> SlashCommand {
             name: GOAL_COMMAND.into(),
             description: "Send as a goal Codex keeps working on until it is done".into(),
             input_hint: Some("objective".into()),
+            kind: SlashCommandKind::Command,
         },
         GoalProvider::Claude => SlashCommand {
             name: GOAL_COMMAND.into(),
@@ -180,6 +190,7 @@ pub(super) fn goal_slash_command(provider: GoalProvider) -> SlashCommand {
                 "Send as a goal Claude keeps working on until its checker confirms the condition"
                     .into(),
             input_hint: Some("condition".into()),
+            kind: SlashCommandKind::Command,
         },
     }
 }
@@ -469,10 +480,10 @@ impl Composer {
             cx.notify();
             return GoalSend::Consumed;
         }
-        // Preserve intent across preflight failures and deferred readiness:
-        // the deferred text may no longer contain its `/goal` prefix.
-        // Goal mode ends only when the sender actually takes the draft.
-        self.goal_ui.mode.insert(self.current_key.clone());
+        // Goal mode is NOT switched on here: a `/goal <objective>` that fails
+        // a preflight check keeps its `/goal` text, and a mode left on would
+        // turn the next ordinary message into a goal. Only a deferred send or
+        // a rejected draft handed back re-arms it (`restore_goal_mode`).
         if let Some(chat) = self
             .binding
             .chat_id(self.state.read(cx))
@@ -864,10 +875,10 @@ impl Composer {
             .into_any_element()
     }
 
-    /// The Goal switch's `(label, icon-only)` widths for the controls row's
-    /// fit, or `None` when this chat doesn't offer it.
+    /// The Goal badge's `(label, icon-only)` widths for the controls row's
+    /// fit, or `None` while goal mode is off.
     pub(super) fn goal_mode_chip_widths(&self, window: &Window, cx: &App) -> Option<(f32, f32)> {
-        if !self.goal_mode_available(cx) || self.goal_provider(cx).is_none() {
+        if !self.goal_mode_on(cx) || self.goal_provider(cx).is_none() {
             return None;
         }
         let label = crate::pickers::chip_text_width(GOAL_CHIP_LABEL, window, Theme::of(cx));
@@ -877,48 +888,31 @@ impl Composer {
         ))
     }
 
-    /// The composer's "Goal" switch, beside the access chip on Codex chats.
-    /// `icon_only` drops the label when the controls row is short of room;
-    /// the tooltip then names the switch and its state.
+    /// The composer's "Goal" badge, beside the access chip while goal mode is
+    /// on — that is, only after this composer's own `/goal`. It never stands
+    /// for a goal the chat is running (the goal bar does). Clicking it turns
+    /// goal mode off. `icon_only` drops the label when the controls row is
+    /// short of room; the tooltip then names the badge and its state.
     pub(super) fn render_goal_mode_chip(
         &self,
         icon_only: bool,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.goal_mode_available(cx) {
+        if !self.goal_mode_on(cx) {
             return None;
         }
         let provider = self.goal_provider(cx)?;
         let theme = Theme::of(cx);
-        let on = self.goal_mode_on(cx);
         let accent = theme.accent;
-        let (rest, wash) = if on {
-            (theme.readable_tone(accent, 0.95), accent.opacity(0.14))
-        } else {
-            (theme.text_muted, gpui::transparent_black())
-        };
-        let hover_wash = if on {
-            accent.opacity(0.2)
-        } else {
-            theme.element_hover
-        };
-        let hover_text = if on { rest } else { theme.text };
+        let rest = theme.readable_tone(accent, 0.95);
         let owner = self.current_key.clone();
         Some(
             gpui_base::Button::new("goal-mode")
                 .role(Role::Switch)
                 .accessibility_id("goal-mode")
                 .accessibility_label("Goal mode")
-                .aria_toggled(if on {
-                    gpui::Toggled::True
-                } else {
-                    gpui::Toggled::False
-                })
-                .aria_description(if on {
-                    provider.mode_on_description()
-                } else {
-                    "Off: Send posts an ordinary message."
-                })
+                .aria_toggled(gpui::Toggled::True)
+                .aria_description(provider.mode_on_description())
                 .tab_index(0)
                 .flex_none()
                 .h(px(crate::pickers::CONTROL_HEIGHT))
@@ -934,34 +928,32 @@ impl Composer {
                 .text_size(crate::typography::ui_rems(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rest)
-                .bg(wash)
+                .bg(accent.opacity(0.14))
                 .cursor_pointer()
-                .hover(move |style| style.bg(hover_wash).text_color(hover_text))
+                .hover(move |style| style.bg(accent.opacity(0.2)).text_color(rest))
                 .focus_visible({
                     let ring = theme.focus_ring();
                     move |style| crate::theme::focus_ring(style, ring)
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.current_key == owner {
-                        let on = this.goal_mode_on(cx);
-                        this.set_goal_mode(!on, cx);
+                        this.set_goal_mode(false, cx);
                     }
                 }))
                 .tooltip_above(move |_, cx| {
                     crate::pickers::ControlTooltip::view(
-                        if on { "Goal mode is on" } else { "Goal mode" },
-                        Some(if on {
-                            provider.mode_on_description().into()
-                        } else {
-                            "Off: Send posts an ordinary message.".into()
-                        }),
+                        "Goal mode is on",
+                        Some(
+                            format!("{} Click to turn it off.", provider.mode_on_description())
+                                .into(),
+                        ),
                         cx,
                     )
                 })
                 .child(
                     crate::icons::icon(crate::icons::TARGET)
                         .size(px(GOAL_CHIP_ICON))
-                        .text_color(if on { rest } else { theme.text_muted }),
+                        .text_color(rest),
                 )
                 .when(!icon_only, |chip| chip.child(GOAL_CHIP_LABEL))
                 .into_any_element(),

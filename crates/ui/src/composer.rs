@@ -32,7 +32,8 @@ use luna_proto::{
     CommandReceipt, CommandReceiptStatus, ComposerDraft, ComposerDraftSaveOutcome, DraftAppshot,
     DraftBlob, DraftBlobState, DraftContext, DraftSubmission, DraftSubmissionState,
     FileSearchMatch, HarnessId, ProjectCommandStatus, ProjectCommandsSnapshot, PromptStashEntry,
-    RunRequest, SandboxLevel, SlashCommand, UserInputAnswer, UserInputQuestion, capabilities,
+    RunRequest, SandboxLevel, SlashCommand, SlashCommandKind, UserInputAnswer, UserInputQuestion,
+    capabilities,
 };
 use luna_rpc::{RpcError, methods};
 
@@ -1555,15 +1556,13 @@ impl TextProjection {
         let mut projection = Self::default();
         let mut raw_at = 0;
         // Completion inserts a trailing separator. Requiring it keeps a slash
-        // query editable until the user finishes or accepts the command.
-        if with_icons && let Some(end) = raw.find(char::is_whitespace) {
-            let command = raw
-                .strip_prefix('/')
-                .and_then(|tail| tail.get(..end.saturating_sub(1)));
-            if command.is_some_and(|name| !name.is_empty() && !name.contains('/')) {
-                projection.push_chip(0..end, &raw[..end], ComposerChipKind::Skill, true);
-                raw_at = end;
-            }
+        // or `$` query editable until the user finishes or accepts it.
+        if with_icons
+            && let Some(end) = raw.find(char::is_whitespace)
+            && leading_command_token(&raw[..end])
+        {
+            projection.push_chip(0..end, &raw[..end], ComposerChipKind::Skill, true);
+            raw_at = end;
         }
         let mut projected: Vec<_> = links
             .into_iter()
@@ -1805,11 +1804,10 @@ pub(crate) fn sent_chip_visual(
     text: &str,
     mentions: &[SentMentionSpan],
 ) -> Option<(String, Vec<SentVisualChipSpan>)> {
-    let slash_end = text.strip_prefix('/').and_then(|_| {
+    let slash_end = {
         let end = text.find(char::is_whitespace).unwrap_or(text.len());
-        let name = &text[1..end];
-        (!name.is_empty() && !name.contains('/')).then_some(end)
-    });
+        leading_command_token(&text[..end]).then_some(end)
+    };
     if slash_end.is_none() && mentions.is_empty() {
         return None;
     }
@@ -4650,6 +4648,65 @@ fn slash_token(text: &str, cursor: usize) -> Option<MentionToken> {
     })
 }
 
+/// Skills are written `$name`; commands keep `/name`.
+const SKILL_SIGIL: char = '$';
+
+/// A name the `$` token can complete: a letter, then the characters Codex and
+/// Claude allow in skill names. Prose such as `$5`, `${VAR}` or `$(cmd)` fails.
+fn is_skill_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphabetic())
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':'))
+}
+
+/// `$` opens skills the way `/` opens commands: only as the prompt's first
+/// token, and only while the whole token can still be a skill name, so money
+/// and shell text (`$5 off`, `$(date)`) never open the picker.
+fn skill_token(text: &str, cursor: usize) -> Option<MentionToken> {
+    if cursor > text.len() || !text.is_char_boundary(cursor) || !text.starts_with(SKILL_SIGIL) {
+        return None;
+    }
+    let end = text
+        .char_indices()
+        .find_map(|(at, ch)| ch.is_whitespace().then_some(at))
+        .unwrap_or(text.len());
+    if cursor == 0 || cursor > end {
+        return None;
+    }
+    let name = &text[1..end];
+    if !name.is_empty() && !is_skill_name(name) {
+        return None;
+    }
+    Some(MentionToken {
+        range: 0..end,
+        query: text[1..cursor].to_string(),
+    })
+}
+
+/// Whether a prompt's first token renders as a chip: `/name` (a command) or
+/// `$name` (a skill).
+fn leading_command_token(token: &str) -> bool {
+    if let Some(name) = token.strip_prefix('/') {
+        !name.is_empty() && !name.contains('/')
+    } else {
+        token.strip_prefix(SKILL_SIGIL).is_some_and(is_skill_name)
+    }
+}
+
+/// Which list an advertised entry belongs to. Codex discovery is
+/// `skills/list`, so its entries are skills even from a host that predates
+/// [`SlashCommandKind`].
+fn command_kind(harness: Option<HarnessId>, command: &SlashCommand) -> SlashCommandKind {
+    if harness == Some(HarnessId::Codex) {
+        SlashCommandKind::Skill
+    } else {
+        command.kind
+    }
+}
+
 /// Slash-command completion state: like [`FileMentionState`] but the
 /// candidate list is fetched per harness (`ListCommands`, revalidated once per
 /// popup open) and filtered locally per keystroke — no RPC, debounce, or
@@ -4657,6 +4714,8 @@ fn slash_token(text: &str, cursor: usize) -> Option<MentionToken> {
 #[derive(Debug, Clone, Default)]
 struct SlashState {
     token: Option<MentionToken>,
+    /// Commands for a `/` token, skills for a `$` token.
+    kind: SlashCommandKind,
     /// Indices into the cached command list, filter-ranked for the query.
     filtered: Vec<usize>,
     active: Option<usize>,
@@ -5158,7 +5217,7 @@ impl Composer {
             ComposerInputEvent::HistoryNavigate(delta) => this.navigate_sent_prompts(*delta, cx),
             // The slash popup and the mention popup share the input's
             // completion key routing; they are mutually exclusive by token
-            // shape (`/` at offset 0 vs `@` at a token boundary).
+            // shape (`/` or `$` at offset 0 vs `@` at a token boundary).
             ComposerInputEvent::MentionNavigate(delta) => {
                 if this.slash.token.is_some() {
                     this.move_slash(*delta, cx)
@@ -7189,6 +7248,7 @@ impl Composer {
         self.drafts.clear();
         self.attachments.clear();
         self.input_items.clear();
+        self.goal_ui.reset_modes();
         self.queue_edit_input_items = None;
         self.appshots.clear();
         self.draft_revisions.clear();
@@ -9095,10 +9155,14 @@ impl Composer {
 
     // ---- slash commands ---------------------------------------------------
 
-    /// Track the `/` token on every edit: open/refresh the popup, fetch the
-    /// harness's command list on first open, filter locally per keystroke.
+    /// Track the `/` (commands) or `$` (skills) token on every edit:
+    /// open/refresh the popup, fetch the harness's list on first open, filter
+    /// locally per keystroke.
     fn update_slash(&mut self, text: &str, cursor: usize, cx: &mut Context<Self>) {
-        let token = slash_token(text, cursor);
+        let (token, kind) = match slash_token(text, cursor) {
+            Some(token) => (Some(token), SlashCommandKind::Command),
+            None => (skill_token(text, cursor), SlashCommandKind::Skill),
+        };
         let still_dismissed = token.as_ref().is_some_and(|token| {
             self.slash.dismissed.as_ref().is_some_and(|(range, value)| {
                 token.range == *range && text.get(range.clone()) == Some(value.as_str())
@@ -9131,12 +9195,13 @@ impl Composer {
             }
         };
         let harness_changed = self.slash.harness != harness || self.slash.scope != scope;
-        if token == self.slash.token && !harness_changed {
+        if token == self.slash.token && kind == self.slash.kind && !harness_changed {
             self.refilter_slash(cx);
             return;
         }
-        let opening = self.slash.token.is_none() || harness_changed;
+        let opening = self.slash.token.is_none() || kind != self.slash.kind || harness_changed;
         self.slash.token = token.clone();
+        self.slash.kind = kind;
         self.slash.harness = harness;
         self.slash.scope = scope.clone();
         self.slash.error = None;
@@ -9215,15 +9280,22 @@ impl Composer {
         cx.notify();
     }
 
-    /// The popup's command list: LUNA's own `/goal` first on Codex chats, then
-    /// the harness's cached commands (minus any that `/goal` shadows).
+    /// The popup's list. A `$` token lists the harness's skills. A `/` token
+    /// lists LUNA's own `/goal` first on Codex and Claude chats, then the
+    /// harness's cached commands (minus any that `/goal` shadows), never skills.
     fn slash_commands(&self, cx: &App) -> Vec<SlashCommand> {
-        let cached = self
-            .slash
-            .harness
+        let harness = self.slash.harness;
+        let cached = harness
             .and_then(|h| self.slash_cache.get(&(h, self.slash.scope.clone())))
             .map(Vec::as_slice)
             .unwrap_or_default();
+        if self.slash.kind == SlashCommandKind::Skill {
+            return cached
+                .iter()
+                .filter(|command| command_kind(harness, command) == SlashCommandKind::Skill)
+                .cloned()
+                .collect();
+        }
         let goal = self
             .slash
             .harness
@@ -9236,6 +9308,7 @@ impl Composer {
         commands.extend(
             cached
                 .iter()
+                .filter(|command| command_kind(harness, command) == SlashCommandKind::Command)
                 .filter(|command| goal.is_none() || command.name != goals::GOAL_COMMAND)
                 .cloned(),
         );
@@ -9295,11 +9368,48 @@ impl Composer {
         else {
             return;
         };
+        let sigil = self.slash_sigil();
         self.input.update(cx, |input, cx| {
-            input.replace_plain_token(token.range, &format!("/{}", command.name), cx)
+            input.replace_plain_token(token.range, &format!("{sigil}{}", command.name), cx)
         });
         self.reset_slash(None, cx);
         cx.notify();
+    }
+
+    /// The open token's sigil: `/` for commands, `$` for skills.
+    fn slash_sigil(&self) -> char {
+        match self.slash.kind {
+            SlashCommandKind::Command => '/',
+            SlashCommandKind::Skill => SKILL_SIGIL,
+        }
+    }
+
+    /// Claude expands a skill only from a leading `/name`, while the composer
+    /// writes skills as `$name`: rewrite a leading `$name` that this harness
+    /// listed as a skill. Anything else (`$HOME is unset`) stays prose, and
+    /// Codex keeps `$name`, its own explicit skill mention.
+    pub(crate) fn skill_wire_text(&self, text: String, cx: &App) -> String {
+        if self.pickers.read(cx).resolved(cx).harness != Some(HarnessId::ClaudeCode) {
+            return text;
+        }
+        let end = text.find(char::is_whitespace).unwrap_or(text.len());
+        let Some(name) = text[..end]
+            .strip_prefix(SKILL_SIGIL)
+            .filter(|name| is_skill_name(name))
+        else {
+            return text;
+        };
+        let listed = self.slash_cache.iter().any(|((harness, _), commands)| {
+            *harness == HarnessId::ClaudeCode
+                && commands
+                    .iter()
+                    .any(|command| command.kind == SlashCommandKind::Skill && command.name == name)
+        });
+        if listed {
+            format!("/{}", &text[SKILL_SIGIL.len_utf8()..])
+        } else {
+            text
+        }
     }
 
     /// Tear down the slash completion (mirrors [`Self::reset_mention`]).
@@ -9325,6 +9435,7 @@ impl Composer {
         // Only while a slash token is active.
         self.slash.token.as_ref()?;
         let commands = self.slash_commands(cx);
+        let sigil = self.slash_sigil();
         // Full pill width at the mention card's height budget — both composer
         // completions share the same surface shape.
         let mut card = crate::popover::popover_card(theme)
@@ -9367,10 +9478,11 @@ impl Composer {
                     .py(px(10.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
-                    .child(if commands.is_empty() {
-                        "This agent has no slash commands"
-                    } else {
-                        "No matching commands"
+                    .child(match (self.slash.kind, commands.is_empty()) {
+                        (SlashCommandKind::Command, true) => "This agent has no slash commands",
+                        (SlashCommandKind::Command, false) => "No matching commands",
+                        (SlashCommandKind::Skill, true) => "This agent has no skills",
+                        (SlashCommandKind::Skill, false) => "No matching skills",
                     }),
             );
         } else {
@@ -9380,7 +9492,7 @@ impl Composer {
                     continue;
                 };
                 let selected = self.slash.active == Some(row_ix);
-                let name: SharedString = format!("/{}", command.name).into();
+                let name: SharedString = format!("{sigil}{}", command.name).into();
                 let mut description = command.description.clone();
                 if let Some(hint) = &command.input_hint {
                     if description.is_empty() {
@@ -9404,7 +9516,9 @@ impl Composer {
                                 .items_center()
                                 .gap(px(8.0))
                                 .child(
-                                    crate::icons::icon(if command.name == goals::GOAL_COMMAND {
+                                    crate::icons::icon(if sigil == SKILL_SIGIL {
+                                        ComposerChipKind::Skill.icon()
+                                    } else if command.name == goals::GOAL_COMMAND {
                                         crate::icons::TARGET
                                     } else {
                                         crate::icons::COMMAND
@@ -9939,6 +10053,8 @@ impl Composer {
         follow_up_behavior: Option<luna_proto::FollowUpBehavior>,
         cx: &mut Context<Self>,
     ) {
+        // Skills are typed `$name`; Claude still receives its own `/name`.
+        let text = self.skill_wire_text(text, cx);
         // Goal mode or `/goal <objective>` starts a Codex goal: the engine
         // runs Codex's own goal start on a loaded runtime, so work begins
         // immediately. A goal is never queued behind the current turn.
@@ -9949,6 +10065,12 @@ impl Composer {
         };
         let follow_up_behavior = follow_up_behavior.filter(|_| !as_goal);
         if self.defer_native_send(&text, follow_up_behavior, cx) {
+            // The deferred send re-enters with the bare objective, which only
+            // goal mode still marks as a goal.
+            if as_goal {
+                let key = self.current_key.clone();
+                self.restore_goal_mode(&key);
+            }
             return;
         }
         if !self.require_project_for_new_session(cx) {
