@@ -1,4 +1,5 @@
 //! Context occupancy is read from the replicated chat snapshot, never local CLI state.
+use crate::popover::TooltipAboveExt as _;
 use crate::theme::Theme;
 use gpui::{
     Context, IntoElement, PathBuilder, Render, SharedString, Window, canvas, div, point,
@@ -67,6 +68,7 @@ pub fn render(
     // (non-text), keeping each state's hue.
     let color = theme.readable_on_composer(tone, crate::theme::TEXT_CONTRAST_TARGET);
     let ring_color = theme.readable_on_composer(tone, crate::theme::NON_TEXT_CONTRAST_TARGET);
+    let hover = theme.element_hover;
     let track = theme.text_faint.opacity(0.25);
     let ring = canvas(
         |_, _, _| (),
@@ -114,15 +116,21 @@ pub fn render(
         .flex()
         .items_center()
         .gap(px(RING_GAP))
-        .h(px(24.0))
+        .h(px(crate::pickers::CONTROL_HEIGHT))
         .px(px(CHIP_PAD_X))
-        .rounded(px(6.0))
-        .text_size(crate::typography::ui_rems(11.0))
+        .rounded_full()
+        .text_size(crate::typography::ui_rems(12.0))
         .text_color(color)
-        .hover(|s| s.bg(crate::theme::ink(0.05)))
+        .hover(move |s| s.bg(hover))
         .child(ring)
-        .when(show_label, |el| el.child(SharedString::from(label)))
-        .tooltip(move |_, cx| {
+        // An unknown share shows the bare track (its card explains why)
+        // instead of a "—" placeholder (audit CP-17); a known share uses
+        // tabular digits so the label never shifts as it ticks.
+        .when(show_label && label != "—", |el| {
+            el.font_features(crate::typography::tabular_figures())
+                .child(SharedString::from(label))
+        })
+        .tooltip_above(move |_, cx| {
             cx.new(|cx| UsageCard {
                 _subscription: cx.observe(&state, |_, _, cx| cx.notify()),
                 state: state.clone(),

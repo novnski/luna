@@ -835,7 +835,7 @@ impl Composer {
             })
             .when(icon_only, |button| {
                 button
-                    .tooltip(move |_, cx| cx.new(|_| AppshotActionTooltip(tooltip.clone())).into())
+                    .tooltip(crate::popover::text_tooltip(tooltip.clone()))
                     .tooltip_show_delay(Duration::from_millis(350))
             })
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -921,7 +921,7 @@ impl Composer {
                 })
                 .tab_index(0)
                 .flex_none()
-                .h(px(32.0))
+                .h(px(crate::pickers::CONTROL_HEIGHT))
                 .when(icon_only, |chip| {
                     chip.w(px(crate::pickers::ACCESS_CHIP_SIZE))
                         .justify_center()
@@ -930,21 +930,24 @@ impl Composer {
                 .flex()
                 .items_center()
                 .gap(px(GOAL_CHIP_ICON_GAP))
-                .rounded(px(8.0))
+                .rounded_full()
                 .text_size(crate::typography::ui_rems(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rest)
                 .bg(wash)
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover_wash).text_color(hover_text))
-                .focus_visible(move |style| style.bg(accent.opacity(0.18)))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     if this.current_key == owner {
                         let on = this.goal_mode_on(cx);
                         this.set_goal_mode(!on, cx);
                     }
                 }))
-                .tooltip(move |_, cx| {
+                .tooltip_above(move |_, cx| {
                     crate::pickers::ControlTooltip::view(
                         if on { "Goal mode is on" } else { "Goal mode" },
                         Some(if on {
@@ -955,7 +958,6 @@ impl Composer {
                         cx,
                     )
                 })
-                .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
                 .child(
                     crate::icons::icon(crate::icons::TARGET)
                         .size(px(GOAL_CHIP_ICON))
@@ -1131,17 +1133,28 @@ impl Composer {
             .child(
                 div()
                     .flex_none()
-                    .text_size(crate::typography::ui_rems(12.5))
+                    .text_size(crate::typography::ui_rems(13.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(title),
             )
+            // The one separator sits between the title and the objective;
+            // trailing metadata needs none (audit CP-22).
+            .when(objective_preview.is_some(), |el| {
+                el.child(
+                    div()
+                        .flex_none()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .text_color(theme.readable_faint(0.8))
+                        .child("·"),
+                )
+            })
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(crate::typography::ui_rems(12.5))
+                    .text_size(crate::typography::ui_rems(13.0))
                     .text_color(theme.readable_muted(0.8))
                     .children(objective_preview),
             )
@@ -1154,12 +1167,12 @@ impl Composer {
                         .items_center()
                         .gap(px(7.0))
                         .text_size(crate::typography::ui_rems(12.0))
+                        .font_features(crate::typography::tabular_figures())
                         .text_color(if live {
                             theme.text.opacity(0.85)
                         } else {
                             theme.readable_muted(0.75)
                         })
-                        .child(div().text_color(theme.readable_faint(0.8)).child("·"))
                         .child(timer),
                 )
             })
@@ -1413,7 +1426,9 @@ impl Composer {
             .bg(crate::popover::surface_bg(&theme))
             .border_1()
             .border_color(theme.border)
-            .when(!theme.is_frost(), |el| el.shadow_lg())
+            .when(!theme.is_frost(), |el| {
+                el.shadow(crate::theme::menu_shadows())
+            })
             // Only the strip tucked behind the next tray needs padding.
             .pb(px(QUEUE_COMPOSER_OVERLAP))
             .flex()

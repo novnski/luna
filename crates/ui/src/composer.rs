@@ -39,8 +39,9 @@ use luna_rpc::{RpcError, methods};
 use crate::appshots::{self, CapturedAppshot};
 use crate::attachments::{self, StagedAttachment};
 use crate::motion;
-use crate::notice::notice_chip;
+use crate::notice::{notice_action, notice_chip};
 use crate::pickers::{DraftConfig, Pickers};
+use crate::popover::TooltipAboveExt as _;
 use crate::settings::{ComposerSendBehavior, platform_combo};
 use crate::state::{AppState, Indicator};
 use crate::theme::Theme;
@@ -388,8 +389,9 @@ impl FlipMorph {
 // Every composer (main, side chat, child chat, new chat) shares one two-row
 // geometry: the input above, this row pinned to the pill's stationary bottom.
 
-/// Leading and trailing inset of the controls row inside the pill.
-pub const ACTIONS_ROW_INSET: f32 = 12.0;
+/// Leading and trailing inset of the controls row inside the pill. 10 puts
+/// the paperclip's ink on the text column's leading edge (audit CP-18).
+pub const ACTIONS_ROW_INSET: f32 = 10.0;
 /// Optical join between the picker group and the paperclip. This is tighter
 /// than the structural spacing ladder because the narrow paperclip glyph
 /// otherwise looks farther away than its hit target actually is.
@@ -587,25 +589,6 @@ pub const APPSHOT_PREVIEW_HEIGHT: f32 = 148.0;
 pub const APPSHOT_IMAGE_MAX_WIDTH: f32 = 320.0;
 pub const APPSHOT_IMAGE_MAX_HEIGHT: f32 = 132.0;
 pub const APPSHOT_TILE_HEIGHT: f32 = 192.0;
-
-struct AppshotActionTooltip(SharedString);
-
-impl Render for AppshotActionTooltip {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.tooltip_surface())
-            .shadow_md()
-            .text_size(crate::typography::ui_rems(11.0))
-            .text_color(theme.text)
-            .child(self.0.clone())
-    }
-}
 
 /// Give ordinary captures a shared height while their width follows the
 /// source window. Extreme panoramas and narrow composers cap width without
@@ -4472,7 +4455,11 @@ impl Render for ComposerInput {
             theme
         };
         let text_color = if self.content.is_empty() {
-            theme.text_faint
+            if self.key_context == MESSAGE_COMPOSER_CONTEXT {
+                theme.placeholder
+            } else {
+                theme.text_faint
+            }
         } else {
             theme.text
         };
@@ -6414,8 +6401,9 @@ impl Composer {
             if key == self.current_key {
                 self.show_draft_save_failure(
                     &key,
-                    "Draft not saved. Your text is still here. Reconnect, then retry saving."
-                        .into(),
+                    // The notice title already says "Draft not saved"
+                    // (audit CP-23); the body gives the reason and remedy.
+                    "Your text is still here. Reconnect, then retry.".into(),
                 );
             }
             self.fail_close_flush(cx);
@@ -6503,8 +6491,7 @@ impl Composer {
                         if task_key == composer.current_key {
                             composer.show_draft_save_failure(
                                 &task_key,
-                                "Draft not saved. Your text is still here. Retry saving."
-                                    .into(),
+                                "Your text is still here.".into(),
                             );
                         }
                         composer.fail_close_flush(cx);
@@ -8305,14 +8292,22 @@ impl Composer {
                     // draw order and images render last, so without it the
                     // thumbnail paints OVER this button (user report).
                     .child(crate::frost::layered(
+                        // A 20 pt raised disc with a plain × (the circled
+                        // glyph inside a disc read as a double ring), shown
+                        // on hover and on keyboard focus (audit CP-19).
                         div()
                             .id(("composer-att-remove", ix))
+                            .role(gpui::Role::Button)
+                            .aria_label("Remove attachment")
+                            .tab_index(0)
                             .absolute()
-                            .top(px(-6.0))
-                            .right(px(-6.0))
-                            .size(px(18.0))
+                            .top(px(-7.0))
+                            .right(px(-7.0))
+                            .size(px(20.0))
                             .rounded_full()
-                            .bg(theme.bg)
+                            .bg(theme.surface_raised)
+                            .border_1()
+                            .border_color(theme.border_strong)
                             .flex()
                             .items_center()
                             .justify_center()
@@ -8320,6 +8315,7 @@ impl Composer {
                             .shadow_sm()
                             .opacity(0.0)
                             .group_hover(group, |s| s.opacity(1.0))
+                            .focus_visible(|s| s.opacity(1.0))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 // The button overhangs the thumbnail, whose
                                 // hitbox is right underneath — don't let the
@@ -8328,9 +8324,9 @@ impl Composer {
                                 this.remove_attachment(&remove_id, cx);
                             }))
                             .child(
-                                crate::icons::icon(crate::icons::CLOSE_CIRCLE)
-                                    .size(px(14.0))
-                                    .text_color(theme.text_muted),
+                                crate::icons::icon(crate::icons::CLOSE)
+                                    .size(px(10.0))
+                                    .text_color(theme.text),
                             ),
                     )),
             );
@@ -8401,7 +8397,7 @@ impl Composer {
                 .cursor_pointer()
                 .hover(|style| style.bg(crate::theme::ink(0.045)))
                 .tooltip(move |_, cx| {
-                    cx.new(|_| AppshotActionTooltip(preview_label.clone()))
+                    cx.new(|_| crate::popover::TextTooltip(preview_label.clone()))
                         .into()
                 })
                 .role(gpui::Role::Button)
@@ -8511,7 +8507,7 @@ impl Composer {
                     .opacity(0.0)
                     .group_hover(group, |style| style.opacity(1.0))
                     .tooltip(move |_, cx| {
-                        cx.new(|_| AppshotActionTooltip(remove_label.clone()))
+                        cx.new(|_| crate::popover::TextTooltip(remove_label.clone()))
                             .into()
                     })
                     .role(gpui::Role::Button)
@@ -8971,42 +8967,50 @@ impl Composer {
                             .opacity(0.55)
                             .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
                     })
+                    // Glyph, then a title-over-subtitle stack on one text
+                    // column, then the kind label right-aligned (audit
+                    // CP-04: the row is flex_row, so a second child landed
+                    // as a zig-zag trailing column).
+                    .child(
+                        crate::icons::icon(crate::icons::MAGIC_WAND_3)
+                            .flex_none()
+                            .size(px(14.0))
+                            .text_color(theme.readable_icon(theme.warning)),
+                    )
                     .child(
                         div()
-                            .w_full()
+                            .flex_1()
+                            .min_w_0()
                             .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                crate::icons::icon(crate::icons::MAGIC_WAND_3)
-                                    .size(px(14.0))
-                                    .text_color(theme.readable_icon(theme.warning)),
-                            )
+                            .flex_col()
+                            .gap(px(1.0))
                             .child(
                                 div()
-                                    .flex_1()
+                                    .truncate()
                                     .text_size(crate::typography::ui_rems(13.0))
                                     .text_color(theme.text)
                                     .child(result.name.clone()),
                             )
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .truncate()
+                                    .text_size(crate::typography::ui_rems(12.0))
                                     .text_color(theme.text_muted)
-                                    .child(integrations::kind_label(result.kind)),
+                                    .child(
+                                        result
+                                            .description
+                                            .clone()
+                                            .unwrap_or_else(|| result.id.clone()),
+                                    ),
                             ),
                     )
                     .child(
                         div()
-                            .pl(px(22.0))
+                            .flex_none()
                             .text_size(crate::typography::ui_rems(11.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text_muted)
-                            .child(
-                                result
-                                    .description
-                                    .clone()
-                                    .unwrap_or_else(|| result.id.clone()),
-                            ),
+                            .child(integrations::kind_label(result.kind)),
                     )
                     .into_any_element(),
                 );
@@ -9776,24 +9780,32 @@ impl Composer {
     /// New sessions require a selected project and a runnable agent. Existing
     /// sessions carry their own run config.
     fn send_blocked(&self, cx: &App) -> bool {
+        self.send_blocked_reason(cx).is_some()
+    }
+
+    /// Why Send can't act right now, in words for its tooltip (audit CP-09).
+    fn send_blocked_reason(&self, cx: &App) -> Option<&'static str> {
         if self.queue_edit_finishing {
-            return true;
+            return Some("Finishing the queued edit…");
         }
         let state = self.state.read(cx);
         if state.review_comment_flush_pending(&self.current_key) {
-            return true;
+            return Some("Saving review comments…");
         }
         if self.binding.chat_id(state).is_some() {
-            return false;
+            return None;
         }
         if state.selected_space_row().is_none() {
-            return true;
+            return Some("Select a project to start");
         }
         // New-session canvas: needs a runnable agent. The
         // no-agents check only fires once the catalog is loaded — offline
         // and still-loading states must not block (the harness resolves from
         // the remembered default and the engine reports real failures).
-        self.pickers.read(cx).no_agents_available()
+        self.pickers
+            .read(cx)
+            .no_agents_available()
+            .then_some("No agent is available")
     }
 
     fn require_project_for_new_session(&mut self, cx: &mut Context<Self>) -> bool {
@@ -11988,7 +12000,9 @@ impl Composer {
             .border_1()
             .border_color(theme.border)
             .bg(crate::popover::surface_bg(theme))
-            .when(!theme.is_frost(), |panel| panel.shadow_lg())
+            .when(!theme.is_frost(), |panel| {
+                panel.shadow(crate::theme::menu_shadows())
+            })
             .p(px(crate::popover::CARD_INSET))
             .flex()
             .flex_col()
@@ -12154,8 +12168,9 @@ impl Composer {
                 this.controls_tray_open = !pressed_open && !this.controls_tray_open;
                 cx.notify();
             }))
-            .tooltip(|_, cx| crate::pickers::ControlTooltip::view("Composer controls", None, cx))
-            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+            .tooltip_above(|_, cx| {
+                crate::pickers::ControlTooltip::view("Composer controls", None, cx)
+            })
             .relative()
             .child(
                 crate::icons::icon(crate::icons::MORE_HORIZONTAL)
@@ -12200,50 +12215,89 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::of(cx);
-        // Luna composer-actions.tsx: a size-7 filled circle — up-arrow to
-        // send/queue, a dark rounded square on the same light circle to stop.
-        match mode {
+        // One stable disc (audit CP-09, CP-10): solid when it can act,
+        // recessed when the draft is empty or sending is blocked. Only the
+        // glyph changes between Send, Queue and Stop, arriving with a short
+        // fade and scale instead of a whole-element swap.
+        let empty = self.input.read(cx).content.is_empty();
+        let blocked_reason = match mode {
+            SendButtonMode::Stop => None,
+            _ => self.send_blocked_reason(cx),
+        };
+        let recessed = mode != SendButtonMode::Stop && (empty || blocked_reason.is_some());
+        let solid = theme.text;
+        let recessed_fill = crate::theme::ink(0.08);
+        let glyph_color = if recessed {
+            theme.text.opacity(0.35)
+        } else {
+            theme.bg
+        };
+        let state_key = match (mode, recessed) {
+            (SendButtonMode::Stop, _) => "stop",
+            (SendButtonMode::Queue, false) => "queue",
+            (_, false) => "send",
+            (_, true) => "rest",
+        };
+        let tooltip: SharedString = match (mode, blocked_reason) {
+            (SendButtonMode::Stop, _) => "Stop".into(),
+            (_, Some(reason)) => reason.into(),
+            (SendButtonMode::Queue, None) => "Queue (⏎)".into(),
+            _ => "Send (⏎)".into(),
+        };
+        let glyph: gpui::AnyElement = match mode {
             SendButtonMode::Stop => div()
-                .id("composer-stop")
-                .size(px(size))
-                .flex_none()
-                .rounded_full()
-                .bg(theme.text)
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_pointer()
-                .hover(|s| s.opacity(0.85))
-                .on_click(cx.listener(|this, _, _, cx| this.interrupt_selected(cx)))
-                .child(div().size(px(11.0)).rounded(px(3.0)).bg(theme.bg))
+                .size(px(11.0))
+                .rounded(px(3.0))
+                .bg(glyph_color)
                 .into_any_element(),
-            SendButtonMode::Send | SendButtonMode::Queue => {
-                // Share the submission guard with Enter, including pending
-                // edits and the new-session runnable-agent check.
-                let blocked = self.send_blocked(cx);
-                div()
-                    .id("composer-send")
-                    .size(px(size))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(theme.text)
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when(blocked, |el| el.opacity(0.35))
-                    .when(!blocked, |el| {
-                        el.cursor_pointer()
-                            .hover(|s| s.opacity(0.85))
-                            .on_click(cx.listener(|this, _, _, cx| this.on_submit(cx)))
-                    })
-                    .child(
-                        crate::icons::icon(crate::icons::ARROW_UP)
-                            .size(px(14.0))
-                            .text_color(theme.bg),
-                    )
-                    .into_any_element()
+            SendButtonMode::Queue => crate::icons::icon(crate::icons::QUEUE_SEND)
+                .size(px(14.0))
+                .text_color(glyph_color)
+                .into_any_element(),
+            SendButtonMode::Send => crate::icons::icon(crate::icons::ARROW_UP)
+                .size(px(14.0))
+                .text_color(glyph_color)
+                .into_any_element(),
+        };
+        let glyph = div().flex().items_center().justify_center().child(glyph);
+        let glyph = gpui::AnimationExt::with_animation(
+            glyph,
+            SharedString::from(format!("composer-primary-glyph-{state_key}")),
+            motion::MotionSpec::new(180, motion::EASE_OUT_QUINT).animation(),
+            |el, t| el.opacity(t),
+        );
+        let fade_key = "composer-primary".to_string();
+        let disc = div()
+            .id("composer-primary")
+            .role(gpui::Role::Button)
+            .aria_label(tooltip.clone())
+            .size(px(size))
+            .flex_none()
+            .rounded_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(glyph_color)
+            .tooltip_above(crate::popover::text_tooltip(tooltip))
+            .child(glyph);
+        let disc = if recessed {
+            disc.bg(recessed_fill)
+        } else {
+            disc.cursor_pointer()
+                .bg(motion::hover_blend(&fade_key, solid, solid.opacity(0.88)))
+                .on_hover(motion::hover_listener(fade_key))
+                .active(|style| style.opacity(0.76))
+        };
+        let disc = match mode {
+            SendButtonMode::Stop => {
+                disc.on_click(cx.listener(|this, _, _, cx| this.interrupt_selected(cx)))
             }
-        }
+            _ if blocked_reason.is_none() && !empty => {
+                disc.on_click(cx.listener(|this, _, _, cx| this.on_submit(cx)))
+            }
+            _ => disc,
+        };
+        disc.into_any_element()
     }
 }
 
@@ -12311,7 +12365,11 @@ impl Render for Composer {
                 style.font_family = theme.font_sans.clone();
                 style.font_size = crate::typography::ui_rems(INPUT_TEXT_SIZE).into();
                 style.color = if input.content.is_empty() {
-                    theme.text_faint
+                    if input.key_context == MESSAGE_COMPOSER_CONTEXT {
+                        theme.placeholder
+                    } else {
+                        theme.text_faint
+                    }
                 } else {
                     theme.text
                 };
@@ -12453,25 +12511,20 @@ impl Render for Composer {
                                 "Action failed"
                             },
                             message,
-                        )
-                        .child(
-                            div()
-                                .id("composer-failure-action")
-                                .role(gpui::Role::Button)
+                            vec![
+                                notice_action(
+                                    "composer-failure-action",
+                                    if draft_save_failed {
+                                        "Retry"
+                                    } else {
+                                        "Dismiss"
+                                    },
+                                    &theme,
+                                )
                                 .aria_label(if draft_save_failed {
                                     "Retry saving draft"
                                 } else {
                                     "Dismiss message"
-                                })
-                                .tab_index(0)
-                                .cursor_pointer()
-                                .flex()
-                                .justify_end()
-                                .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(if draft_save_failed {
-                                    "Retry save"
-                                } else {
-                                    "Dismiss"
                                 })
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.activate_failure_notice(
@@ -12481,7 +12534,9 @@ impl Render for Composer {
                                         cx,
                                     );
                                 }))
-                                .on_key_down(crate::swallow_activation_key),
+                                .on_key_down(crate::swallow_activation_key)
+                                .into_any_element(),
+                            ],
                         )
                         .id("composer-failure")
                         .mx(px(4.0))
@@ -12793,8 +12848,7 @@ impl Render for Composer {
             ))
             .on_hover(motion::hover_listener(attach_hover))
             .on_click(cx.listener(|this, _, _, cx| this.open_file_picker(cx)))
-            .tooltip(|_, cx| crate::pickers::ControlTooltip::view("Attach files", None, cx))
-            .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
+            .tooltip_above(|_, cx| crate::pickers::ControlTooltip::view("Attach files", None, cx))
             .child(
                 crate::icons::icon(crate::icons::PAPERCLIP)
                     .size(px(16.0))
@@ -12829,9 +12883,25 @@ impl Render for Composer {
             crate::shell::new_thread_background_opacity(theme.is_frost())
                 * crate::new_thread_background_mask::CUTOUT_REVEAL_OPACITY
         });
+        // Focus is visible on the pill itself (audit CP-15): a stronger edge
+        // and a soft accent ring.
+        let pill_focused = self.input.focus_handle(cx).is_focused(window);
+        let focus_glow = theme.accent.opacity(0.45);
         let pill = composer_surface(&theme, surface_radius)
             .when_some(artwork_strength, |pill, strength| {
                 pill.bg(theme.artwork_composer_plate(strength))
+            })
+            .when(pill_focused, |pill| {
+                pill.border_color(theme.border_strong)
+                    .shadow(vec![gpui::BoxShadow {
+                        color: focus_glow,
+                        offset: gpui::point(px(0.0), px(0.0)),
+                        // Inset: an outset shadow fills beneath the
+                        // translucent frosted pill and would tint all of it.
+                        blur_radius: px(0.0),
+                        spread_radius: px(1.5),
+                        inset: true,
+                    }])
             })
             .on_mouse_down(
                 MouseButton::Left,
@@ -13035,7 +13105,15 @@ impl Render for Composer {
                 }
             }
         };
-        let new_thread_target_selectors = (new_thread_chrome_opacity > 0.0).then(|| {
+        // An open completion card sits right over the destination row; step
+        // the row out of the way instead of letting the card slice it
+        // (audit CP-05).
+        let target_row_opacity = if self.active_popup_scroll().is_some() {
+            0.0
+        } else {
+            new_thread_chrome_opacity
+        };
+        let new_thread_target_selectors = (target_row_opacity > 0.0).then(|| {
             artwork_plate(self.pickers.update(cx, |pickers, cx| {
                 pickers.render_new_thread_target_selectors(cx)
             }))
@@ -13099,7 +13177,7 @@ impl Render for Composer {
                     .flex()
                     .items_start()
                     .justify_end()
-                    .opacity(new_thread_chrome_opacity)
+                    .opacity(target_row_opacity)
                     .children(new_thread_target_selectors),
             )
         } else if new_thread_chrome > 0.0 {
@@ -13112,7 +13190,7 @@ impl Render for Composer {
                     .flex()
                     .items_start()
                     .justify_end()
-                    .opacity(new_thread_chrome_opacity)
+                    .opacity(target_row_opacity)
                     .children(new_thread_target_selectors),
             )
         } else {

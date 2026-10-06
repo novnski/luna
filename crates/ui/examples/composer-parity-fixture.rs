@@ -487,7 +487,7 @@ fn row_fits(name: &str, composer: &serde_json::Value) -> anyhow::Result<()> {
     let model = match row["modelFit"].as_str() {
         Some("Full") => f(&row["modelFull"]),
         Some("NameOnly") => f(&row["modelNameOnly"]),
-        _ => 32.0,
+        _ => f64::from(luna_ui::pickers::ACCESS_CHIP_SIZE),
     };
     let goal = row["goal"].as_array().map_or(0.0, |goal| {
         4.0 + if row["goalIconOnly"] == true {
@@ -504,7 +504,7 @@ fn row_fits(name: &str, composer: &serde_json::Value) -> anyhow::Result<()> {
             f(&usage[0])
         }
     });
-    let need = model + 4.0 + 32.0 + goal + usage;
+    let need = model + 4.0 + f64::from(luna_ui::pickers::ACCESS_CHIP_SIZE) + goal + usage;
     anyhow::ensure!(
         need <= f(&row["budget"]) + 0.5,
         "{name} controls row needs {need:.1}px but has {:.1}px: {composer}",

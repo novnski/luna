@@ -1,8 +1,32 @@
 //! In-context composer notice for an unresolved action or unsaved draft.
 
-use gpui::{Div, FontWeight, SharedString, div, prelude::*, px};
+use gpui::{AnyElement, Div, FontWeight, SharedString, div, prelude::*, px};
 
 use crate::theme::Theme;
+
+/// A notice action: a 24 pt capsule button in the notice's title row.
+pub fn notice_action(id: &'static str, label: &'static str, theme: &Theme) -> gpui::Stateful<Div> {
+    let ring = theme.focus_ring();
+    div()
+        .id(id)
+        .role(gpui::Role::Button)
+        .aria_label(label)
+        .tab_index(0)
+        .flex_none()
+        .h(px(24.0))
+        .px(px(10.0))
+        .flex()
+        .items_center()
+        .rounded_full()
+        .border_1()
+        .border_color(theme.border_strong)
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text)
+        .cursor_pointer()
+        .hover(|style| style.bg(crate::theme::ink(0.06)))
+        .focus_visible(move |style| crate::theme::focus_ring(style, ring))
+        .child(label)
+}
 
 /// Keep actionable feedback beside the composer. The caller owns the notice's
 /// lifetime and action; this component only supplies the shared presentation.
@@ -11,6 +35,7 @@ pub fn notice_chip(
     warning: bool,
     label: &'static str,
     message: impl Into<SharedString>,
+    actions: Vec<AnyElement>,
 ) -> Div {
     let (accent, muted) = if warning {
         (theme.warning, theme.warning_muted)
@@ -28,7 +53,7 @@ pub fn notice_chip(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .rounded(px(10.0))
+        .rounded(px(crate::theme::radius::LG))
         .border_1()
         .border_color(accent.opacity(0.22))
         .bg(plate)
@@ -49,6 +74,9 @@ pub fn notice_chip(
                 )
                 .child(div().font_weight(FontWeight::MEDIUM).child(label))
                 .child(div().flex_1())
+                // Actions ride the title row (audit CP-23): no extra line for
+                // a text link.
+                .children(actions)
                 .child(
                     div()
                         .id(SharedString::from(format!("notice-copy-{label}")))

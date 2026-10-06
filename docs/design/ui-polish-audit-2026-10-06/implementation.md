@@ -29,30 +29,30 @@ Update this file as each finding lands so work can resume after compaction.
 | TL-21 | P2 | Long prompt collapse: an ASCII "..." line and a glyph-swap toggle | done (milestone B) | Toggle 13 px medium with one rotating chevron; real ellipsis in tertiary (no gradient: frosted backdrop) |
 | TL-22 | P2 | One agent, three status vocabularies | done (milestone B) | One lexicon (Running/Done/Stopped/Failed…) and dot + word badge in chips and the Agents pane |
 | TL-23 | P3 | Light theme: the user bubble barely has an edge and a pending send reads as disabled | done (milestone B) | Light bubble wash 0.065 + inset hairline edge; pending keeps contrast and shows a clock |
-| CP-01 | P1 | Model and access menus open detached from their chips | todo | |
-| CP-02 | P1 | Hover tooltips cover the control they describe | todo | |
-| CP-03 | P1 | Placeholder is almost as bright as typed text (flat tonal hierarchy) | todo | |
-| CP-04 | P1 | Integration rows: the subtitle lands as a zig-zag trailing column | todo | |
-| CP-05 | P1 | Completion popup slices the new-thread destination row | todo | |
-| CP-06 | P1 | Controls row overflows at ~300pt panes (the parity fixture fails) | todo | |
-| CP-07 | P1 | One controls row, six control styles | todo | |
-| CP-08 | P1 | Popover entrance: wrong direction, opacity pop, blur snaps in | todo | |
-| CP-09 | P1 | Send looks ready on an empty draft; blocked and queue states are silent | todo | |
-| CP-10 | P2 | Send ↔ Stop is an instant element swap; hover is an instant opacity step | todo | |
-| CP-11 | P2 | Completion popups vanish without an exit; the stash list is a hand-rolled card | todo | |
-| CP-12 | P2 | Five tooltip implementations in one composer | todo | |
-| CP-13 | P2 | Two highlighted rows at once; the default cursor lands on a disabled row | todo | |
-| CP-14 | P2 | Seven type sizes and two heading styles across sibling menus | todo | |
-| CP-15 | P2 | The composer pill has no focused state | todo | |
-| CP-16 | P2 | Floating menus cast no shadow while tooltips do (elevation inverted) | todo | |
-| CP-17 | P2 | Unknown context usage renders as "○ —" | todo | |
-| CP-18 | P2 | The text column and the control column start at different x | todo | |
-| CP-19 | P2 | Attachment remove control: 18pt, hover-only, double ring; thumbnail radii drift | todo | |
-| CP-20 | P2 | Stacked cards above the composer use four unrelated radii | todo | |
-| CP-21 | P2 | Queue row: tiny drag handle, r5 buttons, instant hovers, mixed action styles | todo | |
-| CP-22 | P3 | Goal bar: orphan separator dot and a jittering timer | todo | |
-| CP-23 | P3 | The draft notice repeats its title and spends a row on a text link | todo | |
-| CP-24 | P3 | Five popover widths and three hairline alphas | todo | |
+| CP-01 | P1 | Model and access menus open detached from their chips | done (milestone C) | popover::anchored_menu_above_leading / below_leading (−CARD_INSET) for model and access menus |
+| CP-02 | P1 | Hover tooltips cover the control they describe | done (milestone C) | popover::TooltipAboveExt — tooltips centered above the trigger, 400 ms delay; composer chips, attach, goal, usage, send |
+| CP-03 | P1 | Placeholder is almost as bright as typed text (flat tonal hierarchy) | done (milestone C) | Theme::placeholder floored on the composer plate for the message composer |
+| CP-04 | P1 | Integration rows: the subtitle lands as a zig-zag trailing column | done (milestone C) | Integration rows: glyph · title-over-subtitle stack · right-aligned kind |
+| CP-05 | P1 | Completion popup slices the new-thread destination row | done (milestone C) | Destination row hidden while a completion popup is open |
+| CP-06 | P1 | Controls row overflows at ~300pt panes (the parity fixture fails) | done (milestone C) | 28 pt controls free the 2 pt; parity fixture passes 300 pt (fixture uses ACCESS_CHIP_SIZE) |
+| CP-07 | P1 | One controls row, six control styles | done (milestone C) | pickers::CONTROL_HEIGHT 28 capsule for model/access/goal/usage/work chips |
+| CP-08 | P1 | Popover entrance: wrong direction, opacity pop, blur snaps in | done (milestone C) | menu_in_from: full fade + 6 pt travel from the trigger side, 180 ms ease-out-quint; exit 120 ms opacity only |
+| CP-09 | P1 | Send looks ready on an empty draft; blocked and queue states are silent | done (milestone C) | One disc: recessed when empty/blocked with reason tooltip; queue glyph; Send/Queue tooltips |
+| CP-10 | P2 | Send ↔ Stop is an instant element swap; hover is an instant opacity step | done (milestone C) | Stable composer-primary disc, glyph crossfade, hover_blend, pressed state |
+| CP-11 | P2 | Completion popups vanish without an exit; the stash list is a hand-rolled card | partial | todo: completion popup exit animation + stash list rebuild |
+| CP-12 | P2 | Five tooltip implementations in one composer | done (milestone C) | Shared tooltip_card/TextTooltip; ControlTooltip, appshot and queue tooltips routed through it |
+| CP-13 | P2 | Two highlighted rows at once; the default cursor lands on a disabled row | partial | Hover wash one step lighter than selection (menu_hover_bg); shared pointer/keyboard cursor not yet unified |
+| CP-14 | P2 | Seven type sizes and two heading styles across sibling menus | done (milestone C) | menu_heading 11 pt semibold (no sub-11 menu text) |
+| CP-15 | P2 | The composer pill has no focused state | done (milestone C) | Composer pill: border_strong + inset accent ring when focused |
+| CP-16 | P2 | Floating menus cast no shadow while tooltips do (elevation inverted) | partial | menu_shadows/tooltip_shadows tokens on opaque cards; frosted menus keep no shadow (GPUI shadows fill beneath translucent glass) |
+| CP-17 | P2 | Unknown context usage renders as "○ —" | done (milestone C) | Unknown usage shows the bare ring; tabular share label |
+| CP-18 | P2 | The text column and the control column start at different x | done (milestone C) | ACTIONS_ROW_INSET 12 → 10 |
+| CP-19 | P2 | Attachment remove control: 18pt, hover-only, double ring; thumbnail radii drift | done (milestone C) | 20 pt raised remove disc with plain ×, visible on hover and focus, Role::Button |
+| CP-20 | P2 | Stacked cards above the composer use four unrelated radii | partial | Notices at radius::LG; stacked tray ladder not changed |
+| CP-21 | P2 | Queue row: tiny drag handle, r5 buttons, instant hovers, mixed action styles | done (milestone C) | Queue handle 20×28 hit area; actions as 28 pt circles with focus ring; Steer 12/500 |
+| CP-22 | P3 | Goal bar: orphan separator dot and a jittering timer | done (milestone C) | Separator only between title and objective; tabular timer |
+| CP-23 | P3 | The draft notice repeats its title and spends a row on a text link | done (milestone C) | Notice action in the title row as a 24 pt capsule; duplicated title removed from the message |
+| CP-24 | P3 | Five popover widths and three hairline alphas | done (milestone C) | MENU_HAIRLINE 0.08; MENU_W_S/M/L tokens for picker widths |
 | SH-01 | P0 | Composer notice is a 5% tint, so transcript text shows straight through it | done (milestone A) | Opaque plate (warning 8% flattened over the canvas) + 22% ring |
 | SH-02 | P1 | The selected sidebar row paints exactly the hover fill | todo | |
 | SH-03 | P1 | The tab strip hard-clips tabs, and Main can scroll out of view | todo | |

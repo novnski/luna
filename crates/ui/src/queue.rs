@@ -65,32 +65,6 @@ fn queue_edit_upload_id(command_id: &str, attachment_id: &str) -> String {
     format!("qe-{}", &digest[..40])
 }
 
-struct QueueActionTooltip {
-    label: SharedString,
-}
-
-impl Render for QueueActionTooltip {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        // Tooltips lay out at min-content width: a long label (an engine's
-        // steer reason) wraps inside a fixed width instead of one wide line.
-        let wraps = self.label.chars().count() > 48;
-        let card = div()
-            .when(wraps, |card| card.w(px(260.0)))
-            .when(!wraps, |card| card.whitespace_nowrap())
-            .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.tooltip_surface())
-            .text_size(crate::typography::ui_rems(10.5))
-            .text_color(theme.text_muted)
-            .child(self.label.clone());
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
-    }
-}
-
 /// Compact, borderless rows inside the queue's single glass surface.
 const ROW_HEIGHT: f32 = 36.0;
 const QUEUE_TEXT_SIZE: f32 = 12.5;
@@ -320,7 +294,9 @@ fn queue_panel_surface(theme: &Theme) -> gpui::Div {
         .bg(crate::popover::surface_bg(theme))
         .border_1()
         .border_color(theme.border)
-        .when(!theme.is_frost(), |el| el.shadow_lg())
+        .when(!theme.is_frost(), |el| {
+            el.shadow(crate::theme::menu_shadows())
+        })
         // Keep visible rows flush with the tray; only the portion tucked behind
         // the composer needs padding.
         .pb(px(QUEUE_COMPOSER_OVERLAP))
@@ -791,10 +767,11 @@ impl Composer {
         );
 
         let drag_chat = chat_id.to_string();
+        // A 20×28 pt hit area for a 14 pt glyph (audit CP-21).
         let queue_marker = div()
             .id(SharedString::from(format!("{key}-drag")))
-            .w(px(14.0))
-            .h(px(22.0))
+            .w(px(20.0))
+            .h(px(28.0))
             .flex_none()
             .flex()
             .items_center()
@@ -1231,7 +1208,6 @@ impl Composer {
         on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static,
     ) -> AnyElement {
         let own = SharedString::from(format!("{key}-{slot}-grp"));
-        let accent = theme.accent;
         div()
             .id(SharedString::from(format!("{key}-{slot}")))
             .group(own.clone())
@@ -1242,13 +1218,18 @@ impl Composer {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(5.0))
-            .opacity(0.72)
+            // The composer's control shape (audit CP-21): a 28 pt circle,
+            // resting in the secondary tone rather than at reduced alpha.
+            .rounded_full()
+            .text_color(theme.content_muted)
             .when(enabled, |el| {
                 el.cursor_pointer()
-                    .hover(|s| s.opacity(1.0).bg(crate::theme::ink(0.07)))
+                    .hover(|s| s.bg(crate::theme::ink(0.07)).text_color(theme.text))
                     .tab_index(0)
-                    .focus_visible(move |s| s.bg(accent.opacity(0.18)).text_color(accent))
+                    .focus_visible({
+                        let ring = theme.focus_ring();
+                        move |s| crate::theme::focus_ring(s, ring)
+                    })
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(move |event, window, cx| {
                         cx.stop_propagation();
@@ -1258,12 +1239,7 @@ impl Composer {
             .when(!enabled, |el| {
                 el.cursor(gpui::CursorStyle::Arrow).opacity(0.45)
             })
-            .tooltip(move |_, cx| {
-                cx.new(|_| QueueActionTooltip {
-                    label: label.into(),
-                })
-                .into()
-            })
+            .tooltip(move |_, cx| cx.new(|_| crate::popover::TextTooltip(label.into())).into())
             .tooltip_show_delay(std::time::Duration::from_millis(350))
             .child(
                 icon(glyph)
@@ -1291,7 +1267,6 @@ impl Composer {
             (None, Some(note)) => note,
             _ => resolution.tooltip().into(),
         };
-        let accent = theme.accent;
         let compact = self.queue_preview_limit() == 1;
         div()
             .id(SharedString::from(format!("{key}-primary")))
@@ -1305,14 +1280,18 @@ impl Composer {
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(5.0))
-            .text_size(crate::typography::ui_rems(11.5))
+            .rounded_full()
+            .text_size(crate::typography::ui_rems(12.0))
+            .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.text_muted)
             .when(enabled, |el| {
                 el.cursor_pointer()
                     .tab_index(0)
                     .hover(|s| s.bg(crate::theme::ink(0.07)).text_color(theme.text))
-                    .focus_visible(move |s| s.bg(accent.opacity(0.18)).text_color(accent))
+                    .focus_visible({
+                        let ring = theme.focus_ring();
+                        move |s| crate::theme::focus_ring(s, ring)
+                    })
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(move |event, window, cx| {
                         cx.stop_propagation();
@@ -1322,7 +1301,7 @@ impl Composer {
             .when(!enabled, |el| el.opacity(0.45))
             .tooltip(move |_, cx| {
                 let label = tooltip.clone();
-                cx.new(|_| QueueActionTooltip { label }).into()
+                cx.new(|_| crate::popover::TextTooltip(label)).into()
             })
             .tooltip_show_delay(std::time::Duration::from_millis(350))
             .child(if compact {

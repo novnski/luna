@@ -75,6 +75,7 @@ fn workspace_footer_row() -> gpui::Div {
 use crate::AccessibleButton as _;
 use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::motion;
+use crate::popover::TooltipAboveExt as _;
 use crate::popover::{self, Loadable, MenuKey};
 use crate::settings::composer::ComposerDefaults;
 use crate::state::{AppState, EngineHandle};
@@ -508,7 +509,10 @@ pub enum ModelChipFit {
 
 /// The access chip is icon-only and square (so is the Goal switch when it
 /// gives up its label).
-pub const ACCESS_CHIP_SIZE: f32 = 32.0;
+/// Every composer-row control is a 28 pt capsule (an icon-only control is a
+/// 28 pt circle), matching the attach and Send discs (audit CP-07).
+pub const CONTROL_HEIGHT: f32 = 28.0;
+pub const ACCESS_CHIP_SIZE: f32 = CONTROL_HEIGHT;
 /// Chip geometry shared by the measured widths and the rendered chips.
 const CHIP_PAD_X: f32 = 10.0;
 const CHIP_ICON: f32 = 16.0;
@@ -576,19 +580,15 @@ impl Render for ControlTooltip {
                 .split('\n')
                 .any(|line| line.chars().count() > TOOLTIP_WRAP_CHARS)
         });
-        div()
-            .when(wraps, |card| card.w(px(260.0)))
+        // The shared tooltip card (audit CP-12) with a title and detail lines.
+        crate::popover::tooltip_card(theme)
+            .when(wraps, |card| card.w(px(crate::popover::TOOLTIP_MAX_WIDTH)))
             .when(!wraps, |card| card.whitespace_nowrap())
             .px(px(10.0))
             .py(px(7.0))
             .flex()
             .flex_col()
             .gap(px(2.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.tooltip_surface())
-            .shadow_md()
             .text_size(crate::typography::ui_rems(12.0))
             .child(
                 div()
@@ -4907,7 +4907,7 @@ impl Pickers {
             .id(id)
             .role(gpui::Role::Button)
             .aria_label(tooltip_title.clone())
-            .h(px(32.0))
+            .h(px(CONTROL_HEIGHT))
             // Shrinkable under row pressure: the composer drops whole pieces
             // first (see `composer::controls_row_fit`), so truncation is only
             // the last resort for an extremely narrow pill.
@@ -4921,7 +4921,7 @@ impl Pickers {
             .when(!icon_only, |el| {
                 el.max_w(px(280.0)).gap(px(CHIP_GAP)).px(px(CHIP_PAD_X))
             })
-            .rounded(px(8.0))
+            .rounded_full()
             .text_size(crate::typography::ui_rems(CHIP_TEXT_SIZE))
             .font_weight(gpui::FontWeight::MEDIUM)
             // luna composer/styles.tsx `pill`: `transition-colors` — the wash
@@ -4943,10 +4943,9 @@ impl Pickers {
             .on_click(cx.listener(move |this, _, window, cx| this.toggle(kind, window, cx)))
             // The open menu already says everything the tooltip would.
             .when(!open, |el| {
-                el.tooltip(move |_, cx| {
+                el.tooltip_above(move |_, cx| {
                     ControlTooltip::view(tooltip_title.clone(), tooltip_detail.clone(), cx)
                 })
-                .tooltip_show_delay(CONTROL_TOOLTIP_DELAY)
             })
             .when(chip.icon_loading, |el| {
                 el.child(div().flex_none().child(crate::loaders::mini_glyph_spinner(
@@ -5109,11 +5108,17 @@ impl Pickers {
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
             Some(PickerKind::Space) => {
                 let content = self.render_space_popover(cx);
-                Some((PickerKind::Space, self.popover_frame(280.0, content, cx)))
+                Some((
+                    PickerKind::Space,
+                    self.popover_frame(popover::MENU_W_M, content, cx),
+                ))
             }
             Some(PickerKind::Device) => {
                 let content = self.render_device_popover(cx);
-                Some((PickerKind::Device, self.popover_frame(224.0, content, cx)))
+                Some((
+                    PickerKind::Device,
+                    self.popover_frame(popover::MENU_W_S, content, cx),
+                ))
             }
             _ => None,
         };
@@ -5199,11 +5204,17 @@ impl Pickers {
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
             Some(PickerKind::Branch) => {
                 let content = self.render_branch_popover(cx);
-                Some((PickerKind::Branch, self.popover_frame(320.0, content, cx)))
+                Some((
+                    PickerKind::Branch,
+                    self.popover_frame(popover::MENU_W_L, content, cx),
+                ))
             }
             Some(PickerKind::Checkout) => {
                 let content = self.render_checkout_popover(cx);
-                Some((PickerKind::Checkout, self.popover_frame(224.0, content, cx)))
+                Some((
+                    PickerKind::Checkout,
+                    self.popover_frame(popover::MENU_W_S, content, cx),
+                ))
             }
             _ => None,
         };
@@ -5349,11 +5360,17 @@ impl Pickers {
         let mut overlay: Option<(PickerKind, AnyElement)> = match self.mounted_kind() {
             Some(PickerKind::Branch) => {
                 let content = self.render_branch_popover(cx);
-                Some((PickerKind::Branch, self.popover_frame(320.0, content, cx)))
+                Some((
+                    PickerKind::Branch,
+                    self.popover_frame(popover::MENU_W_L, content, cx),
+                ))
             }
             Some(PickerKind::Checkout) => {
                 let content = self.render_checkout_popover(cx);
-                Some((PickerKind::Checkout, self.popover_frame(224.0, content, cx)))
+                Some((
+                    PickerKind::Checkout,
+                    self.popover_frame(popover::MENU_W_S, content, cx),
+                ))
             }
             // Space/Device popovers mount in the floating row above the pill.
             _ => None,
@@ -8286,6 +8303,25 @@ fn attach_overlay_end(
     chip
 }
 
+/// Attach the open popover above a chip at the leading edge of the composer
+/// controls row (audit CP-01).
+fn attach_overlay_leading(
+    chip: gpui::Stateful<gpui::Div>,
+    overlay: &mut Option<(PickerKind, AnyElement)>,
+    kind: PickerKind,
+    id: &'static str,
+    closing: Option<std::time::Instant>,
+) -> gpui::Stateful<gpui::Div> {
+    if overlay.as_ref().is_some_and(|(k, _)| *k == kind)
+        && let Some((_, element)) = overlay.take()
+    {
+        return chip
+            .relative()
+            .child(popover::anchored_menu_above_leading(id, element, closing));
+    }
+    chip
+}
+
 impl Render for Pickers {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
@@ -8358,7 +8394,7 @@ impl Render for Pickers {
                     PickerKind::HarnessModel,
                     // Compact single-harness pane (t3 ModelPickerContent
                     // shrunk to its tabbed layout).
-                    self.popover_frame_flush(304.0, content, cx),
+                    self.popover_frame_flush(popover::MENU_W_L, content, cx),
                 ))
             }
             Some(PickerKind::Permission) => {
@@ -8406,16 +8442,18 @@ impl Render for Pickers {
                 .is_some_and(|(kind, _)| *kind == PickerKind::HarnessModel)
                 && let Some((_, content)) = overlay.take()
             {
-                model_chip.child(popover::anchored_menu_below_end(
-                    "model-popover",
-                    content,
-                    closing,
-                ))
+                model_chip
+                    .relative()
+                    .child(popover::anchored_menu_below_leading(
+                        "model-popover",
+                        content,
+                        closing,
+                    ))
             } else {
                 model_chip
             }
         } else {
-            attach_overlay_end(
+            attach_overlay_leading(
                 model_chip,
                 &mut overlay,
                 PickerKind::HarnessModel,
@@ -8461,16 +8499,18 @@ impl Render for Pickers {
                 .is_some_and(|(kind, _)| *kind == PickerKind::Permission)
                 && let Some((_, content)) = overlay.take()
             {
-                permission_chip.child(popover::anchored_menu_below_end(
-                    "permission-popover",
-                    content,
-                    closing,
-                ))
+                permission_chip
+                    .relative()
+                    .child(popover::anchored_menu_below_leading(
+                        "permission-popover",
+                        content,
+                        closing,
+                    ))
             } else {
                 permission_chip
             }
         } else {
-            attach_overlay_end(
+            attach_overlay_leading(
                 permission_chip,
                 &mut overlay,
                 PickerKind::Permission,
@@ -9031,13 +9071,13 @@ mod tests {
                 let measured = self.bounds.clone();
                 let menu = self.pickers.update(cx, |pickers, cx| {
                     let content = pickers.render_harness_model_popover(cx);
-                    pickers.popover_frame_flush(304.0, content, cx)
+                    pickers.popover_frame_flush(popover::MENU_W_L, content, cx)
                 });
                 div().size_full().relative().child(
                     div()
                         .absolute()
                         .top(px(100.0))
-                        .w(px(304.0))
+                        .w(px(popover::MENU_W_L))
                         .when(self.on_left, |el| el.right(px(32.0)))
                         .when(!self.on_left, |el| el.left(px(32.0)))
                         .child(menu)

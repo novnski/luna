@@ -700,6 +700,10 @@ pub struct Theme {
     pub content_muted: Hsla,
     /// Tertiary text on the content canvas: timestamps, hints, timers.
     pub content_faint: Hsla,
+    /// The message composer's placeholder, floored on the composer plate as
+    /// composited rather than the adverse chrome, so it reads clearly below
+    /// typed text (audit CP-03).
+    pub placeholder: Hsla,
 
     // ---- paint: high-contrast solid (primary buttons) ----
     /// The maximum-contrast solid fill: near-white on dark, near-black on light.
@@ -1614,6 +1618,7 @@ impl Theme {
             text_dim: grey(0x98),
             content_muted: neutral(0.708),
             content_faint: neutral(0.556),
+            placeholder: neutral(0.556),
             solid: neutral(0.922), // near-white plate
             on_solid: grey(0x0e),  // near-black label
             accent: accent.primary,
@@ -1711,6 +1716,7 @@ impl Theme {
             text_dim: neutral(0.50),
             content_muted: neutral(0.439),
             content_faint: neutral(0.535),
+            placeholder: neutral(0.535),
             solid: neutral(0.205),    // near-black plate, deeper than body text
             on_solid: neutral(0.985), // near-white label
             accent: accent.primary,
@@ -1964,6 +1970,16 @@ impl Theme {
             .max(TEXT_CONTRAST_TARGET)
             .min(worst(self.text) * 0.75);
         self.content_muted = legible_on(authored_muted, self.text, &surfaces, secondary_floor);
+        let composer_plates = [
+            flatten(self.composer_sidebar_tint(), canvas),
+            flatten(self.input_glass_bg(), canvas),
+        ];
+        self.placeholder = legible_on(
+            authored_faint,
+            self.text,
+            &composer_plates,
+            TEXT_CONTRAST_TARGET,
+        );
     }
 
     /// Hold foreground-only roles to the WCAG 2.2 AA floors on the surfaces
@@ -2432,6 +2448,46 @@ pub fn focus_ring(style: gpui::StyleRefinement, color: Hsla) -> gpui::StyleRefin
         spread_radius: gpui::px(2.0),
         inset: true,
     }])
+}
+
+/// Elevation for floating menus and popovers (audit CP-16): a soft ambient
+/// drop plus a tight contact shadow. Menus sit one step above tooltips.
+pub fn menu_shadows() -> Vec<gpui::BoxShadow> {
+    let (ambient, contact) = match current_appearance() {
+        Appearance::Dark => (0.45, 0.30),
+        Appearance::Light => (0.16, 0.10),
+    };
+    vec![
+        gpui::BoxShadow {
+            color: gpui::hsla(0.0, 0.0, 0.0, ambient),
+            offset: gpui::point(gpui::px(0.0), gpui::px(10.0)),
+            blur_radius: gpui::px(24.0),
+            spread_radius: gpui::px(-6.0),
+            inset: false,
+        },
+        gpui::BoxShadow {
+            color: gpui::hsla(0.0, 0.0, 0.0, contact),
+            offset: gpui::point(gpui::px(0.0), gpui::px(1.0)),
+            blur_radius: gpui::px(2.0),
+            spread_radius: gpui::px(0.0),
+            inset: false,
+        },
+    ]
+}
+
+/// Tooltip elevation: one step below [`menu_shadows`].
+pub fn tooltip_shadows() -> Vec<gpui::BoxShadow> {
+    let alpha = match current_appearance() {
+        Appearance::Dark => 0.35,
+        Appearance::Light => 0.12,
+    };
+    vec![gpui::BoxShadow {
+        color: gpui::hsla(0.0, 0.0, 0.0, alpha),
+        offset: gpui::point(gpui::px(0.0), gpui::px(4.0)),
+        blur_radius: gpui::px(10.0),
+        spread_radius: gpui::px(0.0),
+        inset: false,
+    }]
 }
 
 /// Corner radius ladder (UI polish audit DS-10). Pick by role, and give a

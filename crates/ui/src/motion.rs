@@ -370,11 +370,12 @@ impl MotionSpec {
 pub const FADE_IN: MotionSpec = MotionSpec::new(500, EASE_OUT_EXPO);
 /// Quick fade: 0.15s.
 pub const FADE_QUICK: MotionSpec = MotionSpec::new(150, EASE);
-/// Popover-in: 0.14s (scale 0.96 approximated, translateY −2).
-pub const MENU_IN: MotionSpec = MotionSpec::new(140, EASE);
-/// Popover-out: 0.1s — quicker than the entrance (exits should get out of the
-/// way; matches the Radix convention of a shorter close than open).
-pub const MENU_OUT: MotionSpec = MotionSpec::new(100, EASE);
+/// Popover-in: 180 ms ease-out-quint, a full fade plus a 6 pt travel from the
+/// trigger side (audit CP-08).
+pub const MENU_IN: MotionSpec = MotionSpec::new(180, EASE_OUT_QUINT);
+/// Popover-out: 120 ms, opacity only — quicker than the entrance so a closing
+/// menu gets out of the way.
+pub const MENU_OUT: MotionSpec = MotionSpec::new(120, EASE);
 /// Dialog-in: 0.18s (scale 0.96→1 approximated).
 pub const DIALOG_IN: MotionSpec = MotionSpec::new(180, EASE);
 /// Boot splash exit: 0.5s fade + 6px lift after a 0.15s hold.
@@ -574,10 +575,17 @@ pub fn menu_in<E>(id: impl Into<ElementId>, element: E) -> AnimationElement<E>
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, MENU_IN.animation(), |el, t| {
-        el.relative()
-            .opacity(0.3 + 0.7 * t)
-            .top(px(-2.0 * (1.0 - t)))
+    menu_in_from(id, -6.0, element)
+}
+
+/// Popover entrance from the trigger side: `rise` is the starting offset in
+/// pt (negative = starts above and drops, positive = starts below and rises).
+pub fn menu_in_from<E>(id: impl Into<ElementId>, rise: f32, element: E) -> AnimationElement<E>
+where
+    E: Styled + IntoElement + 'static,
+{
+    element.with_animation(id, MENU_IN.animation(), move |el, t| {
+        el.relative().opacity(t).top(px(rise * (1.0 - t)))
     })
 }
 
@@ -592,9 +600,7 @@ pub fn menu_out<E>(id: impl Into<ElementId>, t: f32, element: E) -> AnimationEle
 where
     E: Styled + IntoElement + 'static,
 {
-    element.with_animation(id, MENU_OUT.animation(), move |el, _| {
-        el.relative().opacity(1.0 - t).top(px(-2.0 * t))
-    })
+    element.with_animation(id, MENU_OUT.animation(), move |el, _| el.opacity(1.0 - t))
 }
 
 /// Dialog entrance over [`DIALOG_IN`] (scale approximated with fade + 2px rise).
@@ -1031,7 +1037,7 @@ mod tests {
     fn catalog_timings_match_luna() {
         assert_eq!(FADE_IN.duration_ms, 500);
         assert_eq!(FADE_QUICK.duration_ms, 150);
-        assert_eq!(MENU_IN.duration_ms, 140);
+        assert_eq!(MENU_IN.duration_ms, 180);
         assert_eq!(DIALOG_IN.duration_ms, 180);
         assert_eq!((SPLASH_OUT.duration_ms, SPLASH_OUT.delay_ms), (500, 150));
         assert_eq!(RESIZE.duration_ms, 200);

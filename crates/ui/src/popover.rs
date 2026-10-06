@@ -302,6 +302,12 @@ pub fn classify_key(key: &str, cmd: bool, ctrl: bool) -> MenuKey {
 pub const CARD_RADIUS: f32 = 12.0;
 
 pub const MENU_GAP: f32 = 2.0;
+/// One hairline alpha for every separator inside floating menus (CP-24).
+pub const MENU_HAIRLINE: f32 = 0.08;
+/// Menu width tokens (CP-24): content may widen a card, never shrink it.
+pub const MENU_W_S: f32 = 240.0;
+pub const MENU_W_M: f32 = 280.0;
+pub const MENU_W_L: f32 = 320.0;
 /// The four-pixel inset of [`popover_card`] that [`menu_scroll_host`] /
 /// [`menu_scroll_list`] cancel for card-bleeding scroll hosts.
 pub const CARD_INSET: f32 = 4.0;
@@ -326,7 +332,7 @@ pub fn tooltip_card(theme: &Theme) -> gpui::Div {
         .border_1()
         .border_color(theme.border_strong)
         .bg(theme.tooltip_surface())
-        .shadow_md()
+        .shadow(crate::theme::tooltip_shadows())
 }
 
 /// The one plain-text tooltip (UI polish audit CP-12, SH-21, DS-20): the
@@ -337,7 +343,12 @@ impl gpui::Render for TextTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         use crate::typography::{TextStyle, TypeStyleExt as _};
         let theme = Theme::of(cx);
+        // Tooltips lay out at min-content width: a long label wraps inside
+        // a fixed width instead of running one wide line.
+        let wraps = self.0.chars().count() > 48;
         tooltip_card(theme)
+            .when(wraps, |card| card.w(px(TOOLTIP_MAX_WIDTH)))
+            .when(!wraps, |card| card.whitespace_nowrap())
             .px(px(8.0))
             .py(px(5.0))
             .font_family(theme.font_sans.clone())
@@ -355,12 +366,63 @@ pub fn text_tooltip(
     move |_, cx| cx.new(|_| TextTooltip(label.clone())).into()
 }
 
+/// Widest a tooltip grows before its text wraps.
+pub const TOOLTIP_MAX_WIDTH: f32 = 260.0;
+
+/// Shared tooltip show delay (audit DS-20).
+pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
+
+/// Wraps a tooltip view so it renders centered ABOVE its anchor point: a
+/// zero-size root whose card overflows upward and to both sides.
+struct AboveTooltip(gpui::AnyView);
+
+impl gpui::Render for AboveTooltip {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_0()
+            .flex()
+            .flex_col()
+            .justify_end()
+            .items_center()
+            .child(div().flex_none().child(self.0.clone()))
+    }
+}
+
+/// Tooltips for controls near the bottom of the window (audit CP-02): the
+/// card centers above the trigger with a 6 pt gap instead of opening at the
+/// cursor, where it covered the control it describes.
+pub trait TooltipAboveExt: gpui::StatefulInteractiveElement + Sized {
+    fn tooltip_above(
+        self,
+        build: impl Fn(&mut Window, &mut gpui::App) -> gpui::AnyView + 'static,
+    ) -> Self {
+        self.tooltip_at(
+            move |window, cx| {
+                let inner = build(window, cx);
+                cx.new(|_| AboveTooltip(inner)).into()
+            },
+            |bounds, _pointer, _window| {
+                Some(gpui::point(bounds.center().x, bounds.top() - px(7.0)))
+            },
+        )
+        .tooltip_show_delay(TOOLTIP_DELAY)
+    }
+
+    fn text_tooltip_above(self, label: impl Into<SharedString>) -> Self {
+        self.tooltip_above(text_tooltip(label))
+    }
+}
+
+impl<T: gpui::StatefulInteractiveElement> TooltipAboveExt for T {}
+
 pub fn popover_card(theme: &Theme) -> gpui::Div {
     div()
         .border_1()
         .border_color(theme.border)
         .rounded(px(CARD_RADIUS))
-        .when(!theme.is_frost(), |el| el.shadow_lg())
+        .when(!theme.is_frost(), |el| {
+            el.shadow(crate::theme::menu_shadows())
+        })
         .bg(surface_bg(theme))
         .p(px(CARD_INSET))
         .gap(px(MENU_GAP))
@@ -450,6 +512,9 @@ fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
     )
     .absolute()
     .inset_0();
+    // No drop shadow under frost: GPUI paints a shadow as a filled shape
+    // beneath its element, and the translucent card would show it as a dark
+    // stain. Opaque cards carry [`crate::theme::menu_shadows`] instead.
     crate::frost::frosted(
         CARD_RADIUS,
         blur,
@@ -470,11 +535,29 @@ fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
 /// and the overlay also keeps stray clicks from reaching whatever sits
 /// underneath.
 fn menu_motion(id: SharedString, exit: Option<f32>, inner: gpui::Div) -> AnyElement {
+    menu_motion_from(id, exit, inner, MENU_RISE_DOWN)
+}
+
+fn menu_motion_up(id: SharedString, exit: Option<f32>, inner: gpui::Div) -> AnyElement {
+    menu_motion_from(id, exit, inner, MENU_RISE_UP)
+}
+
+/// A menu below its trigger drops 6 pt into place; one above it rises 6 pt.
+/// Either way it emerges from the trigger side (audit CP-08).
+const MENU_RISE_DOWN: f32 = -6.0;
+const MENU_RISE_UP: f32 = 6.0;
+
+fn menu_motion_from(
+    id: SharedString,
+    exit: Option<f32>,
+    inner: gpui::Div,
+    rise: f32,
+) -> AnyElement {
     if let Some(t) = exit {
         let inner = inner.relative().child(div().absolute().inset_0().occlude());
         motion::menu_out(SharedString::from(format!("{id}-out")), t, inner).into_any_element()
     } else {
-        motion::menu_in(id, inner).into_any_element()
+        motion::menu_in_from(id, rise, inner).into_any_element()
     }
 }
 
@@ -630,7 +713,7 @@ pub fn anchored_menu_above(
             gpui::anchored()
                 .anchor(Anchor::BottomLeft)
                 .snap_to_window_with_margin(px(8.0))
-                .child(menu_motion(
+                .child(menu_motion_up(
                     id.into(),
                     exit,
                     div().occlude().pb(px(6.0)).child(content),
@@ -639,6 +722,65 @@ pub fn anchored_menu_above(
         .priority(1)
         .into_any_element(),
     )
+}
+
+/// [`anchored_menu_above`] for a chip at the leading edge of a control row
+/// (audit CP-01): the card opens from the chip's left edge, shifted left by
+/// the card inset so its row text lines up with the chip glyph, and only
+/// slides left when it would cross the window gutter.
+pub fn anchored_menu_above_leading(
+    id: impl Into<SharedString>,
+    content: AnyElement,
+    closing: Option<std::time::Instant>,
+) -> AnyElement {
+    let exit = closing.map(exit_progress);
+    let content = frosted_menu(exit, content);
+    pinned_layer(
+        gpui::deferred(
+            gpui::anchored()
+                .anchor(Anchor::BottomLeft)
+                .offset(gpui::point(px(-CARD_INSET), px(0.0)))
+                .snap_to_window_with_margin(px(8.0))
+                .child(menu_motion_up(
+                    id.into(),
+                    exit,
+                    div().occlude().pb(px(6.0)).child(content),
+                )),
+        )
+        .priority(1)
+        .into_any_element(),
+    )
+}
+
+/// The downward counterpart of [`anchored_menu_above_leading`].
+pub fn anchored_menu_below_leading(
+    id: impl Into<SharedString>,
+    content: AnyElement,
+    closing: Option<std::time::Instant>,
+) -> AnyElement {
+    let exit = closing.map(exit_progress);
+    let content = frosted_menu(exit, content);
+    div()
+        .absolute()
+        .bottom_0()
+        .left_0()
+        .size_0()
+        .child(
+            gpui::deferred(
+                gpui::anchored()
+                    .anchor(Anchor::TopLeft)
+                    .offset(gpui::point(px(-CARD_INSET), px(0.0)))
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(menu_motion(
+                        id.into(),
+                        exit,
+                        div().occlude().pt(px(6.0)).child(content),
+                    )),
+            )
+            .priority(1)
+            .into_any_element(),
+        )
+        .into_any_element()
 }
 
 /// Open an upward menu at a point inside a relative trigger. Useful for text
@@ -672,7 +814,7 @@ pub fn full_width_menu_above(
         .left_0()
         .right_0()
         .child(
-            gpui::deferred(menu_motion(
+            gpui::deferred(menu_motion_up(
                 id.into(),
                 exit,
                 div().occlude().pb(px(6.0)).child(content),
@@ -702,7 +844,7 @@ pub fn anchored_menu_above_end(
                 gpui::anchored()
                     .anchor(Anchor::BottomRight)
                     .snap_to_window_with_margin(px(8.0))
-                    .child(menu_motion(
+                    .child(menu_motion_up(
                         id.into(),
                         exit,
                         div().occlude().pb(px(6.0)).child(content),
@@ -828,16 +970,27 @@ pub fn menu_row(theme: &Theme, active: bool, fade_key: impl Into<SharedString>) 
                 theme.text.opacity(0.9),
                 theme.text,
             ))
+            // Hover is one step lighter than the selected wash, so the
+            // pointer never reads as a second selection (audit CP-13).
             .bg(motion::hover_blend(
                 &fade_key,
                 crate::theme::wash(0.0),
-                crate::theme::card_selected_bg(),
+                menu_hover_bg(),
             ));
         // Imperative form — the caller's `.id(...)` makes the element stateful
         // (hover listeners need element state, `.on_hover` needs `Stateful`).
         row.interactivity()
             .on_hover(motion::hover_listener(fade_key));
         row
+    }
+}
+
+/// The pointer's wash on a menu row: the selected wash at 60%.
+pub fn menu_hover_bg() -> gpui::Hsla {
+    let selected = crate::theme::card_selected_bg();
+    gpui::Hsla {
+        a: selected.a * 0.6,
+        ..selected
     }
 }
 
@@ -870,8 +1023,9 @@ pub fn menu_heading(theme: &Theme, label: &str) -> gpui::Div {
         .px(px(8.0))
         .pb(px(4.0))
         .pt(px(6.0))
-        .text_size(crate::typography::ui_rems(10.0))
-        .font_weight(gpui::FontWeight::MEDIUM)
+        // 11 pt semibold: the menu ramp's floor (audit CP-14).
+        .text_size(crate::typography::ui_rems(11.0))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(theme.text_muted)
         .child(SharedString::from(tracked_upper(label)))
 }
@@ -900,7 +1054,7 @@ pub fn menu_separator() -> gpui::Div {
         .h(px(1.0))
         .mx(px(-CARD_INSET))
         .my(px(MENU_GAP))
-        .bg(hairline(0.07))
+        .bg(hairline(MENU_HAIRLINE))
 }
 
 /// The recessed band tone for a palette/picker header or footer strip — a
@@ -1081,7 +1235,7 @@ pub fn menu_section() -> gpui::Div {
         .mt(px(4.0))
         .pt(px(4.0))
         .border_t_1()
-        .border_color(hairline(0.06))
+        .border_color(hairline(MENU_HAIRLINE))
         .flex()
         .flex_col()
         .gap(px(2.0))
