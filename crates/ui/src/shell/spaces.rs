@@ -131,9 +131,134 @@ pub(super) fn compare_sidebar_chats_ranked(
     primary.then_with(|| left.id.cmp(&right.id))
 }
 
-const ACTIVE_PAGE: usize = 20;
-const SETTLED_INITIAL: usize = 10;
-const SETTLED_PAGE: usize = 25;
+/// Every list section (the active list, a device group, Settled, Archived)
+/// shows this many unpinned chats; each "Show more" reveals this many more.
+pub(super) const SIDEBAR_SECTION_PAGE: usize = 5;
+/// The "Show N more" / "Show less" row, on the disclosure header's rhythm.
+const SIDEBAR_MORE_ROW_HEIGHT: f32 = 28.0;
+/// One-line Settled and Archived rows.
+const SIDEBAR_SHELF_ROW_HEIGHT: f32 = 36.0;
+
+/// How far each sidebar list section has been expanded with "Show more",
+/// keyed by section (`active`, `device:{id}`, `settled`, `archived`). An
+/// absent key shows [`SIDEBAR_SECTION_PAGE`] rows. The pages belong to the
+/// project filter they were expanded under: a different filter reads every
+/// section at five, and the first expansion under it drops the old pages.
+#[derive(Debug, Default)]
+pub(super) struct SidebarPages {
+    filter: Option<String>,
+    shown: std::collections::HashMap<String, usize>,
+}
+
+impl SidebarPages {
+    pub(super) fn limit(&self, filter: Option<&str>, key: &str) -> usize {
+        if self.filter.as_deref() != filter {
+            return SIDEBAR_SECTION_PAGE;
+        }
+        self.shown
+            .get(key)
+            .copied()
+            .unwrap_or(SIDEBAR_SECTION_PAGE)
+            .max(SIDEBAR_SECTION_PAGE)
+    }
+
+    pub(super) fn show_more(&mut self, filter: Option<&str>, key: &str) {
+        self.rescope(filter);
+        let next = self.limit(filter, key) + SIDEBAR_SECTION_PAGE;
+        self.shown.insert(key.to_owned(), next);
+    }
+
+    /// A different project filter starts every section at five again (so a
+    /// round trip to another project and back resets too).
+    pub(super) fn rescope(&mut self, filter: Option<&str>) {
+        if self.filter.as_deref() != filter {
+            self.filter = filter.map(str::to_owned);
+            self.shown.clear();
+        }
+    }
+
+    /// Back to five rows (Show less, or the section collapsed/reopened).
+    pub(super) fn reset(&mut self, key: &str) {
+        self.shown.remove(key);
+    }
+}
+
+/// One section's cap bookkeeping: `total` rows, `visible` of them drawn
+/// (which can exceed `limit` by the kept selected row), `limit` the page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct SectionPage {
+    pub total: usize,
+    pub visible: usize,
+    pub limit: usize,
+}
+
+/// What a section's trailing row offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MoreRow {
+    /// Reveal the next page (`n` = up to [`SIDEBAR_SECTION_PAGE`]).
+    More(usize),
+    /// Everything shows after an expansion: return to five.
+    Less,
+}
+
+impl SectionPage {
+    pub(super) fn hidden(self) -> usize {
+        self.total.saturating_sub(self.visible)
+    }
+
+    pub(super) fn more_row(self) -> Option<MoreRow> {
+        let hidden = self.hidden();
+        if hidden > 0 {
+            Some(MoreRow::More(hidden.min(SIDEBAR_SECTION_PAGE)))
+        } else if self.limit > SIDEBAR_SECTION_PAGE && self.total > SIDEBAR_SECTION_PAGE {
+            Some(MoreRow::Less)
+        } else {
+            None
+        }
+    }
+}
+
+/// What the sidebar's sections drew last frame, for the sidebar-sections QA
+/// fixture: per-section pages and rows, the keyed list's reserved heights,
+/// and painted bounds recorded at prepaint (window coordinates).
+#[cfg(feature = "appshots-fixture")]
+#[derive(Default)]
+pub(super) struct SidebarProbe {
+    pub pages: std::collections::HashMap<String, SectionPage>,
+    pub keyed: Vec<(String, f32)>,
+    pub active_rows: Vec<(String, String)>,
+    pub shelf_rows: std::collections::HashMap<String, Vec<String>>,
+    pub shelf_pages: std::collections::HashMap<String, (SectionPage, bool, f32)>,
+    /// Labels of the scroll list's direct children, in order (their bounds
+    /// come from the tracked scroll handle).
+    pub scroll_children: Vec<String>,
+    pub bounds: std::rc::Rc<
+        std::cell::RefCell<std::collections::HashMap<String, gpui::Bounds<gpui::Pixels>>>,
+    >,
+}
+
+#[cfg(feature = "appshots-fixture")]
+impl SidebarProbe {
+    /// Forget last frame's records before the sidebar renders again.
+    pub(super) fn begin_frame(&mut self) {
+        self.pages.clear();
+        self.keyed.clear();
+        self.active_rows.clear();
+        self.shelf_rows.clear();
+        self.shelf_pages.clear();
+        self.scroll_children.clear();
+        self.bounds.borrow_mut().clear();
+    }
+}
+
+/// The unpinned section an active row lists under: one list, or its device
+/// group (the same `device:{id}` key the group's collapse state uses).
+fn active_section_key(chat: &luna_proto::Chat, organization: SidebarOrganization) -> String {
+    match organization {
+        SidebarOrganization::ByDevice => format!("device:{}", chat.device_id),
+        SidebarOrganization::ByProject | SidebarOrganization::InOneList => "active".into(),
+    }
+}
 
 pub(super) fn can_manually_settle_chat(
     chat: &luna_proto::Chat,
@@ -179,8 +304,13 @@ pub(super) fn is_settled_chat(
     now.signed_duration_since(last_activity) >= chrono::Duration::days(i64::from(days))
 }
 
-/// Bound row creation even when a user makes hundreds of threads in a day.
-/// The selected row remains reachable after navigation from search.
+/// The active rows each section draws. Pins always show; every unpinned
+/// section (one list, or each device group) shows its first `limit` rows in
+/// the sorted order and pages the rest behind "Show more". This also bounds
+/// row creation when a user makes hundreds of threads in a day. The selected
+/// row stays reachable after navigation from search: past the cap it is
+/// drawn as its section's last row.
+#[allow(clippy::too_many_arguments)]
 fn active_page<'a>(
     chats: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
     selected_id: Option<&str>,
@@ -188,9 +318,14 @@ fn active_page<'a>(
     auto_settle_after_days: Option<u16>,
     attention_task_keys: &std::collections::HashSet<(String, String)>,
     pending_actions: &std::collections::HashMap<String, TaskConfirmation>,
-    shown: usize,
-) -> (Vec<(ChatIndicator, &'a luna_proto::Chat)>, usize) {
-    let active: Vec<_> = chats
+    organization: SidebarOrganization,
+    limit: impl Fn(&str) -> usize,
+) -> (
+    Vec<(ChatIndicator, &'a luna_proto::Chat)>,
+    std::collections::HashMap<String, SectionPage>,
+) {
+    let mut pages: std::collections::HashMap<String, SectionPage> = Default::default();
+    let visible = chats
         .into_iter()
         .filter(|(status, chat)| match pending_actions.get(&chat.id) {
             Some(
@@ -204,19 +339,24 @@ fn active_page<'a>(
                 attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
             ),
         })
+        .filter(|(_, chat)| {
+            if chat.pinned_order.is_some() {
+                return true;
+            }
+            let key = active_section_key(chat, organization);
+            let page = pages.entry(key).or_insert_with_key(|key| SectionPage {
+                limit: limit(key),
+                ..Default::default()
+            });
+            page.total += 1;
+            let shown = page.total <= page.limit || Some(chat.id.as_str()) == selected_id;
+            if shown {
+                page.visible += 1;
+            }
+            shown
+        })
         .collect();
-    let limit = shown.max(ACTIVE_PAGE);
-    let total = active.len();
-    let mut visible: Vec<_> = active.iter().copied().take(limit).collect();
-    if let Some(selected) = active
-        .iter()
-        .skip(limit)
-        .find(|(_, chat)| Some(chat.id.as_str()) == selected_id)
-    {
-        visible.push(*selected);
-    }
-    let hidden = total.saturating_sub(visible.len());
-    (visible, hidden)
+    (visible, pages)
 }
 
 /// Activity is a view of the existing task rows, not a second inbox. It shows
@@ -638,9 +778,11 @@ impl Shell {
         theme: &Theme,
     ) -> AnyElement {
         let resting_reveal = if open { 1.0 } else { 0.0 };
+        // Text-adjacent: scales with the Interface size like its label.
+        let size = crate::typography::ui_rems(12.0);
         // A disclosure control's state glyph: the non-text floor.
         let chevron = icon(icons::ALT_ARROW_RIGHT)
-            .size(px(12.0))
+            .size(size)
             .text_color(theme.readable_icon(theme.readable_muted(0.5)));
         if let Some(tween) = self
             .sidebar_disclosure_motion
@@ -653,7 +795,7 @@ impl Shell {
             let to = (tween.to / denominator).clamp(0.0, 1.0);
             div()
                 .flex_none()
-                .size(px(12.0))
+                .size(size)
                 .child(chevron.with_animation(
                     SharedString::from(format!("sidebar-chevron-{key}-{}", tween.epoch)),
                     motion::COLLAPSE.animation(),
@@ -668,7 +810,7 @@ impl Shell {
         } else {
             div()
                 .flex_none()
-                .size(px(12.0))
+                .size(size)
                 .child(
                     chevron.with_transformation(gpui::Transformation::rotate(gpui::percentage(
                         resting_reveal * 0.25,
@@ -684,6 +826,7 @@ impl Shell {
     /// default is "the space you're looking at".
     pub(super) fn set_space_filter(&mut self, filter: Option<String>, cx: &mut Context<Self>) {
         self.settings.space_filter = filter.clone();
+        self.sidebar_pages.rescope(filter.as_deref());
         if self.state.read(cx).selected_chat.is_none() {
             if let Some(space_id) = filter.as_deref() {
                 self.state
@@ -1592,7 +1735,8 @@ impl Shell {
                 self.settings.sidebar_auto_settle_after_days,
                 &settlement_task_keys,
                 &self.pending_task_actions,
-                self.active_shown,
+                self.settings.sidebar_organization,
+                |key| self.sidebar_pages.limit(filter.as_deref(), key),
             )
             .0
             .into_iter()
@@ -1645,6 +1789,7 @@ impl Shell {
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let placed = self.effective_placements(cx);
+        let mut pages: std::collections::HashMap<String, SectionPage> = Default::default();
         let mut rows: Vec<ActiveChatRow> = {
             let state = self.state.read(cx);
             let source = sidebar_rows(
@@ -1659,14 +1804,12 @@ impl Shell {
                 &state,
                 &placed,
             );
-            let (chats, hidden_count): (Vec<_>, usize) = if activity_view {
-                (
-                    activity_sidebar_chats_with_recent(
-                        source,
-                        &attention_task_keys,
-                        &recent_completion_keys,
-                    ),
-                    0,
+            // Activity is a triage view of what needs you: never capped.
+            let chats: Vec<_> = if activity_view {
+                activity_sidebar_chats_with_recent(
+                    source,
+                    &attention_task_keys,
+                    &recent_completion_keys,
                 )
             } else {
                 let mut source = source;
@@ -1679,17 +1822,19 @@ impl Shell {
                         right.1,
                     )
                 });
-                active_page(
+                let (chats, section_pages) = active_page(
                     source,
                     state.selected_chat.as_deref(),
                     now,
                     self.settings.sidebar_auto_settle_after_days,
                     &settlement_task_keys,
                     &self.pending_task_actions,
-                    self.active_shown,
-                )
+                    self.settings.sidebar_organization,
+                    |key| self.sidebar_pages.limit(filter.as_deref(), key),
+                );
+                pages = section_pages;
+                chats
             };
-            self.sidebar_hidden_active_count = hidden_count;
             let records = super::placement::chat_index(&state.chats);
             chats
                 .into_iter()
@@ -1814,6 +1959,8 @@ impl Shell {
                 .is_some_and(|(key, _)| key == "__luna_pinned__")
         });
         let mut rendered = Vec::new();
+        #[cfg(feature = "appshots-fixture")]
+        let mut rendered_ids: Vec<(String, String)> = Vec::new();
         for (group, rows) in groups {
             let mut rendered_rows = Vec::with_capacity(rows.len());
             for row in rows {
@@ -1966,6 +2113,17 @@ impl Shell {
                         )
                     })
                     .into_any_element();
+                #[cfg(feature = "appshots-fixture")]
+                rendered_ids.push((
+                    if activity_view {
+                        "activity".into()
+                    } else if chat.pinned_order.is_some() {
+                        "pinned".into()
+                    } else {
+                        active_section_key(&chat, organization)
+                    },
+                    chat.id.clone(),
+                ));
                 rendered_rows.push((format!("c:{}", chat.id), height, element));
             }
 
@@ -1984,20 +2142,30 @@ impl Shell {
             let collapse_key = format!("{organization}:{key}");
             let motion_key = format!("group:{collapse_key}");
             let collapsed = self.sidebar_collapsed_groups.contains(&collapse_key);
-            let row_count = rendered_rows.len();
+            // A device group pages its own rows (`device:{id}`, the same key
+            // as its collapse state); the more row folds away with the body.
+            let page = pages.get(&collapse_key).copied();
+            let more = page
+                .and_then(SectionPage::more_row)
+                .map(|more| self.render_sidebar_more_row(&collapse_key, more, theme, cx));
+            let row_count = page.map_or(rendered_rows.len(), |page| page.total);
             let body_height = SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()
                 + rendered_rows
                     .iter()
                     .map(|(_, height, _)| *height)
                     .sum::<f32>()
-                + SIDEBAR_LIST_GAP * row_count.saturating_sub(1) as f32;
+                + SIDEBAR_LIST_GAP * rendered_rows.len().saturating_sub(1) as f32
+                + more
+                    .as_ref()
+                    .map_or(0.0, |(height, _)| SIDEBAR_LIST_GAP + *height);
             let body = div()
                 .w_full()
                 .flex()
                 .flex_col()
                 .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
                 .gap(px(SIDEBAR_LIST_GAP))
-                .children(rendered_rows.into_iter().map(|(_, _, row)| row));
+                .children(rendered_rows.into_iter().map(|(_, _, row)| row))
+                .children(more.map(|(_, row)| row));
             let visible_label: SharedString = if collapsed {
                 format!("{label} ({row_count})").into()
             } else {
@@ -2024,6 +2192,8 @@ impl Shell {
                 } else {
                     this.sidebar_collapsed_groups.remove(&toggle_key);
                 }
+                // Collapsing (or reopening) a group shows five rows again.
+                this.sidebar_pages.reset(&toggle_key);
                 cx.notify();
             }));
             let body = self.render_sidebar_disclosure_body(
@@ -2059,43 +2229,100 @@ impl Shell {
             }
         }
         self.sidebar_drag_rows = drag_rows;
-        if self.sidebar_hidden_active_count > 0 {
-            let remaining = self.sidebar_hidden_active_count.min(ACTIVE_PAGE);
-            let more = div()
-                .id("active-more")
-                .mt(px(SIDEBAR_SECTION_GAP * theme.ui_scale()))
-                .h(px(36.0 * theme.ui_scale()))
-                .px(px(Theme::SPACE_SM))
-                .flex()
-                .flex_row()
-                .items_center()
-                // Plus is 14px; task harness marks are 13px with an 8px gap.
-                // A 7px gap puts this label on the same text column as titles.
-                .gap(px(7.0))
-                .rounded(px(6.0))
-                .cursor_pointer()
-                .text_size(crate::typography::ui_rems(13.0))
-                .hover_fill_fg(
-                    "active-more",
-                    gpui::transparent_black(),
-                    theme.glass_hover(),
-                    theme.text_muted,
-                    theme.text,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.active_shown += ACTIVE_PAGE;
-                    cx.notify();
-                }))
-                .child(icon(icons::PLUS).size(px(14.0)))
-                .child(SharedString::from(format!("Show {remaining} more")))
-                .into_any_element();
-            rendered.push((
-                "more:active".into(),
-                (36.0 + SIDEBAR_SECTION_GAP) * theme.ui_scale(),
-                more,
-            ));
+        // The single list's more row closes the list (device groups carry
+        // their own inside each group body).
+        if let Some(more) = pages.get("active").copied().and_then(SectionPage::more_row) {
+            let (height, row) = self.render_sidebar_more_row("active", more, theme, cx);
+            rendered.push(("more:active".into(), height, row));
+        }
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe.pages = pages.clone();
+            probe.keyed = rendered
+                .iter()
+                .map(|(key, height, _)| (key.clone(), *height))
+                .collect();
+            probe.active_rows = rendered_ids;
         }
         rendered
+    }
+
+    /// A section's trailing "Show N more" / "Show less" row and its height.
+    /// The glyph sits in the shared mark slot so the label lands on the
+    /// title column; every size scales with the Interface size.
+    fn render_sidebar_more_row(
+        &self,
+        section: &str,
+        more: MoreRow,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> (f32, AnyElement) {
+        let id = format!("sidebar-more-{section}");
+        let (glyph, label, aria): (&'static str, SharedString, SharedString) = match more {
+            MoreRow::More(count) => (
+                icons::ALT_ARROW_DOWN,
+                format!("Show {count} more").into(),
+                format!("Show {count} more tasks").into(),
+            ),
+            MoreRow::Less => (
+                icons::ALT_ARROW_UP,
+                "Show less".into(),
+                "Show fewer tasks".into(),
+            ),
+        };
+        let rest = theme.readable_muted(0.75);
+        let section = section.to_owned();
+        let height = SIDEBAR_MORE_ROW_HEIGHT * theme.ui_scale();
+        let row = div()
+            .id(SharedString::from(id.clone()))
+            .role(gpui::Role::Button)
+            .aria_label(aria)
+            .tab_index(0)
+            .h(px(height))
+            .w_full()
+            .flex_none()
+            .px(px(Theme::SPACE_SM))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
+            .rounded(px(crate::theme::radius::SM))
+            .cursor_pointer()
+            .text_size(crate::typography::ui_rems(12.0))
+            .hover_fill_fg(
+                id.clone(),
+                gpui::transparent_black(),
+                theme.glass_hover(),
+                rest,
+                theme.text,
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                match more {
+                    MoreRow::More(_) => {
+                        let filter = this.settings.space_filter.clone();
+                        this.sidebar_pages.show_more(filter.as_deref(), &section);
+                    }
+                    MoreRow::Less => this.sidebar_pages.reset(&section),
+                }
+                cx.notify();
+            }))
+            .on_key_down(crate::swallow_activation_key)
+            .child(
+                div()
+                    .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        icon(glyph)
+                            .size(crate::typography::ui_rems(12.0))
+                            // An SVG paints only with its own colour.
+                            .text_color(motion::hover_blend(&id, rest, theme.text)),
+                    ),
+            )
+            .child(label)
+            .into_any_element();
+        (height, row)
     }
 
     /// Actual-parent titles for the shelf rows shown (one index per render).
@@ -2112,6 +2339,210 @@ impl Shell {
         .collect()
     }
 
+    /// The Settled and Archived shelves as one tray at the bottom of the
+    /// sidebar list: a hairline, then each shelf's quiet disclosure row and
+    /// its (capped) rows. `None` when neither shelf has anything to hold.
+    pub(super) fn render_sidebar_shelves(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let settled = self.render_settled_section(theme, cx);
+        let archived = self.render_archived_section(theme, cx);
+        if settled.is_none() && archived.is_none() {
+            return None;
+        }
+        let scale = theme.ui_scale();
+        let mut labels = vec!["shelf-rule".to_owned()];
+        labels.extend(settled.is_some().then(|| "settled".to_owned()));
+        labels.extend(archived.is_some().then(|| "archived".to_owned()));
+        let tray = div()
+            .w_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .pb(px(SIDEBAR_DISCLOSURE_BODY_INSET * scale))
+            .child(
+                div()
+                    .w_full()
+                    .pt(px(SIDEBAR_SECTION_GAP * scale))
+                    .pb(px(SIDEBAR_DISCLOSURE_BODY_INSET * scale))
+                    .px(px(Theme::SPACE_SM))
+                    .child(sidebar_separator(theme)),
+            )
+            .children(settled)
+            .children(archived);
+        Some(self.sidebar_probed(tray, move || labels).into_any_element())
+    }
+
+    /// Record the painted bounds of `el`'s children under `labels` for the
+    /// sidebar-sections QA probe; a no-op outside it.
+    pub(super) fn sidebar_probed(
+        &self,
+        el: gpui::Div,
+        labels: impl FnOnce() -> Vec<String>,
+    ) -> gpui::Div {
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = &self.sidebar_probe {
+            let bounds = probe.bounds.clone();
+            let labels = labels();
+            return el.on_children_prepainted(move |children, _, _| {
+                let mut map = bounds.borrow_mut();
+                for (label, child) in labels.iter().zip(children) {
+                    map.insert(label.clone(), child);
+                }
+            });
+        }
+        #[cfg(not(feature = "appshots-fixture"))]
+        let _ = labels;
+        el
+    }
+
+    /// A bottom shelf's disclosure row: its glyph in the shared mark slot
+    /// (titles and the shelf rows' marks line up under it), a quiet title,
+    /// the count and an always-visible chevron. A secondary drawer, not a
+    /// peer of the active list's section labels.
+    fn sidebar_shelf_header(
+        &self,
+        key: &'static str,
+        label: &'static str,
+        glyph: &'static str,
+        total: usize,
+        open: bool,
+        theme: &Theme,
+    ) -> gpui::Stateful<gpui::Div> {
+        let id = format!("{key}-toggle");
+        let rest = theme.readable_muted(0.68);
+        let chevron = self.sidebar_disclosure_chevron(key, open, theme);
+        div()
+            .id(SharedString::from(id.clone()))
+            .role(gpui::Role::Button)
+            .aria_label(SharedString::from(format!("{label}, {total} tasks")))
+            .aria_expanded(open)
+            .tab_index(0)
+            .w_full()
+            .flex_none()
+            .h(px(SIDEBAR_DISCLOSURE_HEADER_HEIGHT * theme.ui_scale()))
+            .px(px(Theme::SPACE_SM))
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(crate::typography::ui_rems(SIDEBAR_MARK_GAP))
+            .rounded(px(crate::theme::radius::SM))
+            .cursor_pointer()
+            .hover_fill_fg(
+                id.clone(),
+                gpui::transparent_black(),
+                theme.glass_hover(),
+                rest,
+                theme.text,
+            )
+            .on_key_down(crate::swallow_activation_key)
+            .child(
+                div()
+                    .w(crate::typography::ui_rems(SIDEBAR_MARK_SLOT))
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .child(
+                        icon(glyph)
+                            .size(crate::typography::ui_rems(13.0))
+                            // An SVG paints only with its own colour.
+                            .text_color(theme.readable_icon(motion::hover_blend(
+                                &id,
+                                theme.readable_muted(0.5),
+                                theme.text_muted,
+                            ))),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(crate::typography::ui_rems(12.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .font_features(crate::typography::tabular_figures())
+                    .text_color(theme.readable_faint(0.9))
+                    .child(SharedString::from(total.to_string())),
+            )
+            .child(chevron)
+    }
+
+    /// Open or close a bottom shelf. Either way it comes back at five rows;
+    /// opening keeps the tray scrolled into view while the body grows.
+    fn toggle_sidebar_shelf(
+        &mut self,
+        key: &'static str,
+        body_height: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let was_open = match key {
+            "settled" => self.settled_open,
+            _ => self.archived_open,
+        };
+        self.begin_sidebar_disclosure_motion(
+            key,
+            if was_open { body_height } else { 0.0 },
+            if was_open { 0.0 } else { body_height },
+        );
+        match key {
+            "settled" => self.settled_open = !was_open,
+            _ => self.archived_open = !was_open,
+        }
+        self.sidebar_pages.reset(key);
+        self.sidebar_shelf_reveal = (!was_open).then(|| {
+            std::time::Instant::now() + motion::COLLAPSE.total() + SIDEBAR_DISCLOSURE_TWEEN_GRACE
+        });
+        cx.notify();
+    }
+
+    /// A shelf body's reserved height: insets, one-line rows and the more
+    /// row, all on the Interface size scale so the tween matches the paint.
+    fn shelf_body_height(visible: usize, more: Option<f32>, scale: f32) -> f32 {
+        2.0 * SIDEBAR_DISCLOSURE_BODY_INSET * scale
+            + visible as f32 * SIDEBAR_SHELF_ROW_HEIGHT * scale
+            + visible.saturating_sub(1) as f32 * SIDEBAR_LIST_GAP
+            + more.map_or(0.0, |height| SIDEBAR_LIST_GAP + height)
+    }
+
+    /// Settled rows under the project filter, most recently active first.
+    fn settled_shelf_chats(&self, cx: &App) -> Vec<luna_proto::Chat> {
+        let now = Utc::now();
+        let mut attention_task_keys = self.activity_task_keys(cx);
+        attention_task_keys.extend(self.settlement_blocking_task_keys());
+        let placed = self.effective_placements(cx);
+        let state = self.state.read(cx);
+        let mut rows: Vec<luna_proto::Chat> = sidebar_rows(
+            state.sidebar_chats(now, self.settings.space_filter.as_deref()),
+            &state,
+            &placed,
+        )
+        .into_iter()
+        .filter(
+            |(status, chat)| match self.pending_task_actions.get(&chat.id) {
+                Some(TaskConfirmation::Settle) => true,
+                Some(TaskConfirmation::Archive | TaskConfirmation::Delete) => false,
+                None => is_settled_chat(
+                    chat,
+                    *status,
+                    now,
+                    self.settings.sidebar_auto_settle_after_days,
+                    attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
+                ),
+            },
+        )
+        .map(|(_, chat)| chat.clone())
+        .collect();
+        rows.sort_by(|left, right| compare_sidebar_chats(SidebarSort::LastUpdated, left, right));
+        rows
+    }
+
     /// Settled tasks stay in the synced task list; automatic settling is a
     /// derived view, while deliberate overrides live on the task record.
     pub(super) fn render_settled_section(
@@ -2120,82 +2551,55 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let now = Utc::now();
-        let mut attention_task_keys = self.activity_task_keys(cx);
-        attention_task_keys.extend(self.settlement_blocking_task_keys());
-        let placed = self.effective_placements(cx);
-        let mut rows: Vec<luna_proto::Chat> = {
-            let state = self.state.read(cx);
-            let rows = sidebar_rows(
-                state.sidebar_chats(now, self.settings.space_filter.as_deref()),
-                &state,
-                &placed,
-            );
-            rows.into_iter()
-                .filter(
-                    |(status, chat)| match self.pending_task_actions.get(&chat.id) {
-                        Some(TaskConfirmation::Settle) => true,
-                        Some(TaskConfirmation::Archive | TaskConfirmation::Delete) => false,
-                        None => is_settled_chat(
-                            chat,
-                            *status,
-                            now,
-                            self.settings.sidebar_auto_settle_after_days,
-                            attention_task_keys
-                                .contains(&(chat.device_id.clone(), chat.id.clone())),
-                        ),
-                    },
-                )
-                .map(|(_, chat)| chat.clone())
-                .collect()
-        };
+        let rows = self.settled_shelf_chats(cx);
         if rows.is_empty() {
             return None;
         }
-        rows.sort_by(|left, right| compare_sidebar_chats(SidebarSort::LastUpdated, left, right));
         let total = rows.len();
-        let shown = self.settled_shown.max(SETTLED_INITIAL);
-        let visible_count = total.min(shown);
-        let has_more = total > shown;
-        // Shelf rows are 36 pt at the default Interface size and scale with
-        // it; the collapse motion's height must match what renders.
-        let scale = theme.ui_scale();
-        let body_height = SIDEBAR_DISCLOSURE_BODY_INSET * scale
-            + visible_count as f32 * 36.0 * scale
-            + visible_count.saturating_sub(1) as f32 * SIDEBAR_LIST_GAP
-            + if has_more {
-                36.0 * scale + SIDEBAR_LIST_GAP
-            } else {
-                0.0
-            };
-        let open = self.settled_open;
-        let label: SharedString = if open {
-            "Settled".into()
-        } else {
-            format!("Settled ({total})").into()
+        let limit = self
+            .sidebar_pages
+            .limit(self.settings.space_filter.as_deref(), "settled");
+        let page = SectionPage {
+            total,
+            visible: total.min(limit),
+            limit,
         };
-        let header = sidebar_disclosure_header(
-            "settled-toggle".into(),
-            theme,
-            label,
-            self.sidebar_disclosure_chevron("settled", open, theme),
-        )
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.begin_sidebar_disclosure_motion(
-                "settled",
-                if this.settled_open { body_height } else { 0.0 },
-                if this.settled_open { 0.0 } else { body_height },
-            );
-            this.settled_open = !this.settled_open;
-            this.settled_shown = SETTLED_INITIAL;
-            cx.notify();
-        }));
+        let more = page
+            .more_row()
+            .map(|more| self.render_sidebar_more_row("settled", more, theme, cx));
+        let body_height = Self::shelf_body_height(
+            page.visible,
+            more.as_ref().map(|(height, _)| *height),
+            theme.ui_scale(),
+        );
+        let open = self.settled_open;
+        let header = self
+            .sidebar_shelf_header("settled", "Settled", icons::CHECK, total, open, theme)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_sidebar_shelf("settled", body_height, cx);
+            }));
         let selected = self.state.read(cx).selected_chat.clone();
         let mut list = div()
+            .w_full()
             .flex()
             .flex_col()
-            .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
+            .py(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
             .gap(px(SIDEBAR_LIST_GAP));
+        let shown = page.visible;
         let parents = self.shelf_parent_titles(rows.iter().take(shown), cx);
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe.shelf_rows.insert(
+                "settled".into(),
+                rows.iter()
+                    .take(shown)
+                    .map(|chat| chat.id.clone())
+                    .collect(),
+            );
+            probe
+                .shelf_pages
+                .insert("settled".into(), (page, open, body_height));
+        }
         for chat in rows.into_iter().take(shown) {
             let id = chat.id.clone();
             let menu_id = id.clone();
@@ -2240,7 +2644,8 @@ impl Shell {
             list = list.child(
                 div()
                     .id(SharedString::from(format!("settled-{id}")))
-                    .h(px(36.0 * theme.ui_scale()))
+                    .flex_none()
+                    .h(px(SIDEBAR_SHELF_ROW_HEIGHT * theme.ui_scale()))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -2327,148 +2732,132 @@ impl Shell {
                     ),
             );
         }
-        let mut body = div().w_full().flex().flex_col().child(list);
-        if has_more {
-            let remaining = (total - shown).min(SETTLED_PAGE);
-            body = body.child(
-                div()
-                    .id("settled-more")
-                    .mt(px(SIDEBAR_LIST_GAP))
-                    .h(px(36.0 * theme.ui_scale()))
-                    .px(px(Theme::SPACE_SM))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(10.0))
-                    .rounded(px(6.0))
-                    .cursor_pointer()
-                    .text_size(crate::typography::ui_rems(13.0))
-                    .hover_fill_fg(
-                        "settled-more",
-                        gpui::transparent_black(),
-                        theme.glass_hover(),
-                        theme.text_muted,
-                        theme.text,
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.settled_shown = this.settled_shown.max(SETTLED_INITIAL) + SETTLED_PAGE;
-                        cx.notify();
-                    }))
-                    .child(icon(icons::PLUS).size(px(14.0)))
-                    .child(SharedString::from(format!("Show {remaining} more"))),
-            );
-        }
+        let has_more = more.is_some();
+        let list = list.children(more.map(|(_, row)| row));
+        let list = self.sidebar_probed(list, move || {
+            let mut labels: Vec<String> =
+                (0..shown).map(|ix| format!("settled-row-{ix}")).collect();
+            if has_more {
+                labels.push("settled-more".into());
+            }
+            labels
+        });
         let body = self.render_sidebar_disclosure_body(
             "settled",
             open,
             body_height,
-            body.into_any_element(),
+            list.into_any_element(),
         );
+        let section = div().w_full().flex().flex_col().child(header).child(body);
         Some(
-            div()
-                .w_full()
-                .flex()
-                .flex_col()
-                .pt(px(SIDEBAR_SECTION_GAP * theme.ui_scale()))
-                .child(header)
-                .child(body)
-                .into_any_element(),
+            self.sidebar_probed(section, || {
+                vec!["settled-header".into(), "settled-body".into()]
+            })
+            .into_any_element(),
         )
     }
 
-    /// The sidebar's archived shelf — a direct port of t3code's settled
-    /// shelf: header is label + hairline + chevron ("Archived (N)" closed,
-    /// "Archived" open), rows are 36px SLIM one-liners (dimmed harness mark,
-    /// title, time-ago right — the time yields to Unarchive on row hover),
-    /// and the tail pages behind an explicit "Show N more" row (initial 10,
-    /// +25 a click). `None` when nothing is archived under the current
-    /// project filter.
-    pub(super) fn render_archived_section(
-        &mut self,
-        theme: &Theme,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        const INITIAL: usize = 10;
-        const PAGE: usize = 25;
-        let now = Utc::now();
+    /// Archived rows under the project filter, by recency (a manual drag
+    /// order describes the active list only).
+    fn archived_shelf_chats(&self, cx: &App) -> Vec<luna_proto::Chat> {
         let filter = self.settings.space_filter.clone();
         let placed = self.effective_placements(cx);
-        let mut rows: Vec<luna_proto::Chat> = {
-            let state = self.state.read(cx);
-            state
-                .chats
-                .iter()
-                .filter(|c| c.archived)
-                .filter(|chat| sidebar_row_visible(chat, &state, &placed))
-                .filter(|chat| {
-                    self.pending_task_actions.get(&chat.id) != Some(&TaskConfirmation::Delete)
-                })
-                .filter(|chat| {
-                    chat.space_id
-                        .as_deref()
-                        .is_some_and(|id| state.space_row(id).is_some())
-                })
-                .filter(|chat| match &filter {
-                    Some(space_id) => chat.space_id.as_deref() == Some(space_id.as_str()),
-                    None => true,
-                })
-                .cloned()
-                .collect()
-        };
-        // A drag order describes the active list; the shelf stays by recency.
+        let state = self.state.read(cx);
+        let mut rows: Vec<luna_proto::Chat> = state
+            .chats
+            .iter()
+            .filter(|c| c.archived)
+            .filter(|chat| sidebar_row_visible(chat, &state, &placed))
+            .filter(|chat| {
+                self.pending_task_actions.get(&chat.id) != Some(&TaskConfirmation::Delete)
+            })
+            .filter(|chat| {
+                chat.space_id
+                    .as_deref()
+                    .is_some_and(|id| state.space_row(id).is_some())
+            })
+            .filter(|chat| match &filter {
+                Some(space_id) => chat.space_id.as_deref() == Some(space_id.as_str()),
+                None => true,
+            })
+            .cloned()
+            .collect();
         let sort = match self.settings.sidebar_sort {
             SidebarSort::Manual => SidebarSort::LastUpdated,
             sort => sort,
         };
         rows.sort_by(|left, right| compare_sidebar_chats(sort, left, right));
+        rows
+    }
+
+    /// The sidebar's archived shelf (after t3code's settled shelf): a quiet
+    /// disclosure row at the bottom of the list, then 36 pt one-line rows
+    /// (dimmed harness mark, title, time-ago right — the time yields to
+    /// Unarchive on row hover), five at a time behind "Show more". `None`
+    /// when nothing is archived under the current project filter.
+    pub(super) fn render_archived_section(
+        &mut self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let now = Utc::now();
+        let rows = self.archived_shelf_chats(cx);
         if rows.is_empty() {
             return None;
         }
         let total = rows.len();
         let open = self.archived_open;
-        let shown = self.archived_shown.max(INITIAL);
-        let visible_count = total.min(shown);
-        let has_more = total > shown;
-        // Shelf rows are 36 pt at the default Interface size and scale with
-        // it; the collapse motion's height must match what renders.
-        let scale = theme.ui_scale();
-        let body_height = SIDEBAR_DISCLOSURE_BODY_INSET * scale
-            + visible_count as f32 * 36.0 * scale
-            + visible_count.saturating_sub(1) as f32 * SIDEBAR_LIST_GAP
-            + if has_more {
-                36.0 * scale + SIDEBAR_LIST_GAP
-            } else {
-                0.0
-            };
-        // Header (t3code settled-shelf toggle): muted 12px label, a hairline
-        // filling the middle, chevron flipping open/closed. The count only
-        // shows while collapsed — expanded, the rows speak for themselves.
-        let label: SharedString = if open {
-            "Archived".into()
-        } else {
-            format!("Archived ({total})").into()
+        let limit = self
+            .sidebar_pages
+            .limit(self.settings.space_filter.as_deref(), "archived");
+        let page = SectionPage {
+            total,
+            visible: total.min(limit),
+            limit,
         };
-        let chevron = self.sidebar_disclosure_chevron("archived", open, theme);
-        let header = sidebar_disclosure_header("archived-toggle".into(), theme, label, chevron)
+        let more = page
+            .more_row()
+            .map(|more| self.render_sidebar_more_row("archived", more, theme, cx));
+        let body_height = Self::shelf_body_height(
+            page.visible,
+            more.as_ref().map(|(height, _)| *height),
+            theme.ui_scale(),
+        );
+        let header = self
+            .sidebar_shelf_header(
+                "archived",
+                "Archived",
+                icons::ARCHIVE_MINIMALISTIC,
+                total,
+                open,
+                theme,
+            )
             .on_click(cx.listener(move |this, _, _, cx| {
-                let was_open = this.archived_open;
-                this.begin_sidebar_disclosure_motion(
-                    "archived",
-                    if was_open { body_height } else { 0.0 },
-                    if was_open { 0.0 } else { body_height },
-                );
-                this.archived_open = !was_open;
-                this.archived_shown = INITIAL;
-                cx.notify();
+                this.toggle_sidebar_shelf("archived", body_height, cx);
             }));
-        let section = div().flex().flex_col().child(header);
+        let shown = page.visible;
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe.shelf_rows.insert(
+                "archived".into(),
+                rows.iter()
+                    .take(shown)
+                    .map(|chat| chat.id.clone())
+                    .collect(),
+            );
+            probe
+                .shelf_pages
+                .insert("archived".into(), (page, open, body_height));
+        }
+        let section = div().w_full().flex().flex_col().child(header);
         let body = {
             let selected = self.state.read(cx).selected_chat.clone();
             let selected_wash = crate::theme::glass_selected_bg();
             let mut list = div()
+                .w_full()
                 .flex()
                 .flex_col()
-                .pt(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
+                .py(px(SIDEBAR_DISCLOSURE_BODY_INSET * theme.ui_scale()))
                 .gap(px(SIDEBAR_LIST_GAP));
             let parents = self.shelf_parent_titles(rows.iter().take(shown), cx);
             for chat in rows.into_iter().take(shown) {
@@ -2563,7 +2952,8 @@ impl Shell {
                 list = list.child(
                     div()
                         .id(SharedString::from(format!("archived-{id}")))
-                        .h(px(36.0 * theme.ui_scale()))
+                        .flex_none()
+                        .h(px(SIDEBAR_SHELF_ROW_HEIGHT * theme.ui_scale()))
                         .flex()
                         .flex_row()
                         .items_center()
@@ -2673,50 +3063,26 @@ impl Shell {
                         .child(right),
                 );
             }
-            let mut body = div().w_full().flex().flex_col().child(list);
-            if has_more {
-                let remaining = (total - shown).min(PAGE);
-                body = body.child(
-                    div()
-                        .id("archived-more")
-                        // Sits outside the rows' gapped column — match the
-                        // list's 2px row gap or it fuses with the last row.
-                        .mt(px(2.0))
-                        .h(px(36.0 * theme.ui_scale()))
-                        .flex()
-                        .flex_row()
-                        .items_center()
-                        .gap(px(10.0))
-                        .px(px(Theme::SPACE_SM))
-                        .rounded(px(6.0))
-                        .text_size(crate::typography::ui_rems(13.0))
-                        .cursor_pointer()
-                        .hover_fill_fg(
-                            "archived-more",
-                            gpui::transparent_black(),
-                            theme.glass_hover(),
-                            theme.readable_muted(0.55),
-                            theme.text,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.archived_shown = this.archived_shown.max(INITIAL) + PAGE;
-                            cx.notify();
-                        }))
-                        .child(
-                            crate::icons::icon(crate::icons::PLUS)
-                                .size(px(14.0))
-                                .flex_none(),
-                        )
-                        .child(SharedString::from(format!("Show {remaining} more"))),
-                );
-            }
-            body.into_any_element()
+            let has_more = more.is_some();
+            let list = list.children(more.map(|(_, row)| row));
+            self.sidebar_probed(list, move || {
+                let mut labels: Vec<String> =
+                    (0..shown).map(|ix| format!("archived-row-{ix}")).collect();
+                if has_more {
+                    labels.push("archived-more".into());
+                }
+                labels
+            })
+            .into_any_element()
         };
         let body = self.render_sidebar_disclosure_body("archived", open, body_height, body);
-        let section = section
-            .pt(px(SIDEBAR_SECTION_GAP * theme.ui_scale()))
-            .child(body);
-        Some(section.into_any_element())
+        let section = section.child(body);
+        Some(
+            self.sidebar_probed(section, || {
+                vec!["archived-header".into(), "archived-body".into()]
+            })
+            .into_any_element(),
+        )
     }
 
     // ---- add-space flow ----
@@ -4446,6 +4812,103 @@ mod tests {
         promote_local_device_group(&mut groups, Some("not-present"));
 
         assert_eq!(groups, before);
+    }
+}
+
+/// The sidebar-sections QA fixture's view of the sidebar.
+#[cfg(feature = "appshots-fixture")]
+impl Shell {
+    /// Start recording sidebar section rows and painted bounds.
+    pub fn fixture_enable_sidebar_probe(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_probe = Some(SidebarProbe::default());
+        cx.notify();
+    }
+
+    /// Switch the project filter through the production path.
+    pub fn fixture_set_space_filter(&mut self, filter: Option<String>, cx: &mut Context<Self>) {
+        self.set_space_filter(filter, cx);
+    }
+
+    /// Scroll the sidebar list `down` pixels from the top (clamped).
+    pub fn fixture_scroll_sidebar_to(&mut self, down: f32, cx: &mut Context<Self>) {
+        let max = f32::from(self.sidebar_scroll.max_offset().y);
+        self.sidebar_scroll
+            .set_offset(gpui::point(px(0.0), px(-down.clamp(0.0, max.max(0.0)))));
+        cx.notify();
+    }
+
+    /// One list, or grouped by device (the View menu's organization rows).
+    pub fn fixture_set_sidebar_by_device(&mut self, by_device: bool, cx: &mut Context<Self>) {
+        self.activate_sidebar_view_row(
+            if by_device {
+                SidebarViewRow::ByDevice
+            } else {
+                SidebarViewRow::InOneList
+            },
+            cx,
+        );
+    }
+
+    pub fn fixture_sidebar_sections_readback(&self, cx: &Context<Self>) -> serde_json::Value {
+        let rect = |bounds: gpui::Bounds<gpui::Pixels>| {
+            serde_json::json!({
+                "x": f32::from(bounds.origin.x),
+                "y": f32::from(bounds.origin.y),
+                "w": f32::from(bounds.size.width),
+                "h": f32::from(bounds.size.height),
+                "bottom": f32::from(bounds.bottom()),
+            })
+        };
+        let more = |page: SectionPage| match page.more_row() {
+            Some(MoreRow::More(count)) => serde_json::json!(format!("Show {count} more")),
+            Some(MoreRow::Less) => serde_json::json!("Show less"),
+            None => serde_json::Value::Null,
+        };
+        let Some(probe) = self.sidebar_probe.as_ref() else {
+            return serde_json::Value::Null;
+        };
+        let scroll = &self.sidebar_scroll;
+        let offset = f32::from(scroll.offset().y);
+        let scroll_children: serde_json::Map<String, serde_json::Value> = probe
+            .scroll_children
+            .iter()
+            .enumerate()
+            .filter_map(|(ix, label)| {
+                let mut bounds = scroll.bounds_for_item(ix)?;
+                // Layout bounds are unscrolled: shift to where they paint.
+                bounds.origin.y += px(offset);
+                Some((label.clone(), rect(bounds)))
+            })
+            .collect();
+        serde_json::json!({
+            "order": self.sidebar_visible_order(cx),
+            "filter": self.settings.space_filter,
+            "selected": self.state.read(cx).selected_chat,
+            "uiScale": Theme::of(cx).ui_scale(),
+            "settledOpen": self.settled_open,
+            "archivedOpen": self.archived_open,
+            "pages": probe.pages.iter().map(|(key, page)| (key.clone(), serde_json::json!({
+                "total": page.total,
+                "visible": page.visible,
+                "limit": page.limit,
+                "more": more(*page),
+            }))).collect::<serde_json::Map<_, _>>(),
+            "activeRows": probe.active_rows.iter().map(|(section, id)| serde_json::json!([section, id])).collect::<Vec<_>>(),
+            "shelfRows": probe.shelf_rows,
+            "shelfPages": probe.shelf_pages.iter().map(|(key, (page, open, body))| (key.clone(), serde_json::json!({
+                "total": page.total,
+                "visible": page.visible,
+                "limit": page.limit,
+                "more": more(*page),
+                "open": open,
+                "bodyHeight": body,
+            }))).collect::<serde_json::Map<_, _>>(),
+            "keyed": probe.keyed.iter().map(|(key, height)| serde_json::json!([key, height])).collect::<Vec<_>>(),
+            "viewport": rect(scroll.bounds()),
+            "scroll": { "offset": offset, "max": f32::from(scroll.max_offset().y) },
+            "scrollChildren": scroll_children,
+            "bounds": probe.bounds.borrow().iter().map(|(label, bounds)| (label.clone(), rect(*bounds))).collect::<serde_json::Map<_, _>>(),
+        })
     }
 }
 
