@@ -146,6 +146,30 @@ Playful verbs become an opt-in setting.
    - Settings rows (DS-03, DS-07, DS-08)
    - the Solar icon pass (DS-09)
 
+### Implementation (2026-10-06)
+
+Implemented on `main` in seven milestones (`c4963094` timeline, `b01a67e6`
+timeline 2, `877a43cc` composer, `2868e2a4` shell, `972e4e80` secondary
+surfaces, `27b703a7` design system, `730ac5b4` thought reflow and shell
+finish). Per-finding status and notes live in
+[`implementation.md`](implementation.md) and appear on each card in the
+report.
+
+- **Done:** 104 findings.
+- **Partial:** 13, each with a note on what remains. The larger
+  open pieces are a full `ui::Button` / `Segmented` control kit (DS-02,
+  DS-16), the remaining ad-hoc hover fills (DS-05, SH-12), animated switch
+  knobs (DS-06), completion-popup exit motion (CP-11) and the sidebar row
+  layout (SH-13), which was user-tuned and needs a design decision.
+
+Verification at each milestone:
+- the serial `luna-ui` lib suite (1185 passing);
+- the appearance contrast audit (all theme, accent and surface
+  combinations pass, now including the composer placeholder);
+- the composer parity fixture through its 300 pt pane case;
+- the usage, appearance, hook and agent fixtures, and the workbench fixture
+  for debug-build panics.
+
 ### Evidence and limits
 
 - **Real renders:** they come from the headless production fixtures, all 40 built at `590cf4b6`.

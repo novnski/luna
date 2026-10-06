@@ -163,6 +163,22 @@ def parse_area(area: Area) -> None:
     area.findings.sort(key=lambda f: order[f.severity])  # stable: keeps the file's own order within a severity
 
 
+def load_status() -> dict[str, tuple[str, str]]:
+    """Implementation status per finding id from implementation.md."""
+    path = ROOT / "implementation.md"
+    out: dict[str, tuple[str, str]] = {}
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"\|\s*([A-Z]{2}-\d+)\s*\|[^|]*\|[^|]*\|\s*([^|]*?)\s*\|\s*(.*?)\s*\|\s*$", line)
+        if m:
+            state = re.sub(r"\s*\(.*\)", "", m.group(2)).strip().lower() or "todo"
+            out[m.group(1)] = (state, m.group(3))
+    return out
+
+
+STATUS = load_status()
+
 _img_cache: dict[str, str | None] = {}
 
 
@@ -270,18 +286,29 @@ def render_finding(f: Finding) -> str:
     if f.extra:
         rows.append(f'<div class="row extra"><div class="md">{MD.render(f.extra)}</div></div>')
     where = f.fields.get("where", "")
-    search = html.escape(" ".join([f.id, f.title, *f.fields.values()]).lower(), quote=True)
+    state, note = STATUS.get(f.id, ("todo", ""))
+    status_html = (
+        f'<span class="status st-{html.escape(state)}">{html.escape(state)}</span>'
+    )
+    note_html = (
+        f'<div class="impl"><h4>Implementation</h4><div class="md">{md_block(note)}</div></div>'
+        if note
+        else ""
+    )
+    search = html.escape(" ".join([f.id, f.title, state, *f.fields.values()]).lower(), quote=True)
     return f"""
 <article class="finding" id="{f.id}" data-area="{f.area}" data-sev="{sev}" data-search="{search}">
   <header>
     <a class="fid" href="#{f.id}">{f.id}</a>
     <span class="sev sev-{sev}" title="{SEVERITIES[sev]}">{sev}</span>
     <h3>{html.escape(f.title)}</h3>
+    {status_html}
   </header>
   <div class="meta">{chips}{effort}</div>
   {f'<div class="where md">{md_block(where)}</div>' if where else ''}
   <div class="pair">{figure(images_for(f, "before"), "before", f)}{figure(images_for(f, "after"), "after", f)}</div>
   <div class="body">{''.join(rows)}</div>
+  {note_html}
 </article>"""
 
 
@@ -411,6 +438,12 @@ a { color: var(--accent); }
 .sev-P0 { color: var(--p0); background: var(--p0-bg); } .sev-P1 { color: var(--p1); background: var(--p1-bg); }
 .sev-P2 { color: var(--p2); background: var(--p2-bg); } .sev-P3 { color: var(--p3); background: var(--p3-bg); }
 .meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.status { font: 600 11.5px/1 var(--mono); padding: 5px 8px; border-radius: 99px; text-transform: uppercase; letter-spacing: 0.04em; }
+.st-done { color: var(--after); background: color-mix(in srgb, var(--after) 14%, transparent); }
+.st-partial { color: var(--p2); background: var(--p2-bg); }
+.st-todo, .st-wip { color: var(--p3); background: var(--p3-bg); }
+.impl { border-top: 1px solid var(--line); padding-top: 12px; }
+.impl h4 { font: 600 11.5px/1 var(--font); letter-spacing: 0.06em; text-transform: uppercase; color: var(--after); margin-bottom: 7px; }
 .chip, .effort { font: 500 12px/1 var(--font); color: var(--muted); background: var(--raised); padding: 5px 9px; border-radius: 99px; }
 .effort { font-family: var(--mono); }
 .where { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
@@ -547,6 +580,10 @@ def build(standalone: bool) -> str:
     summary = summary_text()
     summary_html = f'<section class="summary"><h2>Cross-cutting summary</h2><div class="md">{summary}</div></section>' if summary else ""
     sev_line = " · ".join(f"{sev_total[s]} {s}" for s in SEVERITIES)
+    states = [STATUS.get(f.id, ("todo", ""))[0] for a in areas for f in a.findings]
+    sev_line += " — " + " · ".join(
+        f"{states.count(k)} {k}" for k in ("done", "partial", "todo") if states.count(k)
+    )
     area_btns = '<button type="button" data-area="all" aria-pressed="true">All</button>' + "".join(
         f'<button type="button" data-area="{a.prefix}" aria-pressed="false">{a.name}</button>' for a in areas
     )
