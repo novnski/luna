@@ -148,27 +148,40 @@ Playful verbs become an opt-in setting.
 
 ### Implementation (2026-10-06)
 
-Implemented on `main` in seven milestones (`c4963094` timeline, `b01a67e6`
-timeline 2, `877a43cc` composer, `2868e2a4` shell, `972e4e80` secondary
-surfaces, `27b703a7` design system, `730ac5b4` thought reflow and shell
-finish). Per-finding status and notes live in
+Implemented on `main`. Per-finding status and notes live in
 [`implementation.md`](implementation.md) and appear on each card in the
 report.
 
-- **Done:** 104 findings.
-- **Partial:** 13, each with a note on what remains. The larger
-  open pieces are a full `ui::Button` / `Segmented` control kit (DS-02,
-  DS-16), the remaining ad-hoc hover fills (DS-05, SH-12), animated switch
-  knobs (DS-06), completion-popup exit motion (CP-11) and the sidebar row
-  layout (SH-13), which was user-tuned and needs a design decision.
+- **Milestones A–G:** `c4963094` timeline, `b01a67e6` timeline 2,
+  `877a43cc` composer, `2868e2a4` shell, `972e4e80` secondary surfaces,
+  `27b703a7` design system, `730ac5b4` thought reflow and shell finish.
+- **Milestone H** finished the 13 findings that were partial:
+  - `8b2fe783`: the control kit in `button.rs` (`button`, `icon_button`,
+    `select`, `chip`, `segmented`, `selection_ring`, in Sm/Md/Lg), with
+    every hover eased through `interaction::HoverFill`. It adds
+    theme-tinted `FillTier` and separator roles, and switch knobs that
+    travel only when their value flips (DS-02, DS-05, DS-06, DS-14,
+    DS-16, SH-12).
+  - `c2f3b20f`: title-first sidebar rows on one leading grid, and the
+    chrome size ladder (SH-10, SH-13, SH-14).
+  - `10834fb0`: elevation for frosted menus, drawn as rings outside the
+    glass (CP-16).
+  - `35ce7694`: completion-popup exits and the rebuilt stash menu, one
+    shared menu cursor, the stacked-card radius ladder, and the last
+    composer hovers (CP-11, CP-13, CP-20).
+- **Done:** all 117 findings. The one deliberate exception is the
+  scrollbar thumbs: their hover still snaps, because every rail shares
+  one element id, so they have no stable per-thumb key to fade on.
 
 Verification at each milestone:
 - the serial `luna-ui` lib suite (1185 passing);
-- the appearance contrast audit (all theme, accent and surface
-  combinations pass, now including the composer placeholder);
-- the composer parity fixture through its 300 pt pane case;
-- the usage, appearance, hook and agent fixtures, and the workbench fixture
-  for debug-build panics.
+- the appearance contrast audit (all 810 theme, accent and surface
+  combinations pass, including the composer placeholder);
+- the appearance, goal-card, integrations-picker, related-chats and
+  workbench fixtures, the last also checked for debug-build panics;
+- the composer parity fixture through its 300 pt pane case.
+
+The workbench fixture's split-step timeout predates this work.
 
 ### Evidence and limits
 
