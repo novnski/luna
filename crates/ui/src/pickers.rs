@@ -979,6 +979,7 @@ pub struct Pickers {
     _search_events: Subscription,
     _state_observe: Subscription,
     _catalog_observe: Subscription,
+    _new_chat_provider_observe: Subscription,
 }
 
 impl Pickers {
@@ -1140,6 +1141,20 @@ impl Pickers {
             this.prefetch_models(true, cx);
             cx.notify();
         });
+        // Settings → Providers changed the provider new chats start with:
+        // adopt it, so this composer neither ignores the change until a
+        // restart nor writes its stale copy back on its next pick.
+        let new_chat_provider_observe = cx.observe_global::<
+            crate::settings::provider_defaults::NewChatProviderChanged,
+        >(|this: &mut Self, cx| {
+            let harness = cx
+                .global::<crate::settings::provider_defaults::NewChatProviderChanged>()
+                .0;
+            if this.defaults.harness != Some(harness) {
+                this.defaults.harness = Some(harness);
+                cx.notify();
+            }
+        });
         // Dev/testing knob: `LUNA_OPEN_PICKER=model|traits|repo|branch` boots
         // with that popover open — synthetic input can't reach the app on
         // headless compositors, so captures need a data-side path.
@@ -1246,6 +1261,7 @@ impl Pickers {
             _search_events: search_events,
             _state_observe: state_observe,
             _catalog_observe: catalog_observe,
+            _new_chat_provider_observe: new_chat_provider_observe,
         }
     }
 
