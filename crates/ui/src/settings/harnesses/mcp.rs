@@ -1,4 +1,4 @@
-//! CC-11: Claude MCP rows in the shared "Skill library and MCP" card.
+//! CC-11: Claude MCP rows in the shared "Skills and MCP" card.
 //!
 //! Renders the provider-reported details the engine attaches to an MCP
 //! inventory item (status, transport, per-launch-mode load, the selected
@@ -14,9 +14,10 @@ use luna_proto::{
 };
 use luna_rpc::methods;
 
-use super::{HarnessesPage, meta_text};
+use super::HarnessesPage;
 use crate::settings::widgets;
-use crate::theme::Theme;
+use crate::theme::{FillTier, Theme};
+use crate::typography::ui_rems;
 
 const BUSY_REASON: &str = "Unavailable while Claude handles the previous MCP request.";
 
@@ -190,24 +191,26 @@ impl HarnessesPage {
         cx.notify();
     }
 
-    /// Provider-reported details and actions for one MCP inventory row.
-    pub(super) fn render_mcp_details(
+    /// Provider-reported details and actions for one MCP inventory row:
+    /// `(facts, actions)`. Facts (status badges, Claude's error, app views)
+    /// go under the row's text; actions trail the row.
+    pub(super) fn mcp_row_parts(
         &self,
         theme: &Theme,
         item: &IntegrationInventoryItem,
         details: &IntegrationMcpDetails,
         cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> (Vec<AnyElement>, Vec<AnyElement>) {
         let identity = item.identity.clone().unwrap_or_default();
         let enabled = !self.mcp.busy && !identity.is_empty();
-        let mut facts = vec![status_badge(theme, details.status).into_any_element()];
+        let mut badges = vec![status_badge(theme, details.status).into_any_element()];
         if let Some(transport) = &details.transport {
-            facts.push(widgets::badge(theme, transport.clone()).into_any_element());
+            badges.push(widgets::badge(theme, transport.clone()).into_any_element());
         }
         if let Some(version) = &details.server_version {
-            facts.push(widgets::badge(theme, version.clone()).into_any_element());
+            badges.push(widgets::badge(theme, version.clone()).into_any_element());
         }
-        facts.push(
+        badges.push(
             widgets::badge(
                 theme,
                 match details.tool_count {
@@ -218,24 +221,26 @@ impl HarnessesPage {
             .into_any_element(),
         );
         if let Some(session) = &details.session {
-            facts.push(
+            badges.push(
                 widgets::badge(theme, format!("This chat: {}", session.status.label()))
                     .into_any_element(),
             );
         }
-        let mut block = div().mt(px(6.0)).flex().flex_col().child(
+        let mut facts: Vec<AnyElement> = vec![
             div()
                 .flex()
                 .flex_row()
                 .flex_wrap()
-                .gap(px(6.0))
-                .children(facts),
-        );
+                .gap(ui_rems(6.0))
+                .children(badges)
+                .into_any_element(),
+        ];
         if let Some(error) = &details.error {
-            block = block.child(
+            facts.push(
                 div()
-                    .mt(px(4.0))
-                    .text_size(crate::typography::ui_rems(11.5))
+                    .min_w_0()
+                    .text_size(ui_rems(12.0))
+                    .line_height(ui_rems(16.0))
                     .text_color(theme.readable_tone(theme.danger, 1.0))
                     .child(format!(
                         "Claude error{}: {error}",
@@ -244,7 +249,8 @@ impl HarnessesPage {
                             .as_deref()
                             .map(|code| format!(" ({code})"))
                             .unwrap_or_default()
-                    )),
+                    ))
+                    .into_any_element(),
             );
         }
         let mut actions: Vec<AnyElement> = Vec::new();
@@ -252,10 +258,13 @@ impl HarnessesPage {
             let Some(uri) = tool.ui_resource_uri.clone() else {
                 continue;
             };
-            block = block.child(meta_text(
-                theme,
-                format!("MCP App view: {} → {uri} (not rendered by LUNA)", tool.name),
-            ));
+            facts.push(
+                widgets::row_description(
+                    theme,
+                    format!("MCP App view: {} → {uri} (not rendered by LUNA)", tool.name),
+                )
+                .into_any_element(),
+            );
             match &details.app_support {
                 ProviderMcpAppSupport::ReadSupported => {
                     let label: SharedString =
@@ -278,13 +287,16 @@ impl HarnessesPage {
                     );
                 }
                 ProviderMcpAppSupport::Unavailable { reason } => {
-                    block = block.child(meta_text(theme, reason.clone()));
+                    facts.push(widgets::row_description(theme, reason.clone()).into_any_element());
                 }
                 ProviderMcpAppSupport::Unknown => {
-                    block = block.child(meta_text(
-                        theme,
-                        "Check provider to verify this Claude CLI can read MCP App resources.",
-                    ));
+                    facts.push(
+                        widgets::row_description(
+                            theme,
+                            "Check provider to verify this Claude CLI can read MCP App resources.",
+                        )
+                        .into_any_element(),
+                    );
                 }
             }
         }
@@ -321,43 +333,30 @@ impl HarnessesPage {
                 .into_any_element(),
             );
         }
-        if !actions.is_empty() {
-            block = block.child(
-                div()
-                    .mt(px(6.0))
-                    .flex()
-                    .flex_row()
-                    .flex_wrap()
-                    .gap(px(6.0))
-                    .children(actions),
-            );
-        }
-        block.into_any_element()
+        (facts, actions)
     }
 
-    /// Action receipt and inspected resource, below the inventory rows.
+    /// Action receipt and inspected resource: a status row after the
+    /// inventory rows, inside the Skills and MCP card.
     pub(super) fn render_mcp_panel(&self, theme: &Theme) -> Option<AnyElement> {
         if self.mcp.notice.is_none() && self.mcp.resource.is_none() && !self.mcp.busy {
             return None;
         }
-        let mut panel = div()
-            .id("mcp-result-panel")
-            .role(gpui::Role::Status)
-            .mt(px(12.0))
-            .p(px(12.0))
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(theme.border)
-            .flex()
-            .flex_col();
+        let mut panel = div().w_full().min_w_0().flex().flex_col().gap(ui_rems(4.0));
         if self.mcp.busy {
-            panel = panel.child(meta_text(theme, "Waiting for Claude…"));
+            panel = panel.child(widgets::row_description(theme, "Waiting for Claude…"));
         }
         if let Some((ok, message)) = &self.mcp.notice {
             panel = panel.child(
                 div()
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(if *ok { theme.text } else { theme.warning })
+                    .min_w_0()
+                    .text_size(ui_rems(12.0))
+                    .line_height(ui_rems(16.0))
+                    .text_color(if *ok {
+                        theme.text
+                    } else {
+                        theme.readable_tone(theme.warning, 1.0)
+                    })
                     .child(message.clone()),
             );
         }
@@ -368,8 +367,11 @@ impl HarnessesPage {
                         theme,
                         format!("MCP App resource · {} · {}", view.server, view.uri),
                     ))
-                    .child(meta_text(theme, view.render_unavailable_reason.clone()))
-                    .child(meta_text(
+                    .child(widgets::row_description(
+                        theme,
+                        view.render_unavailable_reason.clone(),
+                    ))
+                    .child(widgets::row_description(
                         theme,
                         format!(
                             "{} · {} bytes · sha256 {}{}",
@@ -393,7 +395,7 @@ impl HarnessesPage {
                 .filter(|(_, domains)| !domains.is_empty())
                 .map(|(label, domains)| format!("{label}: {}", domains.join(", ")))
                 .collect::<Vec<_>>();
-                panel = panel.child(meta_text(
+                panel = panel.child(widgets::row_description(
                     theme,
                     if csp.is_empty() {
                         "Declared CSP: no external domains".to_owned()
@@ -402,7 +404,7 @@ impl HarnessesPage {
                     },
                 ));
                 if !view.permissions.is_empty() {
-                    panel = panel.child(meta_text(
+                    panel = panel.child(widgets::row_description(
                         theme,
                         format!("Requested permissions: {}", view.permissions.join(", ")),
                     ));
@@ -413,12 +415,14 @@ impl HarnessesPage {
                             .id("mcp-app-source")
                             .role(gpui::Role::Document)
                             .aria_label("MCP App source, inert text")
-                            .mt(px(8.0))
-                            .p(px(8.0))
+                            .mt(ui_rems(4.0))
+                            .p(ui_rems(8.0))
                             .rounded(px(6.0))
-                            .bg(theme.ink(0.04))
+                            .border_1()
+                            .border_color(theme.separator(false))
+                            .bg(theme.fill(FillTier::Quaternary))
                             .font_family(theme.font_mono.clone())
-                            .text_size(crate::typography::ui_rems(11.0))
+                            .text_size(ui_rems(11.0))
                             .text_color(theme.text_muted)
                             .child(if view.truncated {
                                 format!("{source}\n… (preview truncated)")
@@ -427,15 +431,24 @@ impl HarnessesPage {
                             }),
                     );
                 } else if view.binary {
-                    panel = panel.child(meta_text(theme, "Binary content: size and hash only."));
+                    panel = panel.child(widgets::row_description(
+                        theme,
+                        "Binary content: size and hash only.",
+                    ));
                 }
             }
             Some(Err(error)) => {
-                panel = panel.child(widgets::error_strip(theme, error.clone()));
+                panel = panel.child(widgets::error_strip(theme, error.clone()).mt_0());
             }
             None => {}
         }
-        Some(panel.into_any_element())
+        Some(
+            widgets::card_row(theme, false)
+                .id("mcp-result-panel")
+                .role(gpui::Role::Status)
+                .child(panel)
+                .into_any_element(),
+        )
     }
 }
 

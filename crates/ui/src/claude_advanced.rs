@@ -390,6 +390,7 @@ pub enum ExternalSessionsState {
 }
 
 fn external_row(theme: &Theme, session: &ClaudeExternalSession, index: usize) -> AnyElement {
+    use crate::settings::widgets;
     let kind = match session.kind {
         ClaudeExternalSessionKind::Background => "Background session",
         ClaudeExternalSessionKind::Interactive if session.owned_by_luna => "LUNA chat process",
@@ -428,19 +429,16 @@ fn external_row(theme: &Theme, session: &ClaudeExternalSession, index: usize) ->
         meta.push("not running".into());
     }
     let meta = meta.join(" · ");
-    div()
+    // The working directory wraps rather than truncating: it is the one
+    // fact that tells two sessions apart.
+    widgets::card_row(theme, false)
         .id(SharedString::from(format!("claude-session-{index}")))
-        .px(px(16.0))
-        .py(px(8.0))
-        .when(index > 0, |row| row.border_t_1().border_color(theme.border))
-        .flex()
-        .flex_col()
-        .gap(px(2.0))
         .role(gpui::Role::Group)
         .aria_label(format!("{title}. {meta}. {}", session.cwd))
-        .child(div().truncate().text_color(theme.text).child(title))
-        .child(small(theme, meta))
-        .child(small(theme, session.cwd.clone()).truncate())
+        .child(
+            widgets::row_text(theme, title, Some(meta.into()))
+                .child(widgets::row_description(theme, session.cwd.clone())),
+        )
         .into_any_element()
 }
 
@@ -451,89 +449,77 @@ pub fn external_sessions_card(
     state: &ExternalSessionsState,
     refresh: AnyElement,
 ) -> AnyElement {
-    let mut card = crate::settings::widgets::section_card(theme)
-        .mt(px(20.0))
-        .child(
-            div()
-                .px(px(16.0))
-                .pt(px(14.0))
-                .pb(px(10.0))
-                .flex()
-                .justify_between()
-                .items_start()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(crate::settings::widgets::row_title(
-                            theme,
-                            "Claude sessions outside LUNA",
-                        ))
-                        .child(crate::settings::widgets::page_subtitle(
-                            theme,
-                            "Read from `claude agents --json` on this device. LUNA never attaches to, stops or removes these sessions. It refuses to resume a conversation that another live Claude process is writing.",
-                        )),
-                )
-                .child(refresh),
-        );
+    external_sessions_section(theme, state, refresh, None)
+}
+
+/// [`external_sessions_card`] with the caller's loading placeholder
+/// (Settings passes skeleton rows; without one the card says "Checking…").
+pub fn external_sessions_section(
+    theme: &Theme,
+    state: &ExternalSessionsState,
+    refresh: AnyElement,
+    loading: Option<AnyElement>,
+) -> AnyElement {
+    use crate::settings::widgets;
+    let note = |copy: &'static str| {
+        widgets::card_row(theme, false).child(widgets::row_description(theme, copy).flex_1())
+    };
+    let strip = |strip: gpui::Div| {
+        widgets::card_row(theme, false).child(div().w_full().min_w_0().child(strip.mt_0()))
+    };
+    let mut card = widgets::section_card(theme).child(widgets::section_header(
+        theme,
+        "Claude sessions outside LUNA",
+        Some(
+            "Read from `claude agents --json` on this device. LUNA never attaches to, stops or \
+             removes these sessions. It refuses to resume a conversation that another live \
+             Claude process is writing."
+                .into(),
+        ),
+        vec![refresh],
+    ));
+    let mut footer = None;
     match state {
-        ExternalSessionsState::Idle => {
-            card = card.child(
-                div()
-                    .px(px(16.0))
-                    .pb(px(14.0))
-                    .child(small(theme, "Not checked yet.")),
-            )
-        }
+        ExternalSessionsState::Idle => card = card.child(note("Not checked yet.")),
         ExternalSessionsState::Loading => {
-            card = card.child(
-                div()
-                    .px(px(16.0))
-                    .pb(px(14.0))
-                    .child(small(theme, "Checking…")),
-            )
+            card = card.child(match loading {
+                Some(placeholder) => widgets::card_row(theme, false)
+                    .child(div().w_full().min_w_0().child(placeholder)),
+                None => note("Checking…"),
+            })
         }
         ExternalSessionsState::Error(error) => {
-            card = card.child(
-                div()
-                    .px(px(16.0))
-                    .pb(px(14.0))
-                    .text_color(theme.readable_tone(theme.danger, 1.0))
-                    .child(format!("Couldn't check Claude sessions: {error}")),
-            )
+            card = card.child(strip(widgets::error_strip(
+                theme,
+                format!("Couldn't check Claude sessions: {error}"),
+            )))
         }
         ExternalSessionsState::Ready(view) => {
             if let Some(reason) = &view.unavailable_reason {
-                card = card.child(
-                    div()
-                        .px(px(16.0))
-                        .pb(px(14.0))
-                        .text_color(theme.readable_tone(theme.warning, 1.0))
-                        .child(format!("Unavailable: {reason}")),
-                );
-            } else if view.sessions.is_empty() {
-                card = card.child(div().px(px(16.0)).pb(px(14.0)).child(small(
+                card = card.child(strip(widgets::warning_strip(
                     theme,
-                    "Claude reports no live sessions on this device.",
+                    format!("Unavailable: {reason}"),
                 )));
+            } else if view.sessions.is_empty() {
+                card = card.child(note("Claude reports no live sessions on this device."));
             } else {
                 for (index, session) in view.sessions.iter().enumerate() {
                     card = card.child(external_row(theme, session, index));
                 }
                 if view.truncated {
-                    card = card.child(
-                        div()
-                            .px(px(16.0))
-                            .py(px(8.0))
-                            .child(small(theme, "Showing the first 200 sessions.")),
-                    );
+                    footer = Some("Showing the first 200 sessions.");
                 }
             }
         }
     }
-    card.into_any_element()
+    div()
+        .flex()
+        .flex_col()
+        .child(card)
+        .when_some(footer, |el, copy| {
+            el.child(widgets::section_footer(theme, copy))
+        })
+        .into_any_element()
 }
 
 /// Certification status of one Claude Code lane in LUNA.
@@ -690,35 +676,44 @@ fn lane_color(theme: &Theme, status: LaneStatus) -> gpui::Hsla {
 
 /// Every advanced Claude lane with its truthful LUNA status.
 pub fn ledger_card(theme: &Theme) -> AnyElement {
-    let mut card = crate::settings::widgets::section_card(theme)
-        .mt(px(20.0))
+    use crate::settings::widgets;
+    use crate::typography::ui_rems;
+    let mut card = widgets::section_card(theme)
         .id("claude-advanced-ledger")
         .role(gpui::Role::List)
         .aria_label("Claude Code advanced features in LUNA")
-        .child(
-            div()
-                .px(px(16.0))
-                .pt(px(14.0))
-                .pb(px(8.0))
-                .child(crate::settings::widgets::row_title(
-                    theme,
-                    "Claude Code advanced features",
-                ))
-                .child(crate::settings::widgets::page_subtitle(
-                    theme,
-                    "What LUNA does with each native lane in Claude Code 2.1.286. Unavailable lanes say why.",
-                )),
-        );
+        .child(widgets::section_header(
+            theme,
+            "Claude Code advanced features",
+            Some(
+                "What LUNA does with each native lane in Claude Code 2.1.286. Unavailable lanes \
+                 say why."
+                    .into(),
+            ),
+            Vec::new(),
+        ));
     for (index, row) in CLAUDE_ADVANCED_LEDGER.iter().enumerate() {
+        // The status rides as text; the dot only reinforces it.
+        let status = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(ui_rems(6.0))
+            .text_size(ui_rems(11.0))
+            .line_height(ui_rems(14.0))
+            .text_color(theme.readable_muted(0.9))
+            .child(
+                div()
+                    .flex_none()
+                    .size(ui_rems(7.0))
+                    .rounded_full()
+                    .bg(lane_color(theme, row.status)),
+            )
+            .child(row.status.label());
         card = card.child(
-            div()
+            widgets::card_row(theme, false)
                 .id(SharedString::from(format!("claude-lane-{index}")))
-                .px(px(16.0))
-                .py(px(7.0))
-                .when(index > 0, |r| r.border_t_1().border_color(theme.border))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
                 .role(gpui::Role::ListItem)
                 .aria_label(format!(
                     "{}: {}. {}",
@@ -726,34 +721,8 @@ pub fn ledger_card(theme: &Theme) -> AnyElement {
                     row.status.label(),
                     row.luna
                 ))
-                .child(
-                    div()
-                        .flex()
-                        .justify_between()
-                        .gap(px(12.0))
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_color(theme.text)
-                                .child(row.lane),
-                        )
-                        .child(
-                            div()
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .gap(px(6.0))
-                                .child(
-                                    div()
-                                        .size(px(7.0))
-                                        .rounded_full()
-                                        .bg(lane_color(theme, row.status)),
-                                )
-                                .child(small(theme, row.status.label())),
-                        ),
-                )
-                .child(small(theme, row.luna)),
+                .child(widgets::row_text(theme, row.lane, Some(row.luna.into())))
+                .child(widgets::row_controls().child(status)),
         );
     }
     card.into_any_element()

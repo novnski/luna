@@ -49,22 +49,30 @@ impl HarnessesPage {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let loading = matches!(self.claude_sessions, ExternalSessionsState::Loading);
-        let refresh =
-            crate::settings::widgets::ghost_action("refresh-claude-sessions", !loading, theme)
-                .aria_label("Refresh Claude sessions outside LUNA")
-                .child(if loading { "Checking…" } else { "Refresh" })
-                .when(!loading, |button| {
-                    button.on_click(cx.listener(|page, _, _, cx| page.load_claude_sessions(cx)))
-                })
-                .into_any_element();
+        let refresh = super::section_action(
+            theme,
+            "refresh-claude-sessions",
+            crate::icons::REFRESH,
+            "Refresh Claude sessions outside LUNA",
+            if loading { "Checking…" } else { "Refresh" },
+            !loading,
+        )
+        .when(!loading, |button| {
+            button.on_click(cx.listener(|page, _, _, cx| page.load_claude_sessions(cx)))
+        })
+        .into_any_element();
+        let skeleton = loading.then(|| {
+            crate::popover::skeleton_rows("claude-sessions-skeleton", theme, 2, cx.entity_id(), cx)
+        });
         div()
             .flex()
             .flex_col()
             .child(claude_advanced::ledger_card(theme))
-            .child(claude_advanced::external_sessions_card(
+            .child(claude_advanced::external_sessions_section(
                 theme,
                 &self.claude_sessions,
                 refresh,
+                skeleton,
             ))
             .into_any_element()
     }
