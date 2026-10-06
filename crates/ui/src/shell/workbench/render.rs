@@ -2205,8 +2205,19 @@ impl Shell {
             compact,
         };
         self.workbench.footer_context = Some(context.clone());
+        // The route clock ticks only while a pane renders Main's own
+        // composer (`render_main`). With Main out of view (another tab active
+        // in every group) it holds whatever frame it last had, even the new
+        // thread the window opened on, so the row then shows the thread.
+        let main_shown = model::panes(layout)
+            .iter()
+            .any(|pane| pane.active_chat_id == Some(layout.main_chat_id.as_str()));
         let dock = self.composer_dock.borrow().frame;
-        let (target, thread) = (dock.selectors(), dock.footer());
+        let (target, thread) = if main_shown && dock.docked {
+            (dock.selectors(), dock.footer())
+        } else {
+            (0.0, 1.0)
+        };
         let thread_shown = thread > 0.0;
         // Both act on the FOCUSED chat's own checkout through the existing
         // Changes/Git workflow, bound to that chat (never the selection);
