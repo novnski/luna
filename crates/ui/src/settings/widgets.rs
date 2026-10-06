@@ -228,7 +228,7 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
         .flex()
         .flex_row()
         .items_baseline()
-        .gap(px(10.0))
+        .gap(crate::typography::ui_rems(10.0))
         // The page title is the top of a clear ladder (audit DS-22):
         // title1 20/25 semibold over 13 pt group headers and rows.
         .child(
@@ -267,8 +267,8 @@ pub fn field_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
     // A group header belongs to the group below it (audit DS-07): 24 pt
     // above (with the column's 12 pt gap), 8 pt to its own card.
     div()
-        .mt(px(12.0))
-        .mb(px(-4.0))
+        .mt(crate::typography::ui_rems(12.0))
+        .mb(crate::typography::ui_rems(-4.0))
         .text_size(crate::typography::ui_rems(13.0))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(theme.readable_muted(0.85))
@@ -282,7 +282,12 @@ pub fn field_label(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
 /// control works for a density picker, a layout picker or anything else where
 /// the choice is easier to show than to describe. Pair with [`option_card`].
 pub fn option_card_row() -> gpui::Div {
-    div().flex().flex_row().items_start().gap(px(16.0)).w_full()
+    div()
+        .flex()
+        .flex_row()
+        .items_start()
+        .gap(crate::typography::ui_rems(16.0))
+        .w_full()
 }
 
 /// Default height of an [`option_card`] preview frame.
@@ -318,7 +323,7 @@ pub fn option_card(
         .flex()
         .flex_col()
         .items_center()
-        .gap(px(8.0))
+        .gap(crate::typography::ui_rems(8.0))
         .cursor_pointer()
         .child(
             crate::button::selection_ring(
@@ -326,7 +331,7 @@ pub fn option_card(
                 OPTION_CARD_RADIUS,
                 theme,
                 div()
-                    .h(px(OPTION_CARD_HEIGHT))
+                    .h(crate::typography::ui_rems(OPTION_CARD_HEIGHT))
                     .w_full()
                     .rounded(px(OPTION_CARD_RADIUS))
                     .overflow_hidden()
@@ -340,7 +345,7 @@ pub fn option_card(
             div()
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(crate::typography::ui_rems(6.0))
                 .text_size(crate::typography::ui_rems(13.0))
                 .font_weight(if selected {
                     gpui::FontWeight::MEDIUM
@@ -353,7 +358,11 @@ pub fn option_card(
                 } else {
                     theme.text_muted
                 })
-                .child(crate::icons::icon(icon_path).size(px(16.0)).flex_none())
+                .child(
+                    crate::icons::icon(icon_path)
+                        .size(crate::typography::ui_rems(16.0))
+                        .flex_none(),
+                )
                 .child(label.into()),
         )
 }
@@ -549,13 +558,13 @@ pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
 pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
     let mut line = div()
         .min_w_0()
-        .mt(px(Theme::TEXT_STACK_GAP))
+        .mt(crate::typography::ui_rems(Theme::TEXT_STACK_GAP))
         .flex()
         .flex_row()
         .flex_wrap()
         .items_center()
-        .gap_x(px(8.0))
-        .gap_y(px(2.0))
+        .gap_x(crate::typography::ui_rems(8.0))
+        .gap_y(crate::typography::ui_rems(2.0))
         .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
         // The secondary tier, held to the text floor (audit DS-13); a raw
         // 65% fade dropped below it on frosted cards.
@@ -635,17 +644,21 @@ pub fn toggle_switch(theme: &Theme, on: bool, key: &str) -> gpui::Div {
     );
     div()
         .flex_none()
-        .w(px(W))
-        .h(px(H))
+        .w(crate::typography::ui_rems(W))
+        .h(crate::typography::ui_rems(H))
         .rounded_full()
         .bg(crate::motion::mix(track_off, theme.accent_strong, t))
         .relative()
         .child(
             div()
                 .absolute()
-                .top(px((H - KNOB) / 2.0))
-                .left(px(crate::motion::lerp(2.0, W - KNOB - 2.0, t)))
-                .size(px(KNOB))
+                .top(crate::typography::ui_rems((H - KNOB) / 2.0))
+                .left(crate::typography::ui_rems(crate::motion::lerp(
+                    2.0,
+                    W - KNOB - 2.0,
+                    t,
+                )))
+                .size(crate::typography::ui_rems(KNOB))
                 .rounded_full()
                 .bg(gpui::white())
                 .shadow_sm(),
@@ -726,7 +739,7 @@ pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div
         .flex()
         .flex_row()
         .items_start()
-        .gap(px(8.0))
+        .gap(crate::typography::ui_rems(8.0))
         .child(
             div().flex_none().mt(crate::typography::ui_rems(2.0)).child(
                 crate::icons::icon(crate::icons::DANGER_TRIANGLE)
@@ -756,7 +769,7 @@ pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::D
         .flex()
         .flex_row()
         .items_start()
-        .gap(px(8.0))
+        .gap(crate::typography::ui_rems(8.0))
         .child(
             div().flex_none().mt(crate::typography::ui_rems(2.0)).child(
                 crate::icons::icon(crate::icons::DANGER_TRIANGLE)
