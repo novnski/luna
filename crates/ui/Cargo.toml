@@ -146,6 +146,10 @@ name = "settings-gallery-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "chat-chrome-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "drafts-fixture"
 required-features = ["appshots-fixture"]
 

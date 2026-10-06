@@ -2,16 +2,15 @@
 //! parsed into navigation authority. Each visible card observes its own state
 //! without rebuilding the parent's transcript when a child publishes a frame.
 //!
-//! Layout follows the transcript's own subagent chip card (same frame, icon
-//! tile, 12px type): a header line — provider mark in the tile, title, a
-//! quiet "New thread" type badge (a child-created record is always a fresh
-//! child), status dot + status + elapsed — and one detail line under the
-//! title: friendly model · reasoning, the single-line prompt/result preview,
-//! then the Open chat / Show in split actions. At narrower widths the actions
-//! and then the status wrap to their own lines rather than squeezing the
-//! title, model or labels.
+//! Layout follows the Settings row anatomy: the provider mark in a 28 pt
+//! tile, centred against two lines — the title with a quiet "New thread"
+//! type badge (a child-created record is always a fresh child), then the
+//! status dot, status and elapsed time, friendly model · reasoning and the
+//! single-line prompt/result preview — and the actions in one trailing
+//! column: a Show in split icon button beside an Open chat button, both from
+//! the shared kit. At narrower widths the actions wrap under the text rather
+//! than squeezing the title; the preview alone truncates.
 use super::*;
-use crate::AccessibleButton as _;
 use crate::shell::child_chats::{ChildChatStatus, child_chat_status, provider_label};
 
 #[derive(Clone, PartialEq)]
@@ -310,87 +309,53 @@ impl Render for AgentCard {
         let status_color = card.status.color(&theme);
         let duration = duration_text(&card, now);
 
-        // Provider mark in the chip card's icon tile (`size-[18px]
-        // rounded-[5px] bg-white/[0.08]`); the label carries provider and
-        // status so neither is shape- or color-only.
-        let identity = div()
+        // The provider mark in the shared 28 pt row tile, centred against
+        // the two text lines; the label carries provider and status so
+        // neither is shape- or colour-only.
+        let tile = div()
             .id("agent-card-provider-identity")
             .aria_label(format!(
                 "{provider_name} provider, {NEW_THREAD}, {status_label}"
             ))
-            .size(crate::typography::ui_rems(18.0))
             .flex_none()
-            .rounded(px(crate::theme::radius::SM))
-            .bg(crate::theme::ink(0.08))
+            .size(crate::typography::ui_rems(28.0))
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(crate::theme::hairline(0.07))
+            .bg(theme.fill(crate::theme::FillTier::Quaternary))
             .flex()
             .items_center()
             .justify_center()
             .child(
                 crate::icons::icon(icon_path)
-                    .size(crate::typography::ui_rems(12.0))
+                    .size(crate::typography::ui_rems(16.0))
                     .text_color(tint.unwrap_or(theme.content_muted)),
             );
 
-        // Status reads like the sidebar: a colored dot and quiet text; only a
-        // failure tints its words. The live/frozen elapsed time trails it.
-        let status = div()
-            .flex()
-            .items_center()
-            .flex_none()
-            .ml_auto()
-            .gap(crate::typography::ui_rems(6.0))
-            .text_color(theme.content_muted)
-            .child(
-                div()
-                    .size(crate::typography::ui_rems(6.0))
-                    .flex_none()
-                    .rounded_full()
-                    .bg(status_color),
-            )
-            .child(
-                div()
-                    .when(matches!(card.status, ChildChatStatus::Failed), |label| {
-                        label.text_color(theme.readable_tone(theme.danger, 1.0))
-                    })
-                    .child(status_label),
-            )
-            .when_some(duration, |status, duration| {
-                status
-                    .child(div().text_color(theme.content_faint).child("·"))
-                    .child(div().child(duration))
-            });
-
-        // Tile, title and type stay together; the status cluster wraps to
-        // its own (right-aligned) line before the title drops below ~80px
-        // (tile + badge take ~100 of the 180).
-        let identity_line = div()
-            .flex_1()
-            .min_w(crate::typography::ui_rems(180.0))
-            .h(px(TOOL_LABEL_LINE_HEIGHT + 2.0))
+        // Line 1: the title and the quiet "New thread" type badge.
+        let title = div()
+            .min_w_0()
             .flex()
             .items_center()
             .gap(crate::typography::ui_rems(8.0))
-            .child(identity)
             .child(
                 div()
                     .min_w_0()
                     .truncate()
+                    .text_size(crate::typography::ui_rems(13.0))
+                    .line_height(crate::typography::ui_rems(18.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(card.title.clone()),
             )
             .child(type_badge(&theme, NEW_THREAD));
-        let header = div()
-            .min_w_0()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_x(crate::typography::ui_rems(8.0))
-            .gap_y(px(2.0))
-            .child(identity_line)
-            .child(status);
 
-        // Friendly model + reasoning stay visible text (never tooltip-only).
+        // Line 2 leads with the status, read like the sidebar (a coloured dot
+        // and quiet words; only a failure tints them), then the live or
+        // frozen elapsed time, the friendly model · reasoning (never
+        // tooltip-only) and the prompt or result preview, which alone gives
+        // way when the line runs out.
+        let separator = || div().flex_none().text_color(theme.content_faint).child("·");
         let mut detail_parts: Vec<String> = Vec::new();
         if let Some(model) = &card.model_label {
             detail_parts.push(model.clone());
@@ -398,118 +363,113 @@ impl Render for AgentCard {
         if let Some(reasoning) = card.reasoning_label {
             detail_parts.push(reasoning.to_string());
         }
-        let detail = detail_parts.join(" · ");
-
-        // Model · reasoning is never truncated by the preview: it keeps its
-        // width, the preview (with its leading separator, so a wrap never
-        // strands a dot) takes what is left down to ~88px, and the actions
-        // wrap below before either is squeezed further.
-        let has_detail = !detail.is_empty();
-        let model = has_detail.then(|| {
-            div()
-                .flex_none()
-                .max_w_full()
-                .truncate()
-                .text_color(theme.content_muted)
-                .child(detail)
-        });
-        let preview = div()
-            .flex_1()
-            .min_w(crate::typography::ui_rems(88.0))
+        let detail = (!detail_parts.is_empty()).then(|| detail_parts.join(" · "));
+        let meta = div()
+            .min_w_0()
             .flex()
             .items_center()
             .gap(crate::typography::ui_rems(6.0))
-            .when(has_detail, |preview| {
-                preview.child(div().flex_none().text_color(theme.content_faint).child("·"))
-            })
+            .text_size(crate::typography::ui_rems(TOOL_LABEL_SIZE))
+            .line_height(crate::typography::ui_rems(16.0))
+            .text_color(theme.content_muted)
             .child(
                 div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.readable_muted(0.8))
-                    .child(card.preview.clone()),
-            );
-
-        // Small labeled actions in the chip's trailing-tile language: muted
-        // until hovered, a soft wash, never a raised button.
-        let (muted, faint, text) = (theme.content_muted, theme.content_faint, theme.text);
-        let card = cx.entity_id();
-        let action = move |id: &'static str, label: &'static str, glyph: &'static str| {
-            div()
-                .id(id)
-                .h(crate::typography::ui_rems(20.0))
-                .px(crate::typography::ui_rems(6.0))
-                .flex()
-                .items_center()
-                .gap(crate::typography::ui_rems(4.0))
-                .flex_none()
-                .rounded(px(crate::theme::radius::SM))
-                .cursor_pointer()
-                .hover_fill_fg(
-                    format!("tl-{id}-{card}"),
-                    gpui::transparent_black(),
-                    crate::theme::fill(crate::theme::FillTier::Tertiary),
-                    muted,
-                    text,
-                )
-                .child(
-                    crate::icons::icon(glyph)
-                        .size(crate::typography::ui_rems(12.0))
-                        .text_color(faint),
-                )
-                .child(label)
-        };
-        let actions = div()
-            .flex()
-            .items_center()
-            .flex_none()
-            .gap(px(2.0))
-            .child(
-                action("agent-card-open", "Open chat", crate::icons::ARROW_UP_RIGHT)
-                    .accessible_button("Open agent chat", theme.accent)
-                    .on_click(cx.listener(|this, _, _, cx| this.open(false, cx))),
+                    .flex_none()
+                    .size(crate::typography::ui_rems(6.0))
+                    .rounded_full()
+                    .bg(status_color),
             )
             .child(
-                action(
-                    "agent-card-split",
-                    "Show in split",
-                    crate::icons::SPLIT_COLUMNS,
+                div()
+                    .flex_none()
+                    .when(matches!(card.status, ChildChatStatus::Failed), |label| {
+                        label.text_color(theme.readable_tone(theme.danger, 1.0))
+                    })
+                    .child(status_label),
+            )
+            .when_some(duration, |meta, duration| {
+                meta.child(separator())
+                    .child(div().flex_none().child(duration))
+            })
+            .when_some(detail, |meta, detail| {
+                meta.child(separator())
+                    .child(div().flex_none().child(detail))
+            })
+            .when(!card.preview.is_empty(), |meta| {
+                meta.child(separator()).child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.readable_muted(0.8))
+                        .child(card.preview.clone()),
                 )
-                .accessible_button("Show agent chat in split", theme.accent)
-                .on_click(cx.listener(|this, _, _, cx| this.open(true, cx))),
-            );
-
-        // Aligned under the title (tile 18px + 8px gap).
-        let details = div()
-            .pl(crate::typography::ui_rems(26.0))
-            .min_w_0()
+            });
+        let text = div()
+            .flex_1()
+            .min_w(crate::typography::ui_rems(180.0))
             .flex()
-            .flex_wrap()
-            .items_center()
-            .gap_x(crate::typography::ui_rems(6.0))
-            .gap_y(px(2.0))
-            .children(model)
-            .child(preview)
-            .child(actions);
+            .flex_col()
+            .gap(crate::typography::ui_rems(2.0))
+            .child(title)
+            .child(meta);
 
+        // The actions sit in one trailing column, centred on the tile and
+        // text: Show in split as a kit icon button beside the Open chat
+        // button. Keys carry the child id, so two cards never share a fade.
+        let child = self.child_id.clone();
+        let split = crate::button::icon_button(
+            format!("agent-card-split-{child}"),
+            crate::icons::SPLIT_COLUMNS,
+            crate::button::ControlSize::Sm,
+            true,
+            &theme,
+        )
+        .aria_label("Show agent chat in split")
+        .tooltip(crate::popover::text_tooltip("Show in split"))
+        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+        .on_click(cx.listener(|this, _, _, cx| this.open(true, cx)));
+        let open = crate::button::button(
+            format!("agent-card-open-{child}"),
+            crate::button::ButtonKind::Secondary,
+            crate::button::ControlSize::Sm,
+            true,
+            &theme,
+        )
+        .aria_label("Open agent chat")
+        .child("Open chat")
+        .on_click(cx.listener(|this, _, _, cx| this.open(false, cx)));
+        let actions = div()
+            .flex_none()
+            .ml_auto()
+            .flex()
+            .items_center()
+            .gap(crate::typography::ui_rems(4.0))
+            .child(split)
+            .child(open);
+
+        // One row: tile · text · actions. When the card is too narrow for
+        // the actions beside a readable title, they wrap under the text,
+        // still at the right.
         div()
             .id(SharedString::from(format!("agent-card-{}", self.child_id)))
             .w_full()
             .min_w_0()
-            .px(crate::typography::ui_rems(8.0))
-            .py(crate::typography::ui_rems(6.0))
+            .px(crate::typography::ui_rems(12.0))
+            .py(crate::typography::ui_rems(10.0))
             .rounded(px(crate::theme::radius::LG))
             .border_1()
             .border_color(crate::theme::hairline(0.07))
             .bg(crate::theme::ink(0.03))
             .flex()
-            .flex_col()
-            .gap(px(2.0))
-            .text_size(crate::typography::ui_rems(TOOL_LABEL_SIZE))
-            .line_height(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
-            .child(header)
-            .child(details)
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_x(crate::typography::ui_rems(12.0))
+            .gap_y(crate::typography::ui_rems(8.0))
+            .child(tile)
+            .child(text)
+            .child(actions)
             .into_any_element()
     }
 }

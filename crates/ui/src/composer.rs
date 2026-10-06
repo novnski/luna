@@ -12486,22 +12486,28 @@ impl Composer {
         &mut self,
         mode: SendButtonMode,
         size: f32,
+        input_focused: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let theme = Theme::of(cx);
         // One stable disc (audit CP-09, CP-10): solid when it can act,
         // recessed when the draft is empty or sending is blocked. Only the
         // glyph changes between Send, Queue and Stop, arriving with a short
-        // fade and scale instead of a whole-element swap.
+        // fade and scale instead of a whole-element swap. The composer's
+        // focus shows here, not as a ring on the pill: while the input is
+        // focused and empty, the recessed disc's arrow takes the accent.
         let empty = self.input.read(cx).content.is_empty();
         let blocked_reason = match mode {
             SendButtonMode::Stop => None,
             _ => self.send_blocked_reason(cx),
         };
         let recessed = mode != SendButtonMode::Stop && (empty || blocked_reason.is_some());
+        let ready = recessed && input_focused && empty && blocked_reason.is_none();
         let solid = theme.text;
         let recessed_fill = crate::theme::ink(0.08);
-        let glyph_color = if recessed {
+        let glyph_color = if ready {
+            theme.readable_tone(theme.accent, 1.0)
+        } else if recessed {
             theme.text.opacity(0.35)
         } else {
             theme.bg
@@ -12510,6 +12516,7 @@ impl Composer {
             (SendButtonMode::Stop, _) => "stop",
             (SendButtonMode::Queue, false) => "queue",
             (_, false) => "send",
+            (_, true) if ready => "ready",
             (_, true) => "rest",
         };
         let tooltip: SharedString = match (mode, blocked_reason) {
@@ -13110,8 +13117,13 @@ impl Render for Composer {
         let probe_scope = crate::perf_counters::probes_enabled()
             .then(|| format!("composer:{}", self.perf_scope(cx)));
         let ui_scale = theme.ui_scale();
-        let send_button =
-            self.render_send_button(mode, if compact { COMPACT_BUTTON } else { ROW_BUTTON }, cx);
+        let input_focused = self.input.focus_handle(cx).is_focused(window);
+        let send_button = self.render_send_button(
+            mode,
+            if compact { COMPACT_BUTTON } else { ROW_BUTTON },
+            input_focused,
+            cx,
+        );
         let send_button = match &probe_scope {
             Some(scope) => div()
                 .flex_none()
@@ -13179,25 +13191,12 @@ impl Render for Composer {
             crate::shell::new_thread_background_opacity(theme.is_frost())
                 * crate::new_thread_background_mask::CUTOUT_REVEAL_OPACITY
         });
-        // Focus is visible on the pill itself (audit CP-15): a stronger edge
-        // and a soft accent ring.
-        let pill_focused = self.input.focus_handle(cx).is_focused(window);
-        let focus_glow = theme.accent.opacity(0.45);
+        // The pill keeps its resting edge when focused: focus shows as the
+        // caret and the send arrow taking the accent (see
+        // `render_send_button`), not as a ring around the whole composer.
         let pill = composer_surface(&theme, surface_radius)
             .when_some(artwork_strength, |pill, strength| {
                 pill.bg(theme.artwork_composer_plate(strength))
-            })
-            .when(pill_focused, |pill| {
-                pill.border_color(theme.border_strong)
-                    .shadow(vec![gpui::BoxShadow {
-                        color: focus_glow,
-                        offset: gpui::point(px(0.0), px(0.0)),
-                        // Inset: an outset shadow fills beneath the
-                        // translucent frosted pill and would tint all of it.
-                        blur_radius: px(0.0),
-                        spread_radius: px(1.5),
-                        inset: true,
-                    }])
             })
             .on_mouse_down(
                 MouseButton::Left,

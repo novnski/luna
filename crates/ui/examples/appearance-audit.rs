@@ -762,6 +762,15 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             theme.readable_faint(0.8),
             pill,
         ),
+        // Focus shows on the send disc, not the pill: the focused, empty
+        // composer's arrow takes the accent on the recessed disc.
+        p(
+            "composer",
+            "send arrow, focused and empty",
+            Kind::NonText,
+            theme.readable_tone(theme.accent, 1.0),
+            flat(theme::ink(0.08), pill),
+        ),
         p(
             "composer",
             "selected text",

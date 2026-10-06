@@ -2084,6 +2084,20 @@ pub fn tool_group_summary(tools: &[ToolItem]) -> String {
     }
 }
 
+/// The glyph on a tool group's summary: thinking for a thought-only group,
+/// the tools' own kind when they share one, else the generic tool mark.
+fn tool_group_glyph(tools: &[ToolItem]) -> &'static str {
+    let mut kinds = tools
+        .iter()
+        .filter(|tool| !tool.is_thought)
+        .map(|tool| tool_icon_path(&tool.call));
+    match kinds.next() {
+        None => crate::icons::LIGHTBULB,
+        Some(first) if kinds.all(|kind| kind == first) => first,
+        Some(_) => crate::icons::WIDGET,
+    }
+}
+
 fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Theme) -> AnyElement {
     let Some(shimmer_phase) = shimmer_phase else {
         // Keep the ordinary inherited hover color when the group is settled
@@ -8314,65 +8328,87 @@ impl Transcript {
         };
 
         let toggle_id = row_id.clone();
-        // A quiet summary sits above the activity rail; its chevron occupies
-        // the same gutter as the rounded task-tree elbows below it.
+        // The summary is a quiet plate that reads as a control: a glyph
+        // naming what's inside (thinking, or the tools' own kind), the
+        // summary, and a chevron that turns as the group opens. The glyph
+        // sits on the activity rail's trunk, so the open rail descends from
+        // it. The plate is a resting fill that brightens under the pointer,
+        // and it scales with the Interface size.
+        let header_height = TOOL_GROUP_HEADER_HEIGHT * ui_scale;
+        let glyph_size = ACTIVITY_ICON_SIZE * ui_scale;
+        let kind_glyph = tool_group_glyph(tools);
+        let hover_key = format!("tl-{row_id}-hdr");
         let header = div()
-            .id(SharedString::from(format!("{row_id}-hdr")))
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
-            .role(gpui::Role::Button)
-            .aria_label(format!("Tool activity: {summary}"))
-            .aria_expanded(open)
-            .tab_index(0)
-            .relative()
+            .h(px(header_height))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
-            .pr(px(4.0))
-            .h(px(TOOL_GROUP_HEADER_HEIGHT))
-            .cursor_pointer()
-            .text_size(crate::typography::ui_rems(TOOL_LABEL_SIZE))
-            .line_height(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
-            // Quiet even when children failed: agents routinely have failed
-            // probes mid-work, and a red HEADER read as "this whole step
-            // broke" (user report). Failures still show on the individual
-            // chips (destructive tint, luna tool-chip.tsx) and in the
-            // summary's "· N failed" count.
-            .hover_fg(format!("tl-{row_id}-hdr"), theme.content_muted, theme.text)
-            .on_click(cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.toggle_fold(toggle_id.clone(), viewport_height, effective_auto_open);
-                cx.notify();
-            }))
             .child(
                 div()
-                    // 26 px + the 6 px gap starts the title on the glyph
-                    // column (x = 32) it introduces.
-                    .w(px(26.0))
-                    .h(px(18.0))
+                    .id(SharedString::from(format!("{row_id}-hdr")))
+                    .rounded(px(Theme::CONTROL_RADIUS))
+                    .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("Tool activity: {summary}"))
+                    .aria_expanded(open)
+                    .tab_index(0)
                     .flex_none()
-                    .relative()
+                    .max_w_full()
+                    .min_w_0()
+                    .h(px(header_height - 2.0 * ui_scale))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(px(6.0 * ui_scale))
+                    .pl(px(ACTIVITY_TRUNK_X - glyph_size / 2.0))
+                    .pr(px(8.0 * ui_scale))
+                    .cursor_pointer()
+                    .text_size(crate::typography::ui_rems(TOOL_LABEL_SIZE))
+                    .line_height(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
+                    // Quiet even when children failed: agents routinely have
+                    // failed probes mid-work, and a red HEADER read as "this
+                    // whole step broke" (user report). Failures still show on
+                    // the individual chips and in the summary's "· N failed".
+                    .hover_fill_fg(
+                        hover_key.clone(),
+                        theme.fill(crate::theme::FillTier::Quaternary),
+                        theme.fill(crate::theme::FillTier::Tertiary),
+                        theme.content_muted,
+                        theme.text,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_fold(toggle_id.clone(), viewport_height, effective_auto_open);
+                        cx.notify();
+                    }))
+                    .child(
+                        crate::icons::icon(kind_glyph)
+                            .flex_none()
+                            .size(px(glyph_size))
+                            .text_color(motion::hover_blend(
+                                &hover_key,
+                                theme.content_muted,
+                                theme.text,
+                            )),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .h(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
+                            .flex()
+                            .items_center()
+                            .truncate()
+                            .child(tool_group_title(summary, shimmer_phase, theme)),
+                    )
                     .child(
                         crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
-                            .absolute()
-                            .left(px(ACTIVITY_TRUNK_X - DISCLOSURE_CHEVRON_SIZE / 2.0))
-                            .top(px((18.0 - DISCLOSURE_CHEVRON_SIZE) / 2.0))
-                            .size(px(DISCLOSURE_CHEVRON_SIZE))
+                            .flex_none()
+                            .size(px(DISCLOSURE_CHEVRON_SIZE * ui_scale))
                             .with_transformation(gpui::Transformation::rotate(gpui::radians(
                                 std::f32::consts::FRAC_PI_2 * disclosure_progress,
                             )))
-                            .text_color(theme.content_muted),
+                            .text_color(theme.content_faint),
                     ),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .h(crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT))
-                    .flex()
-                    .items_center()
-                    .truncate()
-                    .child(tool_group_title(summary, shimmer_phase, theme)),
             );
 
         let chips = div()
@@ -8743,7 +8779,7 @@ impl Transcript {
             .when(collapses, |el| {
                 el.child(reveal_tool_row(
                     header.into_any_element(),
-                    TOOL_GROUP_HEADER_HEIGHT,
+                    header_height,
                     header_reveal,
                 ))
             })
