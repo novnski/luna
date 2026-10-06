@@ -367,10 +367,14 @@ impl Element for DockedComposer {
         let docked = state.frame.docked;
         let x = f32::from(bounds.left());
         // Anchor by the top of the input surface, not its shrinking bottom.
+        // The hero centres the composer in the window. Nothing floats above
+        // or below its pill (the target pickers sit in the frame's bottom
+        // row); its bounds end with the column's bottom padding, so the pill
+        // itself sits slightly above the canvas centre, an optical lift.
         let y = if docked {
             f32::from(bounds.top())
         } else {
-            (self.viewport_height - f32::from(bounds.size.height)) * 0.5 + 8.0
+            (self.viewport_height - f32::from(bounds.size.height)) * 0.5
         };
         let dt = if state.last_docked != docked {
             0.0
