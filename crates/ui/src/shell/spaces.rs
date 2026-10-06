@@ -38,7 +38,7 @@ fn sidebar_rows<'a>(
         .collect()
 }
 
-fn sidebar_row_visible(
+pub(super) fn sidebar_row_visible(
     chat: &luna_proto::Chat,
     state: &AppState,
     placed: &super::placement::EffectivePlacements,

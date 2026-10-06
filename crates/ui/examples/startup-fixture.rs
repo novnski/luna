@@ -4,12 +4,16 @@
 //! Failure cases: settled/archived-only histories reopen a finished task;
 //! automatic settling is ignored; a newer finished task hides an active one;
 //! an empty workspace never finishes boot; late watches override an explicit
-//! new-session choice; explicit navigation to a finished task is overridden.
+//! new-session choice; explicit navigation to a finished task is overridden;
+//! boot opens a child chat the sidebar folds away (an archived task's child
+//! still open, or a newer child of an active task) instead of the new-session
+//! canvas or the task's own row.
 //!
 //! Run twice with the same case directory to check process-restart persistence:
 //! target/debug/examples/startup-fixture <evidence-directory> <case> <label>
 //! Cases: empty, settled, archived, mixed-finished, auto-settled, active,
-//! mixed-active, manual-new, manual-archived. Each run saves PNG + JSON readback.
+//! mixed-active, manual-new, manual-archived, archived-parent-child,
+//! active-parent-child. Each run saves PNG + JSON readback.
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -36,6 +40,8 @@ fn main() -> anyhow::Result<()> {
                 | "mixed-active"
                 | "manual-new"
                 | "manual-archived"
+                | "archived-parent-child"
+                | "active-parent-child"
         ),
         "unknown startup case"
     );
@@ -86,6 +92,8 @@ fn main() -> anyhow::Result<()> {
                 ("settled", "settled"),
                 ("archived", "archived"),
             ],
+            "archived-parent-child" => &[("parent", "archived"), ("child", "child")],
+            "active-parent-child" => &[("parent", "active"), ("child", "child")],
             _ => &[("active", "active")],
         };
         for (index, (id, disposition)) in tasks.iter().enumerate() {
@@ -112,6 +120,23 @@ fn main() -> anyhow::Result<()> {
             }
             if *disposition == "archived" {
                 chat.archived = true;
+            } else if *disposition == "child" {
+                // A child thread of `parent`, newer than it and never
+                // promoted: the sidebar folds it under its parent.
+                chat.child_thread = Some(luna_proto::ChildThread {
+                    work_origin: None,
+                    parent_task_id: "parent".into(),
+                    creation_command_id: "startup-fixture-child".into(),
+                    permission_ceiling: Default::default(),
+                    sandbox_ceiling: None,
+                    initial_message_id: "child-prompt".into(),
+                    initial_prompt: "Startup QA child".into(),
+                    report_results: false,
+                    continue_parent: false,
+                    outcomes: Vec::new(),
+                    outcome_floor_ms: Some(at.timestamp_millis()),
+                    provisioning: None,
+                });
             } else if *disposition == "settled" {
                 chat.settlement_override = Some(ChatSettlementOverride {
                     disposition: SettlementDisposition::Settled,
@@ -249,6 +274,7 @@ fn main() -> anyhow::Result<()> {
                     let expected = match case.as_str() {
                         "active" | "mixed-active" => Some("active"),
                         "manual-archived" => Some("archived"),
+                        "active-parent-child" => Some("parent"),
                         _ => None,
                     };
                     anyhow::ensure!(

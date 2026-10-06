@@ -89,19 +89,26 @@ impl Shell {
         let now = Utc::now();
         let mut attention_task_keys = self.activity_task_keys(cx);
         attention_task_keys.extend(self.settlement_blocking_task_keys());
+        let placed = self.effective_placements(cx);
         let first = {
             let state = self.state.read(cx);
+            // Only a chat the sidebar shows as its own row: a child or fork
+            // folded under its parent (even one whose parent is archived) is
+            // never a landing, so a workspace with no visible active task
+            // opens on the new-session canvas.
             state
                 .overview_chats(now)
                 .into_iter()
                 .find(|(status, chat)| {
-                    !spaces::is_settled_chat(
-                        chat,
-                        *status,
-                        now,
-                        self.settings.sidebar_auto_settle_after_days,
-                        attention_task_keys.contains(&(chat.device_id.clone(), chat.id.clone())),
-                    )
+                    spaces::sidebar_row_visible(chat, state, &placed)
+                        && !spaces::is_settled_chat(
+                            chat,
+                            *status,
+                            now,
+                            self.settings.sidebar_auto_settle_after_days,
+                            attention_task_keys
+                                .contains(&(chat.device_id.clone(), chat.id.clone())),
+                        )
                 })
                 .map(|(_, c)| c.id.clone())
         };
