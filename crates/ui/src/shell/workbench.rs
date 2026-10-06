@@ -154,6 +154,9 @@ pub(super) struct Geometry {
     /// The frame's bottom row, and its Git action buttons by id.
     pub(super) footer: Option<Bounds<Pixels>>,
     pub(super) footer_buttons: HashMap<String, Bounds<Pixels>>,
+    /// The row's read-only context labels (checkout, branch) by text, in
+    /// order (QA readback; empty while the row shows none).
+    pub(super) footer_labels: Vec<(String, Bounds<Pixels>)>,
     /// The workbench notice's Dismiss control, while a notice shows.
     pub(super) notice_dismiss: Option<Bounds<Pixels>>,
     /// Each strip's visible tab viewport: tabs scrolled outside it are
@@ -301,6 +304,17 @@ pub(super) struct ChildFailure {
     pub(super) ambiguous: bool,
 }
 
+/// The frame row's read-only context for a working thread: who (a non-Main
+/// tab), its checkout kind and branch, and whether it offers the Git actions.
+#[derive(Clone)]
+pub(super) struct FooterContext {
+    pub(super) who: Option<SharedString>,
+    pub(super) checkout: Option<(&'static str, &'static str)>,
+    pub(super) branch: Option<SharedString>,
+    pub(super) git: bool,
+    pub(super) compact: bool,
+}
+
 #[derive(Clone)]
 pub(super) struct TabMenu {
     pub(super) chat_id: String,
@@ -348,6 +362,9 @@ pub(super) struct WorkbenchState {
     /// not, previewed or not) is cancelled and its release does nothing.
     pub(super) gesture_cancelled: bool,
     pub(super) geometry: Rc<RefCell<Geometry>>,
+    /// What the frame row last named for a working thread, so the new
+    /// thread's row can fade it out after the route has already left it.
+    pub(super) footer_context: Option<FooterContext>,
     pub(super) creating_child: Option<ChildRequest>,
     pub(super) child_failure: Option<ChildFailure>,
     /// A new New thread was refused while an earlier outcome is unknown
@@ -467,6 +484,7 @@ impl WorkbenchState {
             divider_press: None,
             gesture_cancelled: false,
             geometry: Rc::new(RefCell::new(Geometry::default())),
+            footer_context: None,
             creating_child: None,
             child_failure: None,
             child_blocked: false,
@@ -3906,6 +3924,54 @@ impl Shell {
         self.transcript.update(cx, |transcript, _| {
             transcript.fixture_set_retained_limits(limits)
         });
+    }
+
+    /// Cmd+N: the New session action's own path (a new thread in the
+    /// current project).
+    pub fn fixture_new_session(&mut self, cx: &mut Context<Self>) {
+        self.open_new_session(cx);
+        cx.notify();
+    }
+
+    /// The frame's bottom row as last painted, on either route: the row and
+    /// canvas, the thread's context labels and Git actions, the new
+    /// thread's target chips and open target menu, the main composer's pill,
+    /// and the route clock's two chrome opacities (window coordinates).
+    pub fn fixture_frame_footer(&self, cx: &App) -> serde_json::Value {
+        let rect = |b: &Bounds<Pixels>| {
+            json!([
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                f32::from(b.size.width),
+                f32::from(b.size.height),
+            ])
+        };
+        let geometry = self.workbench.geometry.borrow();
+        let dock = self.composer_dock.borrow().frame;
+        let composer = self.composer.read(cx);
+        json!({
+            "framed": self.workbench_framed(cx),
+            "row": geometry.footer.as_ref().map(rect),
+            "canvas": geometry.canvas.as_ref().map(rect),
+            "labels": geometry
+                .footer_labels
+                .iter()
+                .map(|(text, bounds)| json!({"text": text, "bounds": rect(bounds)}))
+                .collect::<Vec<_>>(),
+            "buttons": geometry
+                .footer_buttons
+                .iter()
+                .map(|(id, bounds)| json!({"id": id, "bounds": rect(bounds)}))
+                .collect::<Vec<_>>(),
+            "targets": composer.pickers().read(cx).fixture_target_readback(cx),
+            "pill": composer.surface_bounds().get().as_ref().map(rect),
+            "dock": {
+                "targetOpacity": dock.selectors(),
+                "threadOpacity": dock.footer(),
+                "active": dock.active,
+                "docked": dock.docked,
+            },
+        })
     }
 
     /// The painted composer surface (pill) of `chat_id`: [x, y, w, h].

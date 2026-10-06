@@ -24,6 +24,10 @@ const TAB_MIN_WIDTH_COMPACT: f32 = 40.0;
 const TAB_MAX_WIDTH: f32 = 220.0;
 /// Below this frame-row width the Git actions show as icon buttons.
 const FOOTER_COMPACT_WIDTH: f32 = 360.0;
+/// Below this frame-row width (points at the 16 px Interface size) the new
+/// thread's machine and checkout chips show only their glyphs; the project
+/// and branch keep their labels (the branch truncating if it must).
+const TARGET_FOOTER_COMPACT_WIDTH: f32 = 560.0;
 /// The canvas sits this far inside the frame (left/right/bottom).
 const CANVAS_INSET: f32 = 8.0;
 const CANVAS_RADIUS: f32 = 14.0;
@@ -135,6 +139,135 @@ fn overflow_fades(scroll: &gpui::ScrollHandle, theme: &Theme) -> Vec<AnyElement>
         );
     }
     fades
+}
+
+/// A read-only frame-row label: a 12 pt glyph and the row's 11.5 pt text in
+/// the readable muted ink (the new thread's target chips share these
+/// metrics). `measure` records it for QA readback.
+fn footer_label(
+    path: &'static str,
+    text: SharedString,
+    muted: gpui::Hsla,
+    measure: Option<Rc<RefCell<Geometry>>>,
+) -> gpui::Div {
+    let key = text.to_string();
+    div()
+        .relative()
+        .min_w_0()
+        .flex_shrink(1.0)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(crate::typography::ui_rems(5.0))
+        .child(
+            icon(path)
+                .size(crate::typography::ui_rems(12.0))
+                .flex_none()
+                .text_color(muted),
+        )
+        .child(div().min_w_0().truncate().child(text))
+        .when_some(measure, |label, measure| {
+            label.child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        measure
+                            .borrow_mut()
+                            .footer_labels
+                            .push((key.clone(), bounds));
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+        })
+}
+
+/// The frame row's read-only thread context: who (a non-Main tab), then
+/// the checkout kind and branch. It shrinks and truncates first; the Git
+/// actions keep their size.
+fn footer_context_row(
+    context: &FooterContext,
+    theme: &Theme,
+    measure: Option<Rc<RefCell<Geometry>>>,
+) -> gpui::Div {
+    let muted = theme.readable_muted(0.7);
+    div()
+        .flex_1()
+        .min_w_0()
+        .overflow_hidden()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(12.0))
+        .when_some(context.who.clone(), |el, who| {
+            el.child(
+                div()
+                    .min_w_0()
+                    .flex_shrink(1.0)
+                    .max_w(px(260.0))
+                    .truncate()
+                    .text_color(theme.text_muted)
+                    .child(who),
+            )
+        })
+        .when_some(context.checkout, |el, (path, text)| {
+            el.child(footer_label(path, text.into(), muted, measure.clone()))
+        })
+        .when_some(context.branch.clone(), |el, branch| {
+            el.child(footer_label(icons::GIT_BRANCH, branch, muted, measure))
+        })
+}
+
+/// The face of a frame-row Git action (Review changes, Commit & push…):
+/// outlined, 22 pt, its label dropped when the row is compact.
+fn footer_button_face(
+    glyph: &'static str,
+    text: &'static str,
+    compact: bool,
+    theme: &Theme,
+) -> gpui::Div {
+    div()
+        .h(crate::typography::ui_rems(22.0))
+        .px(crate::typography::ui_rems(8.0))
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(crate::typography::ui_rems(5.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(theme.border)
+        .child(
+            icon(glyph)
+                .size(crate::typography::ui_rems(12.0))
+                .text_color(theme.readable_muted(0.7)),
+        )
+        .when(!compact, |button| button.child(text))
+}
+
+/// The departing copy of a working thread's row while the route has
+/// already moved to a new thread: its context and inert Git action faces.
+fn footer_thread_layer(context: &FooterContext, theme: &Theme) -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(12.0))
+        .child(footer_context_row(context, theme, None))
+        .when(context.git, |row| {
+            row.child(footer_button_face(
+                icons::GIT_BRANCH,
+                "Review changes",
+                context.compact,
+                theme,
+            ))
+            .child(footer_button_face(
+                icons::CHECK,
+                "Commit & push…",
+                context.compact,
+                theme,
+            ))
+        })
 }
 
 /// The contained content plane every main route shares: below the overlaid
@@ -349,8 +482,9 @@ impl Shell {
     }
 
     /// The new-chat canvas (no chat selected) in the same inset frame as
-    /// the workbench: one canvas, no tab strip, and an empty frame row so
-    /// the canvas keeps its geometry when the first send opens the chat.
+    /// the workbench: one canvas, no tab strip, and the frame row holding
+    /// the new thread's target pickers, so the canvas keeps its geometry
+    /// when the first send opens the chat.
     pub(in crate::shell) fn render_canvas_frame(
         &mut self,
         window: &mut Window,
@@ -362,7 +496,11 @@ impl Shell {
         let theme = Theme::of(cx).clone();
         let canvas_fill = theme.canvas_fill();
         let width = (main_content_width - 2.0 * CANVAS_INSET).max(0.0);
+        // Renders (and ticks the composer's route clock) before the row
+        // reads it.
         let body = self.render_main(window, width, transcript_width.min(width), 0.0, cx);
+        let footer = self.render_new_thread_footer(&theme, cx);
+        let canvas_geometry = self.workbench.geometry.clone();
         div()
             .id("workbench-frame")
             .flex_1()
@@ -385,10 +523,108 @@ impl Shell {
                     .border_color(theme.hairline(0.08))
                     .bg(canvas_fill)
                     .overflow_hidden()
+                    .child(
+                        gpui::canvas(
+                            move |bounds, _, _| canvas_geometry.borrow_mut().canvas = Some(bounds),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
                     .child(body),
             )
-            .child(div().h(px(FRAME_FOOTER_HEIGHT)).flex_none().w_full())
+            .child(footer)
             .into_any_element()
+    }
+
+    /// The new thread's frame row. On the left, its target pickers
+    /// (machine, project, checkout kind, branch), where a working thread
+    /// names its checkout and branch; nothing on the right, since there is
+    /// no task yet to review or commit. Across the route change the two
+    /// rows crossfade on the composer's route clock: the departing thread's
+    /// context fades out first, then the pickers fade in (the reverse of
+    /// [`Self::render_workbench_footer`]).
+    fn render_new_thread_footer(&mut self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let dock = self.composer_dock.borrow().frame;
+        let (target, departing) = (dock.selectors(), dock.footer());
+        let has_projects = !self.state.read(cx).spaces.is_empty();
+        self.workbench.geometry.borrow_mut().footer_buttons.clear();
+        self.workbench.geometry.borrow_mut().footer_labels.clear();
+        let compact = self.target_footer_compact(theme);
+        let pickers = self.composer.read(cx).pickers().clone();
+        let targets = (has_projects && target > 0.0).then(|| {
+            pickers.update(cx, |pickers, cx| {
+                pickers.render_target_footer(true, compact, cx)
+            })
+        });
+        if targets.is_none() {
+            pickers.update(cx, |pickers, cx| pickers.release_target_footer(cx));
+        }
+        let leaving = self
+            .workbench
+            .footer_context
+            .clone()
+            .filter(|_| departing > 0.0);
+        let row_geometry = self.workbench.geometry.clone();
+        div()
+            .id("workbench-footer")
+            .relative()
+            .h(px(FRAME_FOOTER_HEIGHT))
+            .flex_none()
+            .w_full()
+            // The chips carry their own side padding: their glyphs line up
+            // with the thread's labels, their hover plate with the canvas.
+            .pr(px(6.0))
+            .flex()
+            .flex_row()
+            .items_center()
+            .text_size(crate::typography::ui_rems(11.5))
+            .text_color(theme.readable_muted(0.7))
+            .child(
+                gpui::canvas(
+                    move |bounds, _, _| {
+                        row_geometry.borrow_mut().footer = Some(bounds);
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
+            .when_some(targets, |row, targets| {
+                row.child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .opacity(target)
+                        .child(targets),
+                )
+            })
+            .when_some(leaving, |row, context| {
+                row.child(
+                    footer_thread_layer(&context, theme)
+                        .absolute()
+                        .inset_0()
+                        .px(px(6.0))
+                        .opacity(departing),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// Whether the frame row is too narrow for every target label: the
+    /// machine and checkout chips then show only their glyphs.
+    fn target_footer_compact(&self, theme: &Theme) -> bool {
+        self.workbench
+            .geometry
+            .borrow()
+            .footer
+            .is_some_and(|footer| {
+                f32::from(footer.size.width) < TARGET_FOOTER_COMPACT_WIDTH * theme.ui_scale()
+            })
     }
 
     /// The center column on the chat route with a selected chat: the inset
@@ -1896,6 +2132,9 @@ impl Shell {
     /// The frame's bottom row: the focused chat's checkout and branch on the
     /// left; on the right the existing Git entry point for that same
     /// checkout (it never acts on a chat that is not the one named here).
+    /// Arriving from a new thread, its target pickers (inert now: the target
+    /// is fixed) fade out first on the composer's route clock, then this
+    /// row fades in, so the two never show at once.
     fn render_workbench_footer(
         &mut self,
         layout: &Layout,
@@ -1909,10 +2148,6 @@ impl Shell {
         let (who, checkout, branch, has_checkout, change_request) = {
             let state = self.state.read(cx);
             let chat = state.chats.iter().find(|chat| chat.id == focused);
-            let main = state
-                .chats
-                .iter()
-                .find(|chat| chat.id == layout.main_chat_id);
             let space = chat.and_then(|chat| state.space_for_chat(chat));
             let worktree = chat
                 .and_then(|chat| chat.cwd.as_deref())
@@ -1930,7 +2165,6 @@ impl Shell {
                 .map(str::trim)
                 .filter(|branch| !branch.is_empty())
                 .map(SharedString::from);
-            let _ = main;
             let has_checkout = chat.is_some_and(|chat| chat.cwd.is_some());
             let (role, _) = tab_role(state, &layout.main_chat_id, &TabRef::chat(focused.clone()));
             let who: Option<SharedString> = (role != TabRole::Main).then(|| {
@@ -1954,24 +2188,6 @@ impl Shell {
             )
         };
         let muted = theme.readable_muted(0.7);
-        // The context (who, checkout, branch) shrinks and truncates first;
-        // the Git actions keep their size and stay inside the row.
-        let label = |path: &'static str, text: SharedString| {
-            div()
-                .min_w_0()
-                .flex_shrink(1.0)
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(crate::typography::ui_rems(5.0))
-                .child(
-                    icon(path)
-                        .size(crate::typography::ui_rems(12.0))
-                        .flex_none()
-                        .text_color(muted),
-                )
-                .child(div().min_w_0().truncate().child(text))
-        };
         // Too narrow for labelled actions (both sidebars open on a small
         // window): icon buttons, still named by their tooltip and label.
         let footer_width = self
@@ -1981,42 +2197,38 @@ impl Shell {
             .footer
             .map(|footer| f32::from(footer.size.width));
         let compact = footer_width.is_some_and(|width| width < FOOTER_COMPACT_WIDTH);
+        let context = FooterContext {
+            who: who.clone(),
+            checkout,
+            branch,
+            git: has_checkout,
+            compact,
+        };
+        self.workbench.footer_context = Some(context.clone());
+        let dock = self.composer_dock.borrow().frame;
+        let (target, thread) = (dock.selectors(), dock.footer());
+        let thread_shown = thread > 0.0;
         // Both act on the FOCUSED chat's own checkout through the existing
         // Changes/Git workflow, bound to that chat (never the selection);
         // their labels name the chat when it is not Main.
-        let target_name: SharedString = who.clone().unwrap_or_else(|| SharedString::from("Main"));
+        let target_name: SharedString = who.unwrap_or_else(|| SharedString::from("Main"));
         let footer_geometry = self.workbench.geometry.clone();
         let footer_button = |id: &'static str,
                              glyph: &'static str,
                              text: &'static str,
                              label: SharedString| {
             let measure = footer_geometry.clone();
-            div()
+            footer_button_face(glyph, text, compact, theme)
                 .id(id)
                 .role(gpui::Role::Button)
                 .aria_label(label.clone())
                 .tab_index(0)
-                .h(crate::typography::ui_rems(22.0))
-                .px(crate::typography::ui_rems(8.0))
-                .flex()
-                .flex_none()
-                .items_center()
-                .gap(crate::typography::ui_rems(5.0))
-                .rounded(px(6.0))
-                .border_1()
-                .border_color(theme.border)
                 .cursor_pointer()
                 .hover_wash(id)
                 .on_key_down(crate::swallow_activation_key)
                 .tooltip(move |_, cx| crate::pickers::ControlTooltip::view(label.clone(), None, cx))
                 .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
                 .relative()
-                .child(
-                    icon(glyph)
-                        .size(crate::typography::ui_rems(12.0))
-                        .text_color(muted),
-                )
-                .when(!compact, |button| button.child(text))
                 .child(
                     gpui::canvas(
                         move |bounds, _, _| {
@@ -2033,7 +2245,7 @@ impl Shell {
         };
         let review_chat = focused.clone();
         let commit_chat = focused.clone();
-        let git: Option<[AnyElement; 2]> = has_checkout.then(|| {
+        let git: Option<[AnyElement; 2]> = (has_checkout && thread_shown).then(|| {
             [
                 footer_button(
                     "wb-footer-review",
@@ -2061,7 +2273,7 @@ impl Shell {
         });
         // Balance panes: global to the layout, so it leads the row; only
         // with a split (a single group has nothing to balance).
-        let balance = model::has_split(layout).then(|| {
+        let balance = (thread_shown && model::has_split(layout)).then(|| {
             let measure = self.workbench.geometry.clone();
             div()
                 .id("wb-balance-panes")
@@ -2105,50 +2317,35 @@ impl Shell {
                     .inset_0(),
                 )
         });
-        if balance.is_none() {
-            self.workbench.geometry.borrow_mut().balance = None;
+        {
+            let mut geometry = self.workbench.geometry.borrow_mut();
+            if balance.is_none() {
+                geometry.balance = None;
+            }
+            if git.is_none() {
+                geometry.footer_buttons.clear();
+            }
+            geometry.footer_labels.clear();
+        }
+        // The departing new thread's target, inert.
+        let compact_targets = self.target_footer_compact(theme);
+        let pickers = self.composer.read(cx).pickers().clone();
+        let targets = (target > 0.0).then(|| {
+            pickers.update(cx, |pickers, cx| {
+                pickers.render_target_footer(false, compact_targets, cx)
+            })
+        });
+        if targets.is_none() {
+            pickers.update(cx, |pickers, cx| pickers.release_target_footer(cx));
         }
         let row_geometry = self.workbench.geometry.clone();
-        let has_git = git.is_some();
-        if !has_git {
-            self.workbench.geometry.borrow_mut().footer_buttons.clear();
-        }
-        let context = div()
-            .flex_1()
-            .min_w_0()
-            .overflow_hidden()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(12.0))
-            .when_some(who, |el, who| {
-                el.child(
-                    div()
-                        .min_w_0()
-                        .flex_shrink(1.0)
-                        .max_w(px(260.0))
-                        .truncate()
-                        .text_color(theme.text_muted)
-                        .child(who),
-                )
-            })
-            .when_some(checkout, |el, (path, text)| {
-                el.child(label(path, text.into()))
-            })
-            .when_some(branch, |el, branch| {
-                el.child(label(icons::GIT_BRANCH, branch))
-            });
+        let label_geometry = self.workbench.geometry.clone();
         div()
             .id("workbench-footer")
             .relative()
             .h(px(FRAME_FOOTER_HEIGHT))
             .flex_none()
             .w_full()
-            .px(px(6.0))
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap(px(12.0))
             .text_size(crate::typography::ui_rems(11.5))
             .text_color(muted)
             .child(
@@ -2161,17 +2358,51 @@ impl Shell {
                 .absolute()
                 .inset_0(),
             )
-            .children(balance)
-            .child(context)
-            .when_some(change_request, |el, summary| {
-                el.child(crate::change_requests::pull_request_badge(
-                    "workbench-pull-request".into(),
-                    summary,
-                    crate::change_requests::ChangeRequestBadgeSurface::Composer,
-                    theme,
-                ))
+            .when(thread_shown, |row| {
+                row.child(
+                    div()
+                        .size_full()
+                        .px(px(6.0))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap(px(12.0))
+                        .opacity(thread)
+                        .children(balance)
+                        .child(footer_context_row(&context, theme, Some(label_geometry)))
+                        .when_some(change_request, |el, summary| {
+                            el.child(crate::change_requests::pull_request_badge(
+                                "workbench-pull-request".into(),
+                                summary,
+                                crate::change_requests::ChangeRequestBadgeSurface::Composer,
+                                theme,
+                            ))
+                        })
+                        .children(git.into_iter().flatten()),
+                )
             })
-            .children(git.into_iter().flatten())
+            .when_some(targets, |row, targets| {
+                row.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .pr(px(6.0))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .opacity(target)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .child(targets),
+                        ),
+                )
+            })
             .into_any_element()
     }
 

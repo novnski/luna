@@ -27,10 +27,10 @@
 //! 8. Terminal text in theme colors (default foreground, the 16 ANSI slots,
 //!    dim, inverse, selected) paints below 4.5:1 on its actual cell
 //!    background, or the cursor below 3:1.
-//! 10. With new-thread artwork set, composer text, placeholder or the
-//!     device/project and checkout/ref selector labels fall below 4.5:1 over
-//!     an all-white or all-black image (the extremes any artwork lies
-//!     between), at the strength it is painted under each of them.
+//! 10. With new-thread artwork set, composer text or placeholder fall below
+//!     4.5:1 over an all-white or all-black image (the extremes any artwork
+//!     lies between), at the strength it is painted under them. (The target
+//!     pickers sit in the frame's bottom row, off the artwork.)
 //! 11. A terminal frame (160x50 cells, palette, selected and dim cases)
 //!     costs enough in contrast floors to matter during paint.
 //! 12. A palette-controlled terminal pair (default or ANSI16 foreground on
@@ -1286,25 +1286,22 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
     }
     // New-thread artwork extremes. The frosted hero paints at 0.84 (opaque
     // 1.0); under the composer the cutout reveals it at half strength, where
-    // the pill paints `artwork_composer_plate`. Selector rows (above the
-    // pill, where the feather reaches full strength) sit on the opaque
-    // `artwork_selector_plate`, so the image never reaches their labels.
+    // the pill paints `artwork_composer_plate`. Nothing else sits on the
+    // artwork: the target pickers live in the frame's bottom row, outside
+    // the canvas the image is clipped to.
     let hero = if theme.is_frost() { 0.84 } else { 1.0 };
     let strength = hero * 0.5;
     let pill_plate = theme.artwork_composer_plate(strength);
-    let selector_plate = theme.artwork_selector_plate();
-    for (art, name_pill, name_hint, name_select) in [
+    for (art, name_pill, name_hint) in [
         (
             grey(1.0),
             "composer text on white artwork",
             "placeholder on white artwork",
-            "selector label on white artwork",
         ),
         (
             grey(0.0),
             "composer text on black artwork",
             "placeholder on black artwork",
-            "selector label on black artwork",
         ),
     ] {
         let under_pill = flat(pill_plate, flat(art.opacity(strength), canvas));
@@ -1315,14 +1312,6 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             Kind::Text,
             theme.text_faint,
             under_pill,
-        ));
-        let under_selector = flat(selector_plate, flat(art.opacity(hero), canvas));
-        out.push(p(
-            "artwork",
-            name_select,
-            Kind::Text,
-            theme.readable_muted(0.7),
-            under_selector,
         ));
     }
     for (name, color) in syntax(theme) {

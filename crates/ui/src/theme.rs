@@ -1035,13 +1035,6 @@ impl Theme {
         on_fill(self.on_accent, &[self.danger_strong])
     }
 
-    /// The opaque plate the new-chat selector rows sit on while user artwork
-    /// is set: the input plate over the chrome, without the artwork showing
-    /// through, so the labels' floor holds on any image.
-    pub fn artwork_selector_plate(&self) -> Hsla {
-        flatten(self.input_glass_bg(), self.chrome_surface())
-    }
-
     /// The composer pill's fill over user artwork, revealed beneath it at
     /// `strength` (hero opacity × the cutout's reveal): the usual plate,
     /// thickened until text and placeholder read over an all-white and an

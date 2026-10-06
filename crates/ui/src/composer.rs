@@ -119,16 +119,14 @@ const QUEUE_SIDE_INSET: f32 = 16.0;
 /// The composer covers the tray's lower padding so the queue reads as emerging
 /// from behind it instead of as a separate rounded pill.
 pub(crate) const QUEUE_COMPOSER_OVERLAP: f32 = 18.0;
-/// The original floating selector rows use the same 20px chip height as the
-/// established-thread footer. Their surrounding rows own no plate or border.
-const NEW_THREAD_SELECTOR_ROW_HEIGHT: f32 = 20.0;
-// Accommodate the 24px usage indicator and PR badge without overflowing the
-// row's equal 8px top/bottom gutters.
+// An unframed session's read-only checkout/ref row under its pill. Holds the
+// PR badge without overflowing the row's equal 8px top/bottom gutters. A new
+// thread has no row here: its target pickers sit in the frame's bottom row.
 const SESSION_FOOTER_HEIGHT: f32 = 24.0;
 
 /// Route chrome dissolves around the middle of the shared-element move. The
-/// two ramps never overlap, which avoids duplicate picker ids/popovers while
-/// still letting their surrounding geometry collapse continuously.
+/// two ramps never overlap, so the departing and arriving chrome are never
+/// both visible (or both clickable) in one frame.
 fn route_chrome_opacities(new_thread_chrome: f32) -> (f32, f32) {
     let new_thread = ((new_thread_chrome.clamp(0.0, 1.0) - 0.5) * 2.0).clamp(0.0, 1.0);
     let session = (((1.0 - new_thread_chrome.clamp(0.0, 1.0)) - 0.5) * 2.0).clamp(0.0, 1.0);
@@ -4849,8 +4847,9 @@ pub struct Composer {
     answer_input: Entity<ComposerInput>,
     /// Draft displaced while a queued message occupies the composer.
     pub(crate) queue_edit_draft: Option<(String, Vec<StagedAttachment>, Vec<CapturedAppshot>)>,
-    /// Composer actions row plus the new-session floating target tab
-    /// ([`Pickers::render_new_thread_target_selectors`]).
+    /// Composer actions row. The shell also draws the new thread's target
+    /// pickers from it in the frame's bottom row
+    /// ([`Pickers::render_target_footer`]).
     pickers: Entity<Pickers>,
     /// Only changed canvas selections dirty its draft; picker catalog and
     /// layout notifications may arrive while the saved draft is loading.
@@ -13384,55 +13383,6 @@ impl Render for Composer {
                     })
                     .child(send_button),
             );
-        // With new-thread artwork behind the composer, the selector labels
-        // would sit directly on arbitrary image pixels (feathered above the
-        // pill, half-strength below it). Give their rows the composer's own
-        // plate so the text floor holds on light or dark artwork.
-        let artwork_plate = {
-            let artwork = crate::settings::current(cx)
-                .new_thread_composer_background
-                .is_some();
-            let plate = Theme::of(cx).artwork_selector_plate();
-            move |row: gpui::AnyElement| -> gpui::AnyElement {
-                if artwork {
-                    div()
-                        .px(px(4.0))
-                        .py(px(1.0))
-                        .rounded(px(8.0))
-                        .bg(plate)
-                        .child(row)
-                        .into_any_element()
-                } else {
-                    row
-                }
-            }
-        };
-        // An open completion card sits right over the destination row; step
-        // the row out of the way instead of letting the card slice it
-        // (audit CP-05).
-        let target_row_opacity = if self.active_popup_scroll().is_some() {
-            0.0
-        } else {
-            new_thread_chrome_opacity
-        };
-        let new_thread_target_selectors = (target_row_opacity > 0.0).then(|| {
-            artwork_plate(self.pickers.update(cx, |pickers, cx| {
-                pickers.render_new_thread_target_selectors(cx)
-            }))
-        });
-        let new_thread_git_selectors = (new_thread_chrome_opacity > 0.0)
-            .then(|| {
-                self.pickers.update(cx, |pickers, cx| {
-                    pickers.render_new_thread_git_selectors(cx)
-                })
-            })
-            .flatten()
-            .map(artwork_plate);
-        let has_new_thread_git_selectors = self
-            .state
-            .read(cx)
-            .selected_space_row()
-            .is_some_and(|space| space.git_detected);
         // The file dropzone lives in the shell (the whole conversation column,
         // not just the pill — shell.rs `chat-dropzone`); drops land back here
         // via `add_paths`.
@@ -13464,72 +13414,29 @@ impl Render for Composer {
             .children(self.render_chat_reference_popup(&theme, cx))
             .children(self.render_slash_popup(&theme, cx))
             .children(self.render_stash_menu(&theme, cx));
-        // Restore the original chip-only selector treatment: destination at
-        // the top-right, no surrounding surface. Cancel the column gap as the
-        // row collapses so the pill never jumps at the route boundary.
-        let container = if self.dock_frame.is_some() {
-            // Floating selectors share the surface's origin and never change its height.
-            container.relative().child(
-                div()
-                    .id("dock-target-selectors")
-                    .absolute()
-                    .top(crate::typography::ui_rems(-28.0))
-                    .left(px(Theme::SPACE_LG + 10.0))
-                    .right(px(Theme::SPACE_LG + 10.0))
-                    .h(crate::typography::ui_rems(NEW_THREAD_SELECTOR_ROW_HEIGHT))
-                    .flex()
-                    .items_start()
-                    .justify_end()
-                    .opacity(target_row_opacity)
-                    .children(new_thread_target_selectors),
-            )
-        } else if new_thread_chrome > 0.0 {
-            container.child(
-                div()
-                    .w_full()
-                    // Rem-sized like the footer chips it holds.
-                    .h(crate::typography::ui_rems(
-                        NEW_THREAD_SELECTOR_ROW_HEIGHT * new_thread_chrome,
-                    ))
-                    .mb(px(-Theme::SPACE_SM * (1.0 - new_thread_chrome)))
-                    .px(px(10.0))
-                    .flex()
-                    .items_start()
-                    .justify_end()
-                    .opacity(target_row_opacity)
-                    .children(new_thread_target_selectors),
-            )
-        } else {
-            container
-        };
         let container = container.child(pill_surface);
 
-        // The lower slot keeps a stable footprint for Git projects while its
-        // old floating checkout/ref controls dissolve into the session footer.
-        // Non-Git sessions grow the slot continuously from zero.
-        let session_chrome = 1.0 - new_thread_chrome;
-        // In the workbench frame the session's checkout/branch live in the
-        // frame row and the context window in the controls row, so a
-        // session has nothing under its pill: the slot gives its height
-        // back as the session chrome comes in, and the pill sits lower.
+        // Nothing sits around a new thread's pill: its target pickers
+        // (machine, project, checkout, branch) live in the frame's bottom
+        // row, drawn by the shell (`Pickers::render_target_footer`), where a
+        // framed session's checkout and branch are named too. Only an
+        // unframed session (a standalone composer) keeps its read-only
+        // checkout/ref row under the pill, growing in with the session
+        // chrome. The main composer is always framed or a new thread.
         let framed_session =
             self.frame_footer && self.binding.chat_row(self.state.read(cx)).is_some();
-        let bottom_slot = if framed_session {
-            if has_new_thread_git_selectors {
-                new_thread_chrome
-            } else {
-                0.0
-            }
-        } else if has_new_thread_git_selectors || self.dock_frame.is_some() {
-            1.0
+        let bottom_slot = if framed_session || self.dock_frame.is_some() {
+            0.0
         } else {
-            session_chrome
+            1.0 - new_thread_chrome
         };
         let container = if bottom_slot > 0.0 {
-            let footer = (session_chrome_opacity > 0.0 && !framed_session).then(|| {
-                self.pickers
-                    .update(cx, |pickers, cx| pickers.render_footer(cx))
-            });
+            let footer = (session_chrome_opacity > 0.0)
+                .then(|| {
+                    self.pickers
+                        .update(cx, |pickers, cx| pickers.render_footer(cx))
+                })
+                .flatten();
             container.child(
                 div()
                     .w_full()
@@ -13539,18 +13446,6 @@ impl Render for Composer {
                     .mt(px(-Theme::SPACE_SM * (1.0 - bottom_slot)))
                     .mb(px(-Theme::SPACE_SM * bottom_slot))
                     .relative()
-                    .when(new_thread_chrome_opacity > 0.0, |slot| {
-                        slot.child(
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .px(px(10.0))
-                                .flex()
-                                .items_center()
-                                .opacity(new_thread_chrome_opacity)
-                                .children(new_thread_git_selectors),
-                        )
-                    })
                     .when(session_chrome_opacity > 0.0, |slot| {
                         slot.child(
                             div()
@@ -13561,13 +13456,14 @@ impl Render for Composer {
                                 .flex()
                                 .items_center()
                                 .opacity(session_chrome_opacity)
-                                .child(div().flex_1().min_w_0().children(footer.flatten())),
+                                .child(div().flex_1().min_w_0().children(footer)),
                         )
                     }),
             )
         } else {
             container
         };
+
         // Full-size preview of a staged thumbnail (AttachmentPreviewDialog).
         if let Some(preview) = self.preview.clone() {
             if std::mem::take(&mut self.preview_focus_pending) {
@@ -16188,12 +16084,6 @@ mod tests {
         let reverse = FlipMorph::new_thread_transition(49.0, 0.0);
         assert_eq!(reverse.height(124.0, 0.0), 49.0);
         assert_eq!(reverse.height(124.0, 420.0), 124.0);
-    }
-
-    #[test]
-    fn new_thread_selectors_restore_the_compact_floating_row() {
-        assert_eq!(NEW_THREAD_SELECTOR_ROW_HEIGHT, 20.0);
-        assert_eq!(SESSION_FOOTER_HEIGHT, 24.0);
     }
 
     #[test]
