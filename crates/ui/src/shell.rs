@@ -83,6 +83,7 @@ mod native_review;
 mod pane_chat;
 mod placement;
 mod related_chats;
+mod settings_gallery;
 mod side_chats;
 mod spaces;
 mod tabs;
