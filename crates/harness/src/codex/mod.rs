@@ -64,7 +64,7 @@ use tokio_util::sync::CancellationToken;
 use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ModelOption, ModelOptionChoice,
     ProviderForkCapability, ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest,
-    SlashCommand, SteeringMode, UserInputAnswer, UserInputQuestion,
+    SlashCommand, SlashCommandKind, SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::jsonrpc::{Incoming, RpcClient, RpcRequestFailure};
@@ -621,7 +621,7 @@ pub fn observe_skill_discovery(result: &Value) -> CodexSkillDiscoveryObservation
     observed
 }
 
-/// `skills/list` result → picker commands. `data` groups skills by cwd; the
+/// `skills/list` result → picker skills (`$name` in the composer). `data` groups skills by cwd; the
 /// same skill appears under every root, so dedupe by name keeping first
 /// appearance order. The interface's shortDescription is picker-sized; the
 /// top-level description is a model-facing paragraph, kept only as fallback.
@@ -662,6 +662,7 @@ fn parse_skill_commands(result: &Value) -> Vec<SlashCommand> {
                 name: name.to_owned(),
                 description: description.to_owned(),
                 input_hint: None,
+                kind: SlashCommandKind::Skill,
             });
         }
     }

@@ -24,7 +24,7 @@
 //! ([`apply_native`]) is the authority for what is effective; the file scan
 //! explains why (scope, shadowing, ignored sources) and covers what the
 //! handshake does not report (hooks).
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -475,6 +475,39 @@ fn front_matter(text: &str) -> HashMap<String, String> {
         }
     }
     fields
+}
+
+/// Names of the skill folders (`skills/<dir>/SKILL.md`) under the provider
+/// home and every `.claude` from `cwd` up, by folder and front-matter name.
+/// Claude's command catalog does not mark skills; this is how discovery tells
+/// them apart. Plugin and bundled skills have no folder here and stay commands.
+pub(super) fn skill_folder_names(home: Option<&Path>, cwd: Option<&Path>) -> HashSet<String> {
+    let mut roots: Vec<PathBuf> = home.map(|home| home.join("skills")).into_iter().collect();
+    if let Some(cwd) = cwd {
+        roots.extend(
+            cwd.ancestors()
+                .map(|dir| dir.join(".claude").join("skills")),
+        );
+    }
+    let mut names = HashSet::new();
+    for root in roots {
+        let Ok(dirs) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for dir in dirs.filter_map(Result::ok).take(MAX_SCAN_ENTRIES) {
+            let Ok(Some(text)) = read_bounded(&dir.path().join("SKILL.md")) else {
+                continue;
+            };
+            if let Some(name) = front_matter(&text)
+                .remove("name")
+                .filter(|name| !name.is_empty())
+            {
+                names.insert(name);
+            }
+            names.insert(dir.file_name().to_string_lossy().into_owned());
+        }
+    }
+    names
 }
 
 /// Bounded walk returning `(relative path, absolute path)` for regular files.

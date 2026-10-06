@@ -386,6 +386,7 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
                     .map(str::trim)
                     .filter(|h| !h.is_empty())
                     .map(str::to_owned),
+                kind: Default::default(),
             })
         })
         .collect()
@@ -487,7 +488,19 @@ impl Harness for ClaudeHarness {
             self.kill_grace,
         )
         .await?;
-        let commands = parse_initialize_commands(&response);
+        let mut commands = parse_initialize_commands(&response);
+        // The catalog does not say which entries are skills. Tag the ones a
+        // skill folder backs so the composer offers them under `$`; the
+        // invocation Claude receives stays `/name`.
+        let skills = extensions::skill_folder_names(
+            profile.effective_config_home().as_deref(),
+            profile.cwd.as_deref(),
+        );
+        for command in &mut commands {
+            if skills.contains(&command.name) {
+                command.kind = luna_proto::SlashCommandKind::Skill;
+            }
+        }
         self.discovery.put(key, commands.clone());
         Ok(commands)
     }

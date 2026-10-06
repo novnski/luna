@@ -1759,7 +1759,7 @@ impl Composer {
         if self.editing_queued.is_none() {
             return false;
         }
-        let text = self.input.read(cx).text().trim().to_string();
+        let text = self.skill_wire_text(self.input.read(cx).text().trim().to_string(), cx);
         if text.is_empty() && self.staged().is_empty() && self.staged_appshots().is_empty() {
             self.finish_queue_edit("discard", None, cx);
         } else {

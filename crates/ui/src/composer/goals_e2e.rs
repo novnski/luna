@@ -1,7 +1,7 @@
 //! Headless GPUI E2E for Codex goals in the composer (`goal-card-fixture`).
 //!
 //! Scenarios come from `evidence/goal-parity/failure-cases.md`, written before
-//! the parity work. The production composer (Goal switch, goal-mode Send,
+//! the parity work. The production composer (Goal badge, goal-mode Send,
 //! `/goal`, the goal bar and its editor), the production transcript ("Sent as
 //! goal", "Goal achieved in …"), key bindings and the AccessKit tree run in a
 //! hidden window. A synthetic engine answers the task-command path in memory
@@ -108,16 +108,26 @@ impl RpcService for FixtureEngine {
                     description: "Set a goal \u{2014} keep working until the condition is met"
                         .into(),
                     input_hint: None,
+                    kind: SlashCommandKind::Command,
                 },
                 SlashCommand {
                     name: "review".into(),
                     description: "Review the current changes".into(),
                     input_hint: None,
+                    kind: SlashCommandKind::Command,
                 },
                 SlashCommand {
                     name: "plan".into(),
                     description: "Plan before editing".into(),
                     input_hint: Some("task".into()),
+                    kind: SlashCommandKind::Command,
+                },
+                // A skill: offered under `$`, never under `/`.
+                SlashCommand {
+                    name: "release-notes".into(),
+                    description: "Draft release notes".into(),
+                    input_hint: None,
+                    kind: SlashCommandKind::Skill,
                 },
             ]),
             other => Err(RpcError::UnknownMethod(other.into())),
@@ -523,7 +533,7 @@ fn has_action(aria: &Value, action: &str) -> bool {
         .is_some_and(|actions| actions.iter().any(|value| value == action))
 }
 
-/// Every goal node AccessKit exposes (bar, controls, Goal switch, transcript
+/// Every goal node AccessKit exposes (bar, controls, Goal badge, transcript
 /// marks), sorted by label.
 fn goal_nodes(tree: &Value) -> Vec<Value> {
     let mut nodes: Vec<Value> = tree["nodes"]
@@ -590,7 +600,7 @@ fn input_placeholder(tree: &Value) -> Option<String> {
         .and_then(|aria| aria["placeholder"].as_str().map(str::to_owned))
 }
 
-/// Tab forward from the composer input (the Goal switch sits after it).
+/// Tab forward from the composer input (the Goal badge sits after it).
 fn tab_walk(
     composer: &Entity<Composer>,
     window: AnyWindowHandle,
@@ -702,36 +712,68 @@ pub async fn run_goal_card_e2e(
         false,
     )?;
 
-    // 1. No goal: no bar; the Goal switch sits beside the access chip, off.
+    // 1. No goal and no `/goal` typed: no bar and no Goal badge.
     shots.push(shot(window, cx, output, "01-no-goal.png").await?);
     let tree = a11y_tree(window, cx)?;
     let nodes = goal_nodes(&tree);
     anyhow::ensure!(
-        bar_nodes(&nodes).is_empty()
-            && node(&nodes, "Goal mode").is_some_and(|node| node["role"] == "Switch"
-                && node["toggled"] == "False"
-                && node["click"] == true
-                && node["focus"] == true),
+        bar_nodes(&nodes).is_empty() && node(&nodes, "Goal mode").is_none(),
         "no-goal state wrong: {nodes:?}"
     );
     steps.push(json!({"step": "no-goal", "goalNodes": nodes, "card": card(&composer, cx)}));
 
-    // 2. Goal mode from the keyboard: Tab to the switch, Space. Codex's
-    // placeholder replaces "Do anything…".
+    // 2. Only an explicit bare `/goal` turns goal mode on: the first Enter
+    // accepts the `/goal` completion, the second sends it, nothing is
+    // dispatched, and the Goal badge appears with Codex's placeholder. Space
+    // on the badge turns goal mode off and removes it; `/goal` brings it back.
+    let enter_goal_mode = |cx: &mut AsyncApp| -> anyhow::Result<()> {
+        focus_input(&composer, window, cx)?;
+        input_edit(&composer, window, cx, |input, window, cx| {
+            input.replace_text_in_range(None, "/goal", window, cx)
+        })?;
+        key_press(window, cx, "enter")?;
+        key_press(window, cx, "enter")
+    };
+    enter_goal_mode(cx)?;
+    pause(cx, 80).await;
     let walk = tab_walk(&composer, window, cx, |label| label == "Goal mode")?;
-    key_press(window, cx, "space")?;
     let tree = a11y_tree(window, cx)?;
     let nodes = goal_nodes(&tree);
     let on = card(&composer, cx);
     anyhow::ensure!(
         on["goalMode"] == true
+            && on["input"] == ""
+            && rpc.executes().is_empty()
             && on["placeholder"] == GOAL_PLACEHOLDER
             && input_placeholder(&tree).as_deref() == Some(GOAL_PLACEHOLDER)
+            && node(&nodes, "Goal mode").is_some_and(|node| node["role"] == "Switch"
+                && node["toggled"] == "True"
+                && node["click"] == true
+                && node["focus"] == true),
+        "bare /goal did not show the Goal badge: {on} {nodes:?}"
+    );
+    key_press(window, cx, "space")?;
+    let tree = a11y_tree(window, cx)?;
+    let off = card(&composer, cx);
+    anyhow::ensure!(
+        off["goalMode"] == false
+            && off["placeholder"] == "Do anything…"
+            && node(&goal_nodes(&tree), "Goal mode").is_none(),
+        "the Goal badge did not turn goal mode off: {off}"
+    );
+    enter_goal_mode(cx)?;
+    pause(cx, 80).await;
+    let tree = a11y_tree(window, cx)?;
+    let nodes = goal_nodes(&tree);
+    let on = card(&composer, cx);
+    anyhow::ensure!(
+        on["goalMode"] == true
+            && rpc.executes().is_empty()
             && node(&nodes, "Goal mode").is_some_and(|node| node["toggled"] == "True"),
-        "Space on the Goal switch did not enter goal mode: {on} {nodes:?}"
+        "bare /goal did not re-enter goal mode: {on} {nodes:?}"
     );
     shots.push(shot(window, cx, output, "02-goal-mode.png").await?);
-    steps.push(json!({"step": "goal-mode-on", "tabWalk": walk, "goalNodes": nodes, "card": on}));
+    steps.push(json!({"step": "goal-mode-on", "tabWalk": walk, "goalNodes": nodes, "off": off, "card": on}));
 
     // 3. Send in goal mode: ONE session run carrying the goal start (never a
     // queued message, never a goal-only control), then goal mode resets.
@@ -1190,8 +1232,9 @@ pub async fn run_goal_card_e2e(
         crate::appearance::set_mode(crate::appearance::AppearanceMode::Dark, cx)
     })?;
 
-    // 12. Claude chat: the same Goal switch and one `/goal` (LUNA's shadows
-    // Claude's native entry), with Claude's condition wording.
+    // 12. Claude chat: no badge until `/goal`, then the same Goal badge and
+    // one `/goal` (LUNA's shadows Claude's native entry), with Claude's
+    // condition wording. `/` lists commands only and `$` skills only.
     claude_state(
         &state,
         window,
@@ -1205,12 +1248,12 @@ pub async fn run_goal_card_e2e(
     let tree = a11y_tree(window, cx)?;
     let nodes = goal_nodes(&tree);
     anyhow::ensure!(
-        bar_nodes(&nodes).is_empty()
-            && node(&nodes, "Goal mode").is_some_and(|node| node["toggled"] == "False"),
+        bar_nodes(&nodes).is_empty() && node(&nodes, "Goal mode").is_none(),
         "Claude no-goal state wrong: {nodes:?}"
     );
+    enter_goal_mode(cx)?;
+    pause(cx, 80).await;
     let walk = tab_walk(&composer, window, cx, |label| label == "Goal mode")?;
-    key_press(window, cx, "space")?;
     let tree = a11y_tree(window, cx)?;
     let on = card(&composer, cx);
     anyhow::ensure!(
@@ -1245,6 +1288,42 @@ pub async fn run_goal_card_e2e(
         .as_array()
         .map(|names| names.iter().filter(|name| *name == "goal").count())
         .unwrap_or_default();
+    let skill_in_commands = slash["slashCommands"]
+        .as_array()
+        .is_some_and(|names| names.iter().any(|name| name == "release-notes"));
+    // `$` opens the same popup on skills only; accepting writes `$name`, and
+    // Claude still receives `/name`. Prose that starts with `$` stays prose.
+    input_edit(&composer, window, cx, |input, window, cx| {
+        let end = input.text().encode_utf16().count();
+        input.replace_text_in_range(Some(0..end), "$rel", window, cx)
+    })?;
+    draw(window, cx)?;
+    let skills = card(&composer, cx);
+    key_press(window, cx, "enter")?;
+    let accepted = card(&composer, cx);
+    let wire = cx.update(|cx| {
+        let this = composer.read(cx);
+        [
+            this.skill_wire_text("$release-notes for 1.2".into(), cx),
+            this.skill_wire_text("$HOME is unset".into(), cx),
+            this.skill_wire_text("$5 off".into(), cx),
+        ]
+    });
+    input_edit(&composer, window, cx, |input, window, cx| {
+        let end = input.text().encode_utf16().count();
+        input.replace_text_in_range(Some(0..end), "$5", window, cx)
+    })?;
+    let money = card(&composer, cx);
+    anyhow::ensure!(
+        !skill_in_commands
+            && skills["slashOpen"] == true
+            && skills["slashCommands"] == json!(["release-notes"])
+            && accepted["input"] == "$release-notes "
+            && accepted["slashOpen"] == false
+            && wire == ["/release-notes for 1.2", "$HOME is unset", "$5 off"]
+            && money["slashOpen"] == false,
+        "skills and commands are not split by `$` and `/`: {slash} {skills} {accepted} {wire:?} {money}"
+    );
     // E23: the Claude chat's discovery is scoped to it and its mode.
     let claude_scope = rpc
         .calls
@@ -1270,7 +1349,7 @@ pub async fn run_goal_card_e2e(
         goal_entries == 1,
         "Claude `/goal` must be offered once: {slash}"
     );
-    steps.push(json!({"step": "claude-goal-mode", "tabWalk": walk, "card": on, "slash": slash, "listCommands": claude_scope}));
+    steps.push(json!({"step": "claude-goal-mode", "tabWalk": walk, "card": on, "slash": slash, "skills": skills, "accepted": accepted, "wire": wire, "listCommands": claude_scope}));
 
     // 13. Send in goal mode: ONE run carrying the goal for the Claude chat
     // (the harness turns it into Claude's own `/goal <condition>` line).
@@ -1548,7 +1627,7 @@ pub async fn run_goal_card_e2e(
     steps.push(json!({"step": "claude-review-findings", "labels": text_nodes}));
 
     // 18. A provider without native goals (OpenCode) never shows the bar or
-    // the Goal switch, even with a goal readback in state.
+    // the Goal badge, even with a goal readback in state.
     {
         let state = state.clone();
         act(window, cx, move |_, cx| {
