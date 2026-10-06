@@ -8,7 +8,9 @@
 //! - Every interface glyph is official Solar Linear, fetched with
 //!   `@solar-icons/cli` (UI polish audit DS-09). The exceptions: the filled
 //!   stop square (a state glyph), the window controls (they mirror the OS),
-//!   the return-key glyph, and the queue's own line family.
+//!   the return-key glyph, the queue's own line family, and the few glyphs
+//!   Solar lacks, taken from Lucide, Tabler and Simple Icons with strokes set
+//!   to 1.5px (`assets/icons/licenses/THIRD_PARTY_NOTICES.md`).
 //! - The harness brand marks (`claude-mark`, `openai-mark`, `opencode-mark`) are
 //!   ports of luna's `icons.tsx`. gpui tints SVGs with the text color, so the
 //!   Claude mark's brand orange is applied at the call site ([`CLAUDE_BRAND`]).
@@ -84,9 +86,8 @@ icon_assets![
     (QUEUE_PAPERCLIP, "queue-paperclip"),
     (CLOCK_CIRCLE, "clock-circle"),
     // Goal card glyphs, official Solar Linear (24px canvas,
-    // 1.5px strokes): the goal target, token usage, pause and resume.
+    // 1.5px strokes): the goal target, pause and resume.
     (TARGET, "target"),
-    (BOLT, "bolt"),
     (PAUSE, "pause"),
     (PLAY, "play"),
     (CALENDAR, "calendar"),
@@ -102,10 +103,12 @@ icon_assets![
     (FLOPPY_DISK, "floppy-disk"),
     // Solar `git-branch`.
     (GIT_BRANCH, "git-branch"),
+    // Solar `git-diff`: the Diffs surface and the apply-patch tool row.
+    (GIT_DIFF, "git-diff"),
     // Compact task pin for the sidebar's pinned rows and hover action.
     (PIN, "pin"),
-    // Provider-neutral pull-request glyph, drawn in the same linear family.
-    (PULL_REQUEST, "pull-request"),
+    // Lucide `git-pull-request` (Solar has none), stroke set to 1.5px.
+    (PULL_REQUEST, "git-pull-request"),
     // Compact history-ref glyphs, drawn in the same linear style.
     (CLOUD, "cloud"),
     (TAG, "tag"),
@@ -128,31 +131,23 @@ icon_assets![
     (ARROW_LEFT, "arrow-left"),
     (ARROW_RIGHT, "arrow-right"),
     (ARROW_UP, "arrow-up"),
-    // arrow-up mirrored (like the sidebar flip) — the Solar Linear set here
-    // has no plain arrow-down.
     (ARROW_DOWN, "arrow-down"),
-    // arrow-up rotated 45° — the "opens elsewhere" glyph on spawn chips;
-    // the set has no diagonal arrow.
-    (ARROW_UP_RIGHT, "arrow-up-right"),
+    // Solar `arrow-right-up`: the "opens elsewhere" glyph on spawn chips.
+    (ARROW_UP_RIGHT, "arrow-right-up"),
     // Hand-drawn return/enter arrow in the Solar Linear style (like the
     // terminal/plus/close ports) — the set has no return glyph.
     (RETURN, "return"),
     (ALT_ARROW_DOWN, "alt-arrow-down"),
-    // alt-arrow-down mirrored (drawn as its twin: same stroke, caps, joints) —
-    // the embedded Solar Linear set ships no up chevron. The collapse half of
-    // the long-user-message expander.
+    // The collapse half of the long-user-message expander.
     (ALT_ARROW_UP, "alt-arrow-up"),
-    // Hand-drawn expand/maximize arrows in the Solar Linear style (like the
-    // terminal/plus/return ports) — the set has no expand glyph.
-    (EXPAND_ARROWS, "expand-arrows"),
-    // Inward-pointing companion used to restore an expanded pane.
-    (COLLAPSE_ARROWS, "collapse-arrows"),
-    // Hand-drawn fold-all chevrons, drawn as a family with EXPAND_ARROWS
-    // (same stroke, caps, 90° joints) — Solar has no unfold-less either.
+    // Solar `maximize` / `minimize`: expand a pane, and restore it.
+    (EXPAND_ARROWS, "maximize"),
+    (COLLAPSE_ARROWS, "minimize"),
+    // Hand-drawn fold-all chevrons (same stroke, caps, 90° joints as the
+    // Solar set) — Solar has no unfold-less glyph.
     (FOLD_VERTICAL, "fold-vertical"),
-    // The changes pane's unified/split toggle: a rounded frame halved by a
-    // centre rule (Solar Linear weight).
-    (SPLIT_COLUMNS, "split-columns"),
+    // Solar `columns-2`: the changes pane's unified/split toggle.
+    (SPLIT_COLUMNS, "columns-2"),
     // Long-line wrapping toggle shared by changes and agent Markdown fences.
     (WRAP_TEXT, "wrap-text"),
     (ALT_ARROW_LEFT, "alt-arrow-left"),
@@ -162,12 +157,19 @@ icon_assets![
     (REFRESH, "refresh"),
     (RESTART, "restart"),
     (ADD_CIRCLE, "add-circle"),
-    (TUNING, "tuning"),
     (EYE, "eye"),
     (EYE_CLOSED, "eye-closed"),
     (PAPERCLIP, "paperclip"),
     (PEN, "pen"),
     (ARCHIVE_MINIMALISTIC, "archive-minimalistic"),
+    // Settings sections: General, Appearance, Providers, Backups, Appshots
+    // and Updates.
+    (SETTINGS, "settings"),
+    (PAINT_BRUSH, "paint-brush"),
+    (SERVER_2, "server-2"),
+    (DATABASE, "database"),
+    (CAMERA_MINIMALISTIC, "camera-minimalistic"),
+    (ROUND_ARROW_DOWN, "round-arrow-down"),
     (TRASH_BIN_MINIMALISTIC, "trash-bin-minimalistic"),
     // Shared settings glyph: user-supplied horizontal sliders.
     (SETTINGS_MINIMALISTIC, "settings-minimalistic"),
@@ -178,7 +180,6 @@ icon_assets![
     (PALETTE_SEARCH, "palette-search"),
     (COMMAND, "command"),
     (DOCUMENT, "document"),
-    (DOCUMENT_ADD, "document-add"),
     // File-kind glyphs, drawn in the same linear family for transcript badges.
     (FILE_CODE, "file-code"),
     (FILE_STYLE, "file-style"),
@@ -190,20 +191,48 @@ icon_assets![
     (WIDGET, "widget"),
     // Solar `palette`: the accent colour setting (audit DS-21).
     (PALETTE, "palette"),
-    // Solar Linear via @solar-icons/cli (audit TL-16): MCP tools and thoughts.
-    (PLUG_CIRCLE, "plug-circle"),
-    (LIGHTBULB, "lightbulb-minimalistic"),
+    // Activity chain: thoughts, mixed groups, failed rows and each tool kind
+    // (Solar Linear). The MCP mark is Simple Icons' Model Context Protocol
+    // logo; webhook and package-search are Lucide (Solar has neither).
+    (BRAIN, "brain"),
+    (LAYERS_MINIMALISTIC, "layers-minimalistic"),
+    (TOOLBOX, "toolbox"),
+    (DANGER_CIRCLE, "danger-circle"),
+    (MCP_MARK, "mcp-mark"),
+    (FILE_TEXT, "file-text"),
+    (FILE_ADD, "file-add"),
+    (FILE_PEN, "file-pen"),
+    (FILE_SEARCH, "file-search"),
+    (FOLDER_SEARCH, "folder-search"),
+    (GALLERY, "gallery"),
+    (WEBHOOK, "webhook"),
+    (STOPWATCH, "stopwatch"),
+    (CURSOR, "cursor"),
+    (PACKAGE_SEARCH, "package-search"),
+    (CHAT_ROUND_QUESTION_MARK, "chat-round-question-mark"),
+    (CLIPBOARD_LIST, "clipboard-list"),
+    (STOP_CIRCLE, "stop-circle"),
+    (NOTEBOOK, "notebook"),
     (WIFI_OFF, "wifi-off"),
     (CLOSE_CIRCLE, "close-circle"),
     // Solar `info-circle`.
     (INFO_CIRCLE, "info-circle"),
     (DANGER_TRIANGLE, "danger-triangle"),
     (CHAT_ROUND_LINE, "chat-round-line"),
-    // Related chats: the surface, and the side-chat (user fork) kind mark.
-    (DIALOG, "dialog"),
-    (GIT_FORK, "git-fork"),
+    // Solar `chat-line` (reply in a side chat) and `undo-left` (send a side
+    // chat's result back to the main draft).
+    (CHAT_LINE, "chat-line"),
+    (UNDO_LEFT, "undo-left"),
+    // Related chats: the surface (Solar `dialog-2`), and the fork mark for
+    // forks and side chats (Tabler `arrow-fork`, stroke set to 1.5px).
+    (DIALOG_2, "dialog-2"),
+    (FORK, "arrow-fork"),
     // Solar `bot`: subagent tabs.
     (BOT, "bot"),
+    // Solar `stopwatch-play`: automations.
+    (STOPWATCH_PLAY, "stopwatch-play"),
+    // Solar `window-frame`: the browser surface.
+    (WINDOW_FRAME, "window-frame"),
     // Solar `bell` and `volume-loud`.
     (BELL, "bell"),
     (VOLUME_LOUD, "volume-loud"),
@@ -218,13 +247,14 @@ icon_assets![
     (WINDOW_MINIMIZE, "window-minimize"),
     (WINDOW_MAXIMIZE, "window-maximize"),
     (WINDOW_RESTORE, "window-restore"),
-    // The add-space palette's Locations rail: a drawn hard drive and Solar
-    // `home`.
-    (HARD_DRIVE, "hard-drive"),
+    // The add-space palette's Locations rail: Solar `ssd-square` and `home`.
+    (HARD_DRIVE, "ssd-square"),
     (HOME, "home"),
     (STOP, "stop"),
     (CHECK, "check"),
     (COPY, "copy"),
+    // Solar `copy-check`: a copy button's confirmation state.
+    (COPY_CHECK, "copy-check"),
     // Solar `star` for the favorite affordance; the filled twin marks the
     // favorited state and the picker's favorites rail tab.
     (STAR, "star"),

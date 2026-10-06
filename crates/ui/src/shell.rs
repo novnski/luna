@@ -8491,21 +8491,21 @@ impl Shell {
             )
         });
         let section_icon = |item: SettingsSection| match item {
-            SettingsSection::General => icons::SETTINGS_MINIMALISTIC,
+            SettingsSection::General => icons::SETTINGS,
             SettingsSection::Projects => icons::FOLDER_WITH_FILES,
             SettingsSection::Devices => icons::MONITOR,
-            SettingsSection::Providers => icons::WIDGET,
-            SettingsSection::Appearance => icons::TUNING,
+            SettingsSection::Providers => icons::SERVER_2,
+            SettingsSection::Appearance => icons::PAINT_BRUSH,
             SettingsSection::Files => icons::FOLDER,
-            SettingsSection::Backups => icons::ARCHIVE_UP_MINIMALISTIC,
+            SettingsSection::Backups => icons::DATABASE,
             SettingsSection::Notifications => icons::BELL,
             SettingsSection::Shortcuts => icons::KEYBOARD,
             // Appshots are captured window images; Devices keeps the monitor.
-            SettingsSection::Appshots => icons::FILE_IMAGE,
-            SettingsSection::Automations => icons::CLOCK_CIRCLE,
+            SettingsSection::Appshots => icons::CAMERA_MINIMALISTIC,
+            SettingsSection::Automations => icons::STOPWATCH_PLAY,
             SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
             SettingsSection::Usage => icons::CHART,
-            SettingsSection::Updates => icons::RESTART,
+            SettingsSection::Updates => icons::ROUND_ARROW_DOWN,
         };
         // Groups read as groups through space, not rules: a group opens with
         // a 16 pt gap above its first row, rows inside it sit 2 pt apart.
@@ -13703,36 +13703,40 @@ impl Shell {
                                 .on_key_down(crate::swallow_activation_key),
                         )
                         .child(
-                            row("surface-card-related-chats", icons::DIALOG, "Related chats")
-                                .aria_label(related_label)
-                                .child(div().flex_1())
-                                .when(related_count > 0, |row| {
-                                    row.child(
-                                        div()
-                                            .h(px(18.0))
-                                            .min_w(px(18.0))
-                                            .px(px(6.0))
-                                            .flex_none()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded_full()
-                                            .bg(badge_tone.opacity(0.12))
-                                            .text_size(crate::typography::ui_rems(11.0))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(badge_text)
-                                            .child(related_count.to_string()),
-                                    )
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.add_work_surface(RightSurface::RelatedChats, cx)
-                                }))
-                                .on_key_down(crate::swallow_activation_key),
+                            row(
+                                "surface-card-related-chats",
+                                icons::DIALOG_2,
+                                "Related chats",
+                            )
+                            .aria_label(related_label)
+                            .child(div().flex_1())
+                            .when(related_count > 0, |row| {
+                                row.child(
+                                    div()
+                                        .h(px(18.0))
+                                        .min_w(px(18.0))
+                                        .px(px(6.0))
+                                        .flex_none()
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .rounded_full()
+                                        .bg(badge_tone.opacity(0.12))
+                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                        .text_color(badge_text)
+                                        .child(related_count.to_string()),
+                                )
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.add_work_surface(RightSurface::RelatedChats, cx)
+                            }))
+                            .on_key_down(crate::swallow_activation_key),
                         )
                         .child(
                             row(
                                 "surface-card-automations",
-                                icons::CLOCK_CIRCLE,
+                                icons::STOPWATCH_PLAY,
                                 "Automations",
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -13749,9 +13753,11 @@ impl Shell {
                         ),
                     )
                     .child(
-                        row("surface-card-browser", icons::GLOBE, "Browser").on_click(cx.listener(
-                            |this, _, window, cx| this.add_browser_surface(None, window, cx),
-                        )),
+                        row("surface-card-browser", icons::WINDOW_FRAME, "Browser").on_click(
+                            cx.listener(|this, _, window, cx| {
+                                this.add_browser_surface(None, window, cx)
+                            }),
+                        ),
                     )
                     .child(
                         row("surface-card-terminal", icons::TERMINAL, "Terminal").on_click(
@@ -13772,11 +13778,13 @@ impl Shell {
                     // Git surfaces only where there IS git — the pane itself
                     // no longer gates on it (terminals work anywhere).
                     .when(self.space_git_detected(cx), |el| {
-                        el.child(row("surface-card-diffs", icons::LIST, "Diffs").on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.add_diff_surface(cx);
-                            }),
-                        ))
+                        el.child(
+                            row("surface-card-diffs", icons::GIT_DIFF, "Diffs").on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.add_diff_surface(cx);
+                                }),
+                            ),
+                        )
                         .child(
                             row("surface-card-history", icons::GIT_BRANCH, "History").on_click(
                                 cx.listener(|this, _, _, cx| {
@@ -13969,15 +13977,15 @@ impl Shell {
                         if changes.read(cx).is_history() {
                             icons::GIT_BRANCH
                         } else {
-                            icons::LIST
+                            icons::GIT_DIFF
                         }
                     })
-                    .unwrap_or(icons::LIST),
+                    .unwrap_or(icons::GIT_DIFF),
                 RightSurface::Subagent(_) | RightSurface::Agents => icons::BOT,
-                RightSurface::RelatedChats => icons::DIALOG,
-                RightSurface::Automations => icons::CLOCK_CIRCLE,
+                RightSurface::RelatedChats => icons::DIALOG_2,
+                RightSurface::Automations => icons::STOPWATCH_PLAY,
                 RightSurface::Terminal(_) => icons::TERMINAL,
-                RightSurface::Browser(_) => icons::GLOBE,
+                RightSurface::Browser(_) => icons::WINDOW_FRAME,
                 RightSurface::Picker => icons::PLUS,
             };
             // A live subagent tab swaps its icon for the mini working
@@ -14285,7 +14293,7 @@ impl Shell {
                                     this.close_right_plus(cx);
                                 }))
                                 .child(
-                                    icon(icons::GLOBE)
+                                    icon(icons::WINDOW_FRAME)
                                         .size(px(13.0))
                                         .text_color(theme.text_muted),
                                 )
@@ -14322,7 +14330,7 @@ impl Shell {
                                     }))
                                     .on_key_down(crate::swallow_activation_key)
                                     .child(
-                                        icon(icons::DIALOG)
+                                        icon(icons::DIALOG_2)
                                             .size(px(13.0))
                                             .text_color(theme.text_muted),
                                     )
@@ -14340,7 +14348,7 @@ impl Shell {
                                     }))
                                     .on_key_down(crate::swallow_activation_key)
                                     .child(
-                                        icon(icons::CLOCK_CIRCLE)
+                                        icon(icons::STOPWATCH_PLAY)
                                             .size(px(13.0))
                                             .text_color(theme.text_muted),
                                     )
@@ -14370,7 +14378,7 @@ impl Shell {
                                         this.close_right_plus(cx);
                                     }))
                                     .child(
-                                        icon(icons::LIST)
+                                        icon(icons::GIT_DIFF)
                                             .size(px(13.0))
                                             .text_color(theme.text_muted),
                                     )

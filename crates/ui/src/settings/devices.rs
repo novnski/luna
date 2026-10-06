@@ -343,7 +343,7 @@ impl DevicesPage {
                 crate::button::icon_button(
                     format!("device-copy-{}", device.id),
                     if id_copied {
-                        crate::icons::CHECK
+                        crate::icons::COPY_CHECK
                     } else {
                         crate::icons::COPY
                     },

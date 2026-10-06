@@ -2092,9 +2092,9 @@ fn tool_group_glyph(tools: &[ToolItem]) -> &'static str {
         .filter(|tool| !tool.is_thought)
         .map(|tool| tool_icon_path(&tool.call));
     match kinds.next() {
-        None => crate::icons::LIGHTBULB,
+        None => crate::icons::BRAIN,
         Some(first) if kinds.all(|kind| kind == first) => first,
-        Some(_) => crate::icons::WIDGET,
+        Some(_) => crate::icons::LAYERS_MINIMALISTIC,
     }
 }
 
@@ -7626,7 +7626,7 @@ impl Transcript {
                 meta_action(
                     SharedString::from(format!("copy-message-{entry_id}")),
                     if copied_message {
-                        crate::icons::CHECK
+                        crate::icons::COPY_CHECK
                     } else {
                         crate::icons::COPY
                     },
@@ -7678,9 +7678,9 @@ impl Transcript {
                     meta_action(
                         SharedString::from(format!("side-action-{copy_entry_id}")),
                         if handoff {
-                            crate::icons::RETURN
+                            crate::icons::UNDO_LEFT
                         } else {
-                            crate::icons::CHAT_ROUND_LINE
+                            crate::icons::CHAT_LINE
                         },
                         label,
                         &theme,
@@ -7714,7 +7714,7 @@ impl Transcript {
                     };
                     meta_action(
                         SharedString::from(format!("fork-message-{message_id}")),
-                        crate::icons::GIT_FORK,
+                        crate::icons::FORK,
                         "Fork from here",
                         &theme,
                     )
@@ -9083,21 +9083,53 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
 fn tool_icon_path(call: &ToolCall) -> &'static str {
     match call {
         ToolCall::Exec { .. } => crate::icons::TERMINAL,
-        ToolCall::ReadFile { .. } => crate::icons::DOCUMENT,
-        ToolCall::ApplyPatch { .. } => crate::icons::PEN_NEW_SQUARE,
-        ToolCall::WriteFile { .. } => crate::icons::DOCUMENT_ADD,
-        ToolCall::EditFile { .. } => crate::icons::PEN,
-        ToolCall::Search { .. } => crate::icons::MAGNIFER,
-        ToolCall::Glob { .. } => crate::icons::FOLDER_WITH_FILES,
+        ToolCall::ReadFile { .. } => crate::icons::FILE_TEXT,
+        ToolCall::ApplyPatch { .. } => crate::icons::GIT_DIFF,
+        ToolCall::WriteFile { .. } => crate::icons::FILE_ADD,
+        ToolCall::EditFile { .. } => crate::icons::FILE_PEN,
+        ToolCall::Search { .. } => crate::icons::FILE_SEARCH,
+        ToolCall::Glob { .. } => crate::icons::FOLDER_SEARCH,
         ToolCall::WebFetch { .. } | ToolCall::WebSearch { .. } => crate::icons::GLOBAL,
-        ToolCall::ViewImage { .. } => crate::icons::FILE_IMAGE,
+        ToolCall::ViewImage { .. } => crate::icons::GALLERY,
         ToolCall::Todo { .. } => crate::icons::CHECKLIST,
         call if is_agent_call(call) => crate::icons::BOT,
-        ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::BOT,
-        ToolCall::Mcp { .. } => crate::icons::PLUG_CIRCLE,
-        call if call.native_hook_name().is_some() => crate::icons::BOLT,
-        ToolCall::ComputerUse { .. } | ToolCall::Unknown { .. } => crate::icons::WIDGET,
+        ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::STOPWATCH,
+        ToolCall::Mcp { .. } => crate::icons::MCP_MARK,
+        call if call.native_hook_name().is_some() => crate::icons::WEBHOOK,
+        ToolCall::ComputerUse { .. } => crate::icons::CURSOR,
+        ToolCall::Unknown { name, .. } => unknown_tool_icon(name).unwrap_or(crate::icons::TOOLBOX),
     }
+}
+
+/// A chain row's glyph: thinking, a failure, or the tool's own kind.
+fn activity_glyph(tool: &ToolItem) -> &'static str {
+    if tool.is_thought {
+        crate::icons::BRAIN
+    } else if tool.is_error {
+        crate::icons::DANGER_CIRCLE
+    } else {
+        tool_icon_path(&tool.call)
+    }
+}
+
+/// Glyphs for harness tools that arrive as [`ToolCall::Unknown`] under their
+/// raw name. Claude names them in PascalCase, OpenCode in lowercase, so the
+/// match ignores case and separators.
+fn unknown_tool_icon(name: &str) -> Option<&'static str> {
+    let key: String = name
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    Some(match key.as_str() {
+        "toolsearch" => crate::icons::PACKAGE_SEARCH,
+        "skill" => crate::icons::MAGIC_WAND_3,
+        "askuserquestion" | "question" => crate::icons::CHAT_ROUND_QUESTION_MARK,
+        "enterplanmode" | "exitplanmode" | "planenter" | "planexit" => crate::icons::CLIPBOARD_LIST,
+        "taskstop" | "killshell" | "killbash" => crate::icons::STOP_CIRCLE,
+        "notebookedit" => crate::icons::NOTEBOOK,
+        _ => return None,
+    })
 }
 
 /// Compact file-action chips show only the final path component. The full
@@ -9628,7 +9660,7 @@ fn chip_header_row(
                     .justify_center()
                     .child(
                         crate::icons::icon(if tool.is_thought {
-                            crate::icons::LIGHTBULB
+                            crate::icons::BRAIN
                         } else {
                             tool_icon_path(&tool.call)
                         })
@@ -10029,20 +10061,14 @@ fn activity_rail(
                 .opacity(branch_reveal)
                 .child(spinner)
                 .into_any_element(),
-            None => crate::icons::icon(if tool.is_thought {
-                crate::icons::LIGHTBULB
-            } else if tool.is_error {
-                crate::icons::CLOSE_CIRCLE
-            } else {
-                tool_icon_path(&tool.call)
-            })
-            .absolute()
-            .left(px(ACTIVITY_ICON_LEFT))
-            .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
-            .size(px(ACTIVITY_ICON_SIZE))
-            .opacity(branch_reveal)
-            .text_color(tint)
-            .into_any_element(),
+            None => crate::icons::icon(activity_glyph(tool))
+                .absolute()
+                .left(px(ACTIVITY_ICON_LEFT))
+                .top(px(row_height / 2.0 - ACTIVITY_ICON_SIZE / 2.0))
+                .size(px(ACTIVITY_ICON_SIZE))
+                .opacity(branch_reveal)
+                .text_color(tint)
+                .into_any_element(),
         })
 }
 
@@ -15305,13 +15331,19 @@ impl Transcript {
                 .iter()
                 .map(|row| {
                     let (kind, text) = perf_row_text(row);
-                    serde_json::json!({
+                    let mut readback = serde_json::json!({
                         "id": row.id.as_ref(),
                         "entryId": row.entry_id.as_ref(),
                         "version": row.version,
                         "kind": kind,
                         "text": text,
-                    })
+                    });
+                    if let RowKind::ToolGroup { tools, .. } = &row.kind {
+                        readback["groupGlyph"] = tool_group_glyph(tools).into();
+                        readback["glyphs"] =
+                            tools.iter().map(activity_glyph).collect::<Vec<_>>().into();
+                    }
+                    readback
                 })
                 .collect(),
         )

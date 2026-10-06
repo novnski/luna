@@ -83,7 +83,7 @@ impl TabRole {
         match self {
             Self::Main => icons::HOME,
             Self::Child => icons::BOT,
-            Self::Side => icons::GIT_FORK,
+            Self::Side => icons::FORK,
             Self::Alongside => icons::SPLIT_COLUMNS,
         }
     }
@@ -3408,7 +3408,7 @@ impl WorkbenchAction {
     pub(super) fn icon(self) -> &'static str {
         match self {
             Self::Chooser | Self::NewChild => icons::PLUS,
-            Self::SideChat => icons::GIT_FORK,
+            Self::SideChat => icons::FORK,
             Self::NewThreadSplit => icons::SPLIT_COLUMNS,
             Self::NextGroup => icons::ALT_ARROW_RIGHT,
             Self::PreviousGroup => icons::ALT_ARROW_LEFT,

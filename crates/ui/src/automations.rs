@@ -1699,7 +1699,7 @@ impl AutomationsPanel {
             let creatable = self.scope_chat().is_some() && self.editor.is_none();
             card = card.child(
                 widgets::card_row(theme, false)
-                    .child(widgets::row_tile(theme, icons::CLOCK_CIRCLE))
+                    .child(widgets::row_tile(theme, icons::STOPWATCH_PLAY))
                     .child(widgets::row_text(
                         theme,
                         "No automations yet",

@@ -54,7 +54,7 @@ impl RelatedKind {
     pub(super) fn icon(self) -> &'static str {
         match self {
             Self::Child => icons::BOT,
-            Self::Side => icons::GIT_FORK,
+            Self::Side => icons::FORK,
             Self::Alongside => icons::SPLIT_COLUMNS,
         }
     }

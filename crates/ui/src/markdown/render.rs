@@ -2026,7 +2026,7 @@ pub(crate) fn copy_action(
         })
         .child(
             crate::icons::icon(if copied {
-                crate::icons::CHECK
+                crate::icons::COPY_CHECK
             } else {
                 crate::icons::COPY
             })
@@ -2071,7 +2071,7 @@ fn code_copy_button(
             })
             .child(
                 crate::icons::icon(if copied {
-                    crate::icons::CHECK
+                    crate::icons::COPY_CHECK
                 } else {
                     crate::icons::COPY
                 })
