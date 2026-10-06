@@ -142,6 +142,10 @@ name = "accounts-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "settings-gallery-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "drafts-fixture"
 required-features = ["appshots-fixture"]
 
