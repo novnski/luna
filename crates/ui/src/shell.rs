@@ -12665,21 +12665,31 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .when_some(parent_navigation, |el, (parent_id, title)| {
+                    // A kit ghost button, sized with the interface (it used a
+                    // fixed 26 px row with GPUI's absolute `text_xs`).
                     el.child(
                         div()
-                            .id("child-parent-navigation")
-                            .role(gpui::Role::Button)
-                            .aria_label("Open parent chat")
-                            .h(px(26.0))
                             .flex_none()
-                            .px(px(16.0))
-                            .cursor_pointer()
-                            .text_xs()
-                            .text_color(theme.text_muted)
-                            .child(format!("↑ {title}"))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_chat(parent_id.clone(), cx)
-                            })),
+                            .px(crate::typography::ui_rems(12.0))
+                            .py(crate::typography::ui_rems(4.0))
+                            .child(
+                                crate::button::button(
+                                    "child-parent-navigation",
+                                    crate::button::ButtonKind::Ghost,
+                                    crate::button::ControlSize::Sm,
+                                    true,
+                                    &theme,
+                                )
+                                .aria_label("Open parent chat")
+                                .child(crate::button::glyph(
+                                    icons::ARROW_UP,
+                                    crate::button::ControlSize::Sm,
+                                ))
+                                .child(div().truncate().child(SharedString::from(title)))
+                                .on_click(cx.listener(
+                                    move |this, _, _, cx| this.open_chat(parent_id.clone(), cx),
+                                )),
+                            ),
                     )
                 })
                 .relative()
