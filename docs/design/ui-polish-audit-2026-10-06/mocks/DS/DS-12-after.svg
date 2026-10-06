@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="470" viewBox="0 0 720 470" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="470" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-12 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Four icon sizes paired with the type scale</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">icon.* tokens + ui::label(icon, text, TextStyle) handles size, gap and optical centre</text>
+<text x="24" y="126" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">icon.xs</text>
+<text x="110" y="126" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">12 px</text>
+<svg x="190" y="116.04" width="12" height="12" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="206" y="126.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">main</text>
+<text x="300" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">gap 4 · with caption2/caption</text>
+<text x="500" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#737373" text-anchor="start">badges, inline status</text>
+<text x="24" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">icon.sm</text>
+<text x="110" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">14 px</text>
+<svg x="190" y="178.68" width="14" height="14" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="210" y="190.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">main</text>
+<text x="300" y="190" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">gap 6 · with caption/footnote</text>
+<text x="500" y="190" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#737373" text-anchor="start">toolbars, chips, menu rows</text>
+<text x="24" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">icon.md</text>
+<text x="110" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">16 px</text>
+<svg x="190" y="241.32" width="16" height="16" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="212" y="254.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#e5e5e5" text-anchor="start">main</text>
+<text x="300" y="254" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">gap 6 · with body</text>
+<text x="500" y="254" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#737373" text-anchor="start">buttons, settings tiles, rows</text>
+<text x="24" y="318" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">icon.lg</text>
+<text x="110" y="318" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">20 px</text>
+<svg x="190" y="302.6" width="20" height="20" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="218" y="318.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="15" font-weight="400" fill="#e5e5e5" text-anchor="start">main</text>
+<text x="300" y="318" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">gap 8 · with title3+</text>
+<text x="500" y="318" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#737373" text-anchor="start">titlebar, empty states</text>
+<rect x="24" y="372" width="549" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="386" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">≤12 px only for filled/bold status glyphs; line icons start at 14 px (≥0.875 px stroke)</text>
+<rect x="24" y="400" width="531" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="414" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">one glyph = one size per role: chevrons 14, close 14, check 14 in menus / 16 in rows</text>
+<text x="16" y="458" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">crates/ui/src/icons.rs: pub enum IconSize { Xs, Sm, Md, Lg } + fn label(…)</text>
+</svg>

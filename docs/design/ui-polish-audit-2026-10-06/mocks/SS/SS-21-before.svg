@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="330" viewBox="0 0 720 330" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="330.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-21 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Browser toolbar: progress, Stop, and a border that never moves</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<text x="16.0" y="66.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">Page loading</text>
+<rect x="16.0" y="74.0" width="470.0" height="38.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M40.2,93.0 H31.8 M35.3,89.5 L31.8,93.0 L35.3,96.5" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M59.8,93.0 H68.2 M64.7,89.5 L68.2,93.0 L64.7,96.5" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M96.5,93.0 A4.5,4.5 0 1 1 93.3,88.7" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M93.3,87.0 L93.6,89.0 L91.6,89.6" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="112.0" y="81.0" width="338.0" height="24.0" rx="6" fill="#1d1d1f"/>
+<circle cx="126.0" cy="93.0" r="4.5600000000000005" fill="none" stroke="#85858a" stroke-width="1.3"/>
+<path d="M121.4,93.0 H130.6" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M126.0,88.4 C123.0,91.2 123.0,94.8 126.0,97.6 C129.0,94.8 129.0,91.2 126.0,88.4" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="138.0" y="97.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e8e8ea" text-anchor="start">localhost:5173/dashboard</text>
+<path d="M458.9,96.1 L465.1,89.9 M460.3,89.9 H465.1 V94.7" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="16.0" y="178.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">Invalid address</text>
+<rect x="16.0" y="186.0" width="470.0" height="38.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M40.2,205.0 H31.8 M35.3,201.5 L31.8,205.0 L35.3,208.5" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M59.8,205.0 H68.2 M64.7,201.5 L68.2,205.0 L64.7,208.5" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M96.5,205.0 A4.5,4.5 0 1 1 93.3,200.7" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M93.3,199.0 L93.6,201.0 L91.6,201.6" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="112.0" y="193.0" width="338.0" height="24.0" rx="6" fill="#1d1d1f" stroke="#f87171" stroke-width="1"/>
+<circle cx="127.0" cy="206.0" r="4.5600000000000005" fill="none" stroke="#85858a" stroke-width="1.3"/>
+<path d="M122.4,206.0 H131.6" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M127.0,201.4 C124.0,204.2 124.0,207.8 127.0,210.6 C130.0,207.8 130.0,204.2 127.0,201.4" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="139.0" y="210.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e8e8ea" text-anchor="start">localhost:51 73/dash</text>
+<rect x="428.0" y="196.0" width="18.0" height="18.0" rx="4" fill="#2a2a2d"/>
+<path d="M441.0,201.0 V207.0 H433.0 M436.0,204.0 L433.0,207.0 L436.0,210.0" fill="none" stroke="#a9a9ae" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M458.9,208.1 L465.1,201.9 M460.3,201.9 H465.1 V206.7" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="76.0" y="79.0" width="160.0" height="28.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="90.0" y="124.0" width="198.8" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="97.0" y="137.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">looks idle · Reload stays Reload</text>
+<line x1="189.4" y1="124.0" x2="189.4" y2="107.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="114.0" y="193.0" width="150.0" height="24.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="90.0" y="234.0" width="210.4" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="97.0" y="247.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">border_1 appears: text shifts 1 pt</text>
+<line x1="195.2" y1="234.0" x2="195.2" y2="217.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="426.0" y="194.0" width="22.0" height="22.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="500.0" y="234.0" width="164.2" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="507.0" y="247.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">r4 inside r6 at 3 pt inset</text>
+<line x1="500.0" y1="234.0" x2="448.0" y2="216.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="16.0" y="276.0" width="429.8" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="23.0" y="289.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">page.loading is shown only as the surface-tab indicator (shell.rs:13562)</text>
+</svg>

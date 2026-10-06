@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" viewBox="0 0 720 300" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="300.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-19 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Editor path bar: keep the file name, collapse the middle</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<text x="16.0" y="54.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">Editor header · 360 pt pane</text>
+<rect x="16.0" y="60.0" width="360.0" height="38.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M28.5,73.0 h6.2 l3.4,3.4 v9.5 h-9.5 z" fill="#9aa4b2" opacity="0.35"/>
+<rect x="27.7" y="79.0" width="10.6" height="5.0" rx="1.5" fill="#dea584"/>
+<rect x="46.0" y="69.0" width="22.0" height="20.0" rx="5" fill="#232325"/>
+<text x="57.0" y="83.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a9a9ae" text-anchor="middle">…</text>
+<path d="M75.8,76.2 L78.6,79.0 L75.8,81.8" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="84.0" y="83.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#85858a" text-anchor="start">files</text>
+<path d="M126.8,76.2 L129.6,79.0 L126.8,81.8" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="135.0" y="83.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e8e8ea" text-anchor="start">preview.rs</text>
+<rect x="316.0" y="67.0" width="24.0" height="24.0" rx="6" fill="none"/>
+<path d="M331.5,79.0 A4.5,4.5 0 1 1 328.3,74.7" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M328.3,73.0 L328.6,75.0 L326.6,75.6" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="344.0" y="67.0" width="24.0" height="24.0" rx="6" fill="none"/>
+<path d="M350.7,78.3 Q356.0,83.2 361.3,78.3" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="44.0" y="67.0" width="26.0" height="24.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="60.0" y="110.0" width="141.1" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="67.0" y="123.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">… menu = crates/ui/src</text>
+<line x1="130.5" y1="110.0" x2="70.0" y2="91.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="400.0" y="69.0" width="221.9" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="407.0" y="82.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">leaf flex_none · 12 px medium · text</text>
+<rect x="400.0" y="97.0" width="187.2" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="407.0" y="110.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">separators: 10 px chevron icon</text>
+<text x="16.0" y="164.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">Same file in the Diff pane</text>
+<rect x="16.0" y="170.0" width="688.0" height="36.0" rx="6" fill="#141415"/>
+<path d="M29.1,186.3 L33.0,190.2 L36.9,186.3" fill="none" stroke="#a9a9ae" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M48.5,182.0 h6.2 l3.4,3.4 v9.5 h-9.5 z" fill="#9aa4b2" opacity="0.35"/>
+<rect x="47.7" y="188.0" width="10.6" height="5.0" rx="1.5" fill="#dea584"/>
+<text x="68.0" y="193.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#85858a" text-anchor="start">crates/ui/src/files/</text>
+<text x="176.0" y="193.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e8e8ea" text-anchor="start">preview.rs</text>
+<rect x="64.0" y="176.0" width="172.0" height="24.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="330.0" y="220.0" width="233.5" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="337.0" y="233.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">shared path component, leaf emphasised</text>
+<line x1="330.0" y1="220.0" x2="236.0" y2="200.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<text x="656.0" y="193.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#00d492" text-anchor="end">+12</text>
+<text x="692.0" y="193.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#ff6467" text-anchor="end">−3</text>
+</svg>

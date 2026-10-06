@@ -19,14 +19,19 @@ pub fn notice_chip(
     };
     let message = message.into();
     let copy_message = message.clone();
+    // The notice floats in the composer dock above scrolling transcript rows,
+    // so its plate is opaque: a light status tint flattened over the canvas as
+    // composited. A translucent tint let message text print through it.
+    let canvas = crate::theme::flatten(theme.canvas_fill(), theme.chrome_surface());
+    let plate = crate::theme::flatten(accent.opacity(0.08), canvas);
     div()
         .flex()
         .flex_col()
         .gap(px(6.0))
         .rounded(px(10.0))
         .border_1()
-        .border_color(accent.opacity(0.16))
-        .bg(accent.opacity(0.05))
+        .border_color(accent.opacity(0.22))
+        .bg(plate)
         .px(px(10.0))
         .py(px(8.0))
         .text_size(crate::typography::ui_rems(12.0))

@@ -506,6 +506,7 @@ fn open_main_window(
                 appearance::observe_window(window, cx).detach();
                 let shell = cx.new(|cx| {
                     observe_main_window_geometry(window, cx);
+                    appearance::observe_accessibility(window, cx);
                     shell::Shell::new(state, boot, cx)
                 });
                 save_main_window_geometry(window, cx);

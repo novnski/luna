@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-11 · One detail card with segments + a real fetch button</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<line x1="52.5" y1="14" x2="52.5" y2="24.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 24.0 Q52.5 30.0 58.5 30.0 L68 30.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(72,22.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="96" y="34.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Hook</text>
+<text x="130.4" y="34.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">PreToolUse · Read</text>
+<rect x="96" y="47" width="424" height="116" rx="10" fill="#0F0F0F" stroke="#1C1C1C" stroke-width="1"/>
+<text x="108" y="65" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#ABABB0" text-anchor="start">Command</text>
+<g transform="translate(498,54.5) scale(0.5417)" fill="none" stroke="#ABABB0" stroke-width="2.31" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="3"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></g>
+<text x="108" y="94" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#E8E8EA" text-anchor="start">Hook: PreToolUse:Read</text>
+<line x1="96" y1="105" x2="520" y2="105" stroke="#1C1C1C" stroke-width="1" stroke-linecap="butt"/>
+<text x="108" y="123" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#ABABB0" text-anchor="start">Output · 8 B</text>
+<g transform="translate(498,112.5) scale(0.5417)" fill="none" stroke="#ABABB0" stroke-width="2.31" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="3"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></g>
+<text x="108" y="152" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#E8E8EA" text-anchor="start">checking</text>
+<rect x="96" y="171" width="150" height="24" rx="6" fill="#FFFFFF" opacity="0.06"/>
+<g transform="translate(105,177) scale(0.5000)" fill="none" stroke="#ABABB0" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5v15M6 13.5l6 6 6-6"/></g>
+<text x="123" y="187" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#ABABB0" text-anchor="start">Show full output</text>
+<text x="256" y="187" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#77777E" text-anchor="start">Loading:</text>
+<rect x="304.0" y="178.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="1.0"/>
+<rect x="307.0" y="178.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.7"/>
+<rect x="307.0" y="181.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.45"/>
+<rect x="307.0" y="184.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.3"/>
+<rect x="304.0" y="184.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.22"/>
+<rect x="304.0" y="181.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.18"/>
+<text x="316" y="187" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#8E8E93" text-anchor="start">Loading full output…</text>
+<rect x="40" y="230" width="520" height="55" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="48" y="246" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Invocation + output are segments of one r10 card divided by a hairline</text>
+<text x="48" y="261" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">(no stacked borders); the fetch affordance is a 24 px r6 ghost button</text>
+<text x="48" y="276" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">with a 12 px arrow-down icon, hover fade, focus ring and a mini spinner.</text>
+</g>
+</svg>

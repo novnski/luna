@@ -542,7 +542,7 @@ pub fn render_block(
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .text_color(theme.text_muted)
+            .text_color(theme.content_muted)
             .children(children.iter().enumerate().map(|(ci, child)| {
                 render_block(
                     child,
@@ -1015,13 +1015,13 @@ fn flatten_runs_weighted(runs: &[InlineRun], theme: &Theme, base_weight: FontWei
             // only be a square box.
             background_color: None,
             underline: is_link.then_some(UnderlineStyle {
-                color: Some(theme.text_muted),
+                color: Some(theme.content_muted),
                 thickness: px(1.0),
                 wavy: false,
             }),
             strikethrough: run.style.strikethrough.then_some(gpui::StrikethroughStyle {
                 thickness: px(1.0),
-                color: Some(theme.text_muted),
+                color: Some(theme.content_muted),
             }),
         });
     }
@@ -1913,13 +1913,13 @@ fn code_action_button(
     label: &'static str,
     theme: &Theme,
 ) -> gpui::Stateful<gpui::Div> {
-    let accent = theme.accent;
+    let ring = theme.focus_ring();
     div()
         .id(id)
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
-        .focus_visible(move |style| style.bg(accent.opacity(0.18)).text_color(accent))
+        .focus_visible(move |style| crate::theme::focus_ring(style, ring))
 }
 
 fn code_icon_action(
@@ -1951,8 +1951,52 @@ fn code_icon_action(
         .child(
             crate::icons::icon(icon_path)
                 .size(px(13.0))
-                .text_color(theme.text_muted),
+                .text_color(theme.content_muted),
         )
+        .into_any_element()
+}
+
+/// The shared copy action for code surfaces (fenced code, tool output and
+/// invocation): a 22 px icon button that swaps to a check and "Copied".
+pub(crate) fn copy_action(
+    id: SharedString,
+    label: &'static str,
+    copied: bool,
+    handler: Rc<dyn Fn(&mut Window, &mut gpui::App)>,
+    theme: &Theme,
+) -> AnyElement {
+    let fade_key = id.to_string();
+    code_action_button(id, label, theme)
+        .h(px(CODE_ACTION_SIZE))
+        .px(px(6.0))
+        .rounded(px(5.0))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(4.0))
+        .cursor_pointer()
+        .bg(crate::motion::hover_blend(
+            &fade_key,
+            gpui::transparent_black(),
+            crate::theme::ink(0.08),
+        ))
+        .on_hover(crate::motion::hover_listener(fade_key))
+        .text_size(crate::typography::ui_rems(11.0))
+        .text_color(theme.content_muted)
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            handler(window, cx);
+        })
+        .child(
+            crate::icons::icon(if copied {
+                crate::icons::CHECK
+            } else {
+                crate::icons::COPY
+            })
+            .size(px(12.0))
+            .text_color(theme.content_muted),
+        )
+        .when(copied, |el| el.child(SharedString::from("Copied")))
         .into_any_element()
 }
 
@@ -1983,7 +2027,7 @@ fn code_copy_button(
             ))
             .on_hover(crate::motion::hover_listener(fade_key))
             .text_size(crate::typography::ui_rems(10.5))
-            .text_color(theme.text_muted)
+            .text_color(theme.content_muted)
             .on_click(move |_, window, cx| {
                 cx.stop_propagation();
                 handler(ix, code_text.clone(), window, cx);
@@ -1995,7 +2039,7 @@ fn code_copy_button(
                     crate::icons::COPY
                 })
                 .size(px(12.0))
-                .text_color(theme.text_muted),
+                .text_color(theme.content_muted),
             )
             .when(copied, |el| el.child(SharedString::from("Copied")))
             .into_any_element()
@@ -2027,7 +2071,7 @@ fn code_block_header(
                 div()
                     .min_w_0()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_muted)
+                    .text_color(theme.content_muted)
                     .children(language.map(|lang| SharedString::from(lang.to_string()))),
             )
             .child(
@@ -2181,7 +2225,7 @@ fn render_code_block_source_with_actions(
             .child(
                 crate::icons::icon(crate::icons::WRAP_TEXT)
                     .size(px(13.0))
-                    .text_color(theme.text_muted),
+                    .text_color(theme.content_muted),
             )
     });
     let mut actions = Vec::new();

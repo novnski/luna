@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-09 · Keyboard focus: invisible on tool rows, three styles elsewhere</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="30" y="18" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Tab → group header (tab_index 0, no focus_visible)</text>
+<g transform="translate(35.5,32.0) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="58" y="43.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Ran 3 commands · edited 2 files</text>
+<text x="290" y="43" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">← focused: no visual change</text>
+<text x="30" y="82" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Tab → tool row (tab_index 0, no focus_visible)</text>
+<line x1="42.5" y1="90" x2="42.5" y2="100.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M42.5 100.0 Q42.5 106.0 48.5 106.0 L58 106.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(62,98.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l1-4L16 5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14 7l3 3"/></g>
+<text x="86" y="110.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Edit</text>
+<text x="120.4" y="110.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">transcript.rs</text>
+<text x="290" y="110" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">← focused: no visual change</text>
+<text x="30" y="150" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Tab → "Send now" (trailer_action :9809)</text>
+<rect x="26" y="158" width="66" height="22" rx="6" fill="#1E1E1E"/>
+<text x="30" y="173" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#7C86FF" text-anchor="start">Send now</text>
+<text x="110" y="173" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">bg surface_raised #1E1E1E on #080808 = 1.3:1</text>
+<text x="30" y="212" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Tab → attachment thumb (:6185 border_2)</text>
+<rect x="30" y="222" width="112" height="80" rx="8" fill="#2A2F3A"/>
+<rect x="170" y="220" width="116" height="84" rx="8" fill="#2A2F3A" stroke="#7C86FF" stroke-width="2"/>
+<text x="158" y="266" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#9A9AA0" text-anchor="start">→</text>
+<text x="300" y="258" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">border_2 grows the box 4 px and</text>
+<text x="300" y="272" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">shifts the strip (theme.rs:2373 warns)</text>
+<rect x="470" y="150" width="230" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="478" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">theme::focus_ring() exists (36 call</text>
+<text x="478" y="181" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">sites app-wide) but has 0 uses in</text>
+<text x="478" y="196" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">transcript.rs / markdown/render.rs</text>
+</g>
+</svg>

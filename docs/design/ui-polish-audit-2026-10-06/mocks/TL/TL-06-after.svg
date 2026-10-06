@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="454" viewBox="0 0 720 454">
+<defs><clipPath id="oclip"><rect x="16" y="20" width="330" height="100" rx="10"/></clipPath></defs>
+<rect width="720" height="454" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-06 · One CodeSurface for output, invocation, diff and fences</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<g clip-path="url(#oclip)">
+<rect x="16" y="20" width="330" height="94" rx="10" fill="#0F0F0F" stroke="#1C1C1C" stroke-width="1"/>
+<path d="M16.5 48 V30 a9.5 9.5 0 0 1 9.5 -9.5 H336 a9.5 9.5 0 0 1 9.5 9.5 V48 Z" fill="#141414"/>
+<line x1="16" y1="48" x2="346" y2="48" stroke="#1C1C1C" stroke-width="1" stroke-linecap="butt"/>
+<text x="28" y="38.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#ABABB0" text-anchor="start">Output</text>
+<g transform="translate(323.5,27.5) scale(0.5417)" fill="none" stroke="#ABABB0" stroke-width="2.31" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="3"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></g>
+<text x="28" y="67" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#E8E8EA" text-anchor="start">$ cargo clippy --locked -p luna-ui</text>
+<text x="28" y="85" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#E8E8EA" text-anchor="start">warning: unused import: `crate::motion::EASE`</text>
+<text x="28" y="103" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#E8E8EA" text-anchor="start">   --&gt; crates/ui/src/transcript.rs:52:5</text>
+</g>
+<rect x="16" y="20" width="330" height="94" rx="10" fill="none" stroke="#1C1C1C" stroke-width="1"/>
+<defs><linearGradient id="fadeR" x1="0" x2="1"><stop offset="0" stop-color="#0F0F0F" stop-opacity="0"/><stop offset="1" stop-color="#0F0F0F"/></linearGradient></defs>
+<rect x="316" y="49" width="28" height="66" rx="0" fill="url(#fadeR)"/>
+<rect x="30" y="112" width="120" height="3" rx="1.5" fill="#FFFFFF" opacity="0.3"/>
+<rect x="374" y="20" width="330" height="102" rx="10" fill="#0F0F0F" stroke="#1C1C1C" stroke-width="1"/>
+<path d="M374.5 48 V30 a9.5 9.5 0 0 1 9.5 -9.5 H694 a9.5 9.5 0 0 1 9.5 9.5 V48 Z" fill="#141414"/>
+<line x1="374" y1="48" x2="704" y2="48" stroke="#1C1C1C" stroke-width="1" stroke-linecap="butt"/>
+<text x="386" y="38" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#ABABB0" text-anchor="start">rust</text>
+<g transform="translate(681.5,27.5) scale(0.5417)" fill="none" stroke="#ABABB0" stroke-width="2.31" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="3"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></g>
+<text x="386" y="71" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#C4A7FF" text-anchor="start">use </text>
+<text x="416.0" y="71" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#C9C9CC" text-anchor="start">crate::motion::</text>
+<text x="528.5" y="71" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#9CC3FF" text-anchor="start">EASE</text>
+<text x="558.5" y="71" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#C9C9CC" text-anchor="start">;</text>
+<text x="386" y="89" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#C4A7FF" text-anchor="start">fn </text>
+<text x="408.5" y="89" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#9CC3FF" text-anchor="start">main</text>
+<text x="438.5" y="89" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#C9C9CC" text-anchor="start">() { </text>
+<text x="476.0" y="89" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#9CC3FF" text-anchor="start">println!</text>
+<text x="536.0" y="89" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#5EE0B0" text-anchor="start">("hi")</text>
+<text x="581.0" y="89" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#C9C9CC" text-anchor="start"> }</text>
+<text x="386" y="107" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#77777E" text-anchor="start">// long lines scroll →</text>
+<text x="16" y="14" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Tool detail → render::code_surface()</text>
+<text x="374" y="14" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Markdown fence → render::code_surface()</text>
+<rect x="16" y="150" width="688" height="176" rx="8" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="140" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#C9F5D4" text-anchor="start">Shared spec</text>
+<text x="28" y="188" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#9A9AA0" text-anchor="start">radius</text>
+<text x="140" y="188" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">10 px (PANEL_RADIUS)</text>
+<text x="28" y="210" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#9A9AA0" text-anchor="start">header</text>
+<text x="140" y="210" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">28 px · 11 px medium label · secondary tone</text>
+<text x="28" y="232" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#9A9AA0" text-anchor="start">copy</text>
+<text x="140" y="232" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">22 px icon button (code_icon_action), hover fade, tooltip, ✓ Copied</text>
+<text x="28" y="254" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#9A9AA0" text-anchor="start">fill / edge</text>
+<text x="140" y="254" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">ink .035 · theme.border, header ink .02</text>
+<text x="28" y="276" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#9A9AA0" text-anchor="start">mono</text>
+<text x="140" y="276" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">theme.code_font_size (12.5) / 18 everywhere</text>
+<text x="28" y="298" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#9A9AA0" text-anchor="start">text tone</text>
+<text x="140" y="298" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">primary for output; stderr lines in danger_muted</text>
+<text x="28" y="320" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#9A9AA0" text-anchor="start">long lines</text>
+<text x="140" y="320" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">horizontal scroll with 28 px edge fade + thin scrollbar; no …</text>
+<rect x="16" y="342" width="520" height="40" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="24" y="358" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Extract code_block_frame + code_block_header from markdown/render.rs into one</text>
+<text x="24" y="373" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">code_surface(label, actions, body) used by detail_body (Output/Invocation/Diff).</text>
+</g>
+</svg>

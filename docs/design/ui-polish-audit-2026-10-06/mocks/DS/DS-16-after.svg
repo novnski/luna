@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="470" viewBox="0 0 720 470" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="470" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-16 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">One SegmentedControl, one selection ring</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">ui::Segmented (track r8 · p2 · thumb r6 slides) and ui::selection_ring (2 pt accent, 2 pt gap)</text>
+<rect x="24" y="104" width="304" height="28" rx="8" fill="#151515" />
+<rect x="26" y="106" width="100" height="24" rx="6" fill="#2a2a2a" />
+<text x="76" y="122" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Theme default</text>
+<text x="176" y="122" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">Frosted</text>
+<text x="276" y="122" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">Opaque</text>
+<rect x="24" y="160" width="204" height="28" rx="8" fill="#151515" />
+<rect x="26" y="162" width="100" height="24" rx="6" fill="#2a2a2a" />
+<text x="76" y="178" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Enter</text>
+<text x="176" y="178" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">⌘ Enter</text>
+<rect x="24" y="216" width="304" height="28" rx="8" fill="#151515" />
+<rect x="26" y="218" width="100" height="24" rx="6" fill="#2a2a2a" />
+<text x="76" y="234" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Claude Code</text>
+<text x="176" y="234" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">Codex</text>
+<text x="276" y="234" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">OpenCode</text>
+<text x="360" y="122" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#30D158" text-anchor="start">md 28 · label footnote 12 · thumb fill.primary</text>
+<text x="360" y="178" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#30D158" text-anchor="start">same control for 2–5 options</text>
+<text x="360" y="234" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#30D158" text-anchor="start">harness tabs become a segmented control</text>
+<circle cx="36" cy="302" r="11" fill="#8b7cf6"/>
+<circle cx="70" cy="302" r="11" fill="#fb923c"/>
+<circle cx="104" cy="302" r="11" fill="#facc15"/>
+<circle cx="138" cy="302" r="11" fill="#4ade80"/>
+<circle cx="36" cy="302" r="14.5" fill="none" stroke="#8b7cf6" stroke-width="2"/>
+<rect x="200" y="284" width="70" height="40" rx="6" fill="#111" stroke="#333" stroke-width="1" />
+<rect x="196" y="280" width="78" height="48" rx="10" fill="none" stroke="#8b7cf6" stroke-width="2" />
+<rect x="290" y="284" width="70" height="40" rx="6" fill="#111" stroke="#333" stroke-width="1" />
+<text x="400" y="306" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#30D158" text-anchor="start">selection ring: 2 pt accent at 2 pt offset,</text>
+<text x="400" y="322" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#30D158" text-anchor="start">radius = inner + 4 (concentric)</text>
+<rect x="24" y="360" width="402" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="374" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">all single-choice: thumb slides (motion::QUICK), ring scales in</text>
+<rect x="24" y="388" width="469" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="402" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">accent is reserved for the ring / focus; neutral thumb keeps controls calm</text>
+<text x="16" y="458" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">replaces surface_choice, preference_choice, background_effect_choice, general send toggle, accent underline</text>
+</svg>

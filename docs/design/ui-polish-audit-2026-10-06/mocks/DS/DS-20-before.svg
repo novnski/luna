@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="330" viewBox="0 0 720 330" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="330" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-20 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Six tooltip delays</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">tooltip_show_delay values (62 .tooltip() call sites)</text>
+<text x="40" y="107" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">250</text>
+<rect x="76" y="99" width="150.0" height="10" rx="2" fill="#5a2a27" />
+<text x="232.0" y="107" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="start">history.rs:3653 ×1</text>
+<text x="40" y="125" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">280</text>
+<rect x="76" y="117" width="168.0" height="10" rx="2" fill="#5a2a27" />
+<text x="250.0" y="125" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="start">badges HOVER_DELAY ×1</text>
+<text x="40" y="143" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">300</text>
+<rect x="76" y="135" width="180.0" height="10" rx="2" fill="#5a2a27" />
+<text x="262.0" y="143" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="start">literal ×4</text>
+<text x="40" y="161" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">350</text>
+<rect x="76" y="153" width="210.0" height="10" rx="2" fill="#5a2a27" />
+<text x="292.0" y="161" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="start">literal ×25</text>
+<text x="40" y="179" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">400</text>
+<rect x="76" y="171" width="240.0" height="10" rx="2" fill="#5a2a27" />
+<text x="322.0" y="179" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="start">pickers CONTROL_TOOLTIP_DELAY ×13</text>
+<text x="40" y="197" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="start">500</text>
+<rect x="76" y="189" width="300.0" height="10" rx="2" fill="#444" />
+<text x="382.0" y="197" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="start">GPUI default (no delay set)</text>
+<rect x="40" y="210" width="580" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="47" y="224" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">composer pickers wait 400 ms, queue buttons beside them 350 ms; tooltips pop in with no fade</text>
+<rect x="40" y="238" width="469" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="47" y="252" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">no warm-up: moving along a toolbar re-waits the full delay at every button</text>
+<text x="16" y="318" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">GPUI DEFAULT_TOOLTIP_SHOW_DELAY = 500 ms (vendor/zui/crates/gpui/src/elements/div.rs:49)</text>
+</svg>

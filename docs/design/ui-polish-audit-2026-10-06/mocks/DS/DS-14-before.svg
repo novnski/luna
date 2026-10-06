@@ -1,0 +1,84 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="450" viewBox="0 0 720 450" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="450" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-14 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">27 raw alpha washes, untinted, beside theme roles</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">ink()/wash()/hairline() are pure white (dark) or black (light) at a call-site alpha</text>
+<text x="24" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">ink(α) alphas in use (150 calls)</text>
+<rect x="24" y="116" width="32" height="32" rx="6" fill="#ffffff04" />
+<text x="40" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.015</text>
+<rect x="61" y="116" width="32" height="32" rx="6" fill="#ffffff05" />
+<text x="77" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.02</text>
+<rect x="98" y="116" width="32" height="32" rx="6" fill="#ffffff06" />
+<text x="114" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.025</text>
+<rect x="135" y="116" width="32" height="32" rx="6" fill="#ffffff08" />
+<text x="151" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.03</text>
+<rect x="172" y="116" width="32" height="32" rx="6" fill="#ffffff09" />
+<text x="188" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.035</text>
+<rect x="209" y="116" width="32" height="32" rx="6" fill="#ffffff0a" />
+<text x="225" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.04</text>
+<rect x="246" y="116" width="32" height="32" rx="6" fill="#ffffff0b" />
+<text x="262" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.045</text>
+<rect x="283" y="116" width="32" height="32" rx="6" fill="#ffffff0d" />
+<text x="299" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.05</text>
+<rect x="320" y="116" width="32" height="32" rx="6" fill="#ffffff0e" />
+<text x="336" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.055</text>
+<rect x="357" y="116" width="32" height="32" rx="6" fill="#ffffff0f" />
+<text x="373" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.06</text>
+<rect x="394" y="116" width="32" height="32" rx="6" fill="#ffffff12" />
+<text x="410" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.07</text>
+<rect x="431" y="116" width="32" height="32" rx="6" fill="#ffffff14" />
+<text x="447" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.08</text>
+<rect x="468" y="116" width="32" height="32" rx="6" fill="#ffffff17" />
+<text x="484" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.09</text>
+<rect x="505" y="116" width="32" height="32" rx="6" fill="#ffffff1a" />
+<text x="521" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.1</text>
+<rect x="542" y="116" width="32" height="32" rx="6" fill="#ffffff24" />
+<text x="558" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.14</text>
+<rect x="579" y="116" width="32" height="32" rx="6" fill="#ffffff26" />
+<text x="595" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.15</text>
+<rect x="616" y="116" width="32" height="32" rx="6" fill="#ffffff29" />
+<text x="632" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.16</text>
+<rect x="653" y="116" width="32" height="32" rx="6" fill="#ffffff33" />
+<text x="669" y="162" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.2</text>
+<text x="24" y="196" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">hairline(α) borders in use (45 calls)</text>
+<rect x="24" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff09" stroke-width="1" />
+<text x="50" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.035</text>
+<rect x="84" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff0a" stroke-width="1" />
+<text x="110" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.04</text>
+<rect x="144" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff0f" stroke-width="1" />
+<text x="170" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.06</text>
+<rect x="204" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff12" stroke-width="1" />
+<text x="230" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.07</text>
+<rect x="264" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff14" stroke-width="1" />
+<text x="290" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.08</text>
+<rect x="324" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff17" stroke-width="1" />
+<text x="350" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.09</text>
+<rect x="384" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff1a" stroke-width="1" />
+<text x="410" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.1</text>
+<rect x="444" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff1c" stroke-width="1" />
+<text x="470" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.11</text>
+<rect x="504" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff1f" stroke-width="1" />
+<text x="530" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.12</text>
+<rect x="564" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff24" stroke-width="1" />
+<text x="590" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.14</text>
+<rect x="624" y="208" width="52" height="32" rx="6" fill="none" stroke="#ffffff99" stroke-width="1" />
+<text x="650" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="middle">.6</text>
+<text x="24" y="296" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">On a tinted theme (Nord #2e3440): white washes go grey-blue-neutral</text>
+<rect x="24" y="308" width="320" height="90" rx="10" fill="#2e3440" />
+<rect x="36" y="320" width="140" height="30" rx="6" fill="#ffffff14" />
+<text x="106" y="340" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#d8dee9" text-anchor="middle">ink(0.08)</text>
+<rect x="188" y="320" width="140" height="30" rx="6" fill="#434c5e" />
+<text x="258" y="340" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#d8dee9" text-anchor="middle">theme hover</text>
+<text x="36" y="380" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">same role, two colours in one list</text>
+<rect x="370" y="320" width="278" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="377" y="334" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">Theme::element_hover exists but is used 23×</text>
+<rect x="370" y="348" width="315" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="377" y="362" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">border: 157 · border_strong: 58 · hairline(α): 45</text>
+<rect x="370" y="376" width="340" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="377" y="390" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">+ 435 .opacity(literal) calls with 50 distinct values</text>
+<text x="16" y="438" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">tallies: scratchpad/ds/ink_alphas.txt, opacity_values.txt · theme.rs:2208-2250</text>
+</svg>

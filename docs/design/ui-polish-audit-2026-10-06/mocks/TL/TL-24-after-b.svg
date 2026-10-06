@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="504" viewBox="0 0 720 504">
+<rect width="720" height="504" fill="#0A0A0B"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-24 · Option B · arc spinner + morphing verb + tabular timer</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="16" y="20" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">Verb change at 7 s · drawn at 1.35× · out 120 ms (fade + 3 px up + 2 px blur), in 180 ms, width eases 250 ms</text>
+<rect x="16" y="30" width="163" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 7 s + 0 ms</text>
+<g transform="translate(22,78) scale(1.35)">
+<circle cx="6" cy="-4" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.5" opacity="0.08"/>
+<path d="M10.50 -4.00 A4.5 4.5 0 1 1 6.00 -8.50" fill="none" stroke="#7C86FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<g opacity="1.0" transform="translate(0,0)"><text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Pondering</text></g>
+<text x="76.0" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8E8E93" text-anchor="start">· 14s</text>
+</g>
+<text x="26" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">timer x 0 px</text>
+<rect x="191" y="30" width="163" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="201" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 7 s + 90 ms</text>
+<g transform="translate(197,78) scale(1.35)">
+<circle cx="6" cy="-4" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.5" opacity="0.08"/>
+<path d="M7.87 0.09 A4.5 4.5 0 1 1 10.09 -5.87" fill="none" stroke="#7C86FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<g opacity="0.35" transform="translate(0,-2.2)"><text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Pondering</text></g>
+<g opacity="0.0" transform="translate(0,3.0)"><text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Brewing</text></g>
+<text x="71.68" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8E8E93" text-anchor="start">· 14s</text>
+</g>
+<text x="201" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">timer x -4 px (eased)</text>
+<rect x="366" y="30" width="163" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="376" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 7 s + 180 ms</text>
+<g transform="translate(372,78) scale(1.35)">
+<circle cx="6" cy="-4" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.5" opacity="0.08"/>
+<path d="M3.05 -0.60 A4.5 4.5 0 1 1 9.40 -1.05" fill="none" stroke="#7C86FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<g opacity="0.6" transform="translate(0,1.2000000000000002)"><text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Brewing</text></g>
+<text x="67.36" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8E8E93" text-anchor="start">· 14s</text>
+</g>
+<text x="376" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">timer x -9 px (eased)</text>
+<rect x="541" y="30" width="163" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="551" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 7 s + 300 ms</text>
+<g transform="translate(547,78) scale(1.35)">
+<circle cx="6" cy="-4" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.5" opacity="0.08"/>
+<path d="M2.10 -6.25 A4.5 4.5 0 1 1 3.75 -0.10" fill="none" stroke="#7C86FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<g opacity="1.0" transform="translate(0,0.0)"><text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Brewing</text></g>
+<text x="64.0" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8E8E93" text-anchor="start">· 14s</text>
+</g>
+<text x="551" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">timer x -12 px (eased)</text>
+<rect x="16" y="140" width="688" height="92" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="156" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">Resting state (reduced motion: static 270° arc, words swap instantly) · 1× and 2×</text>
+<circle cx="32" cy="176" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.5" opacity="0.08"/>
+<path d="M32.00 171.50 A4.5 4.5 0 1 1 27.50 176.00" fill="none" stroke="#7C86FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text xml:space="preserve" x="42" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Thinking<tspan fill="#8E8E93" font-size="11">  ·  13s</tspan></text>
+<g transform="translate(200,196) scale(2)">
+<circle cx="6" cy="-4" r="4.5" fill="none" stroke="#FFFFFF" stroke-width="1.5" opacity="0.08"/>
+<path d="M6.00 -8.50 A4.5 4.5 0 1 1 1.50 -4.00" fill="none" stroke="#7C86FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text xml:space="preserve" x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Thinking<tspan fill="#8E8E93" font-size="11">  ·  13s</tspan></text>
+</g>
+<rect x="16" y="246" width="330" height="140" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<line x1="30" y1="360" x2="332" y2="360" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<line x1="30" y1="360" x2="30" y2="272" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<polyline points="30.0,360.0 35.0,358.5 40.1,357.1 45.1,355.6 50.1,354.1 55.2,352.7 60.2,351.2 65.2,349.7 70.3,348.3 75.3,346.8 80.3,345.3 85.4,343.9 90.4,342.4 95.4,340.9 100.5,339.5 105.5,338.0 110.5,336.5 115.6,335.1 120.6,333.6 125.6,332.1 130.7,330.7 135.7,329.2 140.7,327.7 145.8,326.3 150.8,324.8 155.8,323.3 160.9,321.9 165.9,320.4 170.9,318.9 176.0,317.5 181.0,316.0 186.0,314.5 191.1,313.1 196.1,311.6 201.1,310.1 206.2,308.7 211.2,307.2 216.2,305.7 221.3,304.3 226.3,302.8 231.3,301.3 236.4,299.9 241.4,298.4 246.4,296.9 251.5,295.5 256.5,294.0 261.5,292.5 266.6,291.1 271.6,289.6 276.6,288.1 281.7,286.7 286.7,285.2 291.7,283.7 296.8,282.3 301.8,280.8 306.8,279.3 311.9,277.9 316.9,276.4 321.9,274.9 327.0,273.5 332.0,272.0" fill="none" stroke="#30D158" stroke-width="2"/>
+<circle cx="30" cy="360" r="2.8" fill="#30D158"/>
+<circle cx="181.0" cy="316.0" r="2.8" fill="#30D158"/>
+<circle cx="332" cy="272" r="2.8" fill="#30D158"/>
+<text x="26" y="262" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Arc: 270°, 1.5 px, linear 800 ms / turn</text>
+<text x="26" y="377" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="start">12 px box, 9 px arc = cap height; 60 fps transform</text>
+<text x="332" y="371" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#9A9AA0" text-anchor="end">800 ms</text>
+<rect x="362" y="246" width="342" height="140" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<line x1="376" y1="360" x2="690" y2="360" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<line x1="376" y1="360" x2="376" y2="272" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<polyline points="376.0,360.0 381.2,353.4 386.5,347.1 391.7,341.1 396.9,335.3 402.2,329.8 407.4,324.7 412.6,319.9 417.9,315.4 423.1,311.2 428.3,307.4 433.6,303.9 438.8,300.7 444.0,297.8 449.3,295.1 454.5,292.7 459.7,290.5 465.0,288.5 470.2,286.8 475.4,285.2 480.7,283.7 485.9,282.4 491.1,281.3 496.4,280.2 501.6,279.3 506.8,278.5 512.1,277.7 517.3,277.0 522.5,276.4 527.8,275.9 533.0,275.4 538.2,275.0 543.5,274.6 548.7,274.2 553.9,273.9 559.2,273.7 564.4,273.4 569.6,273.2 574.9,273.0 580.1,272.9 585.3,272.7 590.6,272.6 595.8,272.5 601.0,272.4 606.3,272.3 611.5,272.3 616.7,272.2 622.0,272.2 627.2,272.1 632.4,272.1 637.7,272.1 642.9,272.1 648.1,272.0 653.4,272.0 658.6,272.0 663.8,272.0 669.1,272.0 674.3,272.0 679.5,272.0 684.8,272.0 690.0,272.0" fill="none" stroke="#30D158" stroke-width="2"/>
+<circle cx="376" cy="359.9999999999999" r="2.8" fill="#30D158"/>
+<circle cx="489.03999999999996" cy="281.72220160643974" r="2.8" fill="#30D158"/>
+<circle cx="602.0799999999999" cy="272.4023446181302" r="2.8" fill="#30D158"/>
+<circle cx="690" cy="272.0" r="2.8" fill="#30D158"/>
+<text x="372" y="262" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Width + word: EASE_OUT_QUINT 250 ms</text>
+<text x="372" y="377" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="start">timer glides instead of jumping (~45 px today)</text>
+<text x="690" y="371" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#9A9AA0" text-anchor="end">250 ms</text>
+<rect x="16" y="398" width="640" height="40" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="24" y="414" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Spinner is a single accent arc (reads as activity at a glance), verb cross-fades with a small</text>
+<text x="24" y="429" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">vertical morph, digits use tabular figures so "13s → 14s" never shifts; refined verb set (below).</text>
+</g>
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="400" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-18 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Floor: caption 11 pt; caption2 10 pt only for glyph-like text</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">caption2 (10/13) restricted to kbd hints, counts and uppercase badges; everything readable ≥ 11</text>
+<rect x="24" y="96" width="320" height="140" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<text x="40" y="122" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#e5e5e5" text-anchor="start">Usage</text>
+<text x="40" y="146" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e5e5e5" text-anchor="start">Claude · 5-hour window</text>
+<text x="328" y="146" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="end">Resets 14:20</text>
+<rect x="40" y="156" width="288" height="6" rx="3" fill="#222" />
+<rect x="40" y="156" width="170" height="6" rx="3" fill="#8b7cf6" />
+<text x="40" y="184" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#f87171" text-anchor="start">Couldn’t refresh usage — retrying in 30 s</text>
+<rect x="270" y="110" width="58" height="16" rx="4" fill="#ffffff10" />
+<text x="299" y="122" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="middle">⌘ ⇧ U</text>
+<rect x="370" y="112" width="174" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="377" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">caption 11/14 for all copy</text>
+<rect x="370" y="140" width="204" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="377" y="154" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">caption2 10/13 for the kbd chip</text>
+<rect x="370" y="168" width="192" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="377" y="182" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">card grows 10 pt, no wrapping</text>
+<rect x="24" y="262" width="426" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="276" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">9 / 9.5 / 10.5 deleted from the scale; 10 survives only as caption2</text>
+<text x="16" y="388" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">audit query: rg 'ui_rems\((9|9\.5|10|10\.5)\)' crates/ui/src → 94 sites to migrate</text>
+</svg>

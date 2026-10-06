@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="520" viewBox="0 0 720 520" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="520" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-08 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Three different settings row anatomies</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Same role (setting + control), three pages, three recipes</text>
+<text x="24" y="98" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a1a1a1" text-anchor="start">Appearance · card_row</text>
+<rect x="24" y="108" width="216" height="70.5" rx="12" fill="#090909" stroke="#222222" stroke-width="1" />
+<rect x="36" y="125" width="36" height="36" rx="10" fill="#101010" stroke="#222222" stroke-width="1" />
+<svg x="46" y="135" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g fill="none"><path d="M4 6H20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M4 10H17C18.6569 10 20 11.3431 20 13C20 14.6569 18.6569 16 17 16H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 13L9 16L12 19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M4 20H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="82" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#e5e5e5" text-anchor="start">Diff wrapping</text>
+<text x="82" y="158" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">Wrap long source lines…</text>
+<rect x="196" y="134" width="32" height="18" rx="9" fill="#2a2a2a" />
+<circle cx="205" cy="143" r="7" fill="#b3b3b3"/>
+<line x1="246" y1="108" x2="246" y2="178.5" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="242" y1="108" x2="250" y2="108" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="242" y1="178.5" x2="250" y2="178.5" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<text x="254" y="147.25" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start"></text>
+<text x="24" y="200" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="start">h 70.5 · tile 36 · r10 · title 13M</text>
+<text x="24" y="214" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="start">desc 12 · gap 1 · py 14 · px 20</text>
+<text x="256" y="98" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a1a1a1" text-anchor="start">General · hand-built row</text>
+<rect x="256" y="108" width="216" height="84" rx="12" fill="#090909" stroke="#222222" stroke-width="1" />
+<text x="272" y="136" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#e5e5e5" text-anchor="start">Send shortcut</text>
+<text x="272" y="156" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Choose whether Enter</text>
+<text x="272" y="172" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">sends or inserts…</text>
+<rect x="388" y="136" width="72" height="26" rx="9" fill="#151515" />
+<rect x="390" y="138" width="34" height="22" rx="7" fill="#000" />
+<text x="407" y="153" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">↵</text>
+<text x="442" y="153" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="middle">⌘↵</text>
+<line x1="478" y1="108" x2="478" y2="192" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="474" y1="108" x2="482" y2="108" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="474" y1="192" x2="482" y2="192" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<text x="486" y="154.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start"></text>
+<text x="256" y="214" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="start">h 84 (min_h) · no tile · desc 11.5</text>
+<text x="256" y="228" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="start">desc mt 4 · general.rs:252</text>
+<text x="488" y="98" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a1a1a1" text-anchor="start">Providers · prose card</text>
+<rect x="488" y="108" width="216" height="150" rx="12" fill="#090909" stroke="#222222" stroke-width="1" />
+<text x="502" y="132" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#e5e5e5" text-anchor="start">Model cache</text>
+<text x="502" y="152" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">LUNA saves model lists on each</text>
+<text x="502" y="169" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">device and refreshes them in the</text>
+<text x="502" y="186" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">background after launch. Refresh</text>
+<text x="502" y="203" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">now to check the selected device…</text>
+<text x="512" y="236" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">Refresh models</text>
+<rect x="502" y="222" width="112" height="22" rx="8" fill="none" stroke="#FF453A" stroke-width="1" stroke-dasharray="3 3" />
+<text x="488" y="280" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="start">no rows · no control column</text>
+<text x="488" y="294" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="start">button has no rest chrome</text>
+<rect x="24" y="330" width="672" height="150" rx="12" fill="#0d0d0d" stroke="#1e1e1e" stroke-width="1" />
+<text x="40" y="356" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">macOS System Settings reference</text>
+<text x="40" y="380" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">• single-line row ≈ 36–40 pt · with subtitle ≈ 50–56 pt</text>
+<text x="40" y="400" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">• 13 pt title, 11 pt secondary subtitle, 20 pt icon tile</text>
+<text x="40" y="420" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">• controls right-aligned in one column; descriptions wrap under the title</text>
+<text x="40" y="440" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">• explanatory prose lives in a footer under the group, not inside rows</text>
+<text x="40" y="464" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#FF453A" text-anchor="start">Luna today: 70.5 pt and 84 pt rows (+35–60%), prose cards on Providers</text>
+<text x="16" y="508" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">shots: appearance-light-overview.png · mcp-inventory 01-claude-mcp-inventory.png · usage settings-local.png</text>
+</svg>

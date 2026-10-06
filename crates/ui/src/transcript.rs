@@ -33,10 +33,11 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, BorderStyle, Bounds, ClipboardItem, ContentMask, Context, Entity, ListAlignment,
-    ListOffset, ListScrollEvent, ListState, MouseButton, MouseMoveEvent, MouseUpEvent, ObjectFit,
-    PathBuilder, Pixels, Point, SharedString, StyledImage as _, StyledText, Subscription, Task,
-    TextAlign, TextRun, Window, canvas, div, img, list, point, prelude::*, px, quad, size,
+    AnyElement, BorderStyle, Bounds, ClipboardItem, ContentMask, Context, Entity, Hsla,
+    ListAlignment, ListOffset, ListScrollEvent, ListState, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ObjectFit, PathBuilder, Pixels, Point, SharedString, StyledImage as _,
+    StyledText, Subscription, Task, TextAlign, TextRun, Window, canvas, div, img, list, point,
+    prelude::*, px, quad, size,
 };
 
 use luna_doc::{
@@ -117,11 +118,24 @@ const TOOL_LABEL_LINE_HEIGHT: f32 = 18.0;
 const TOOL_GROUP_HEADER_HEIGHT: f32 = 26.0;
 /// Compact rows retain the analytic heights used by row and group folds.
 const TOOL_TREE_ROW_HEIGHT: f32 = 32.0;
-const TOOL_FOLD: motion::MotionSpec = motion::MotionSpec::new(140, motion::EASE_OUT);
+/// Tool rows and groups fold on the shared disclosure curve (fast response,
+/// soft landing) so every expandable in the timeline moves the same way.
+const TOOL_FOLD: motion::MotionSpec = motion::DISCLOSURE;
+/// An opening body fades in over this span while its height springs open.
+const TOOL_BODY_FADE_MS: f32 = 180.0;
+/// A closing body is fully transparent by this fraction of the fold.
+const TOOL_BODY_FADE_OUT_FRACTION: f32 = 0.6;
+/// Disclosure chevron: one glyph and size for rows and group headers.
+const DISCLOSURE_CHEVRON_SIZE: f32 = 12.0;
 /// BoardUI task-list cadence: a slow light sweep keeps the active summary
 /// legible, while each newly appended row reveals quickly enough to read as a
 /// continuous log rather than a stack of discrete pop-ins.
 const TOOL_GROUP_SHIMMER_DURATION: Duration = Duration::from_millis(3_400);
+/// Working-line verb/object size and the shared line box of that row.
+const WORKING_STATUS_SIZE: f32 = 12.0;
+const WORKING_STATUS_LINE_HEIGHT: f32 = 16.0;
+/// The elapsed timer is one step quieter than the status itself.
+const WORKING_TIMER_SIZE: f32 = 11.0;
 const TOOL_GROUP_SHIMMER_HALF_WIDTH: f32 = 0.36;
 const TOOL_GROUP_SHIMMER_STRIP_WIDTH: f32 = 2.0;
 const TOOL_ROW_REVEAL: motion::MotionSpec = motion::MotionSpec::new(360, motion::EASE_OUT_EXPO);
@@ -779,7 +793,8 @@ pub enum ToolDetail {
 
 /// Max verbatim output lines per chip before the counted tail row.
 pub const OUTPUT_DETAIL_MAX_LINES: usize = 24;
-const OUTPUT_CODE_HEADER_HEIGHT: f32 = 26.0;
+/// Tool output shares the markdown code block's header height (audit TL-06).
+const OUTPUT_CODE_HEADER_HEIGHT: f32 = 28.0;
 const OUTPUT_VIEWPORT_MAX_HEIGHT: f32 = 252.0;
 const DIFF_VIEWPORT_MAX_HEIGHT: f32 = 360.0;
 
@@ -1989,20 +2004,49 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
         // (and when reduced motion turns the active shimmer off).
         return text.into_any_element();
     };
+    let overlay = shimmer_overlay(
+        text.clone(),
+        TOOL_LABEL_SIZE,
+        TOOL_LABEL_LINE_HEIGHT,
+        theme.content_muted,
+        theme.text,
+        shimmer_phase,
+        theme,
+    );
+    div()
+        .relative()
+        .h_full()
+        .min_w_0()
+        .flex_1()
+        .overflow_hidden()
+        .child(text)
+        .child(overlay)
+        .into_any_element()
+}
+
+/// The shared text shimmer: a soft highlight band sweeping across one shaped
+/// line. Paint it over a text element of the same size and line height.
+fn shimmer_overlay(
+    text: SharedString,
+    size_at_default: f32,
+    line_height_at_default: f32,
+    base: Hsla,
+    peak: Hsla,
+    shimmer_phase: f32,
+    theme: &Theme,
+) -> impl IntoElement {
     // Keep the title as ONE normal text run. Splitting it per character copies
     // the gradient stops, but also splits shaping/kerning and makes the sweep
     // visibly hop one glyph at a time. The overlay repaints the intact shaped
     // line through narrow moving clips, which is the native equivalent of
     // CSS `background-clip: text` without duplicating accessible text.
-    let overlay_text = text.clone();
+    let overlay_text = text;
     let overlay_font = gpui::font(theme.font_sans.clone());
-    let base = theme.text_muted;
-    let peak = theme.text;
-    let overlay = canvas(
+    canvas(
         move |bounds, window, _| {
             let probe = window.text_system().shape_line(
                 overlay_text.clone(),
-                crate::typography::ui_rems(TOOL_LABEL_SIZE).to_pixels(window.rem_size()),
+                crate::typography::ui_rems(size_at_default).to_pixels(window.rem_size()),
                 &[TextRun {
                     len: overlay_text.len(),
                     font: overlay_font.clone(),
@@ -2026,7 +2070,7 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
                 }
                 let line = window.text_system().shape_line(
                     overlay_text.clone(),
-                    crate::typography::ui_rems(TOOL_LABEL_SIZE).to_pixels(window.rem_size()),
+                    crate::typography::ui_rems(size_at_default).to_pixels(window.rem_size()),
                     &[TextRun {
                         len: overlay_text.len(),
                         font: overlay_font.clone(),
@@ -2050,7 +2094,7 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
                     },
                 };
                 window.with_content_mask(Some(mask), |window| {
-                    let line_height = crate::typography::ui_rems(TOOL_LABEL_LINE_HEIGHT)
+                    let line_height = crate::typography::ui_rems(line_height_at_default)
                         .to_pixels(window.rem_size());
                     let _ = line.paint(
                         bounds.origin,
@@ -2065,16 +2109,7 @@ fn tool_group_title(text: SharedString, shimmer_phase: Option<f32>, theme: &Them
         },
     )
     .absolute()
-    .inset_0();
-    div()
-        .relative()
-        .h_full()
-        .min_w_0()
-        .flex_1()
-        .overflow_hidden()
-        .child(text)
-        .child(overlay)
-        .into_any_element()
+    .inset_0()
 }
 
 // `single_line` and the per-kind chip label/detail are shared with the terminal
@@ -2100,12 +2135,14 @@ pub fn detail_height(detail: &ToolDetail) -> f32 {
     detail_height_for(detail, None, 1.0)
 }
 
+/// Tool output is code: it uses the code size and the code block's 12.5/18
+/// rhythm, so output and fenced code read as one component.
 fn tool_code_size(theme: &Theme) -> f32 {
-    theme.code_font_size * (TOOL_TEXT_SIZE / crate::typography::CODE_FONT_SIZE_DEFAULT)
+    theme.code_font_size
 }
 
 fn tool_code_line_height(theme: &Theme) -> f32 {
-    tool_code_size(theme) * (OUTPUT_LINE_HEIGHT / TOOL_TEXT_SIZE)
+    tool_code_size(theme) * (render::CODE_LINE_HEIGHT / render::CODE_TEXT_SIZE)
 }
 
 fn tool_diff_height(file: &crate::changes::FileDiff, theme: &Theme) -> f32 {
@@ -2312,47 +2349,150 @@ fn format_kb(bytes: u64) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Working indicator flavour (pure; rendered by the shell strip)
+// Working indicator status (pure; rendered by the transcript trailer)
 // ---------------------------------------------------------------------------
 
-/// Rotating flavour vocabulary (21 words / 7s, seeded per chat).
-pub const FLAVOUR_WORDS: [&str; 21] = [
-    "Orbiting",
-    "Thinking",
-    "Pondering",
-    "Scheming",
-    "Brewing",
-    "Weaving",
-    "Tinkering",
-    "Musing",
-    "Composing",
-    "Sifting",
-    "Untangling",
-    "Distilling",
-    "Sketching",
-    "Plotting",
-    "Riffing",
-    "Combobulating",
-    "Percolating",
-    "Marinating",
-    "Noodling",
-    "Puzzling",
-    "Conjuring",
-];
-pub const FLAVOUR_ROTATE_SECS: i64 = 7;
-
-/// The flavour word for a seed at an elapsed time.
-pub fn flavour_word(seed: u64, elapsed_secs: i64) -> &'static str {
-    let step = (elapsed_secs.max(0) / FLAVOUR_ROTATE_SECS) as u64;
-    FLAVOUR_WORDS[((seed.wrapping_add(step)) % FLAVOUR_WORDS.len() as u64) as usize]
+/// What the working line says while a turn runs: a calm verb and, when the
+/// newest activity names one, its object ("Running" + "cargo test").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveStatus {
+    pub verb: &'static str,
+    pub object: Option<String>,
 }
 
-/// A stable per-chat seed.
-pub fn flavour_seed(chat_id: &str) -> u64 {
-    fnv1a(chat_id.as_bytes())
+impl LiveStatus {
+    const fn word(verb: &'static str) -> Self {
+        Self { verb, object: None }
+    }
+
+    /// The full sentence, for accessibility and change detection.
+    pub fn label(&self) -> String {
+        match &self.object {
+            Some(object) => format!("{} {object}", self.verb),
+            None => self.verb.to_string(),
+        }
+    }
 }
 
-/// How long a provider warning (not a retry) replaces the flavour word.
+/// Longest object shown after the verb; longer commands and patterns end in
+/// an ellipsis so the timer stays on the same line.
+const LIVE_STATUS_OBJECT_CHARS: usize = 44;
+
+/// Derive the working status from the current turn's rows.
+///
+/// Failure cases this must avoid (written before the implementation):
+/// 1. Naming a tool that already finished, or one from an earlier turn: only
+///    unresolved tools after the latest user row count.
+/// 2. Naming a UI-synthesized thought chip as a tool: thoughts read "Thinking".
+/// 3. A multi-line or very long command, path or URL stretching the line:
+///    objects are single-line, paths reduce to their file name, and anything
+///    longer than [`LIVE_STATUS_OBJECT_CHARS`] is ellipsized.
+/// 4. Flicker between two concurrently running tools: the newest one wins,
+///    deterministically, until it resolves.
+/// 5. A running subagent read as a plain tool, or a finished spawn keeping the
+///    line busy: live subagents read "Waiting on N agents" only while their
+///    lifecycle says they run.
+/// 6. Claiming progress with no evidence: with nothing specific in flight the
+///    line falls back to a calm word ("Thinking" before any output, "Working"
+///    between steps) instead of a rotating joke.
+pub fn live_status(rows: &[Row]) -> LiveStatus {
+    let mut live_agents = 0usize;
+    let mut decided: Option<LiveStatus> = None;
+    let mut saw_output = false;
+    for row in rows.iter().rev() {
+        match &row.kind {
+            RowKind::User { .. } => break,
+            RowKind::LiveMarkdown { .. } => {
+                saw_output = true;
+                decided.get_or_insert(LiveStatus::word("Writing"));
+            }
+            RowKind::ToolGroup { tools, .. } => {
+                saw_output = true;
+                for tool in tools.iter().rev() {
+                    if matches!(
+                        tool.subagent_status,
+                        Some(SubagentStatus::Running | SubagentStatus::Waiting)
+                    ) {
+                        live_agents += 1;
+                        continue;
+                    }
+                    if tool.resolved || decided.is_some() {
+                        continue;
+                    }
+                    decided = Some(if tool.is_thought {
+                        LiveStatus::word("Thinking")
+                    } else {
+                        tool_status(&tool.call)
+                    });
+                }
+            }
+            _ => saw_output = true,
+        }
+    }
+    if let Some(status) = decided {
+        return status;
+    }
+    match live_agents {
+        0 if saw_output => LiveStatus::word("Working"),
+        0 => LiveStatus::word("Thinking"),
+        1 => LiveStatus::word("Waiting on 1 agent"),
+        n => LiveStatus {
+            verb: "Waiting on",
+            object: Some(format!("{n} agents")),
+        },
+    }
+}
+
+/// The present-tense status for one running tool call.
+fn tool_status(call: &ToolCall) -> LiveStatus {
+    let (label, detail) = tool_chip_content(call);
+    let file = |detail: &str| {
+        let trimmed = detail.trim_end_matches('/');
+        trimmed.rsplit('/').next().unwrap_or(trimmed).to_string()
+    };
+    let (verb, object) = match label {
+        "Run" => ("Running", Some(detail)),
+        "Read" => ("Reading", Some(file(&detail))),
+        "Write" => ("Writing", Some(file(&detail))),
+        "Edit" => ("Editing", Some(file(&detail))),
+        "Patch" => ("Applying a patch to", Some(file(&detail))),
+        "Search" => ("Searching for", Some(detail)),
+        "Glob" => ("Finding", Some(detail)),
+        "Fetch" => ("Fetching", Some(url_host(&detail))),
+        "Web" => ("Searching the web for", Some(detail)),
+        "View image" => ("Viewing", Some(file(&detail))),
+        "Todo" => ("Updating the plan", None),
+        "MCP" => ("Calling", Some(detail)),
+        "Computer use" => ("Using the computer", None),
+        "Agent" => ("Starting an agent", None),
+        "Hook" => ("Running hook", Some(detail)),
+        _ => ("Using", Some(detail)),
+    };
+    let object = object
+        .map(|object| object.trim().to_string())
+        .filter(|object| !object.is_empty())
+        .map(|object| ellipsize_chars(&object, LIVE_STATUS_OBJECT_CHARS));
+    LiveStatus { verb, object }
+}
+
+fn url_host(url: &str) -> String {
+    let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
+    rest.split(['/', '?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .to_string()
+}
+
+fn ellipsize_chars(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
+    out.push('…');
+    out
+}
+
+/// How long a provider warning (not a retry) replaces the status word.
 const PROVIDER_WARNING_MS: i64 = 10_000;
 
 /// The working trailer's "Sending…" bridge: true while an in-flight send is
@@ -3456,6 +3596,10 @@ pub enum TranscriptEvent {
         frozen: bool,
     },
     OpenAccounts,
+    /// The working line's hover "Stop": interrupt that chat's active turn.
+    InterruptChat {
+        chat_id: String,
+    },
     ForkMessage {
         task_id: String,
         message_id: String,
@@ -6101,19 +6245,25 @@ impl Transcript {
                 "Expand message"
             })
             .aria_expanded(expanded)
+            .tab_index(0)
+            .rounded(px(Theme::CONTROL_RADIUS))
+            .focus_visible({
+                let ring = theme.focus_ring();
+                move |style| crate::theme::focus_ring(style, ring)
+            })
             .flex()
             .items_center()
             .gap(px(5.0))
             .text_size(crate::typography::ui_rems(14.0))
             .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
-            .text_color(theme.text_muted)
+            .text_color(theme.content_muted)
             .cursor_pointer()
             .hover(|s| s.text_color(theme.text))
             .child(label)
             .child(
                 crate::icons::icon(glyph)
                     .size(px(12.0))
-                    .text_color(theme.text_muted)
+                    .text_color(theme.content_muted)
                     .group_hover("user-message-toggle", |s| s.text_color(theme.text)),
             )
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -6148,6 +6298,7 @@ impl Transcript {
         let devices = self.generated_attachment_device_ids(owner, cx);
         let state = self.attachment_state(&devices, path, Some(mime_type), cx);
         let theme = Theme::of(cx).clone();
+        let focus_ring = theme.focus_ring();
         let width = if viewed { 96.0 } else { 512.0 };
         let height = if viewed { 80.0 } else { 320.0 };
         let frame = div()
@@ -6182,7 +6333,7 @@ impl Transcript {
                     })
                     .tab_index(0)
                     .cursor_pointer()
-                    .focus_visible(move |style| style.border_2().border_color(theme.accent))
+                    .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.attachment_preview_return_focus = window.focused(cx);
                         preview.viewer.reset();
@@ -6200,7 +6351,7 @@ impl Transcript {
                     .into_any_element()
             }
             AttachmentSnapshot::Loading => frame
-                .text_color(theme.text_muted)
+                .text_color(theme.content_muted)
                 .child(if viewed {
                     "Loading image…"
                 } else {
@@ -6208,7 +6359,7 @@ impl Transcript {
                 })
                 .into_any_element(),
             AttachmentSnapshot::Error { .. } => frame
-                .text_color(theme.text_muted)
+                .text_color(theme.content_muted)
                 .child(if viewed {
                     "Image unavailable"
                 } else {
@@ -6274,6 +6425,7 @@ impl Transcript {
             if let Some(appshot) = &att.appshot {
                 let has_image = matches!(&state, AttachmentSnapshot::Loaded(_));
                 let theme = Theme::of(cx).clone();
+                let focus_ring = theme.focus_ring();
                 let accent = theme.accent;
                 let width = 240.0;
                 let mut card = div()
@@ -6309,7 +6461,7 @@ impl Transcript {
                             ))
                             .tab_index(0)
                             .cursor_pointer()
-                            .focus_visible(move |style| style.border_2().border_color(accent))
+                            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.attachment_preview_return_focus = window.focused(cx);
                                 preview.viewer.reset();
@@ -6334,7 +6486,7 @@ impl Transcript {
                         image_frame.child(
                             div()
                                 .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
+                                .text_color(theme.content_muted)
                                 .child(if sending {
                                     "Uploading Appshot…"
                                 } else {
@@ -6346,7 +6498,7 @@ impl Transcript {
                         image_frame.child(
                             div()
                                 .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
+                                .text_color(theme.content_muted)
                                 .child(if sending {
                                     "Uploading Appshot…"
                                 } else {
@@ -6377,7 +6529,7 @@ impl Transcript {
                                             .into_any_element(),
                                         None => crate::icons::icon(crate::icons::MONITOR)
                                             .size(px(15.0))
-                                            .text_color(theme.text_muted)
+                                            .text_color(theme.content_muted)
                                             .into_any_element(),
                                     }),
                             )
@@ -6385,7 +6537,7 @@ impl Transcript {
                                 div()
                                     .truncate()
                                     .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.text_muted)
+                                    .text_color(theme.content_muted)
                                     .child(SharedString::from(format!(
                                         "{} · Appshot",
                                         appshot.app_name
@@ -6405,7 +6557,7 @@ impl Transcript {
                     card = card.child(
                         div()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted)
+                            .text_color(theme.content_muted)
                             .child(SharedString::from(
                                 uploading
                                     .map(|pct| format!("Uploading {pct}%"))
@@ -6736,7 +6888,7 @@ impl Transcript {
                                 row.child(trailer_action(
                                     "recovery-cancel",
                                     "Cancel",
-                                    theme.text_muted,
+                                    theme.content_muted,
                                     &theme,
                                     |this, cx| this.recovery_command(false, cx),
                                     cx,
@@ -6749,7 +6901,7 @@ impl Transcript {
                         .max_w(px(640.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .line_height(crate::typography::ui_rems(16.0))
-                        .text_color(theme.text_muted)
+                        .text_color(theme.content_muted)
                         .child(SharedString::from(recovery.detail)),
                 )
                 .into_any_element(),
@@ -6759,7 +6911,7 @@ impl Transcript {
     fn render_working_trailer(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let now = chrono::Utc::now();
         let subagent_doc = self.doc_override.as_ref().filter(|_| !self.pane_chat);
-        let (sending, queued, elapsed_secs, seed) = if let Some(doc_id) = subagent_doc {
+        let (sending, queued, elapsed_secs) = if let Some(doc_id) = subagent_doc {
             // A subagent doc has no Session row — `indicator_for` would read
             // the PARENT chat's live state into this tab. Liveness rides the
             // doc itself instead: the sink's assistant entry streams until
@@ -6777,7 +6929,7 @@ impl Transcript {
                 return None;
             }
             let elapsed = ((now.timestamp_millis() - last.created_at).max(0) / 1000) as i64;
-            (false, false, elapsed, flavour_seed(doc_id))
+            (false, false, elapsed)
         } else {
             let chat_id = self.chat_id.clone()?;
             if let Some(recovery) = self.render_recovery_trailer(&chat_id, cx) {
@@ -6832,10 +6984,10 @@ impl Transcript {
                     .unwrap_or(0);
                 (sending, queued, elapsed)
             };
-            (sending, queued, elapsed, flavour_seed(&chat_id))
+            (sending, queued, elapsed)
         };
         // A transient provider status (Codex stream retry or warning) takes
-        // the flavour word's place: retries while they last, warnings briefly.
+        // the status's place: retries while they last, warnings briefly.
         let notice = ((self.doc_override.is_none() || self.pane_chat) && !sending)
             .then(|| match &self.doc_override {
                 Some(doc_id) => crate::chat_binding::ChatBinding::Chat(doc_id.clone())
@@ -6849,52 +7001,148 @@ impl Transcript {
                     || now.timestamp_millis().saturating_sub(notice.at_ms) < PROVIDER_WARNING_MS
             })
             .map(|notice| notice.message);
-        let word = if queued {
-            "Queued — will send automatically"
-        } else if sending {
-            "Sending"
-        } else {
-            flavour_word(seed, elapsed_secs)
-        };
         let theme = Theme::of(cx).clone();
+        // One line, three tones: the verb in secondary (with a slow shimmer
+        // while live), the object in primary, the timer in tertiary with
+        // tabular digits so ticking seconds never shift the line.
+        let status = live_status(&self.rows);
+        let (verb, object, tone): (SharedString, Option<SharedString>, Hsla) = if queued {
+            (
+                "Queued — will send automatically".into(),
+                None,
+                theme.warning,
+            )
+        } else if sending {
+            ("Sending".into(), None, theme.content_muted)
+        } else if let Some(notice) = &notice {
+            (notice.clone().into(), None, theme.warning)
+        } else {
+            (
+                status.verb.into(),
+                status.object.clone().map(SharedString::from),
+                theme.content_muted,
+            )
+        };
+        let label: SharedString = match &object {
+            Some(object) => format!("{verb} {object}").into(),
+            None => verb.clone(),
+        };
+        let view = cx.entity_id();
+        let shimmer = (!queued && notice.is_none() && !cx.reduce_motion())
+            .then(|| motion::pulse_delta(&motion::STATUS_SHIMMER, view, cx));
+        let verb_el = {
+            let text = div()
+                .flex_none()
+                .whitespace_nowrap()
+                .text_color(tone)
+                .child(verb.clone());
+            match shimmer {
+                Some(phase) => div()
+                    .relative()
+                    .flex_none()
+                    .child(text)
+                    .child(shimmer_overlay(
+                        verb.clone(),
+                        WORKING_STATUS_SIZE,
+                        WORKING_STATUS_LINE_HEIGHT,
+                        tone,
+                        theme.text,
+                        phase,
+                        &theme,
+                    ))
+                    .into_any_element(),
+                None => text.into_any_element(),
+            }
+        };
+        let stop_chat = (!sending && !queued && subagent_doc.is_none())
+            .then(|| self.chat_id.clone())
+            .flatten();
+        let status_line = div()
+            .id(SharedString::from(format!(
+                "working-status-{:x}",
+                fnv1a(label.as_bytes())
+            )))
+            .role(gpui::Role::Status)
+            .aria_label(label.clone())
+            .min_w_0()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(4.0))
+            .text_size(crate::typography::ui_rems(WORKING_STATUS_SIZE))
+            .line_height(crate::typography::ui_rems(WORKING_STATUS_LINE_HEIGHT))
+            .child(verb_el)
+            .when_some(object, |el, object| {
+                el.child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_color(theme.text)
+                        .child(object),
+                )
+            })
+            // A status change arrives as a short fade and 2 px settle rather
+            // than a hard cut (reduced motion snaps it).
+            .with_animation(
+                SharedString::from(format!("working-status-in-{:x}", fnv1a(label.as_bytes()))),
+                motion::STATUS_SWAP.animation(),
+                |el, t| el.relative().opacity(t).top(px(2.0 * (1.0 - t))),
+            );
         Some(
             div()
+                .id("working-trailer")
+                .group("working-trailer")
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(px(Theme::SPACE_SM))
                 .pt(px(Theme::SPACE_LG))
-                .text_size(crate::typography::ui_rems(11.0))
-                .child(crate::loaders::gradient_spinner(
-                    "working-indicator",
-                    &theme,
-                    2.5,
-                    cx.entity_id(),
-                    cx,
-                ))
-                .child(
-                    div()
-                        .id("working-status")
-                        .role(gpui::Role::Status)
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(if queued || notice.is_some() {
-                            theme.warning
-                        } else {
-                            theme.text_muted
-                        })
-                        .child(SharedString::from(if queued {
-                            word.to_string()
-                        } else if let Some(notice) = &notice {
-                            notice.clone()
-                        } else {
-                            format!("{word}…")
-                        })),
-                )
+                .min_w_0()
+                .child(crate::loaders::breathing_orb(&theme, view, cx))
+                .child(status_line)
                 .when(!sending, |el| {
                     el.child(
                         div()
-                            .text_color(theme.text_faint)
-                            .child(SharedString::from(format_elapsed(elapsed_secs))),
+                            .flex_none()
+                            .whitespace_nowrap()
+                            .text_size(crate::typography::ui_rems(WORKING_TIMER_SIZE))
+                            .line_height(crate::typography::ui_rems(WORKING_STATUS_LINE_HEIGHT))
+                            .font_features(crate::typography::tabular_figures())
+                            .text_color(theme.content_faint)
+                            .child(SharedString::from(format!(
+                                "· {}",
+                                format_elapsed(elapsed_secs)
+                            ))),
+                    )
+                })
+                .when_some(stop_chat, |el, chat_id| {
+                    // A quiet way out that appears only under the pointer;
+                    // the composer's Stop button stays the primary control.
+                    el.child(
+                        div()
+                            .id("working-stop")
+                            .role(gpui::Role::Button)
+                            .aria_label("Stop the current turn")
+                            .tab_index(0)
+                            .flex_none()
+                            .ml(px(4.0))
+                            .px(px(6.0))
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .cursor_pointer()
+                            .text_size(crate::typography::ui_rems(WORKING_TIMER_SIZE))
+                            .line_height(crate::typography::ui_rems(WORKING_STATUS_LINE_HEIGHT))
+                            .text_color(theme.content_muted)
+                            .opacity(0.0)
+                            .group_hover("working-trailer", |style| style.opacity(1.0))
+                            .focus_visible(|style| style.opacity(1.0))
+                            .hover(|style| style.bg(crate::theme::wash(0.08)))
+                            .child("Stop")
+                            .on_click(cx.listener(move |_, _, _, cx| {
+                                cx.stop_propagation();
+                                cx.emit(TranscriptEvent::InterruptChat {
+                                    chat_id: chat_id.clone(),
+                                });
+                            })),
                     )
                 })
                 .into_any_element(),
@@ -6917,6 +7165,7 @@ impl Transcript {
         };
         self.rendered_rows.insert(row.id.clone());
         let theme = Theme::of(cx).clone();
+        let focus_ring = theme.focus_ring();
         let workspace_root = {
             let state = self.state.read(cx);
             self.chat_id
@@ -7202,9 +7451,9 @@ impl Transcript {
             let timestamp = div()
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(if theme.appearance.is_light() {
-                    theme.text_muted
+                    theme.content_muted
                 } else {
-                    theme.text_muted.opacity(0.55)
+                    theme.content_muted.opacity(0.55)
                 })
                 .child(SharedString::from(format_timestamp(ms, &chrono::Local)));
             let copy = copy_text.clone().map(|text| {
@@ -7236,7 +7485,7 @@ impl Transcript {
                             crate::icons::COPY
                         })
                         .size(px(14.0))
-                        .text_color(theme.text_muted),
+                        .text_color(theme.content_muted),
                     )
             });
             let side_action = copy_text.clone().and_then(|text| {
@@ -7295,10 +7544,10 @@ impl Transcript {
                         .flex()
                         .items_center()
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
+                        .text_color(theme.content_muted)
                         .cursor_pointer()
                         .hover(move |style| style.bg(crate::theme::ink(0.08)))
-                        .focus_visible(move |style| style.bg(theme.surface_raised))
+                        .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
                         .child(label)
                         .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
                         .on_key_down(crate::swallow_activation_key),
@@ -7340,7 +7589,7 @@ impl Transcript {
                         .child(
                             crate::icons::icon(crate::icons::GIT_BRANCH)
                                 .size(px(14.0))
-                                .text_color(theme.text_muted),
+                                .text_color(theme.content_muted),
                         )
                 })
             });
@@ -7370,7 +7619,7 @@ impl Transcript {
                             .child(
                                 crate::icons::icon(crate::icons::PEN)
                                     .size(px(14.0))
-                                    .text_color(theme.text_muted),
+                                    .text_color(theme.content_muted),
                             )
                     })
             });
@@ -7408,10 +7657,10 @@ impl Transcript {
                             .flex()
                             .items_center()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted)
+                            .text_color(theme.content_muted)
                             .cursor_pointer()
                             .hover(|style| style.bg(crate::theme::ink(0.08)))
-                            .focus_visible(move |style| style.bg(theme.surface_raised))
+                            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
                             .child(label)
                             .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
                             .on_key_down(crate::swallow_activation_key)
@@ -7666,6 +7915,7 @@ impl Transcript {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let mut fold = self.folds.get(row_id).copied().unwrap_or_default();
+        let focus_ring = theme.focus_ring();
         // Agent/spawn chips never fold: they are their own row, always open,
         // no "Called N tools" header — a running subagent stays visible.
         let collapses = tool_group_collapses(tools);
@@ -7949,6 +8199,8 @@ impl Transcript {
         // the same gutter as the rounded task-tree elbows below it.
         let header = div()
             .id(SharedString::from(format!("{row_id}-hdr")))
+            .rounded(px(Theme::CONTROL_RADIUS))
+            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
             .role(gpui::Role::Button)
             .aria_label(format!("Tool activity: {summary}"))
             .aria_expanded(open)
@@ -7968,7 +8220,7 @@ impl Transcript {
             // broke" (user report). Failures still show on the individual
             // chips (destructive tint, luna tool-chip.tsx) and in the
             // summary's "· N failed" count.
-            .text_color(theme.text_muted)
+            .text_color(theme.content_muted)
             .hover(|s| s.text_color(theme.text))
             .on_click(cx.listener(move |this, _, _, cx| {
                 cx.stop_propagation();
@@ -7977,21 +8229,22 @@ impl Transcript {
             }))
             .child(
                 div()
-                    // Keep the title adjacent to its disclosure affordance.
-                    .w(px(22.0))
+                    // 26 px + the 6 px gap starts the title on the glyph
+                    // column (x = 32) it introduces.
+                    .w(px(26.0))
                     .h(px(18.0))
                     .flex_none()
                     .relative()
                     .child(
-                        crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
+                        crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
                             .absolute()
-                            .left(px(ACTIVITY_TRUNK_X - 7.0))
-                            .top(px(2.0))
-                            .size(px(14.0))
+                            .left(px(ACTIVITY_TRUNK_X - DISCLOSURE_CHEVRON_SIZE / 2.0))
+                            .top(px((18.0 - DISCLOSURE_CHEVRON_SIZE) / 2.0))
+                            .size(px(DISCLOSURE_CHEVRON_SIZE))
                             .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                                -std::f32::consts::FRAC_PI_2 * (1.0 - disclosure_progress),
+                                std::f32::consts::FRAC_PI_2 * disclosure_progress,
                             )))
-                            .text_color(theme.text_muted),
+                            .text_color(theme.content_muted),
                     ),
             )
             .child(
@@ -8077,6 +8330,23 @@ impl Transcript {
                     && dfold
                         .toggled_at
                         .is_some_and(|at| at.elapsed() < FOLD_TWEEN_WINDOW);
+                // One clock drives the chevron, the height spring and the
+                // body fade, so the three always agree mid-fold.
+                let (chevron_progress, body_alpha) = match dfold.toggled_at {
+                    Some(at) if animating && !reduce_motion => {
+                        let elapsed_ms = at.elapsed().as_secs_f32() * 1000.0;
+                        let raw = elapsed_ms / TOOL_FOLD.duration_ms as f32;
+                        let t = TOOL_FOLD.curve.eval(raw.clamp(0.0, 1.0));
+                        if open {
+                            let fade = (elapsed_ms / TOOL_BODY_FADE_MS).clamp(0.0, 1.0);
+                            (t, motion::EASE_OUT.eval(fade))
+                        } else {
+                            let fade = (raw / TOOL_BODY_FADE_OUT_FRACTION).clamp(0.0, 1.0);
+                            (1.0 - t, 1.0 - fade)
+                        }
+                    }
+                    _ => (if open { 1.0 } else { 0.0 }, 1.0),
+                };
                 let toggle_key = key.clone();
                 let primary_blob = tool.diff_ref.clone().or_else(|| tool.output_ref.clone());
                 let (chip_label, chip_detail) = tool_chip_content(&tool.call);
@@ -8109,6 +8379,8 @@ impl Transcript {
                             .aria_label(chip_accessible_name)
                             .aria_expanded(open)
                             .tab_index(0)
+                            .rounded(px(Theme::CONTROL_RADIUS))
+                            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
                             .h(px(if collapses {
                                 CHIP_CARD_HEIGHT
                             } else {
@@ -8132,7 +8404,13 @@ impl Transcript {
                                 }
                                 cx.notify();
                             }))
-                            .child(chip_header(tool, open, theme, cx.entity_id(), cx)),
+                            .child(chip_header(
+                                tool,
+                                chevron_progress,
+                                theme,
+                                cx.entity_id(),
+                                cx,
+                            )),
                     );
                 // The body stays mounted while the close tween shrinks over it.
                 // Invocation first (what was asked), then output/diff (what
@@ -8144,7 +8422,13 @@ impl Transcript {
                         .min_w_0()
                         .flex()
                         .flex_col()
-                        .overflow_hidden();
+                        .overflow_hidden()
+                        .when(body_alpha < 1.0, |panel| {
+                            panel
+                                .relative()
+                                .top(px(6.0 * (1.0 - body_alpha)))
+                                .opacity(body_alpha)
+                        });
                     if let Some(invocation) = invocation.as_deref() {
                         panel = panel
                             .child(
@@ -8189,12 +8473,12 @@ impl Transcript {
                             .flex()
                             .items_center()
                             .text_size(crate::typography::ui_rems(TOOL_TEXT_SIZE))
-                            .text_color(theme.text_faint)
+                            .text_color(theme.content_faint)
                             .child(label);
                         if !loading {
                             row = row
                                 .cursor_pointer()
-                                .hover(|s| s.text_color(theme.text_muted))
+                                .hover(|s| s.text_color(theme.content_muted))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.spawn_blob_fetch(blob_ref.clone(), cx);
                                     cx.notify();
@@ -8488,7 +8772,7 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
                         .items_center()
                         .gap(px(8.0))
                         .text_size(crate::typography::ui_rems(11.0))
-                        .text_color(theme.text_muted)
+                        .text_color(theme.content_muted)
                         .child(crate::icons::icon(crate::icons::DANGER_TRIANGLE).size(px(13.0)))
                         .child("Run error")
                         .child(div().flex_1())
@@ -8562,14 +8846,14 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
                         .child(
                             crate::icons::icon(crate::icons::CHAT_ROUND_LINE)
                                 .size(px(12.0))
-                                .text_color(theme.text_muted),
+                                .text_color(theme.content_muted),
                         ),
                 )
                 .child(
                     div()
                         .flex_none()
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(theme.text_muted)
+                        .text_color(theme.content_muted)
                         .child(SharedString::from("Question")),
                 )
                 .child(
@@ -8673,7 +8957,7 @@ fn detail_body(
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .text_color(theme.text_faint)
+                            .text_color(theme.content_faint)
                             .child(SharedString::from(stat.path.clone())),
                     )
                     .child(
@@ -8705,12 +8989,15 @@ fn detail_body(
                 .flex()
                 .items_center()
                 .justify_between()
-                .px(px(8.0))
+                .pl(px(render::CODE_PADDING_X))
+                .pr(px(5.0))
                 .border_b_1()
-                .border_color(crate::theme::hairline(0.08))
+                .border_color(theme.border)
+                .bg(crate::theme::ink(0.02))
                 .font_family(theme.font_sans.clone())
-                .text_size(crate::typography::ui_rems(10.0))
-                .text_color(theme.text_muted)
+                .text_size(crate::typography::ui_rems(11.0))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(theme.content_muted)
                 .child(match copy.as_ref().map(|(_, ix, _)| *ix) {
                     Some(0) if invocation_is_command => "Command",
                     Some(0) => "Invocation",
@@ -8720,52 +9007,52 @@ fn detail_body(
                 let handler = copy.handler.clone();
                 let copied = copy.copied_ix == Some(ix);
                 let value = SharedString::from(raw_text.to_string());
-                header.child(
-                    div()
-                        .id(format!("{key}-copy-{ix}"))
-                        .role(gpui::Role::Button)
-                        .aria_label(match ix {
-                            0 if invocation_is_command => "Copy command",
-                            0 => "Copy invocation",
-                            _ => "Copy output",
-                        })
-                        .cursor_pointer()
-                        .hover(|s| s.text_color(theme.text))
-                        .child(if copied { "Copied" } else { "Copy" })
-                        .on_click(move |_, window, cx| {
-                            (handler)(ix, value.clone(), window, cx);
-                            cx.stop_propagation();
-                        }),
-                )
+                header.child(render::copy_action(
+                    SharedString::from(format!("{key}-copy-{ix}")),
+                    match ix {
+                        0 if invocation_is_command => "Copy command",
+                        0 => "Copy invocation",
+                        _ => "Copy output",
+                    },
+                    copied,
+                    Rc::new(move |window, cx| (handler)(ix, value.clone(), window, cx)),
+                    theme,
+                ))
             } else {
                 header
             };
             let rows = lines.len() + usize::from(*truncated_by > 0);
             let viewport = (rows as f32 * tool_code_line_height(theme) + OUTPUT_BODY_PAD)
                 .min(OUTPUT_VIEWPORT_MAX_HEIGHT);
-            body.rounded(px(7.0))
+            body.rounded(px(10.0))
                 .border_1()
-                .border_color(crate::theme::hairline(0.08))
-                .bg(crate::theme::ink(0.045))
+                .border_color(theme.border)
+                .bg(crate::theme::ink(0.035))
                 .child(header)
                 .child(
+                    // Long lines scroll sideways instead of ending in an
+                    // ellipsis: an error location must stay readable and
+                    // selectable in place.
                     div()
                         .id(scroll_id)
                         .h(px(viewport))
-                        .overflow_y_scroll()
+                        .overflow_scroll()
                         .py(px(6.0))
-                        .px(px(8.0))
+                        .px(px(render::CODE_PADDING_X))
+                        .flex()
+                        .flex_col()
+                        .items_start()
                         .font_family(theme.font_mono.clone())
                         .text_size(px(tool_code_size(theme)))
                         .children(lines.iter().map(|line| {
                             div()
                                 .h(px(tool_code_line_height(theme)))
-                                .w_full()
-                                .min_w_0()
+                                .flex_none()
                                 .flex()
                                 .items_center()
-                                .text_color(theme.text_faint)
-                                .child(div().w_full().min_w_0().truncate().child(line.clone()))
+                                .whitespace_nowrap()
+                                .text_color(theme.text)
+                                .child(line.clone())
                         }))
                         .when(*truncated_by > 0, |block| {
                             block.child(more_lines_row(*truncated_by, theme, true))
@@ -8846,8 +9133,11 @@ fn more_lines_row(truncated_by: usize, theme: &Theme, code: bool) -> gpui::Div {
             row.h(px(tool_code_line_height(theme)))
                 .text_size(px(tool_code_size(theme)))
         })
-        .text_color(theme.text_faint)
-        .child(SharedString::from(format!("… {truncated_by} more lines")))
+        .text_color(theme.content_faint)
+        .child(SharedString::from(match truncated_by {
+            1 => "… 1 more line".to_string(),
+            n => format!("… {n} more lines"),
+        }))
 }
 
 /// Shape one flattened thought line into gpui text runs — the detail-body
@@ -8874,16 +9164,16 @@ fn thought_line_text(line: &[InlineRun], theme: &Theme) -> Option<(SharedString,
         runs.push(TextRun {
             len: run.text.len(),
             font: f,
-            color: theme.text_faint,
+            color: theme.content_faint,
             background_color: None,
             underline: run.style.link.is_some().then_some(gpui::UnderlineStyle {
-                color: Some(theme.text_faint),
+                color: Some(theme.content_faint),
                 thickness: px(1.0),
                 wavy: false,
             }),
             strikethrough: run.style.strikethrough.then_some(gpui::StrikethroughStyle {
                 thickness: px(1.0),
-                color: Some(theme.text_faint),
+                color: Some(theme.content_faint),
             }),
         });
         text.push_str(&run.text);
@@ -8896,8 +9186,8 @@ fn thought_line_text(line: &[InlineRun], theme: &Theme) -> Option<(SharedString,
 
 /// The trailing tile on a chip header, when it has one.
 enum ChipTrail {
-    /// Expand/collapse chevron — flipped while the detail body is open.
-    Chevron { open: bool },
+    /// Expand/collapse chevron, rotated 0→90° with the fold's progress.
+    Chevron { progress: f32 },
     /// Top-right "opens elsewhere" arrow — the spawn chip's link to its
     /// subagent tab.
     OpenArrow,
@@ -9026,12 +9316,10 @@ fn chip_header_row(
     };
     // Text resolves its color during layout, so group-hover text needs stable
     // child IDs under the keyed, expandable header to retain hover state.
-    let hover_text = activity && trail.is_some() && !failed;
-    let tint = if failed {
-        theme.danger
-    } else {
-        theme.text_muted
-    };
+    let hover_text = activity && trail.is_some();
+    // A failure is one red glyph plus one red word, never a red row: the
+    // label and detail keep their tones so a failed step still reads.
+    let tint = theme.content_muted;
     div()
         .group("tool-header")
         .h(px(if activity {
@@ -9067,7 +9355,7 @@ fn chip_header_row(
                             tool_icon_path(&tool.call)
                         })
                         .size(px(12.0))
-                        .text_color(theme.text_muted),
+                        .text_color(theme.content_muted),
                     ),
             )
         })
@@ -9106,10 +9394,8 @@ fn chip_header_row(
                 .when(activity && detail.is_empty(), |detail| detail.hidden())
                 .items_center()
                 .truncate()
-                .text_color(if failed {
-                    theme.danger
-                } else if activity {
-                    theme.text_muted
+                .text_color(if activity {
+                    theme.content_muted
                 } else {
                     theme.text.opacity(0.85)
                 })
@@ -9125,11 +9411,7 @@ fn chip_header_row(
                         .bg(theme.ink(0.06))
                         .pl(px(1.0))
                         .pr(px(6.0))
-                        .text_color(if failed {
-                            theme.danger
-                        } else {
-                            theme.text.opacity(0.85)
-                        })
+                        .text_color(theme.text.opacity(0.85))
                         .child(
                             div()
                                 .size(px(20.0))
@@ -9184,6 +9466,19 @@ fn chip_header_row(
                     }
                 }),
         )
+        // Trailing accessories (model, status, spinner, disclosure) share one
+        // right-aligned column instead of trailing the text at a varying x.
+        .child(div().flex_1().min_w(px(4.0)))
+        .when(failed && !is_agent_tool(tool), |row| {
+            row.child(
+                div()
+                    .flex_none()
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(theme.readable_tone(theme.danger, 1.0))
+                    .child("Failed"),
+            )
+        })
         .when_some(tool.call.subagent_model(), |row, model| {
             // Which model the child runs on, when the spawn named one.
             //
@@ -9204,7 +9499,7 @@ fn chip_header_row(
                     .flex()
                     .items_center()
                     .text_size(crate::typography::ui_rems(11.0))
-                    .text_color(theme.text_faint)
+                    .text_color(theme.content_faint)
                     .child(SharedString::from(model.to_owned())),
             )
         })
@@ -9218,7 +9513,7 @@ fn chip_header_row(
                         .text_color(if failed {
                             theme.danger
                         } else {
-                            theme.text_faint
+                            theme.content_faint
                         })
                         .child(child_status_label(tool.subagent_status)),
                 )
@@ -9241,38 +9536,32 @@ fn chip_header_row(
         .when_some(trail, |row, trail| {
             // Trailing tile matching the group header's: a chevron for the
             // output/diff accordion, or the open-arrow for spawn chips.
+            // Always discoverable: half strength at rest, full under the
+            // pointer. The spawn link uses the same bare 12 px glyph.
             let tile = div()
                 .size(px(18.0))
                 .flex_none()
-                .when(activity, |tile| {
-                    tile.opacity(0.0)
-                        .group_hover("tool-header", |style| style.opacity(1.0))
-                })
-                .when(!activity, |tile| {
-                    tile.rounded(px(5.0)).bg(crate::theme::ink(0.06))
-                })
+                .opacity(0.5)
+                .group_hover("tool-header", |style| style.opacity(1.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .text_color(theme.readable_muted(0.8));
             row.child(match trail {
-                ChipTrail::Chevron { open } => tile.child(
-                    crate::icons::icon(if open {
-                        crate::icons::ALT_ARROW_DOWN
-                    } else {
-                        crate::icons::ALT_ARROW_RIGHT
-                    })
-                    .size(px(12.0))
-                    .text_color(theme.text_faint)
-                    .when(activity, |caret| {
-                        caret.group_hover("tool-header", |style| {
-                            style.text_color(if failed { theme.danger } else { theme.text })
-                        })
-                    }),
+                ChipTrail::Chevron { progress } => tile.child(
+                    crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
+                        .size(px(DISCLOSURE_CHEVRON_SIZE))
+                        .with_transformation(gpui::Transformation::rotate(gpui::radians(
+                            std::f32::consts::FRAC_PI_2 * progress,
+                        )))
+                        .text_color(theme.content_faint)
+                        .when(activity, |caret| {
+                            caret.group_hover("tool-header", |style| style.text_color(theme.text))
+                        }),
                 ),
                 ChipTrail::OpenArrow => tile.child(
                     crate::icons::icon(crate::icons::ARROW_UP_RIGHT)
-                        .size(px(11.0))
+                        .size(px(DISCLOSURE_CHEVRON_SIZE))
                         .text_color(theme.readable_muted(0.8)),
                 ),
             })
@@ -9282,12 +9571,12 @@ fn chip_header_row(
 /// The header row of an expandable chip card.
 fn chip_header(
     tool: &ToolItem,
-    open: bool,
+    progress: f32,
     theme: &Theme,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> gpui::Div {
-    chip_header_row(tool, Some(ChipTrail::Chevron { open }), theme, view, cx)
+    chip_header_row(tool, Some(ChipTrail::Chevron { progress }), theme, view, cx)
 }
 
 /// Max chars a subagent tab title keeps. The strip chip is fixed-width and
@@ -9384,7 +9673,7 @@ fn activity_rail(
     let tint = if tool.is_error {
         theme.danger
     } else {
-        theme.text_muted
+        theme.content_muted
     };
     let (incoming_reveal, branch_reveal) = tool_connector_parts(reveal, has_predecessor);
     div()
@@ -9436,6 +9725,8 @@ fn activity_rail(
         .child(
             crate::icons::icon(if tool.is_thought {
                 crate::icons::CHAT_ROUND_LINE
+            } else if tool.is_error {
+                crate::icons::CLOSE_CIRCLE
             } else {
                 tool_icon_path(&tool.call)
             })
@@ -9578,6 +9869,13 @@ fn subagent_chip(
         .child(
             div()
                 .id(id)
+                .role(gpui::Role::Button)
+                .aria_label("Open subagent transcript")
+                .tab_index(0)
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
                 .when(rail, |el| el.ml(px(12.0)))
                 .h(px(CHIP_CARD_HEIGHT))
                 .min_w_0()
@@ -9795,18 +10093,18 @@ fn trailer_action(
     activate: impl Fn(&mut Transcript, &mut Context<Transcript>) + 'static,
     cx: &mut Context<Transcript>,
 ) -> gpui::Stateful<gpui::Div> {
-    let focus_bg = theme.surface_raised;
+    let focus_ring = theme.focus_ring();
     div()
         .id(id)
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
-        .px(px(4.0))
+        .px(px(6.0))
         .rounded(px(Theme::CONTROL_RADIUS))
         .text_color(color)
         .cursor_pointer()
         .hover(|style| style.bg(crate::theme::ink(0.08)))
-        .focus_visible(move |style| style.bg(focus_bg))
+        .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
         .on_click(cx.listener(move |this, _, _, cx| activate(this, cx)))
         .on_key_down(crate::swallow_activation_key)
         .child(label)
@@ -14524,12 +14822,7 @@ mod tests {
     }
 
     #[test]
-    fn flavour_words_rotate_every_seven_seconds() {
-        let seed = flavour_seed("chat-1");
-        assert_eq!(flavour_word(seed, 0), flavour_word(seed, 6));
-        assert_ne!(flavour_word(seed, 0), flavour_word(seed, 7));
-        // Deterministic per chat; different chats usually differ in phase.
-        assert_eq!(flavour_word(seed, 3), flavour_word(seed, 3));
+    fn elapsed_formatting() {
         assert_eq!(format_elapsed(59), "59s");
         assert_eq!(format_elapsed(92), "1m 32s");
         assert_eq!(format_elapsed(-5), "0s");

@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="436" viewBox="0 0 720 436" role="img">
+<defs><clipPath id="c01after0"><rect x="64.0" y="80.0" width="110.0" height="172.0" rx="0"/></clipPath><clipPath id="c01after1"><rect x="253.0" y="80.0" width="97.0" height="172.0" rx="0"/></clipPath><clipPath id="c01after2"><rect x="482.0" y="80.0" width="44.0" height="172.0" rx="0"/></clipPath></defs>
+<rect x="0.0" y="0.0" width="720.0" height="436.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-01 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Right pane closing: content must ride out with the pane</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="60.0" width="160.0" height="196.0" rx="10" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="22.0" y="82.0" width="40.0" height="166.0" rx="8" fill="#0b0b0c" stroke="#262629" stroke-width="1"/>
+<rect x="32.0" y="100.0" width="10.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="32.0" y="122.0" width="8.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="32.0" y="144.0" width="8.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="32.0" y="166.0" width="10.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="32.0" y="188.0" width="8.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="30.0" y="222.0" width="24.0" height="20.0" rx="8" fill="#1d1d1f"/>
+<circle cx="28.0" cy="71.0" r="3" fill="#ff5f57" opacity="0.8"/>
+<circle cx="37.0" cy="71.0" r="3" fill="#febc2e" opacity="0.8"/>
+<circle cx="46.0" cy="71.0" r="3" fill="#28c840" opacity="0.8"/>
+<g clip-path="url(#c01after0)">
+<g opacity="1.0">
+<text x="70.0" y="98.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="600" fill="#e8e8ea" text-anchor="start">Agents · this conv…</text>
+<circle cx="74.0" cy="111.0" r="2.5" fill="#34d399"/>
+<rect x="81.0" y="107.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="81.0" y="116.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="74.0" cy="137.0" r="2.5" fill="#34d399"/>
+<rect x="81.0" y="133.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="81.0" y="142.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="74.0" cy="163.0" r="2.5" fill="#f87171"/>
+<rect x="81.0" y="159.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="81.0" y="168.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="74.0" cy="189.0" r="2.5" fill="#34d399"/>
+<rect x="81.0" y="185.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="81.0" y="194.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="74.0" cy="215.0" r="2.5" fill="#85858a"/>
+<rect x="81.0" y="211.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="81.0" y="220.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+</g>
+</g>
+<line x1="63.0" y1="80.0" x2="63.0" y2="250.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<text x="96.0" y="274.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a9a9ae" text-anchor="middle">0 ms</text>
+<rect x="192.0" y="60.0" width="160.0" height="196.0" rx="10" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="198.0" y="82.0" width="53.0" height="166.0" rx="8" fill="#0b0b0c" stroke="#262629" stroke-width="1"/>
+<rect x="208.0" y="100.0" width="23.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="208.0" y="122.0" width="9.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="208.0" y="144.0" width="8.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="208.0" y="166.0" width="23.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="208.0" y="188.0" width="9.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="206.0" y="222.0" width="37.0" height="20.0" rx="8" fill="#1d1d1f"/>
+<circle cx="204.0" cy="71.0" r="3" fill="#ff5f57" opacity="0.8"/>
+<circle cx="213.0" cy="71.0" r="3" fill="#febc2e" opacity="0.8"/>
+<circle cx="222.0" cy="71.0" r="3" fill="#28c840" opacity="0.8"/>
+<g clip-path="url(#c01after1)">
+<g opacity="0.8">
+<text x="259.0" y="98.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="600" fill="#e8e8ea" text-anchor="start">Agents · this conv…</text>
+<circle cx="263.0" cy="111.0" r="2.5" fill="#34d399"/>
+<rect x="270.0" y="107.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="270.0" y="116.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="263.0" cy="137.0" r="2.5" fill="#34d399"/>
+<rect x="270.0" y="133.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="270.0" y="142.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="263.0" cy="163.0" r="2.5" fill="#f87171"/>
+<rect x="270.0" y="159.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="270.0" y="168.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="263.0" cy="189.0" r="2.5" fill="#34d399"/>
+<rect x="270.0" y="185.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="270.0" y="194.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="263.0" cy="215.0" r="2.5" fill="#85858a"/>
+<rect x="270.0" y="211.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="270.0" y="220.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+</g>
+</g>
+<line x1="252.0" y1="80.0" x2="252.0" y2="250.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<text x="272.0" y="274.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a9a9ae" text-anchor="middle">16 ms</text>
+<rect x="368.0" y="60.0" width="160.0" height="196.0" rx="10" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="374.0" y="82.0" width="106.0" height="166.0" rx="8" fill="#0b0b0c" stroke="#262629" stroke-width="1"/>
+<rect x="384.0" y="100.0" width="76.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="384.0" y="122.0" width="62.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="384.0" y="144.0" width="48.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="384.0" y="166.0" width="76.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="384.0" y="188.0" width="62.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="382.0" y="222.0" width="90.0" height="20.0" rx="8" fill="#1d1d1f"/>
+<circle cx="380.0" cy="71.0" r="3" fill="#ff5f57" opacity="0.8"/>
+<circle cx="389.0" cy="71.0" r="3" fill="#febc2e" opacity="0.8"/>
+<circle cx="398.0" cy="71.0" r="3" fill="#28c840" opacity="0.8"/>
+<g clip-path="url(#c01after2)">
+<g opacity="0.12">
+<text x="488.0" y="98.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="600" fill="#e8e8ea" text-anchor="start">Agents · this conv…</text>
+<circle cx="492.0" cy="111.0" r="2.5" fill="#34d399"/>
+<rect x="499.0" y="107.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="499.0" y="116.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="492.0" cy="137.0" r="2.5" fill="#34d399"/>
+<rect x="499.0" y="133.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="499.0" y="142.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="492.0" cy="163.0" r="2.5" fill="#f87171"/>
+<rect x="499.0" y="159.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="499.0" y="168.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="492.0" cy="189.0" r="2.5" fill="#34d399"/>
+<rect x="499.0" y="185.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="499.0" y="194.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+<circle cx="492.0" cy="215.0" r="2.5" fill="#85858a"/>
+<rect x="499.0" y="211.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="499.0" y="220.0" width="52.0" height="4.0" rx="2" fill="#38383c"/>
+</g>
+</g>
+<line x1="481.0" y1="80.0" x2="481.0" y2="250.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<text x="448.0" y="274.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a9a9ae" text-anchor="middle">100 ms</text>
+<rect x="544.0" y="60.0" width="160.0" height="196.0" rx="10" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="550.0" y="82.0" width="150.0" height="166.0" rx="8" fill="#0b0b0c" stroke="#262629" stroke-width="1"/>
+<rect x="560.0" y="100.0" width="120.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="560.0" y="122.0" width="106.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="560.0" y="144.0" width="92.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="560.0" y="166.0" width="120.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="560.0" y="188.0" width="106.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="558.0" y="222.0" width="134.0" height="20.0" rx="8" fill="#1d1d1f"/>
+<circle cx="556.0" cy="71.0" r="3" fill="#ff5f57" opacity="0.8"/>
+<circle cx="565.0" cy="71.0" r="3" fill="#febc2e" opacity="0.8"/>
+<circle cx="574.0" cy="71.0" r="3" fill="#28c840" opacity="0.8"/>
+<text x="624.0" y="274.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a9a9ae" text-anchor="middle">200 ms</text>
+<rect x="253.0" y="82.0" width="97.0" height="150.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="214.0" y="284.0" width="129.5" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="221.0" y="297.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">same surface, fading</text>
+<line x1="278.8" y1="284.0" x2="278.8" y2="232.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="16.0" y="316.0" width="420.0" height="104.0" rx="8" fill="#0e0e0e" stroke="#38383c" stroke-width="1"/>
+<text x="26.0" y="332.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="start">Timeline · 0 → 200 ms</text>
+<line x1="44.0" y1="400.0" x2="424.0" y2="400.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<line x1="44.0" y1="340.0" x2="44.0" y2="400.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<text x="44.0" y="413.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">0</text>
+<text x="272.0" y="413.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">120</text>
+<text x="424.0" y="413.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">200 ms</text>
+<path d="M44.0,340.0 L44.4,340.1 L45.6,340.4 L47.6,341.0 L50.3,341.7 L53.8,342.6 L57.9,343.6 L62.7,344.9 L68.2,346.2 L74.3,347.7 L80.9,349.4 L88.2,351.1 L95.9,353.0 L104.2,354.9 L112.9,356.9 L122.2,359.0 L131.8,361.1 L141.8,363.3 L152.3,365.5 L163.0,367.8 L174.1,370.0 L185.6,372.2 L197.2,374.5 L209.2,376.7 L221.3,378.9 L233.6,381.0 L246.1,383.1 L258.8,385.1 L271.5,387.0 L284.4,388.9 L297.3,390.6 L310.2,392.3 L323.2,393.8 L336.1,395.1 L349.0,396.4 L361.8,397.4 L374.6,398.3 L387.2,399.0 L399.6,399.6 L411.9,399.9 L424.0,400.0" fill="none" stroke="#a9a9ae" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M44.0,340.0 L48.2,340.5 L52.2,341.2 L56.0,342.1 L59.6,343.1 L63.1,344.3 L66.6,345.6 L69.9,347.0 L73.2,348.5 L76.4,350.2 L79.6,351.9 L82.8,353.7 L86.1,355.6 L89.3,357.6 L92.7,359.6 L96.1,361.6 L99.6,363.7 L103.3,365.8 L107.1,368.0 L111.1,370.1 L115.2,372.2 L119.6,374.4 L124.3,376.5 L129.1,378.6 L134.3,380.6 L139.7,382.6 L145.5,384.5 L151.6,386.4 L158.1,388.2 L165.0,389.9 L172.2,391.5 L179.9,393.0 L188.1,394.3 L196.7,395.6 L205.8,396.7 L215.4,397.7 L225.6,398.5 L236.3,399.1 L247.6,399.6 L259.5,399.9 L272.0,400.0 L424.0,400.0" fill="none" stroke="#30D158" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="426.0" y="332.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="end">content opacity 120 ms</text>
+<text x="299.1" y="332.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#a9a9ae" text-anchor="end">pane width 200 ms</text>
+<text x="452.0" y="338.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">closing_surface: Option&lt;RightSurface&gt;</text>
+<text x="452.0" y="356.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">frozen at close start, cleared when the</text>
+<text x="452.0" y="374.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">right_tween ends. Content opacity 1 → 0</text>
+<text x="452.0" y="392.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">over the first 120 ms (FADE_QUICK);</text>
+<text x="452.0" y="410.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">open: 0 → 1 over 150 ms, 50 ms delay.</text>
+</svg>

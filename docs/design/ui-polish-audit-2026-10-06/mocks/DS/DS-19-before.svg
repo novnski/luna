@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="380" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-19 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">16–18 pt click targets</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Clickable elements whose own box is smaller than 20 pt (hit area = visual box)</text>
+<rect x="30" y="110" width="44" height="44" rx="8" fill="none" stroke="#333" stroke-width="1" stroke-dasharray="3 3" />
+<rect x="44.0" y="124.0" width="16" height="16" rx="4" fill="#ffffff14" stroke="#FF453A" stroke-width="1.2" />
+<svg x="46" y="126" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="52" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">comment remove</text>
+<text x="52" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="middle">16×16</text>
+<text x="52" y="204" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="8.5" font-weight="400" fill="#737373" text-anchor="middle">comment_ui.rs:113</text>
+<rect x="162" y="110" width="44" height="44" rx="8" fill="none" stroke="#333" stroke-width="1" stroke-dasharray="3 3" />
+<rect x="176.0" y="124.0" width="16" height="16" rx="4" fill="#ffffff14" stroke="#FF453A" stroke-width="1.2" />
+<svg x="178" y="126" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="184" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">history search ✕</text>
+<text x="184" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="middle">16×16</text>
+<text x="184" y="204" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="8.5" font-weight="400" fill="#737373" text-anchor="middle">history.rs:1781</text>
+<rect x="294" y="110" width="44" height="44" rx="8" fill="none" stroke="#333" stroke-width="1" stroke-dasharray="3 3" />
+<rect x="308.0" y="124.0" width="16" height="16" rx="4" fill="#ffffff14" stroke="#FF453A" stroke-width="1.2" />
+<svg x="310" y="126" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="316" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">file preview</text>
+<text x="316" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="middle">16×16</text>
+<text x="316" y="204" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="8.5" font-weight="400" fill="#737373" text-anchor="middle">files/preview.rs:3009</text>
+<rect x="426" y="110" width="44" height="44" rx="8" fill="none" stroke="#333" stroke-width="1" stroke-dasharray="3 3" />
+<rect x="439.0" y="123.0" width="18" height="18" rx="4" fill="#ffffff14" stroke="#FF453A" stroke-width="1.2" />
+<svg x="442" y="126" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="448" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">failure dismiss</text>
+<text x="448" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="middle">18×18</text>
+<text x="448" y="204" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="8.5" font-weight="400" fill="#737373" text-anchor="middle">workbench/render.rs:1750</text>
+<rect x="558" y="110" width="44" height="44" rx="8" fill="none" stroke="#333" stroke-width="1" stroke-dasharray="3 3" />
+<rect x="571.0" y="123.0" width="18" height="18" rx="4" fill="#ffffff14" stroke="#FF453A" stroke-width="1.2" />
+<svg x="574" y="126" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="580" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">browser go</text>
+<text x="580" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#FF453A" text-anchor="middle">18×18</text>
+<text x="580" y="204" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="8.5" font-weight="400" fill="#737373" text-anchor="middle">browser/view.rs:471</text>
+<text x="40" y="250" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">dashed = 44 pt (touch) reference · red = actual hit box</text>
+<rect x="40" y="270" width="642" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="47" y="284" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">Fitts: at 200 pt travel a 16 pt target is ≈16% slower than 24 pt and much easier to miss on a trackpad</text>
+<text x="16" y="368" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">heuristic scan of .id + .on_click + .size(px(&lt;20)); toolbar CONTROL_SIZE 24 is fine</text>
+</svg>

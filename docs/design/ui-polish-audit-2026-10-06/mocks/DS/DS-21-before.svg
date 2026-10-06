@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="380" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-21 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">One glyph, many meanings</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Settings icons from appearance.rs / shell.rs:8446 (row tiles and the Settings rail)</text>
+<rect x="24" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="86" y="108" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="96" y="118" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 14.5a3 3 0 1 1 6 0a3 3 0 0 1-6 0Zm-10-5a3 3 0 1 0 6 0a3 3 0 0 0-6 0Z"/><path stroke-linecap="round" d="M16.959 9V2m-10 13v7m10 0v-2m-10-18v2"/></g></g></svg>
+<text x="104" y="162" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Accent color</text>
+<text x="104" y="176" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">appearance.rs:3465</text>
+<rect x="196" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="258" y="108" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="268" y="118" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 14.5a3 3 0 1 1 6 0a3 3 0 0 1-6 0Zm-10-5a3 3 0 1 0 6 0a3 3 0 0 0-6 0Z"/><path stroke-linecap="round" d="M16.959 9V2m-10 13v7m10 0v-2m-10-18v2"/></g></g></svg>
+<text x="276" y="162" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Background effect</text>
+<text x="276" y="176" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">:3639</text>
+<rect x="368" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="430" y="108" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="440" y="118" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 14.5a3 3 0 1 1 6 0a3 3 0 0 1-6 0Zm-10-5a3 3 0 1 0 6 0a3 3 0 0 0-6 0Z"/><path stroke-linecap="round" d="M16.959 9V2m-10 13v7m10 0v-2m-10-18v2"/></g></g></svg>
+<text x="448" y="162" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Diff colors</text>
+<text x="448" y="176" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">:3898</text>
+<rect x="540" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="602" y="108" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="612" y="118" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 14.5a3 3 0 1 1 6 0a3 3 0 0 1-6 0Zm-10-5a3 3 0 1 0 6 0a3 3 0 0 0-6 0Z"/><path stroke-linecap="round" d="M16.959 9V2m-10 13v7m10 0v-2m-10-18v2"/></g></g></svg>
+<text x="620" y="162" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Reset appearance</text>
+<text x="620" y="176" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">:3914</text>
+<rect x="24" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="86" y="218" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="96" y="228" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 14.5a3 3 0 1 1 6 0a3 3 0 0 1-6 0Zm-10-5a3 3 0 1 0 6 0a3 3 0 0 0-6 0Z"/><path stroke-linecap="round" d="M16.959 9V2m-10 13v7m10 0v-2m-10-18v2"/></g></g></svg>
+<text x="104" y="272" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Appearance (rail)</text>
+<text x="104" y="286" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">shell.rs:8450</text>
+<rect x="196" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="258" y="218" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="268" y="228" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g fill="none"><g stroke="currentColor" stroke-width="1.5" stroke-linecap="square">
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M9 20C10.7956 20 12.25 18.5456 12.25 16.75C12.25 14.9544 10.7956 13.5 9 13.5C7.20438 13.5 5.75 14.9544 5.75 16.75C5.75 18.5456 7.20438 20 9 20Z"/>
+    <path fill-rule="evenodd" clip-rule="evenodd" d="M15 10.5C16.7956 10.5 18.25 9.04562 18.25 7.25C18.25 5.45438 16.7956 4 15 4C13.2044 4 11.75 5.45438 11.75 7.25C11.75 9.04562 13.2044 10.5 15 10.5Z"/>
+    <path d="M11.5 7.25H3.75M5.5 16.75H3.75M20.25 7.25H18.5M20.25 16.75H12.5"/>
+  </g>
+</g></svg>
+<text x="276" y="272" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">General (rail)</text>
+<text x="276" y="286" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">shell.rs:8446</text>
+<rect x="368" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="430" y="218" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="440" y="228" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g fill="none"><path d="M4 6H20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M4 10H17C18.6569 10 20 11.3431 20 13C20 14.6569 18.6569 16 17 16H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 13L9 16L12 19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M4 20H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="448" y="272" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Chat code wrapping</text>
+<text x="448" y="286" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">:3770</text>
+<rect x="540" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="602" y="218" width="36" height="36" rx="10" fill="#101010" stroke="#FF453A" stroke-width="1" />
+<svg x="612" y="228" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g fill="none"><path d="M4 6H20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M4 10H17C18.6569 10 20 11.3431 20 13C20 14.6569 18.6569 16 17 16H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 13L9 16L12 19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M4 20H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="620" y="272" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Diff wrapping</text>
+<text x="620" y="286" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9" font-weight="400" fill="#737373" text-anchor="middle">:3792</text>
+<rect x="24" y="330" width="605" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="31" y="344" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">sliders ×5 for colour, effect, reset and the page itself; two slider glyphs adjacent in the rail</text>
+<text x="16" y="368" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">icons should name the thing, not ‘a setting’</text>
+</svg>

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-02 · Disclosure chevrons: 3 sizes, 2 behaviours, hidden</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<g transform="translate(29.5,46.0) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="52" y="57.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Ran 2 commands · read 1 file</text>
+<line x1="36.5" y1="68" x2="36.5" y2="78.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 78.0 Q36.5 84.0 42.5 84.0 L52 84.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="36.5" y1="78.0" x2="36.5" y2="100" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(56,76.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="4"/><path d="M7.5 10l2.5 2-2.5 2M12.5 15h4"/></g>
+<text x="80" y="88.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Run</text>
+<text x="107.8" y="88.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">cargo build --locked</text>
+<line x1="36.5" y1="100" x2="36.5" y2="110.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 110.0 Q36.5 116.0 42.5 116.0 L52 116.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="36.5" y1="110.0" x2="36.5" y2="132" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(56,108.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H8a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3V8z"/><path d="M14 3v3a2 2 0 0 0 2 2h3M9 13h6M9 17h4"/></g>
+<text x="80" y="120.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Read</text>
+<text x="114.4" y="120.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">transcript.rs</text>
+<g transform="translate(204.64000000000001,110.0) scale(0.5000)" fill="none" stroke="#CCCCCE" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round" opacity="1.0"><path d="M9 5.5l6.5 6.5L9 18.5"/></g>
+<line x1="36.5" y1="132" x2="36.5" y2="142.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 142.0 Q36.5 148.0 42.5 148.0 L52 148.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(56,140.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="4"/><path d="M7.5 10l2.5 2-2.5 2M12.5 15h4"/></g>
+<text x="80" y="152.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Run</text>
+<text x="107.8" y="152.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">cargo test</text>
+<text x="264" y="120" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#77777E" text-anchor="start" font-style="italic">(hovered)</text>
+<rect x="229.5" y="75.5" width="19" height="17" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="169.5" y="139.5" width="19" height="17" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="24" y="180" width="440" height="30" rx="9" fill="#0F0F0F" stroke="#202020" stroke-width="1"/>
+<rect x="32" y="186" width="18" height="18" rx="5" fill="#1B1B1B"/>
+<g transform="translate(35,189) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5M2 13v3M22 13v3"/><circle cx="9" cy="13.5" r="0.8"/><circle cx="15" cy="13.5" r="0.8"/></g>
+<text x="58" y="199.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#C9C9CC" text-anchor="start">Agent</text>
+<text x="96.9" y="199.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#D4D4D6" text-anchor="start">Map the parser</text>
+<rect x="438" y="186" width="18" height="18" rx="5" fill="#161616"/>
+<g transform="translate(441.5,189.5) scale(0.4583)" fill="none" stroke="#C9C9CC" stroke-width="2.73" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 16.5l9-9M9 7.5h7.5V15"/></g>
+<text x="430" y="199" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">Done</text>
+<text x="400.0" y="199" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">haiku</text>
+<rect x="435.5" y="183.5" width="23" height="23" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="27.5" y="43.5" width="19" height="19" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<path d="M486 18 L36.5 18 L36.5 44" fill="none" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="36.5" cy="44" r="2.6" fill="#FF453A"/>
+<rect x="486" y="4" width="222" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="494" y="20" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Group header: 14 px chevron, leading,</text>
+<text x="494" y="35" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">ROTATES (transcript.rs:7987)</text>
+<line x1="486" y1="84" x2="248.0" y2="84" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="248.0" cy="84" r="2.6" fill="#FF453A"/>
+<rect x="486" y="80" width="222" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="494" y="96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Tool rows: 12 px, trailing after the</text>
+<text x="494" y="111" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">text; glyph SWAP right↔down; opacity</text>
+<text x="494" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">0 until hover (:9249-9270)</text>
+<line x1="486" y1="195" x2="458" y2="195" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="458" cy="195" r="2.6" fill="#FF453A"/>
+<rect x="486" y="186" width="222" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="494" y="202" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Agent card: 11 px arrow in an 18 px</text>
+<text x="494" y="217" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">filled tile — a third treatment</text>
+<rect x="24" y="236" width="440" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="32" y="252" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Rows 1 and 3 expand too, but nothing says so: hover or keyboard focus is</text>
+<text x="32" y="267" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">the only way to discover the disclosure.</text>
+</g>
+</svg>

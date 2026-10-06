@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="420.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-12 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Empty / loading / error: one surface_state recipe</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="56.0" width="216.0" height="136.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="22.0" y="62.0" width="204.0" height="18.0" rx="5" fill="#1d1d1f"/>
+<text x="22.0" y="206.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#8e8e93" text-anchor="start">Files · loading</text>
+<rect x="252.0" y="56.0" width="216.0" height="136.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="258.0" y="62.0" width="204.0" height="18.0" rx="5" fill="#1d1d1f"/>
+<text x="258.0" y="206.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#8e8e93" text-anchor="start">Diff · preparing</text>
+<rect x="488.0" y="56.0" width="216.0" height="136.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="494.0" y="62.0" width="204.0" height="18.0" rx="5" fill="#1d1d1f"/>
+<text x="494.0" y="206.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#8e8e93" text-anchor="start">Browser · empty</text>
+<rect x="16.0" y="230.0" width="216.0" height="136.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="22.0" y="236.0" width="204.0" height="18.0" rx="5" fill="#1d1d1f"/>
+<text x="22.0" y="380.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#8e8e93" text-anchor="start">Terminal · no chat</text>
+<rect x="252.0" y="230.0" width="216.0" height="136.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="258.0" y="236.0" width="204.0" height="18.0" rx="5" fill="#1d1d1f"/>
+<text x="258.0" y="380.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#8e8e93" text-anchor="start">Automations · loading</text>
+<rect x="488.0" y="230.0" width="216.0" height="136.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="494.0" y="236.0" width="204.0" height="18.0" rx="5" fill="#1d1d1f"/>
+<text x="494.0" y="380.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#8e8e93" text-anchor="start">Files · error</text>
+<circle cx="310.0" cy="136.0" r="6" fill="none" stroke="#a9a9ae" stroke-width="1.8" opacity="0.25"/>
+<path d="M310.0,130.0 A6,6 0 0 1 316.0,136.0" fill="none" stroke="#a9a9ae" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="322.0" y="140.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#85858a" text-anchor="start">Preparing diff…</text>
+<rect x="580.0" y="90.0" width="32.0" height="32.0" rx="9" fill="#1f1f22" stroke="#38383c" stroke-width="1"/>
+<circle cx="596.0" cy="106.0" r="6.84" fill="none" stroke="#a9a9ae" stroke-width="1.3"/>
+<path d="M589.2,106.0 H602.8" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M596.0,99.2 C591.5,103.3 591.5,108.7 596.0,112.8 C600.5,108.7 600.5,103.3 596.0,99.2" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="596.0" y="140.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e8e8ea" text-anchor="middle">No preview running</text>
+<text x="596.0" y="155.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="middle">Start a dev server to see it here.</text>
+<rect x="554.0" y="162.0" width="84.0" height="22.0" rx="6" fill="#2c2c30" stroke="#38383c" stroke-width="1"/>
+<text x="596.0" y="177.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#e8e8ea" text-anchor="middle">Open URL…</text>
+<text x="124.0" y="310.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#85858a" text-anchor="middle">Select a chat to open a terminal</text>
+<text x="264.0" y="274.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#a9a9ae" text-anchor="start">Runs on this device while LUNA is open…</text>
+<text x="264.0" y="292.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#a9a9ae" text-anchor="start">Loading…</text>
+<text x="596.0" y="300.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="middle">Could not list workspace files.</text>
+<rect x="568.0" y="312.0" width="56.0" height="26.0" rx="7" fill="#232325" stroke="#38383c" stroke-width="1"/>
+<text x="596.0" y="329.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="middle">Retry</text>
+<rect x="18.0" y="84.0" width="212.0" height="104.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="40.0" y="392.0" width="123.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="47.0" y="405.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">blank while loading</text>
+<line x1="101.9" y1="392.0" x2="101.9" y2="188.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="200.0" y="392.0" width="256.6" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="207.0" y="405.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">only Diff spins · Loading… text in 4 sizes</text>
+<rect x="480.0" y="392.0" width="210.4" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="487.0" y="405.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">buttons 28 h r7 / r6+border / none</text>
+</svg>

@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="434" viewBox="0 0 720 434">
+<rect width="720" height="434" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-07 · Four left edges inside one reply (drawn at 1.5×)</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1.5× zoom of 1x px</text>
+<g transform="translate(0,34)">
+<g transform="translate(24,40) scale(1.5)">
+<text x="0" y="15" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Delegating.</text>
+<rect x="0" y="30" width="300" height="30" rx="9" fill="#0F0F0F" stroke="#202020" stroke-width="1"/>
+<rect x="8" y="36" width="18" height="18" rx="5" fill="#1B1B1B"/>
+<g transform="translate(11,39) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5M2 13v3M22 13v3"/><circle cx="9" cy="13.5" r="0.8"/><circle cx="15" cy="13.5" r="0.8"/></g>
+<text x="34" y="49.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#C9C9CC" text-anchor="start">Agent</text>
+<text x="72.9" y="49.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#D4D4D6" text-anchor="start">Map the parser</text>
+<rect x="274" y="36" width="18" height="18" rx="5" fill="#161616"/>
+<g transform="translate(277.5,39.5) scale(0.4583)" fill="none" stroke="#C9C9CC" stroke-width="2.73" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 16.5l9-9M9 7.5h7.5V15"/></g>
+<text x="266" y="49" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">Done</text>
+<text x="236.0" y="49" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">haiku</text>
+<g transform="translate(6.5,83) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="28" y="93.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">1 hook</text>
+<line x1="12.5" y1="104" x2="12.5" y2="114.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M12.5 114.0 Q12.5 120.0 18.5 120.0 L28 120.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(32,112.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="56" y="124.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Hook</text>
+<text x="90.4" y="124.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">PreToolUse · Read</text>
+<rect x="56" y="137" width="244" height="56" rx="7" fill="#131313" stroke="#232323" stroke-width="1"/>
+<line x1="56" y1="163" x2="300" y2="163" stroke="#232323" stroke-width="1" stroke-linecap="butt"/>
+<text x="64" y="153.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="start">Output</text>
+<text x="292" y="153.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="end">Copy</text>
+<text x="64" y="182" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">checking</text>
+<text x="0" y="219" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Two watchers launched.</text>
+</g>
+<line x1="24.0" y1="22" x2="24.0" y2="330" stroke="#FF453A" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3" opacity="0.75"/>
+<text x="24.0" y="16" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#FF453A" text-anchor="middle">0</text>
+<line x1="66.0" y1="22" x2="66.0" y2="330" stroke="#FF453A" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3" opacity="0.75"/>
+<text x="64.0" y="16" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#FF453A" text-anchor="end">28</text>
+<line x1="72.0" y1="22" x2="72.0" y2="330" stroke="#FF453A" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3" opacity="0.75"/>
+<text x="74.0" y="16" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#FF453A" text-anchor="start">32</text>
+<line x1="108.0" y1="22" x2="108.0" y2="330" stroke="#FF453A" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3" opacity="0.75"/>
+<text x="108.0" y="16" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#FF453A" text-anchor="middle">56</text>
+<line x1="500" y1="130" x2="66.0" y2="173.5" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="66.0" cy="173.5" r="2.6" fill="#FF453A"/>
+<rect x="500" y="60" width="210" height="70" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="508" y="76" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Header title x = 28 (22 px chevron</text>
+<text x="508" y="91" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">box + 6 px gap, transcript.rs:7980)</text>
+<text x="508" y="106" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">sits 4 px LEFT of the glyph column</text>
+<text x="508" y="121" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">x = 32 (ACTIVITY_ICON_LEFT)</text>
+<line x1="500" y1="223" x2="108.0" y2="250.0" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="108.0" cy="250.0" r="2.6" fill="#FF453A"/>
+<rect x="500" y="168" width="210" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="508" y="184" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Prose + agent cards at 0, labels +</text>
+<text x="508" y="199" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">detail panels at 56: four competing</text>
+<text x="508" y="214" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">edges inside 56 px</text>
+</g>
+</svg>

@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="464" viewBox="0 0 720 464">
+<defs><clipPath id="vp1212"><rect x="18" y="36" width="148" height="134" rx="6"/></clipPath><clipPath id="vp18812"><rect x="194" y="36" width="148" height="134" rx="6"/></clipPath><clipPath id="vp36412"><rect x="370" y="36" width="148" height="134" rx="6"/></clipPath><clipPath id="vp54012"><rect x="546" y="36" width="148" height="134" rx="6"/></clipPath></defs>
+<rect width="720" height="464" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-17 · Icon pill, graceful exit, 320 ms decisive glide</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="12" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="22" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 0 (click)</text>
+<g clip-path="url(#vp1212)">
+<rect x="18" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="28" y="42" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="64" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="86" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="108" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="130" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="152" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="174" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="196" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="218" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="240" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="262" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="284" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="306" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="328" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="350" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="372" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<g opacity="1.0">
+<rect x="42" y="124" width="100" height="20" rx="10" fill="#1C1C1E" stroke="#2E2E33" stroke-width="1"/>
+<g transform="translate(52,129) scale(0.4167)" fill="none" stroke="#ABABB0" stroke-width="3.00" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5v15M6 13.5l6 6 6-6"/></g>
+<text x="98" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#E8E8EA" text-anchor="middle">Scroll to bottom</text>
+</g>
+<text x="22" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">pill visible</text>
+<rect x="188" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="198" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 60 ms</text>
+<g clip-path="url(#vp18812)">
+<rect x="194" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="204" y="-80.9126007476649" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="-58.9126007476649" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="-36.9126007476649" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="-14.912600747664897" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="7.0873992523351035" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="29.087399252335103" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="51.0873992523351" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="73.0873992523351" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="95.0873992523351" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="117.0873992523351" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="139.0873992523351" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="161.0873992523351" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="183.0873992523351" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="205.0873992523351" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="227.0873992523351" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="249.0873992523351" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<g opacity="0.5">
+<rect x="218" y="124" width="100" height="20" rx="10" fill="#1C1C1E" stroke="#2E2E33" stroke-width="1"/>
+<g transform="translate(228,129) scale(0.4167)" fill="none" stroke="#ABABB0" stroke-width="3.00" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5v15M6 13.5l6 6 6-6"/></g>
+<text x="274" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#E8E8EA" text-anchor="middle">Scroll to bottom</text>
+</g>
+<text x="198" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">pill fading + 4 px drop</text>
+<rect x="364" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="374" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 160 ms</text>
+<g clip-path="url(#vp36412)">
+<rect x="370" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="380" y="-140.66268408282036" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-118.66268408282036" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-96.66268408282036" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-74.66268408282036" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-52.66268408282036" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-30.662684082820363" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-8.662684082820363" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="13.337315917179637" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="35.33731591717964" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="57.33731591717964" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="79.33731591717964" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="101.33731591717964" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="123.33731591717964" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="145.33731591717964" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="167.33731591717964" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="189.33731591717964" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<text x="374" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">96% of distance</text>
+<rect x="540" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="550" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 320 ms</text>
+<g clip-path="url(#vp54012)">
+<rect x="546" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="556" y="-148.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-126.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-104.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-82.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-60.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-38.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-16.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="6.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="28.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="50.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="72.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="94.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="116.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="138.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="160.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="182.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<text x="550" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">settled</text>
+<rect x="12" y="210" width="340" height="150" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<line x1="26" y1="334" x2="338" y2="334" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<line x1="26" y1="334" x2="26" y2="236" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<polyline points="26.0,334.0 31.2,326.7 36.4,319.7 41.6,312.9 46.8,306.5 52.0,300.4 57.2,294.7 62.4,289.3 67.6,284.3 72.8,279.7 78.0,275.4 83.2,271.5 88.4,268.0 93.6,264.7 98.8,261.7 104.0,259.0 109.2,256.6 114.4,254.4 119.6,252.4 124.8,250.7 130.0,249.1 135.2,247.6 140.4,246.3 145.6,245.2 150.8,244.1 156.0,243.2 161.2,242.3 166.4,241.6 171.6,240.9 176.8,240.3 182.0,239.8 187.2,239.3 192.4,238.9 197.6,238.5 202.8,238.2 208.0,237.9 213.2,237.6 218.4,237.4 223.6,237.2 228.8,237.0 234.0,236.8 239.2,236.7 244.4,236.6 249.6,236.5 254.8,236.4 260.0,236.3 265.2,236.2 270.4,236.2 275.6,236.1 280.8,236.1 286.0,236.1 291.2,236.1 296.4,236.0 301.6,236.0 306.8,236.0 312.0,236.0 317.2,236.0 322.4,236.0 327.6,236.0 332.8,236.0 338.0,236.0" fill="none" stroke="#30D158" stroke-width="2"/>
+<circle cx="26" cy="333.9999999999999" r="2.8" fill="#30D158"/>
+<circle cx="182.0" cy="239.78451031517687" r="2.8" fill="#30D158"/>
+<circle cx="338" cy="236.0" r="2.8" fill="#30D158"/>
+<text x="22" y="226" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Jump glide: 320 ms · EASE_OUT_QUINT (0.22, 1, 0.36, 1)</text>
+<text x="22" y="351" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="start">≤ 2.5 viewports; streaming keeps the spring for growth</text>
+<text x="338" y="345" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#9A9AA0" text-anchor="end">320 ms</text>
+<rect x="368" y="210" width="340" height="150" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<text x="380" y="230" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Pill</text>
+<rect x="392" y="248" width="150" height="30" rx="15" fill="#1C1C1E" stroke="#2E2E33" stroke-width="1"/>
+<g transform="translate(404,256) scale(0.5833)" fill="none" stroke="#ABABB0" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5v15M6 13.5l6 6 6-6"/></g>
+<text x="424" y="268" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#E8E8EA" text-anchor="start">Scroll to bottom</text>
+<text x="380" y="300" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9F5D4" text-anchor="start">• Solar arrow-down 14 px (icons::ARROW_DOWN exists)</text>
+<text x="380" y="318" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9F5D4" text-anchor="start">• exit: 120 ms fade + 4 px drop (menu_out pattern)</text>
+<text x="380" y="336" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9F5D4" text-anchor="start">• role Button, aria "Scroll to bottom", focus ring</text>
+</g>
+</svg>

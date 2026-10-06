@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="430" viewBox="0 0 720 430" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="430" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-06 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Switches and selections snap; the switch is off-brand</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">settings/widgets.rs:417 toggle_switch — knob left = if on {16} else {2}; no transition</text>
+<text x="24" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Frame-by-frame after a click</text>
+<rect x="24" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="60" y="139" width="32" height="18" rx="9.0" fill="#2a2a2a" />
+<circle cx="69.0" cy="148.0" r="7.0" fill="#b3b3b3"/>
+<text x="76" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">0 ms</text>
+<rect x="144" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="180" y="139" width="32" height="18" rx="9.0" fill="#2a2a2a" />
+<circle cx="189.0" cy="148.0" r="7.0" fill="#b3b3b3"/>
+<text x="196" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">8 ms</text>
+<rect x="264" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="300" y="139" width="32" height="18" rx="9.0" fill="#e5e5e5" />
+<circle cx="323.0" cy="148.0" r="7.0" fill="#0e0e0e"/>
+<text x="316" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">16 ms</text>
+<rect x="384" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="420" y="139" width="32" height="18" rx="9.0" fill="#e5e5e5" />
+<circle cx="443.0" cy="148.0" r="7.0" fill="#0e0e0e"/>
+<text x="436" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">100 ms</text>
+<rect x="504" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="540" y="139" width="32" height="18" rx="9.0" fill="#e5e5e5" />
+<circle cx="563.0" cy="148.0" r="7.0" fill="#0e0e0e"/>
+<text x="556" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">200 ms</text>
+<circle cx="318" cy="148" r="3.5" fill="#FF453A"/>
+<line x1="318" y1="148" x2="420" y2="228" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="420" y="218" width="217" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="427" y="232" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">knob teleports 14 pt in one frame</text>
+<circle cx="436" cy="148" r="3.5" fill="#FF453A"/>
+<line x1="436" y1="148" x2="40" y2="250" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="40" y="240" width="266" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="47" y="254" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">on = white track (theme.text), not accent</text>
+<text x="24" y="280" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Same snap: segmented options, accent swatches, option cards, Glass chips</text>
+<rect x="24" y="296" width="96" height="30" rx="7" fill="#26223d" stroke="#8b7cf6" stroke-width="1" />
+<text x="72" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#8b7cf6" text-anchor="middle">Theme default</text>
+<rect x="128" y="296" width="96" height="30" rx="7" fill="#1a1a1a" stroke="#2e2e2e" stroke-width="1" />
+<text x="176" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e5e5e5" text-anchor="middle">Frosted</text>
+<rect x="232" y="296" width="96" height="30" rx="7" fill="#1a1a1a" stroke="#2e2e2e" stroke-width="1" />
+<text x="280" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e5e5e5" text-anchor="middle">Opaque</text>
+<path d="M340 311 L380 311" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M374 306 L381 311 L374 316" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="392" y="296" width="96" height="30" rx="7" fill="#1a1a1a" stroke="#2e2e2e" stroke-width="1" />
+<text x="440" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e5e5e5" text-anchor="middle">Theme default</text>
+<rect x="496" y="296" width="96" height="30" rx="7" fill="#26223d" stroke="#8b7cf6" stroke-width="1" />
+<text x="544" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#8b7cf6" text-anchor="middle">Frosted</text>
+<rect x="600" y="296" width="96" height="30" rx="7" fill="#1a1a1a" stroke="#2e2e2e" stroke-width="1" />
+<text x="648" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e5e5e5" text-anchor="middle">Opaque</text>
+<text x="360" y="346" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="middle">0 ms — border, fill and text color swap instantly</text>
+<text x="16" y="418" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">15 toggle_switch call sites · 0 of them animate · 32×18 track, 14 pt knob</text>
+</svg>

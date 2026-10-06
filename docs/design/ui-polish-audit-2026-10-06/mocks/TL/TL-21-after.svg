@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-21 · Fade the last line, rotate the chevron, make it focusable</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="180" y="16" width="480" height="160" rx="16" fill="#1C1C1C"/>
+<defs><linearGradient id="fadeB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1C1C1C" stop-opacity="0"/><stop offset="1" stop-color="#1C1C1C"/></linearGradient></defs>
+<text x="196" y="42" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Here is the full log from the failing run:</text>
+<text x="196" y="64" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">error[E0599]: no method named `ease` found</text>
+<text x="196" y="86" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">  --&gt; crates/ui/src/transcript.rs:7991:14</text>
+<text x="196" y="108" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">   |</text>
+<text x="196" y="130" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">7991 |     .with_transformation(rotate(ease(t)))</text>
+<rect x="182" y="107.4" width="476" height="30" rx="0" fill="url(#fadeB)"/>
+<rect x="190" y="145" width="96" height="22" rx="6" fill="none" stroke="#7C86FF" stroke-width="2"/>
+<text x="196" y="160" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#ABABB0" text-anchor="start">Show more</text>
+<g transform="translate(261.255,150) scale(0.5000)" fill="none" stroke="#ABABB0" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<line x1="166" y1="95" x2="210" y2="120.6" stroke="#30D158" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="210" cy="120.6" r="2.6" fill="#30D158"/>
+<rect x="16" y="40" width="150" height="55" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="24" y="56" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">28 px gradient mask to</text>
+<text x="24" y="71" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">the bubble fill over the</text>
+<text x="24" y="86" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">5th line; no extra line</text>
+<line x1="166" y1="155" x2="192" y2="155" stroke="#30D158" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="192" cy="155" r="2.6" fill="#30D158"/>
+<rect x="16" y="150" width="150" height="70" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="24" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">13 px secondary label; 12</text>
+<text x="24" y="181" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">px chevron rotates 180° on</text>
+<text x="24" y="196" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">DISCLOSURE; tab_index(0)</text>
+<text x="24" y="211" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">+ focus ring (shown)</text>
+</g>
+</svg>

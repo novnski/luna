@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="380.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-11 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Disclosure chevrons: one rotating glyph everywhere</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<text x="16.0" y="70.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#30D158" text-anchor="start">disclosure_chevron(id, progress) · 12 px · readable_faint(0.8) · COLLAPSE 180 ms ease-out</text>
+<rect x="16.0" y="86.0" width="126.0" height="70.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M47.2,109.8 L58.4,121.0 L47.2,132.2" fill="none" stroke="#a9a9ae" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(0 52.0 121.0)"/>
+<rect x="80.0" y="117.0" width="48.0" height="8.0" rx="3" fill="#38383c"/>
+<text x="79.0" y="174.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="middle">0 ms · 0°</text>
+<rect x="154.0" y="86.0" width="126.0" height="70.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M185.2,109.8 L196.4,121.0 L185.2,132.2" fill="none" stroke="#a9a9ae" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(34 190.0 121.0)"/>
+<rect x="218.0" y="117.0" width="48.0" height="8.0" rx="3" fill="#38383c"/>
+<text x="217.0" y="174.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="middle">45 ms · 34°</text>
+<rect x="292.0" y="86.0" width="126.0" height="70.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M323.2,109.8 L334.4,121.0 L323.2,132.2" fill="none" stroke="#a9a9ae" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(62 328.0 121.0)"/>
+<rect x="356.0" y="117.0" width="48.0" height="8.0" rx="3" fill="#38383c"/>
+<text x="355.0" y="174.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="middle">90 ms · 62°</text>
+<rect x="430.0" y="86.0" width="126.0" height="70.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M461.2,109.8 L472.4,121.0 L461.2,132.2" fill="none" stroke="#a9a9ae" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(81 466.0 121.0)"/>
+<rect x="494.0" y="117.0" width="48.0" height="8.0" rx="3" fill="#38383c"/>
+<text x="493.0" y="174.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="middle">135 ms · 81°</text>
+<rect x="568.0" y="86.0" width="126.0" height="70.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<path d="M599.2,109.8 L610.4,121.0 L599.2,132.2" fill="none" stroke="#a9a9ae" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(90 604.0 121.0)"/>
+<rect x="632.0" y="117.0" width="48.0" height="8.0" rx="3" fill="#38383c"/>
+<text x="631.0" y="174.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="middle">180 ms · 90°</text>
+<rect x="16.0" y="196.0" width="420.0" height="150.0" rx="8" fill="#0e0e0e" stroke="#38383c" stroke-width="1"/>
+<text x="26.0" y="212.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="start">COLLAPSE · 180 ms ease-out</text>
+<line x1="44.0" y1="326.0" x2="424.0" y2="326.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<line x1="44.0" y1="220.0" x2="44.0" y2="326.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<text x="44.0" y="339.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">0</text>
+<text x="234.0" y="339.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">90</text>
+<text x="424.0" y="339.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">180 ms</text>
+<path d="M44.0,326.0 L44.4,325.8 L45.6,325.2 L47.6,324.3 L50.3,323.0 L53.8,321.4 L57.9,319.6 L62.7,317.4 L68.2,315.0 L74.3,312.3 L80.9,309.4 L88.2,306.4 L95.9,303.1 L104.2,299.7 L112.9,296.1 L122.2,292.5 L131.8,288.7 L141.8,284.8 L152.3,280.9 L163.0,277.0 L174.1,273.0 L185.6,269.0 L197.2,265.1 L209.2,261.2 L221.3,257.3 L233.6,253.5 L246.1,249.9 L258.8,246.3 L271.5,242.9 L284.4,239.6 L297.3,236.6 L310.2,233.7 L323.2,231.0 L336.1,228.6 L349.0,226.4 L361.8,224.6 L374.6,223.0 L387.2,221.7 L399.6,220.8 L411.9,220.2 L424.0,220.0" fill="none" stroke="#30D158" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="426.0" y="212.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="end">rotation 0 → 90°</text>
+<text x="452.0" y="220.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e8e8ea" text-anchor="start">Use in: Files tree, diff file headers,</text>
+<text x="452.0" y="240.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e8e8ea" text-anchor="start">sidebar spaces, transcript groups.</text>
+<text x="452.0" y="268.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">One glyph (ALT_ARROW_RIGHT) rotated by</text>
+<text x="452.0" y="286.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">progress·90°; reverse on collapse.</text>
+<text x="452.0" y="314.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">Delete motion::CHEVRON or fix its doc.</text>
+</svg>

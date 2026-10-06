@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="430" viewBox="0 0 720 430" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="430" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-11 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">13-step spacing scale</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">space.* tokens on a 4-pt grid with 2/6/10 half-steps for control interiors</text>
+<text x="24" y="109" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.0.5</text>
+<rect x="124" y="99" width="6" height="12" rx="2" fill="#2c4f36" />
+<text x="136" y="109" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">2</text>
+<text x="24" y="131" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.1</text>
+<rect x="124" y="121" width="12" height="12" rx="2" fill="#3a6b48" />
+<text x="142" y="131" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">4</text>
+<text x="24" y="153" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.1.5</text>
+<rect x="124" y="143" width="18" height="12" rx="2" fill="#2c4f36" />
+<text x="148" y="153" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">6</text>
+<text x="24" y="175" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.2</text>
+<rect x="124" y="165" width="24" height="12" rx="2" fill="#3a6b48" />
+<text x="154" y="175" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">8</text>
+<text x="24" y="197" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.2.5</text>
+<rect x="124" y="187" width="30" height="12" rx="2" fill="#2c4f36" />
+<text x="160" y="197" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">10</text>
+<text x="24" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.3</text>
+<rect x="124" y="209" width="36" height="12" rx="2" fill="#3a6b48" />
+<text x="166" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">12</text>
+<text x="24" y="241" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.4</text>
+<rect x="124" y="231" width="48" height="12" rx="2" fill="#3a6b48" />
+<text x="178" y="241" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">16</text>
+<text x="24" y="263" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.5</text>
+<rect x="124" y="253" width="60" height="12" rx="2" fill="#3a6b48" />
+<text x="190" y="263" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">20</text>
+<text x="24" y="285" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.6</text>
+<rect x="124" y="275" width="72" height="12" rx="2" fill="#3a6b48" />
+<text x="202" y="285" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">24</text>
+<text x="24" y="307" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.8</text>
+<rect x="124" y="297" width="96" height="12" rx="2" fill="#3a6b48" />
+<text x="226" y="307" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">32</text>
+<text x="24" y="329" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.10</text>
+<rect x="124" y="319" width="120" height="12" rx="2" fill="#3a6b48" />
+<text x="250" y="329" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">40</text>
+<text x="24" y="351" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.12</text>
+<rect x="124" y="341" width="144" height="12" rx="2" fill="#3a6b48" />
+<text x="274" y="351" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">48</text>
+<text x="24" y="373" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#30D158" text-anchor="start">space.16</text>
+<rect x="124" y="363" width="192" height="12" rx="2" fill="#3a6b48" />
+<text x="322" y="373" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">64</text>
+<text x="400" y="110" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Snap rules</text>
+<text x="400" y="134" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">3 → 2 or 4</text>
+<text x="400" y="154" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">5, 7 → 4/6/8 by context</text>
+<text x="400" y="174" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">9, 11 → 8/10/12</text>
+<text x="400" y="194" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">13, 14, 15 → 12 or 16</text>
+<text x="400" y="214" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">18 → 16 or 20</text>
+<text x="400" y="234" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">21, 22 → 20 or 24</text>
+<text x="400" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">26, 28 → 24 or 32</text>
+<rect x="400" y="290" width="229" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="407" y="304" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">6 = icon↔label gap, 10 = control px</text>
+<rect x="400" y="318" width="291" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="407" y="332" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">1 pt TEXT_STACK_GAP stays as an optical nudge</text>
+<text x="16" y="418" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">theme::space::{S0_5…S16}; clippy-style lint in CI flags new px() literals in p/gap/m calls</text>
+</svg>

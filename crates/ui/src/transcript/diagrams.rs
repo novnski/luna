@@ -362,7 +362,7 @@ impl Transcript {
                     }
                     _ => div()
                         .p(px(12.0))
-                        .text_color(theme.text_muted)
+                        .text_color(theme.content_muted)
                         .child("Diagram preview unavailable; source shown")
                         .into_any_element(),
                 };

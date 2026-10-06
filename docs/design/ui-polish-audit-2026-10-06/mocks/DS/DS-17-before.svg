@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="450" viewBox="0 0 720 450" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="450" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-17 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Seven focus treatments; most clickables never focus</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Same 28 pt button with each focus_visible style found in crates/ui/src</text>
+<rect x="44" y="100" width="120" height="28" rx="8" fill="#1c1c1c" />
+<rect x="45" y="101" width="118" height="26" rx="7" fill="none" stroke="#8b7cf6" stroke-width="2" />
+<text x="104" y="118" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Action</text>
+<text x="104" y="146" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">focus_ring() inset 2 pt</text>
+<text x="104" y="160" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">×23 (+46 via helper)</text>
+<rect x="216" y="100" width="120" height="28" rx="8" fill="#1c1c1c" stroke="#3a3a3a" stroke-width="1" />
+<text x="276" y="118" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Action</text>
+<text x="276" y="146" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">border_strong</text>
+<text x="276" y="160" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">×8</text>
+<rect x="388" y="100" width="120" height="28" rx="8" fill="#1c1c1c" stroke="#8b7cf6" stroke-width="1" />
+<text x="448" y="118" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Action</text>
+<text x="448" y="146" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">border accent 1 pt</text>
+<text x="448" y="160" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">×11</text>
+<rect x="560" y="100" width="120" height="28" rx="8" fill="#8b7cf62e" />
+<text x="620" y="118" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Action</text>
+<text x="620" y="146" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">bg accent .18</text>
+<text x="620" y="160" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">×5</text>
+<rect x="44" y="196" width="120" height="28" rx="8" fill="#2b2b2b" />
+<text x="104" y="214" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Action</text>
+<text x="104" y="242" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">bg surface_raised</text>
+<text x="104" y="256" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">×2</text>
+<rect x="216" y="196" width="120" height="28" rx="8" fill="#ebebeb1c" />
+<text x="276" y="214" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Action</text>
+<text x="276" y="242" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">card_selected_bg</text>
+<text x="276" y="256" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">×2</text>
+<rect x="386" y="194" width="124" height="32" rx="9" fill="#1c1c1c" stroke="#8b7cf6" stroke-width="2" />
+<text x="448" y="214" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Action</text>
+<text x="448" y="242" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">border_2 accent (+2 pt layout)</text>
+<text x="448" y="256" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">×2</text>
+<rect x="24" y="300" width="654" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="31" y="314" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">556 .on_click() vs ~144 tab stops (98 tab_index + 46 accessible_button) → most clickables are mouse-only</text>
+<rect x="24" y="328" width="469" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="31" y="342" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">border_strong focus is a neutral 14% hairline: hard to see, not the accent</text>
+<rect x="24" y="356" width="469" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="31" y="370" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">popover::button_frame swaps a transparent 1 pt border for the focus colour</text>
+<text x="16" y="438" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">67 focus_visible sites · lib.rs:147 AccessibleButton is the good path but is opt-in</text>
+</svg>

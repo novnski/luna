@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="434" viewBox="0 0 720 434">
+<rect width="720" height="434" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-16 · Icon sizes drift (11–16 px) and glyphs collide in meaning</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<g transform="translate(29.5,26.0) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="52" y="37.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Ran 1 command · 2 hooks · read 1 file</text>
+<line x1="36.5" y1="48" x2="36.5" y2="58.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 58.0 Q36.5 64.0 42.5 64.0 L52 64.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="36.5" y1="58.0" x2="36.5" y2="80" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(56,56.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="4"/><path d="M7.5 10l2.5 2-2.5 2M12.5 15h4"/></g>
+<text x="80" y="68.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Run</text>
+<text x="107.8" y="68.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">cargo test</text>
+<line x1="36.5" y1="80" x2="36.5" y2="90.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 90.0 Q36.5 96.0 42.5 96.0 L52 96.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="36.5" y1="90.0" x2="36.5" y2="112" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(56,88.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="80" y="100.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Hook</text>
+<text x="114.4" y="100.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">PreToolUse · Bash</text>
+<line x1="36.5" y1="112" x2="36.5" y2="122.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 122.0 Q36.5 128.0 42.5 128.0 L52 128.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="36.5" y1="122.0" x2="36.5" y2="144" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(56,120.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="80" y="132.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">MCP</text>
+<text x="114.928" y="132.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">linear.list_issues</text>
+<line x1="36.5" y1="144" x2="36.5" y2="154.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 154.0 Q36.5 160.0 42.5 160.0 L52 160.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(56,152.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 1 0-8-4.9L3 21l4.9-1A9 9 0 0 0 12 21z"/><path d="M8 10.5h8M8 14h5"/></g>
+<text x="80" y="164.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Thought process</text>
+<rect x="24" y="186" width="420" height="30" rx="9" fill="#0F0F0F" stroke="#202020" stroke-width="1"/>
+<rect x="32" y="192" width="18" height="18" rx="5" fill="#1B1B1B"/>
+<g transform="translate(35,195) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5M2 13v3M22 13v3"/><circle cx="9" cy="13.5" r="0.8"/><circle cx="15" cy="13.5" r="0.8"/></g>
+<text x="58" y="205.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#C9C9CC" text-anchor="start">Agent</text>
+<text x="96.9" y="205.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#D4D4D6" text-anchor="start">Map the parser</text>
+<rect x="418" y="192" width="18" height="18" rx="5" fill="#161616"/>
+<g transform="translate(421.5,195.5) scale(0.4583)" fill="none" stroke="#C9C9CC" stroke-width="2.73" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 16.5l9-9M9 7.5h7.5V15"/></g>
+<text x="410" y="205" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">Done</text>
+<text x="36" y="21" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="700" fill="#FF453A" text-anchor="middle">14</text>
+<text x="64" y="52" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="700" fill="#FF453A" text-anchor="middle">16</text>
+<text x="41" y="189" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="700" fill="#FF453A" text-anchor="middle">12 in 18 tile</text>
+<text x="427" y="189" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="700" fill="#FF453A" text-anchor="middle">11</text>
+<rect x="470" y="16" width="236" height="70" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="478" y="32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Sizes beside 11–12 px text: 16 (rail</text>
+<text x="478" y="47" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">glyph), 14 (group chevron), 13 (error,</text>
+<text x="478" y="62" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">goal, code action), 12 (row chevron,</text>
+<text x="478" y="77" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">tile glyph, copy), 11 (open arrow)</text>
+<line x1="470" y1="112" x2="64" y2="64" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="64" cy="64" r="2.6" fill="#FF453A"/>
+<rect x="470" y="112" width="236" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="478" y="128" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">16 px rail glyph is 1.55× the 12 px</text>
+<text x="478" y="143" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">cap height: icons outweigh labels</text>
+<rect x="24" y="240" width="680" height="120" rx="8" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="36" y="258" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Same glyph, different meaning (tool_icon_path, transcript.rs:8590)</text>
+<g transform="translate(40,274) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="66" y="286" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#9A9AA0" text-anchor="start">WIDGET</text>
+<text x="200" y="286" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#FFD0CC" text-anchor="start">Hook · MCP · Unknown · ComputerUse</text>
+<g transform="translate(40,300) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 1 0-8-4.9L3 21l4.9-1A9 9 0 0 0 12 21z"/><path d="M8 10.5h8M8 14h5"/></g>
+<text x="66" y="312" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#9A9AA0" text-anchor="start">CHAT_ROUND_LINE</text>
+<text x="200" y="312" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#FFD0CC" text-anchor="start">Thought process · Question chip</text>
+<g transform="translate(40,326) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H8a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h8a3 3 0 0 0 3-3V8z"/><path d="M14 3v3a2 2 0 0 0 2 2h3M9 13h6M9 17h4"/></g>
+<text x="66" y="338" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#9A9AA0" text-anchor="start">DOCUMENT</text>
+<text x="200" y="338" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#FFD0CC" text-anchor="start">Read file · ApplyPatch</text>
+</g>
+</svg>

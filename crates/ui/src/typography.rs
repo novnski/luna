@@ -122,6 +122,12 @@ pub const fn ui_rems(pixels_at_default: f32) -> Rems {
     rems(pixels_at_default / 16.0)
 }
 
+/// Tabular (fixed-width) figures for counters and timers, so ticking digits
+/// never shift the text after them.
+pub fn tabular_figures() -> gpui::FontFeatures {
+    gpui::FontFeatures(std::sync::Arc::new(vec![("tnum".into(), 1)]))
+}
+
 pub const CODE_FONT_SIZE_DEFAULT: f32 = 12.5;
 pub const TERMINAL_FONT_SIZE_DEFAULT: f32 = 13.0;
 pub const FONT_SIZE_MIN: f32 = 8.0;

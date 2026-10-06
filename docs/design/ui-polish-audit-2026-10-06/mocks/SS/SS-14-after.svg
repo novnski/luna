@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="436" viewBox="0 0 720 436" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="436.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-14 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">One leading edge per pane: toolbar and content at 12 pt</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<g transform="translate(16,52) scale(1.3)">
+<rect x="0.0" y="0.0" width="250.0" height="250.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<text x="12.0" y="24.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="500" fill="#e8e8ea" text-anchor="start">Agents · this conversation</text>
+<text x="12.0" y="52.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#e8e8ea" text-anchor="start">Work · Map the parser</text>
+<text x="12.0" y="72.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">Agent: List token kinds</text>
+<rect x="12.0" y="77.0" width="180.0" height="5.0" rx="2" fill="#38383c"/>
+<text x="12.0" y="102.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">Agent: Read the lexer</text>
+<rect x="12.0" y="107.0" width="160.0" height="5.0" rx="2" fill="#38383c"/>
+<text x="12.0" y="132.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">Agent: Check docs</text>
+<rect x="12.0" y="137.0" width="140.0" height="5.0" rx="2" fill="#38383c"/>
+<text x="12.0" y="162.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">Background shell</text>
+<rect x="12.0" y="167.0" width="120.0" height="5.0" rx="2" fill="#38383c"/>
+<text x="12.0" y="210.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#a9a9ae" text-anchor="start">No agents yet. Native subagents…</text>
+<line x1="12.0" y1="4.0" x2="12.0" y2="246.0" stroke="#30D158" stroke-width="0.7" stroke-linecap="round" stroke-dasharray="2 2"/>
+</g>
+<g transform="translate(372,52) scale(1.3)">
+<rect x="0.0" y="0.0" width="250.0" height="250.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="12.0" y="7.0" width="70.0" height="22.0" rx="6" fill="#232325"/>
+<text x="20.0" y="22.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">Working tree</text>
+<rect x="0.0" y="38.0" width="250.0" height="30.0" rx="0" fill="#141415"/>
+<text x="30.0" y="57.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="8.5" font-weight="400" fill="#c9c9cd" text-anchor="start">crates/ui/src/changes.rs</text>
+<path d="M14.9,50.9 L18.5,54.6 L22.1,50.9" fill="none" stroke="#a9a9ae" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="0.0" y="68.0" width="250.0" height="22.0" rx="0" fill="#121624"/>
+<text x="12.0" y="83.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="8" font-weight="400" fill="#a9a9ae" text-anchor="start">@@ -4398,4 +4398,4 @@</text>
+<rect x="0.0" y="90.0" width="250.0" height="16.0" rx="0" fill="#0b0b0c"/>
+<rect x="14.0" y="96.0" width="10.0" height="4.0" rx="2" fill="#38383c"/>
+<rect x="70.0" y="96.0" width="120.0" height="4.0" rx="2" fill="#5a5a60"/>
+<rect x="0.0" y="106.0" width="250.0" height="16.0" rx="0" fill="#0b0b0c"/>
+<rect x="14.0" y="112.0" width="10.0" height="4.0" rx="2" fill="#38383c"/>
+<rect x="70.0" y="112.0" width="111.0" height="4.0" rx="2" fill="#5a5a60"/>
+<rect x="0.0" y="122.0" width="250.0" height="16.0" rx="0" fill="#0b0b0c"/>
+<rect x="14.0" y="128.0" width="10.0" height="4.0" rx="2" fill="#38383c"/>
+<rect x="70.0" y="128.0" width="102.0" height="4.0" rx="2" fill="#5a5a60"/>
+<rect x="0.0" y="138.0" width="250.0" height="16.0" rx="0" fill="#0b0b0c"/>
+<rect x="14.0" y="144.0" width="10.0" height="4.0" rx="2" fill="#38383c"/>
+<rect x="70.0" y="144.0" width="93.0" height="4.0" rx="2" fill="#5a5a60"/>
+<rect x="0.0" y="154.0" width="250.0" height="16.0" rx="0" fill="#0b0b0c"/>
+<rect x="14.0" y="160.0" width="10.0" height="4.0" rx="2" fill="#38383c"/>
+<rect x="70.0" y="160.0" width="84.0" height="4.0" rx="2" fill="#5a5a60"/>
+<rect x="0.0" y="170.0" width="250.0" height="16.0" rx="0" fill="#0b0b0c"/>
+<rect x="14.0" y="176.0" width="10.0" height="4.0" rx="2" fill="#38383c"/>
+<rect x="70.0" y="176.0" width="75.0" height="4.0" rx="2" fill="#5a5a60"/>
+<line x1="12.0" y1="4.0" x2="12.0" y2="246.0" stroke="#30D158" stroke-width="0.7" stroke-linecap="round" stroke-dasharray="2 2"/>
+</g>
+<rect x="16.0" y="388.0" width="406.7" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="23.0" y="401.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">surface_chrome::CONTENT_INSET = 12 for titles, rows and empty states</text>
+<rect x="16.0" y="410.0" width="268.1" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="23.0" y="423.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">diff: toolbar · file header · hunk all at 12</text>
+</svg>

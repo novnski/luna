@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="520" viewBox="0 0 720 520" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="520" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-02 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">One control set: 3 heights × 4 variants</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">ui::Button / ui::IconButton / ui::Select share size tokens; radius follows height</text>
+<text x="24" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start">SIZE</text>
+<text x="130" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start">PRIMARY</text>
+<text x="270" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start">SECONDARY</text>
+<text x="410" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start">GHOST</text>
+<text x="550" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start">DANGER</text>
+<text x="24" y="136.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">sm · 24</text>
+<rect x="130" y="120" width="80" height="24" rx="6" fill="#e5e5e5" />
+<text x="170.0" y="135.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#0e0e0e" text-anchor="middle">Action</text>
+<rect x="270" y="120" width="80" height="24" rx="6" fill="#1c1c1c" stroke="#2e2e2e" stroke-width="1" />
+<text x="310.0" y="135.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#e5e5e5" text-anchor="middle">Action</text>
+<rect x="410" y="120" width="80" height="24" rx="6" fill="#ffffff0d" />
+<text x="450.0" y="135.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#e5e5e5" text-anchor="middle">Action</text>
+<rect x="550" y="120" width="80" height="24" rx="6" fill="#b4232a" />
+<text x="590.0" y="135.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#fff" text-anchor="middle">Action</text>
+<text x="24" y="184.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">md · 28</text>
+<rect x="130" y="166" width="96" height="28" rx="8" fill="#e5e5e5" />
+<text x="178.0" y="184.32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#0e0e0e" text-anchor="middle">Action</text>
+<rect x="270" y="166" width="96" height="28" rx="8" fill="#1c1c1c" stroke="#2e2e2e" stroke-width="1" />
+<text x="318.0" y="184.32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e5e5e5" text-anchor="middle">Action</text>
+<rect x="410" y="166" width="96" height="28" rx="8" fill="#ffffff0d" />
+<text x="458.0" y="184.32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e5e5e5" text-anchor="middle">Action</text>
+<rect x="550" y="166" width="96" height="28" rx="8" fill="#b4232a" />
+<text x="598.0" y="184.32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#fff" text-anchor="middle">Action</text>
+<text x="24" y="236.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">lg · 32</text>
+<rect x="130" y="216" width="96" height="32" rx="8" fill="#e5e5e5" />
+<text x="178.0" y="236.68" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#0e0e0e" text-anchor="middle">Action</text>
+<rect x="270" y="216" width="96" height="32" rx="8" fill="#1c1c1c" stroke="#2e2e2e" stroke-width="1" />
+<text x="318.0" y="236.68" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#e5e5e5" text-anchor="middle">Action</text>
+<rect x="410" y="216" width="96" height="32" rx="8" fill="#ffffff0d" />
+<text x="458.0" y="236.68" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#e5e5e5" text-anchor="middle">Action</text>
+<rect x="550" y="216" width="96" height="32" rx="8" fill="#b4232a" />
+<text x="598.0" y="236.68" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#fff" text-anchor="middle">Action</text>
+<text x="24" y="292" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">Select</text>
+<rect x="130" y="278" width="170" height="28" rx="8" fill="#141414" stroke="#2e2e2e" stroke-width="1" />
+<text x="140" y="296" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">Luna Dark</text>
+<path d="M280 290 l4 4 l4 -4" fill="none" stroke="#a1a1a1" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="314" y="278" width="150" height="28" rx="8" fill="#141414" stroke="#2e2e2e" stroke-width="1" />
+<text x="324" y="296" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">Geist</text>
+<path d="M444 290 l4 4 l4 -4" fill="none" stroke="#a1a1a1" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="478" y="278" width="96" height="28" rx="8" fill="#141414" stroke="#2e2e2e" stroke-width="1" />
+<text x="488" y="296" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">16 pt</text>
+<path d="M554 290 l4 4 l4 -4" fill="none" stroke="#a1a1a1" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="130" y="320" width="512" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="137" y="334" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">Select uses the same sizes · label 12 pt (md) · one chevron: alt-arrow-down 14 px</text>
+<rect x="130" y="348" width="574" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="137" y="362" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">Settings column = md 28 for buttons, segmented and selects · dialogs lg 32 · toolbars sm 24</text>
+<rect x="130" y="376" width="358" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="137" y="390" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">ghost keeps a 6% rest fill so it still reads as a button</text>
+<text x="16" y="508" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">replaces popover::button_frame, ghost_action, compact_action, surface_choice, mcp_button, queue action …</text>
+</svg>

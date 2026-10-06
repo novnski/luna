@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="380" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-21 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Each icon names its subject</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Proposed Solar Linear subjects (fetch names via @solar-icons/cli search; ✓ = already in assets)</text>
+<rect x="24" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="90" y="110" width="28" height="28" rx="7" fill="none" stroke="#30D158" stroke-width="1" stroke-dasharray="3 3" />
+<text x="104" y="129" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#30D158" text-anchor="middle">?</text>
+<text x="104" y="158" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Accent color</text>
+<text x="104" y="173" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">palette (fetch)</text>
+<rect x="196" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="262" y="110" width="28" height="28" rx="7" fill="#101010" stroke="#30D158" stroke-width="1" />
+<svg x="268" y="116" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-linecap="round"><path stroke-width="1.5" d="M3.84453 7.92226C2.71849 6.79623 2.71849 4.97056 3.84453 3.84453C4.97056 2.71849 6.79623 2.71849 7.92226 3.84453L20.1555 16.0777C21.2815 17.2038 21.2815 19.0294 20.1555 20.1555C19.0294 21.2815 17.2038 21.2815 16.0777 20.1555L3.84453 7.92226Z"/><path stroke-width="1.5" d="M6 10L10 6"/><path d="M16.1 2.30719C16.261 1.8976 16.8385 1.8976 16.9994 2.30719L17.4298 3.40247C17.479 3.52752 17.5776 3.62651 17.7022 3.67583L18.7934 4.1078C19.2015 4.26934 19.2015 4.849 18.7934 5.01054L17.7022 5.44252C17.5776 5.49184 17.479 5.59082 17.4298 5.71587L16.9995 6.81115C16.8385 7.22074 16.261 7.22074 16.1 6.81116L15.6697 5.71587C15.6205 5.59082 15.5219 5.49184 15.3973 5.44252L14.3061 5.01054C13.898 4.849 13.898 4.26934 14.3061 4.1078L15.3973 3.67583C15.5219 3.62651 15.6205 3.52752 15.6697 3.40247L16.1 2.30719Z"/><path d="M19.9672 9.12945C20.1281 8.71987 20.7057 8.71987 20.8666 9.12945L21.0235 9.5288C21.0727 9.65385 21.1713 9.75284 21.2959 9.80215L21.6937 9.95965C22.1018 10.1212 22.1018 10.7009 21.6937 10.8624L21.2959 11.0199C21.1713 11.0692 21.0727 11.1682 21.0235 11.2932L20.8666 11.6926C20.7057 12.1022 20.1281 12.1022 19.9672 11.6926L19.8103 11.2932C19.7611 11.1682 19.6625 11.0692 19.5379 11.0199L19.14 10.8624C18.732 10.7009 18.732 10.1212 19.14 9.95965L19.5379 9.80215C19.6625 9.75284 19.7611 9.65385 19.8103 9.5288L19.9672 9.12945Z"/><path d="M5.1332 15.3072C5.29414 14.8976 5.87167 14.8976 6.03261 15.3072L6.18953 15.7065C6.23867 15.8316 6.33729 15.9306 6.46188 15.9799L6.85975 16.1374C7.26783 16.2989 7.26783 16.8786 6.85975 17.0401L6.46188 17.1976C6.33729 17.2469 6.23867 17.3459 6.18953 17.471L6.03261 17.8703C5.87167 18.2799 5.29414 18.2799 5.1332 17.8703L4.97628 17.471C4.92714 17.3459 4.82852 17.2469 4.70393 17.1976L4.30606 17.0401C3.89798 16.8786 3.89798 16.2989 4.30606 16.1374L4.70393 15.9799C4.82852 15.9306 4.92714 15.8316 4.97628 15.7065L5.1332 15.3072Z"/></g></g></svg>
+<text x="276" y="158" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Background effect</text>
+<text x="276" y="173" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">magic stick ✓</text>
+<rect x="368" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="434" y="110" width="28" height="28" rx="7" fill="#101010" stroke="#30D158" stroke-width="1" />
+<svg x="440" y="116" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 11c0-3.771 0-5.657 1.172-6.828S6.229 3 10 3h4c3.771 0 5.657 0 6.828 1.172S22 7.229 22 11v2c0 3.771 0 5.657-1.172 6.828S17.771 21 14 21h-4c-3.771 0-5.657 0-6.828-1.172S2 16.771 2 13z"/><path stroke-linecap="round" d="M12 21V3"/></g></g></svg>
+<text x="448" y="158" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Diff colors</text>
+<text x="448" y="173" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">split / diff ✓</text>
+<rect x="540" y="96" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="606" y="110" width="28" height="28" rx="7" fill="#101010" stroke="#30D158" stroke-width="1" />
+<svg x="612" y="116" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4.27 11a8 8 0 1 1 2.07 4.66"/><path stroke-linejoin="round" d="M6.84 20.66l-.63-2.86l2.86-.63"/></g></g></svg>
+<text x="620" y="158" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Reset appearance</text>
+<text x="620" y="173" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">restart ✓</text>
+<rect x="24" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="90" y="220" width="28" height="28" rx="7" fill="#101010" stroke="#30D158" stroke-width="1" />
+<svg x="96" y="226" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g fill="none"><circle cx="12" cy="12" r="6" stroke="currentColor" stroke-width="1.5"/>
+<path d="M12 2V3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M12 21V22" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M22 12L21 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M3 12L2 12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M19.0708 4.9292L18.678 5.32204" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M5.32178 18.6782L4.92894 19.0711" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M19.0708 19.0708L18.678 18.678" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M5.32178 5.32178L4.92894 4.92894" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="104" y="268" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Appearance (rail)</text>
+<text x="104" y="283" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">palette / sun-moon ✓</text>
+<rect x="196" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="262" y="220" width="28" height="28" rx="7" fill="#101010" stroke="#30D158" stroke-width="1" />
+<svg x="268" y="226" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g fill="none"><path d="M10.4 2.75h3.2l.48 2.12c.55.2 1.07.5 1.53.88l2.08-.64 1.6 2.77-1.6 1.48c.1.58.1 1.18 0 1.76l1.6 1.48-1.6 2.77-2.08-.64c-.46.38-.98.68-1.53.88l-.48 2.12h-3.2l-.48-2.12c-.55-.2-1.07-.5-1.53-.88l-2.08.64-1.6-2.77 1.6-1.48a5.1 5.1 0 0 1 0-1.76l-1.6-1.48 1.6-2.77 2.08.64c.46-.38.98-.68 1.53-.88l.48-2.12Z" transform="translate(0 1.75)" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+  <circle cx="12" cy="12" r="2.65" stroke="currentColor" stroke-width="1.5"/>
+</g></svg>
+<text x="276" y="268" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">General (rail)</text>
+<text x="276" y="283" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">settings gear ✓</text>
+<rect x="368" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="434" y="220" width="28" height="28" rx="7" fill="#101010" stroke="#30D158" stroke-width="1" />
+<svg x="440" y="226" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g fill="none"><path d="M4 6H20" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M4 10H17C18.6569 10 20 11.3431 20 13C20 14.6569 18.6569 16 17 16H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M12 13L9 16L12 19" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M4 20H7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="448" y="268" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Chat code wrapping</text>
+<text x="448" y="283" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">wrap text ✓</text>
+<rect x="540" y="206" width="160" height="90" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="606" y="220" width="28" height="28" rx="7" fill="none" stroke="#30D158" stroke-width="1" stroke-dasharray="3 3" />
+<text x="620" y="239" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#30D158" text-anchor="middle">?</text>
+<text x="620" y="268" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="middle">Diff wrapping</text>
+<text x="620" y="283" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#30D158" text-anchor="middle">split + wrap (fetch)</text>
+<rect x="24" y="330" width="580" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="344" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">rule: a glyph appears once per screen with one meaning; ‘fetch’ tiles come from Solar Linear</text>
+<text x="16" y="368" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">pairs with DS-09 (Solar-only) — no new hand-drawn glyphs</text>
+</svg>

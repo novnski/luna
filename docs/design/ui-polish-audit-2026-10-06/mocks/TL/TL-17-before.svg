@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="464" viewBox="0 0 720 464">
+<defs><clipPath id="vp1212"><rect x="18" y="36" width="148" height="134" rx="6"/></clipPath><clipPath id="vp18812"><rect x="194" y="36" width="148" height="134" rx="6"/></clipPath><clipPath id="vp36412"><rect x="370" y="36" width="148" height="134" rx="6"/></clipPath><clipPath id="vp54012"><rect x="546" y="36" width="148" height="134" rx="6"/></clipPath></defs>
+<rect width="720" height="464" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-17 · Jump to bottom: text arrow, no exit, 1.2 s creeping glide</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="12" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="22" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 0 (click)</text>
+<g clip-path="url(#vp1212)">
+<rect x="18" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="28" y="42" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="64" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="86" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="108" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="130" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="152" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="174" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="196" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="218" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="240" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="262" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="284" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="306" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="328" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="350" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="28" y="372" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<g opacity="1.0">
+<rect x="42" y="124" width="100" height="20" rx="10" fill="#1C1C1E" stroke="#2E2E33" stroke-width="1"/>
+<text x="92" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#E8E8EA" text-anchor="middle">↓  Scroll to bottom</text>
+</g>
+<text x="22" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#FF453A" text-anchor="start">pill visible</text>
+<rect x="188" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="198" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 16 ms</text>
+<g clip-path="url(#vp18812)">
+<rect x="194" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="204" y="42.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="64.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="86.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="108.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="130.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="152.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="174.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="196.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="218.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="240.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="262.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="284.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="306.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="328.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="350.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="204" y="372.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<text x="198" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#FF453A" text-anchor="start">pill gone instantly</text>
+<rect x="364" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="374" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 383 ms</text>
+<g clip-path="url(#vp36412)">
+<rect x="370" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="380" y="-129.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-107.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-85.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-63.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-41.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="-19.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="3.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="25.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="47.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="69.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="91.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="113.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="135.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="157.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="179.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="380" y="201.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<text x="374" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#FF453A" text-anchor="start">90% of distance</text>
+<rect x="540" y="12" width="160" height="176" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="550" y="28" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t ≈ 1,270 ms</text>
+<g clip-path="url(#vp54012)">
+<rect x="546" y="36" width="148" height="144" rx="0" fill="#080808"/>
+<rect x="556" y="-148.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-126.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-104.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-82.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-60.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-38.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="-16.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="6.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="28.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="50.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="72.0" width="90" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="94.0" width="110" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="116.0" width="100" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="138.0" width="120" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="160.0" width="80" height="6" rx="3" fill="#3A3A3E"/>
+<rect x="556" y="182.0" width="130" height="6" rx="3" fill="#3A3A3E"/>
+</g>
+<text x="550" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#FF453A" text-anchor="start">spring settles</text>
+<rect x="12" y="210" width="340" height="150" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<line x1="26" y1="334" x2="338" y2="334" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<line x1="26" y1="334" x2="26" y2="236" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<polyline points="26.0,330.1 31.2,322.3 36.4,313.5 41.6,304.6 46.8,296.2 52.0,288.7 57.2,281.9 62.4,275.9 67.6,270.6 72.8,266.0 78.0,262.0 83.2,258.5 88.4,255.5 93.6,252.9 98.8,250.7 104.0,248.7 109.2,247.0 114.4,245.5 119.6,244.2 124.8,243.1 130.0,242.2 135.2,241.4 140.4,240.6 145.6,240.0 150.8,239.5 156.0,239.0 161.2,238.6 166.4,238.3 171.6,238.0 176.8,237.7 182.0,237.5 187.2,237.3 192.4,237.1 197.6,237.0 202.8,236.8 208.0,236.7 213.2,236.6 218.4,236.5 223.6,236.5 228.8,236.4 234.0,236.3 239.2,236.3 244.4,236.3 249.6,236.2 254.8,236.2 260.0,236.2 265.2,236.1 270.4,236.1 275.6,236.1 280.8,236.1 286.0,236.1 291.2,236.1 296.4,236.1 301.6,236.1 306.8,236.0 312.0,236.0 317.2,236.0 322.4,236.0 327.6,236.0 332.8,236.0 338.0,236.0" fill="none" stroke="#FF453A" stroke-width="2"/>
+<circle cx="26" cy="330.08" r="2.8" fill="#FF453A"/>
+<circle cx="120.42105263157895" cy="244.05290182896687" r="2.8" fill="#FF453A"/>
+<circle cx="338" cy="236.0196092768663" r="2.8" fill="#FF453A"/>
+<text x="22" y="226" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">StickSpring glide (damping .7, stiffness .05, mass 1.25)</text>
+<text x="22" y="351" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="start">90% at 383 ms, then ~900 ms crawling the last 10%</text>
+<text x="338" y="345" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#9A9AA0" text-anchor="end">1,270 ms</text>
+<rect x="368" y="210" width="340" height="150" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<text x="380" y="230" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Pill (shell.rs jump_pill)</text>
+<rect x="392" y="248" width="150" height="30" rx="15" fill="#1C1C1E" stroke="#2E2E33" stroke-width="1"/>
+<text x="405" y="268" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#C9C9CC" text-anchor="start">↓</text>
+<text x="423" y="268" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#E8E8EA" text-anchor="start">Scroll to bottom</text>
+<rect x="399.5" y="251.5" width="17" height="23" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="380" y="300" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#FFD0CC" text-anchor="start">• "↓" is a Unicode text glyph, not the icon set</text>
+<text x="380" y="318" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#FFD0CC" text-anchor="start">• dialog_in entrance, no exit animation</text>
+<text x="380" y="336" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#FFD0CC" text-anchor="start">• no role / aria label / tab stop</text>
+</g>
+</svg>

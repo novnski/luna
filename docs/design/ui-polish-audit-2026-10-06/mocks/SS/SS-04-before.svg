@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="484" viewBox="0 0 720 484" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="484.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-04 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Usage meters: one recipe, used %, colour by threshold</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="56.0" width="284.0" height="158.0" rx="10" fill="#0e0e0e" stroke="#595959" stroke-width="1"/>
+<rect x="20.0" y="58.0" width="32.0" height="36.0" rx="0" fill="none"/>
+<circle cx="36.0" cy="76.0" r="8" fill="none" stroke="#e8e8ea" stroke-width="1.4"/>
+<line x1="22.0" y1="94.0" x2="50.0" y2="94.0" stroke="#8b7cf6" stroke-width="2" stroke-linecap="round"/>
+<rect x="60.0" y="68.0" width="12.0" height="14.0" rx="2" fill="#8b7cf6" opacity="0.85"/>
+<rect x="86.0" y="64.0" width="132.0" height="24.0" rx="5" fill="#2c2c30"/>
+<text x="92.0" y="81.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e8e8ea" text-anchor="start">Iulian&#x27;s MacBook Pro…</text>
+<path d="M244.8,76.0 A5.8,5.8 0 1 1 240.7,70.5" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M240.7,68.2 L241.0,70.8 L238.4,71.7" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M265.5,74.1 L270.0,78.6 L274.5,74.1" fill="none" stroke="#a9a9ae" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="16.0" y1="96.0" x2="300.0" y2="96.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<text x="26.0" y="116.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#e8e8ea" text-anchor="start">Codex</text>
+<rect x="256.0" y="104.0" width="34.0" height="16.0" rx="4" fill="#2c2c30"/>
+<text x="273.0" y="116.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="middle">Pro</text>
+<text x="26.0" y="134.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a9a9ae" text-anchor="start">iulian@example.test</text>
+<text x="26.0" y="156.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">5h</text>
+<rect x="72.0" y="151.0" width="150.0" height="4.0" rx="2" fill="#2c2c30"/>
+<rect x="72.0" y="151.0" width="7.5" height="4.0" rx="2" fill="#f87171"/>
+<text x="252.0" y="156.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="end">5%</text>
+<text x="290.0" y="156.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="end">4h 12m</text>
+<text x="26.0" y="178.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">7d</text>
+<rect x="72.0" y="173.0" width="150.0" height="4.0" rx="2" fill="#2c2c30"/>
+<rect x="72.0" y="173.0" width="91.5" height="4.0" rx="2" fill="#f87171"/>
+<text x="252.0" y="178.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="end">61%</text>
+<text x="290.0" y="178.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="end">4d 23h</text>
+<text x="26.0" y="200.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">Spark</text>
+<rect x="72.0" y="195.0" width="150.0" height="4.0" rx="2" fill="#2c2c30"/>
+<rect x="72.0" y="195.0" width="141.0" height="4.0" rx="2" fill="#f87171"/>
+<text x="252.0" y="200.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="end">94%</text>
+<text x="290.0" y="200.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="end">1d 2h</text>
+<text x="16.0" y="54.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="1" font-weight="400" fill="#e8e8ea" text-anchor="start"></text>
+<text x="330.0" y="70.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e8e8ea" text-anchor="start">Usage page · Codex</text>
+<text x="330.0" y="100.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">5h</text>
+<rect x="382.0" y="92.0" width="250.0" height="9.0" rx="4" fill="#38383c"/>
+<rect x="382.0" y="92.0" width="237.5" height="9.0" rx="4" fill="#e8e8ea"/>
+<text x="702.0" y="100.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="end">95% left</text>
+<text x="330.0" y="130.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">7d</text>
+<rect x="382.0" y="122.0" width="250.0" height="9.0" rx="4" fill="#38383c"/>
+<rect x="382.0" y="122.0" width="97.5" height="9.0" rx="4" fill="#e8e8ea"/>
+<text x="702.0" y="130.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="end">39% left</text>
+<text x="330.0" y="160.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">Spark</text>
+<rect x="382.0" y="152.0" width="250.0" height="9.0" rx="4" fill="#38383c"/>
+<rect x="382.0" y="152.0" width="15.0" height="9.0" rx="4" fill="#e8e8ea"/>
+<text x="702.0" y="160.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="end">6% left</text>
+<rect x="70.0" y="148.0" width="18.0" height="12.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="100.0" y="230.0" width="175.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="107.0" y="243.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">5% used → painted danger red</text>
+<line x1="100.0" y1="230.0" x2="88.0" y2="160.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="380.0" y="86.0" width="254.0" height="20.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="390.0" y="186.0" width="181.5" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="397.0" y="199.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">page fills % LEFT (same data)</text>
+<line x1="480.7" y1="186.0" x2="480.7" y2="106.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="330.0" y="214.0" width="210.4" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="337.0" y="227.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">card 4 px / r2  vs  page 9 px / r4</text>
+<rect x="0.0" y="262.0" width="720.0" height="222.0" rx="0" fill="#dfe2e7"/>
+<text x="16.0" y="284.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#6e6e73" text-anchor="start">Luna Light · OpenCode</text>
+<rect x="16.0" y="294.0" width="284.0" height="158.0" rx="10" fill="#ffffff" stroke="#9aa0a8" stroke-width="1"/>
+<rect x="20.0" y="296.0" width="32.0" height="36.0" rx="0" fill="none"/>
+<circle cx="36.0" cy="314.0" r="8" fill="none" stroke="#202631" stroke-width="1.4"/>
+<line x1="22.0" y1="332.0" x2="50.0" y2="332.0" stroke="#5b43e8" stroke-width="2" stroke-linecap="round"/>
+<rect x="60.0" y="306.0" width="12.0" height="14.0" rx="2" fill="#5b43e8" opacity="0.85"/>
+<rect x="86.0" y="302.0" width="132.0" height="24.0" rx="5" fill="#e2e6ec"/>
+<text x="92.0" y="319.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#202631" text-anchor="start">Iulian&#x27;s MacBook Pro…</text>
+<path d="M244.8,314.0 A5.8,5.8 0 1 1 240.7,308.5" fill="none" stroke="#445064" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M240.7,306.2 L241.0,308.8 L238.4,309.7" fill="none" stroke="#445064" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M265.5,312.1 L270.0,316.6 L274.5,312.1" fill="none" stroke="#445064" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="16.0" y1="334.0" x2="300.0" y2="334.0" stroke="#c9d0da" stroke-width="1" stroke-linecap="round"/>
+<text x="26.0" y="354.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="700" fill="#202631" text-anchor="start">opencode</text>
+<rect x="256.0" y="342.0" width="34.0" height="16.0" rx="4" fill="#eef1f5"/>
+<text x="273.0" y="354.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="middle">Go</text>
+<text x="26.0" y="372.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#445064" text-anchor="start">iulian@example.test</text>
+<text x="26.0" y="394.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="start">5h</text>
+<rect x="72.0" y="389.0" width="150.0" height="4.0" rx="2" fill="#e8edf3"/>
+<rect x="72.0" y="389.0" width="4.0" height="4.0" rx="2" fill="#445064"/>
+<text x="252.0" y="394.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="end">0%</text>
+<text x="290.0" y="394.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="end">21m</text>
+<text x="26.0" y="416.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="start">7d</text>
+<rect x="72.0" y="411.0" width="150.0" height="4.0" rx="2" fill="#e8edf3"/>
+<rect x="72.0" y="411.0" width="4.0" height="4.0" rx="2" fill="#445064"/>
+<text x="252.0" y="416.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="end">0%</text>
+<text x="290.0" y="416.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="end">3d 2h</text>
+<text x="26.0" y="438.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="start">Monthly</text>
+<rect x="72.0" y="433.0" width="150.0" height="4.0" rx="2" fill="#e8edf3"/>
+<rect x="72.0" y="433.0" width="55.5" height="4.0" rx="2" fill="#445064"/>
+<text x="252.0" y="438.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="end">37%</text>
+<text x="290.0" y="438.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#445064" text-anchor="end">17d 11h</text>
+<rect x="68.0" y="386.0" width="10.0" height="12.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="330.0" y="428.0" width="123.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="337.0" y="441.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">0% draws a 1.2% nub</text>
+<line x1="330.0" y1="428.0" x2="78.0" y2="398.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="330.0" y="454.0" width="245.0" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="337.0" y="467.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">track #e8edf3 on card #e9ebef: invisible</text>
+</svg>

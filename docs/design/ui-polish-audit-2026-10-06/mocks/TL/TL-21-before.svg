@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-21 · Long prompt collapse: an ASCII "..." line + glyph-swap toggle</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="180" y="16" width="480" height="182" rx="16" fill="#1C1C1C"/>
+<text x="196" y="42" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Here is the full log from the failing run:</text>
+<text x="196" y="64" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">error[E0599]: no method named `ease` found</text>
+<text x="196" y="86" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">  --&gt; crates/ui/src/transcript.rs:7991:14</text>
+<text x="196" y="108" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">   |</text>
+<text x="196" y="130" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">7991 |     .with_transformation(rotate(ease(t)))</text>
+<text x="196" y="152" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">...</text>
+<rect x="191.5" y="137.5" width="37" height="21" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="196" y="182" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#C9C9CC" text-anchor="start">Show more</text>
+<g transform="translate(264.0,172) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<rect x="191.5" y="166.5" width="101" height="21" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<line x1="166" y1="95" x2="192" y2="148" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="192" cy="148" r="2.6" fill="#FF453A"/>
+<rect x="16" y="40" width="150" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="24" y="56" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Literal "..." on its own</text>
+<text x="24" y="71" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">22 px line (transcript.rs</text>
+<text x="24" y="86" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">:6036) — no fade mask</text>
+<line x1="166" y1="177" x2="192" y2="177" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="192" cy="177" r="2.6" fill="#FF453A"/>
+<rect x="16" y="150" width="150" height="70" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="24" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">14 px toggle; chevron</text>
+<text x="24" y="181" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">swaps DOWN↔UP glyph;</text>
+<text x="24" y="196" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">role Button but no</text>
+<text x="24" y="211" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">tab_index (:6097)</text>
+</g>
+</svg>

@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-11 · Stacked detail boxes: double hairline + bare-text fetch link</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<line x1="52.5" y1="14" x2="52.5" y2="24.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 24.0 Q52.5 30.0 58.5 30.0 L68 30.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(72,22.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="96" y="34.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Hook</text>
+<text x="130.4" y="34.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">PreToolUse · Read</text>
+<rect x="96" y="47" width="424" height="56" rx="7" fill="#131313" stroke="#232323" stroke-width="1"/>
+<line x1="96" y1="73" x2="520" y2="73" stroke="#232323" stroke-width="1" stroke-linecap="butt"/>
+<text x="104" y="63.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="start">Invocation</text>
+<text x="512" y="63.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="end">Copy</text>
+<text x="104" y="92" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">Hook: PreToolUse:Read</text>
+<rect x="96" y="104" width="424" height="56" rx="7" fill="#131313" stroke="#232323" stroke-width="1"/>
+<line x1="96" y1="130" x2="520" y2="130" stroke="#232323" stroke-width="1" stroke-linecap="butt"/>
+<text x="104" y="120.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="start">Output</text>
+<text x="512" y="120.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="end">Copy</text>
+<text x="104" y="149" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">checking</text>
+<text x="96" y="177" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">Show full output (8 B)</text>
+<rect x="95.5" y="99.5" width="425" height="9" rx="3" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="93.5" y="163.5" width="141" height="19" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="560" y="60" width="140" height="80" rx="8" fill="#0C0C0D" stroke="#2A2A2E" stroke-width="1"/>
+<rect x="570" y="70" width="120" height="26" rx="7" fill="#131313" stroke="#232323" stroke-width="2"/>
+<rect x="570" y="99" width="120" height="30" rx="7" fill="#131313" stroke="#232323" stroke-width="2"/>
+<text x="630" y="156" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">2 borders, 1 px apart</text>
+<rect x="40" y="214" width="600" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="48" y="230" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">DETAIL_SEPARATOR = 1 px (transcript.rs:799) between two bordered r7 boxes reads as a</text>
+<text x="48" y="245" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">thick double rule; "Show full output" is faint text with no icon, button shape, hover</text>
+<text x="48" y="260" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">fill or focus style; its loading state is text only ("Loading full output…").</text>
+</g>
+</svg>

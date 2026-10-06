@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="470" viewBox="0 0 720 470" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="470" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-12 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Same glyph at five sizes, no icon tokens</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Render sizes per icon constant (icon(X).size(px(N))); 17 distinct icon sizes overall (9–28)</text>
+<text x="24" y="122" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">plus</text>
+<rect x="160" y="100" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="180.5" y="114.5" width="11" height="11" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="186" y="152" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">11</text>
+<rect x="224" y="100" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="244.0" y="114.0" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="250" y="152" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">12</text>
+<rect x="288" y="100" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="307.5" y="113.5" width="13" height="13" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="314" y="152" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">13</text>
+<rect x="352" y="100" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="371.0" y="113.0" width="14" height="14" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="378" y="152" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">14</text>
+<rect x="416" y="100" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="434.0" y="112.0" width="16" height="16" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M8 3.25v9.5M3.25 8h9.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="442" y="152" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">16</text>
+<text x="24" y="178" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">check</text>
+<rect x="160" y="156" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="181.0" y="171.0" width="10" height="10" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g></svg>
+<text x="186" y="208" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">10</text>
+<rect x="224" y="156" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="244.0" y="170.0" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g></svg>
+<text x="250" y="208" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">12</text>
+<rect x="288" y="156" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="307.5" y="169.5" width="13" height="13" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g></svg>
+<text x="314" y="208" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">13</text>
+<rect x="352" y="156" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="371.0" y="169.0" width="14" height="14" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g></svg>
+<text x="378" y="208" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">14</text>
+<rect x="416" y="156" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="434.0" y="168.0" width="16" height="16" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g></svg>
+<text x="442" y="208" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">16</text>
+<text x="24" y="234" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">alt-arrow-down</text>
+<rect x="160" y="212" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="180.5" y="226.5" width="11" height="11" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g ><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m19 9l-7 6l-7-6"/></g></svg>
+<text x="186" y="264" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">11</text>
+<rect x="224" y="212" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="244.0" y="226.0" width="12" height="12" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g ><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m19 9l-7 6l-7-6"/></g></svg>
+<text x="250" y="264" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">12</text>
+<rect x="288" y="212" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="307.5" y="225.5" width="13" height="13" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g ><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m19 9l-7 6l-7-6"/></g></svg>
+<text x="314" y="264" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">13</text>
+<rect x="352" y="212" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="371.0" y="225.0" width="14" height="14" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g ><path fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="m19 9l-7 6l-7-6"/></g></svg>
+<text x="378" y="264" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">14</text>
+<text x="24" y="290" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">close</text>
+<rect x="160" y="268" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="181.5" y="283.5" width="9" height="9" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="186" y="320" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">9</text>
+<rect x="224" y="268" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="244.5" y="282.5" width="11" height="11" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="250" y="320" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">11</text>
+<rect x="288" y="268" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="308.0" y="282.0" width="12" height="12" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="314" y="320" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">12</text>
+<text x="24" y="346" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">git-branch</text>
+<rect x="160" y="324" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="180.5" y="338.5" width="11" height="11" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="186" y="376" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">11</text>
+<rect x="224" y="324" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="243.5" y="337.5" width="13" height="13" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="250" y="376" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">13</text>
+<rect x="288" y="324" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="307.0" y="337.0" width="14" height="14" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="314" y="376" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">14</text>
+<rect x="352" y="324" width="52" height="40" rx="8" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<svg x="370.0" y="336.0" width="16" height="16" viewBox="0 0 24 24" color="#e5e5e5" overflow="visible"><g fill="none"><circle cx="6.5" cy="5.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="6.5" cy="18.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<circle cx="17.5" cy="7.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
+<path d="M6.5 7.75v8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M17.5 9.75c0 2.9-2.6 4.35-6.2 4.72c-1.9.2-3.3.9-4 2.03" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+</g></svg>
+<text x="378" y="376" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="middle">16</text>
+<text x="500" y="112" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#e5e5e5" text-anchor="start">At 11 px a 1.5/24 stroke</text>
+<text x="500" y="130" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#FF453A" text-anchor="start">renders 0.69 px — greys out</text>
+<text x="500" y="160" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#e5e5e5" text-anchor="start">Icon ↔ label gaps in use:</text>
+<text x="500" y="178" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11.5" font-weight="400" fill="#FF453A" text-anchor="start">4 · 5 · 6 · 7 · 8 pt</text>
+<text x="500" y="208" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">No icon+label helper; each</text>
+<text x="500" y="224" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">site picks size, gap and</text>
+<text x="500" y="240" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">vertical nudge by hand</text>
+<text x="16" y="458" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">per-icon tally: scratchpad/ds/icon_size_by_role.txt</text>
+</svg>

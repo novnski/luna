@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-10 · Four radii: inline 4 · control 6 · panel 10 · bubble 16</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="20" y="46.0" width="40" height="18" rx="4" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="40.0" y="78.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">inline code</text>
+<text x="40.0" y="91.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">4</text>
+<rect x="104" y="44.0" width="40" height="22" rx="4" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="124.0" y="80.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">file well</text>
+<text x="124.0" y="93.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">4</text>
+<rect x="188" y="44.0" width="64" height="22" rx="6" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="220.0" y="80.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">file badge</text>
+<text x="220.0" y="93.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">6</text>
+<rect x="276" y="44.0" width="22" height="22" rx="6" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="287.0" y="80.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">tool tile</text>
+<text x="287.0" y="93.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">6</text>
+<rect x="360" y="44.0" width="40" height="22" rx="6" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="380.0" y="80.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">code Copy</text>
+<text x="380.0" y="93.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">6</text>
+<rect x="444" y="44.0" width="22" height="22" rx="6" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="455.0" y="80.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">icon btn</text>
+<text x="455.0" y="93.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">6</text>
+<rect x="20" y="130" width="90" height="50" rx="10" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="65.0" y="194" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">output block</text>
+<text x="65.0" y="207" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">10</text>
+<rect x="134" y="130" width="90" height="50" rx="10" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="179.0" y="194" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">notice</text>
+<text x="179.0" y="207" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">10</text>
+<rect x="248" y="130" width="90" height="50" rx="10" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="293.0" y="194" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">agent card</text>
+<text x="293.0" y="207" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">10</text>
+<rect x="362" y="130" width="90" height="50" rx="10" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="407.0" y="194" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">code block</text>
+<text x="407.0" y="207" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">10</text>
+<rect x="476" y="130" width="90" height="50" rx="10" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="521.0" y="194" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">input chip</text>
+<text x="521.0" y="207" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">10</text>
+<rect x="590" y="130" width="90" height="50" rx="16" fill="#1A1A1C" stroke="#2E2E33" stroke-width="1"/>
+<text x="635.0" y="194" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="middle">user bubble</text>
+<text x="635.0" y="207" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="700" fill="#30D158" text-anchor="middle">16</text>
+<rect x="20" y="230" width="560" height="55" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="28" y="246" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Add Theme::INLINE_RADIUS = 4 beside CONTROL (6), PANEL (10), BUBBLE (16);</text>
+<text x="28" y="261" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">replace every literal px(4.5|5|7|8|9) in transcript.rs, agent_cards.rs and</text>
+<text x="28" y="276" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">markdown/render.rs with the matching token.</text>
+<rect x="596" y="222" width="112" height="100" rx="8" fill="#0C0C0D" stroke="#2A2A2E" stroke-width="1"/>
+<text x="604" y="236" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#9A9AA0" text-anchor="start">corners ×4</text>
+<path d="M610 318 V288 A40 40 0 0 1 650 248 H700" fill="none" stroke="#E8E8EA" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="666" y="298" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="700" fill="#30D158" text-anchor="start">10 only</text>
+</g>
+</svg>

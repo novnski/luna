@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="414" viewBox="0 0 720 414">
+<rect width="720" height="414" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-15 · Seven chrome text sizes, two below the macOS floor</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="24" y="38" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="700" fill="#FF453A" text-anchor="start">10 px</text>
+<text x="100" y="38" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="start">Output · Invocation · Copy (detail header, :8712)</text>
+<rect x="95.5" y="23.5" width="256.0" height="21" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="24" y="70" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="700" fill="#FF453A" text-anchor="start">10.5 px</text>
+<text x="100" y="70" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9C9CC" text-anchor="start">Copied · New thread badge (render.rs:1985, agent_cards.rs:197)</text>
+<rect x="95.5" y="55.5" width="336.5" height="21" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<text x="24" y="102" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="500" fill="#9A9AA0" text-anchor="start">11 px</text>
+<text x="100" y="102" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9C9CC" text-anchor="start">Done · haiku · rust · Side chat · Run error · recovery detail</text>
+<text x="24" y="134" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="500" fill="#9A9AA0" text-anchor="start">12 px</text>
+<text x="100" y="134" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Ran 3 commands · Run cargo test · Oct 6, 1:03 AM · Thinking…</text>
+<text x="24" y="166" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="500" fill="#9A9AA0" text-anchor="start">12.5 px</text>
+<text x="100" y="166" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12.5" font-weight="400" fill="#C9C9CC" text-anchor="start">fn main() { … }   (code; tool output scales it to 12)</text>
+<text x="24" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="500" fill="#9A9AA0" text-anchor="start">13 px</text>
+<text x="100" y="198" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#C9C9CC" text-anchor="start">Scroll to bottom (jump pill, shell.rs)</text>
+<text x="24" y="230" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="500" fill="#9A9AA0" text-anchor="start">14 px</text>
+<text x="100" y="230" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Body prose · user bubble · Show more</text>
+<rect x="24" y="262" width="560" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="32" y="278" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">10 and 10.5 px sit below the 11 pt minimum macOS uses for secondary labels;</text>
+<text x="32" y="293" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">12 vs 12.5 px mono differs between tool output and code fences;</text>
+<text x="32" y="308" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">no named styles: every call site passes ui_rems(n) with its own n.</text>
+</g>
+</svg>

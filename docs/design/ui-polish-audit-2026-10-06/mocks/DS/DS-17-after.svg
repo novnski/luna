@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="450" viewBox="0 0 720 450" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="450" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-17 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">One focus ring on every control</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">theme::focus_ring (2 pt inset, theme.focus_ring() colour floored to 3:1) via ui::interactive()</text>
+<rect x="24" y="110" width="96" height="28" rx="8" fill="#1c1c1c" />
+<rect x="25" y="111" width="94" height="26" rx="7" fill="none" stroke="#8b7cf6" stroke-width="2" />
+<text x="72.0" y="128" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Button</text>
+<rect x="174" y="110" width="120" height="28" rx="8" fill="#1c1c1c" />
+<rect x="175" y="111" width="118" height="26" rx="7" fill="none" stroke="#8b7cf6" stroke-width="2" />
+<text x="234.0" y="128" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Select ⌄</text>
+<rect x="324" y="110" width="96" height="28" rx="6" fill="#1c1c1c" />
+<rect x="325" y="111" width="94" height="26" rx="5" fill="none" stroke="#8b7cf6" stroke-width="2" />
+<text x="372.0" y="128" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Segment</text>
+<rect x="474" y="110" width="38" height="22" rx="11" fill="#8b7cf6" />
+<rect x="475" y="111" width="36" height="20" rx="10" fill="none" stroke="#c9c1ff" stroke-width="2" />
+<circle cx="501" cy="121" r="8" fill="#fff"/>
+<text x="24" y="170" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">Button · Select · Segment · Switch — identical ring, follows the control radius</text>
+<rect x="24" y="210" width="574" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="224" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">ui::interactive(id, label) = role + aria label + tab stop + focus ring + hover fill + press</text>
+<rect x="24" y="238" width="543" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="252" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">lint: an element with .on_click and no .tab_index must opt out explicitly (decorative)</text>
+<rect x="24" y="266" width="395" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="280" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">rows in lists: ring on the row (radius.md), not on inner icons</text>
+<text x="16" y="438" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">delete per-site focus_visible closures (border_strong, bg washes, border_2) in favour of the helper</text>
+</svg>

@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="434" viewBox="0 0 720 434">
+<rect width="720" height="434" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-05 · Three tiers floored against the transcript's real canvas</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="30" y="40" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Delegating.</text>
+<g transform="translate(36.5,61.0) scale(0.5000)" fill="none" stroke="#ABABB0" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="58" y="71.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#ABABB0" text-anchor="start">1 hook</text>
+<line x1="42.5" y1="82" x2="42.5" y2="92.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M42.5 92.0 Q42.5 98.0 48.5 98.0 L58 98.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(62,90.0) scale(0.6667)" fill="none" stroke="#ABABB0" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="86" y="102.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#ABABB0" text-anchor="start">Hook</text>
+<text x="120.4" y="102.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#E8E8EA" text-anchor="start">PreToolUse · Read</text>
+<text x="86" y="136" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#8E8E93" text-anchor="start">Show full output · 8 B</text>
+<rect x="30" y="152" width="520" height="30" rx="10" fill="#0F0F0F" stroke="#202020" stroke-width="1"/>
+<rect x="38" y="158" width="18" height="18" rx="6" fill="#1B1B1B"/>
+<g transform="translate(41,161) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5M2 13v3M22 13v3"/><circle cx="9" cy="13.5" r="0.8"/><circle cx="15" cy="13.5" r="0.8"/></g>
+<text x="64" y="171.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#ABABB0" text-anchor="start">Agent</text>
+<text x="102.9" y="171.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#E8E8EA" text-anchor="start">Map the parser</text>
+<g transform="translate(527,161) scale(0.5000)" fill="none" stroke="#ABABB0" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 16.5l9-9M9 7.5h7.5V15"/></g>
+<text x="516" y="171" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#ABABB0" text-anchor="end">Done</text>
+<circle cx="484.34" cy="167" r="3" fill="#00D492"/>
+<text x="471.34" y="171" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8E8E93" text-anchor="end">haiku</text>
+<text x="30" y="210" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#E8E8EA" text-anchor="start">Proposed transcript tiers (contrast on canvas #080808):</text>
+<rect x="30" y="230" width="60" height="22" rx="4" fill="#E8E8EA"/>
+<text x="100" y="245" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">#E8E8EA</text>
+<text x="170" y="245" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#E8E8EA" text-anchor="start">primary  (prose, details)</text>
+<text x="370" y="245" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">16.4:1</text>
+<rect x="30" y="264" width="60" height="22" rx="4" fill="#ABABB0"/>
+<text x="100" y="279" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">#ABABB0</text>
+<text x="170" y="279" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#ABABB0" text-anchor="start">secondary (labels, headers)</text>
+<text x="370" y="279" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">8.8:1</text>
+<rect x="30" y="298" width="60" height="22" rx="4" fill="#8E8E93"/>
+<text x="100" y="313" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">#8E8E93</text>
+<text x="170" y="313" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8E8E93" text-anchor="start">tertiary (meta, model, hints)</text>
+<text x="370" y="313" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">6.1:1</text>
+<rect x="420" y="228" width="269.0" height="70" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="428" y="244" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Floor tertiary at 4.5:1 on the composited</text>
+<text x="428" y="259" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">transcript canvas (≈#080808), not the adverse</text>
+<text x="428" y="274" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">desktop composite; keep ≥ 1.4:1 luminance step</text>
+<text x="428" y="289" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">between tiers (DS owns the token change).</text>
+</g>
+</svg>

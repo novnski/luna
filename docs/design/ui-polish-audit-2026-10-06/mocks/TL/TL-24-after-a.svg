@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="504" viewBox="0 0 720 504">
+<rect width="720" height="504" fill="#0A0A0B"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-24 · Option A · text shimmer + breathing orb</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="16" y="20" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">Filmstrip · drawn at 1.75× · orb 1.6 s sine breath, highlight sweep 1.8 s per pass, 60 fps paint-only</text>
+<rect x="16" y="30" width="128" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 0 ms</text>
+<g transform="translate(22,76) scale(1.75)">
+<circle cx="6" cy="-4" r="5.5" fill="#7C86FF" opacity="0.16"/>
+<circle cx="6" cy="-4" r="2.6" fill="#7C86FF"/>
+<defs><linearGradient id="sa0" x1="1.6000000000000014" x2="78.4" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#FFFFFF"/><stop offset="0.040" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="url(#sa0)" text-anchor="start">Thinking</text>
+</g>
+<text x="26" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">orb 0.85× · sweep 0%</text>
+<rect x="156" y="30" width="128" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="166" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 450 ms</text>
+<g transform="translate(162,76) scale(1.75)">
+<circle cx="6" cy="-4" r="5.978036128806451" fill="#7C86FF" opacity="0.26755812898145154"/>
+<circle cx="6" cy="-4" r="2.898772580504032" fill="#AEB4FF"/>
+<defs><linearGradient id="sa1" x1="1.6000000000000014" x2="78.4" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.060" stop-color="#ABABB0"/><stop offset="0.200" stop-color="#FFFFFF"/><stop offset="0.340" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="url(#sa1)" text-anchor="start">Thinking</text>
+</g>
+<text x="166" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">orb 0.94× · sweep 25%</text>
+<rect x="296" y="30" width="128" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="306" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 900 ms</text>
+<g transform="translate(302,76) scale(1.75)">
+<circle cx="6" cy="-4" r="6.269551813004515" fill="#7C86FF" opacity="0.33314915792601585"/>
+<circle cx="6" cy="-4" r="3.080969883127822" fill="#AEB4FF"/>
+<defs><linearGradient id="sa2" x1="1.6000000000000014" x2="78.4" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.360" stop-color="#ABABB0"/><stop offset="0.500" stop-color="#FFFFFF"/><stop offset="0.640" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="url(#sa2)" text-anchor="start">Thinking</text>
+</g>
+<text x="306" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">orb 0.99× · sweep 50%</text>
+<rect x="436" y="30" width="128" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="446" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 1350 ms</text>
+<g transform="translate(442,76) scale(1.75)">
+<circle cx="6" cy="-4" r="5.677771906792159" fill="#7C86FF" opacity="0.19999867902823576"/>
+<circle cx="6" cy="-4" r="2.7111074417450993" fill="#7C86FF"/>
+<defs><linearGradient id="sa3" x1="1.6000000000000014" x2="78.4" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.660" stop-color="#ABABB0"/><stop offset="0.800" stop-color="#FFFFFF"/><stop offset="0.940" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="url(#sa3)" text-anchor="start">Thinking</text>
+</g>
+<text x="446" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">orb 0.88× · sweep 75%</text>
+<rect x="576" y="30" width="128" height="96" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="586" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 1800 ms</text>
+<g transform="translate(582,76) scale(1.75)">
+<circle cx="6" cy="-4" r="5.617157287525381" fill="#7C86FF" opacity="0.18636038969321073"/>
+<circle cx="6" cy="-4" r="2.673223304703363" fill="#7C86FF"/>
+<defs><linearGradient id="sa4" x1="1.6000000000000014" x2="78.4" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#FFFFFF"/><stop offset="0.040" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="url(#sa4)" text-anchor="start">Thinking</text>
+</g>
+<text x="586" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="start">orb 0.87× · sweep 100%</text>
+<rect x="16" y="140" width="688" height="92" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="156" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">Resting state (reduced motion: orb static at 1.0, no sweep) · 1× and 2×</text>
+<circle cx="32" cy="176" r="6.3" fill="#7C86FF" opacity="0.33999999999999997"/>
+<circle cx="32" cy="176" r="3.1" fill="#AEB4FF"/>
+<text xml:space="preserve" x="42" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Thinking<tspan fill="#8E8E93" font-size="11">  ·  13s</tspan></text>
+<g transform="translate(200,196) scale(2)">
+<circle cx="6" cy="-4" r="6.3" fill="#7C86FF" opacity="0.33999999999999997"/>
+<circle cx="6" cy="-4" r="3.1" fill="#AEB4FF"/>
+<text xml:space="preserve" x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#ABABB0">Thinking<tspan fill="#8E8E93" font-size="11">  ·  13s</tspan></text>
+</g>
+<rect x="16" y="246" width="330" height="140" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<line x1="30" y1="360" x2="332" y2="360" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<line x1="30" y1="360" x2="30" y2="272" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<polyline points="30.0,360.0 35.0,359.8 40.1,359.0 45.1,357.8 50.1,356.2 55.2,354.1 60.2,351.6 65.2,348.7 70.3,345.4 75.3,341.9 80.3,338.0 85.4,333.9 90.4,329.6 95.4,325.1 100.5,320.6 105.5,316.0 110.5,311.4 115.6,306.9 120.6,302.4 125.6,298.1 130.7,294.0 135.7,290.1 140.7,286.6 145.8,283.3 150.8,280.4 155.8,277.9 160.9,275.8 165.9,274.2 170.9,273.0 176.0,272.2 181.0,272.0 186.0,272.2 191.1,273.0 196.1,274.2 201.1,275.8 206.2,277.9 211.2,280.4 216.2,283.3 221.3,286.6 226.3,290.1 231.3,294.0 236.4,298.1 241.4,302.4 246.4,306.9 251.5,311.4 256.5,316.0 261.5,320.6 266.6,325.1 271.6,329.6 276.6,333.9 281.7,338.0 286.7,341.9 291.7,345.4 296.8,348.7 301.8,351.6 306.8,354.1 311.9,356.2 316.9,357.8 321.9,359.0 327.0,359.8 332.0,360.0" fill="none" stroke="#30D158" stroke-width="2"/>
+<circle cx="30" cy="360.0" r="2.8" fill="#30D158"/>
+<circle cx="105.5" cy="316.0" r="2.8" fill="#30D158"/>
+<circle cx="181.0" cy="272.0" r="2.8" fill="#30D158"/>
+<circle cx="256.5" cy="316.0" r="2.8" fill="#30D158"/>
+<circle cx="332" cy="360.0" r="2.8" fill="#30D158"/>
+<text x="26" y="262" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Orb breath: sine, 1.6 s period</text>
+<text x="26" y="377" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="start">scale 0.85→1.0, halo opacity 0.16→0.34</text>
+<text x="332" y="371" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#9A9AA0" text-anchor="end">1.6 s</text>
+<rect x="362" y="246" width="342" height="140" rx="8" fill="#101012" stroke="#2A2A2E" stroke-width="1"/>
+<line x1="376" y1="360" x2="690" y2="360" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<line x1="376" y1="360" x2="376" y2="272" stroke="#3A3A40" stroke-width="1" stroke-linecap="round"/>
+<polyline points="376.0,360.0 381.2,358.5 386.5,357.1 391.7,355.6 396.9,354.1 402.2,352.7 407.4,351.2 412.6,349.7 417.9,348.3 423.1,346.8 428.3,345.3 433.6,343.9 438.8,342.4 444.0,340.9 449.3,339.5 454.5,338.0 459.7,336.5 465.0,335.1 470.2,333.6 475.4,332.1 480.7,330.7 485.9,329.2 491.1,327.7 496.4,326.3 501.6,324.8 506.8,323.3 512.1,321.9 517.3,320.4 522.5,318.9 527.8,317.5 533.0,316.0 538.2,314.5 543.5,313.1 548.7,311.6 553.9,310.1 559.2,308.7 564.4,307.2 569.6,305.7 574.9,304.3 580.1,302.8 585.3,301.3 590.6,299.9 595.8,298.4 601.0,296.9 606.3,295.5 611.5,294.0 616.7,292.5 622.0,291.1 627.2,289.6 632.4,288.1 637.7,286.7 642.9,285.2 648.1,283.7 653.4,282.3 658.6,280.8 663.8,279.3 669.1,277.9 674.3,276.4 679.5,274.9 684.8,273.5 690.0,272.0" fill="none" stroke="#30D158" stroke-width="2"/>
+<circle cx="376" cy="360" r="2.8" fill="#30D158"/>
+<circle cx="533.0" cy="316.0" r="2.8" fill="#30D158"/>
+<circle cx="690" cy="272" r="2.8" fill="#30D158"/>
+<text x="372" y="262" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Highlight sweep: linear 1.8 s, 24% band</text>
+<text x="372" y="377" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="start">reuse tool_group_title() strip-clip shimmer (:1986)</text>
+<text x="690" y="371" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#9A9AA0" text-anchor="end">1.8 s</text>
+<rect x="16" y="398" width="640" height="40" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="24" y="414" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Orb: 6 px accent core + 12 px halo, cap-height centred; verb "Thinking" in secondary #ABABB0 with</text>
+<text x="24" y="429" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">a white highlight sweep; timer "· 13s" 11 px tertiary #8E8E93, tabular digits. Calm, unmistakably live.</text>
+</g>
+</svg>

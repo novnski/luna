@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="470" viewBox="0 0 720 470" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="470" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-05 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Three interaction fills, one animated helper</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Fill tokens derived from theme.text (tinted per theme), applied by ui::interactive(…)</text>
+<rect x="24" y="96" width="210" height="84" rx="10" fill="#e5e5e50f" />
+<rect x="24" y="96" width="210" height="84" rx="10" fill="none" stroke="#1d1d1d" stroke-width="1" />
+<text x="38" y="126" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="13" font-weight="600" fill="#30D158" text-anchor="start">fill.tertiary</text>
+<text x="38" y="148" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">6% · hover</text>
+<text x="38" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">menus, rows, icon buttons</text>
+<rect x="250" y="96" width="210" height="84" rx="10" fill="#e5e5e51a" />
+<rect x="250" y="96" width="210" height="84" rx="10" fill="none" stroke="#1d1d1d" stroke-width="1" />
+<text x="264" y="126" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="13" font-weight="600" fill="#30D158" text-anchor="start">fill.secondary</text>
+<text x="264" y="148" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">10% · pressed</text>
+<text x="264" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">mouse-down, drag</text>
+<rect x="476" y="96" width="210" height="84" rx="10" fill="#26223d" />
+<rect x="476" y="96" width="210" height="84" rx="10" fill="none" stroke="#1d1d1d" stroke-width="1" />
+<text x="490" y="126" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="13" font-weight="600" fill="#30D158" text-anchor="start">accent.wash</text>
+<text x="490" y="148" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">selected</text>
+<text x="490" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">current row / chip</text>
+<text x="24" y="230" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Every hover: in 120 ms, out 180 ms, curve standard (0.2, 0, 0, 1)</text>
+<line x1="60" y1="340" x2="420" y2="340" stroke="#333" stroke-width="1" stroke-linecap="round"/>
+<line x1="60" y1="340" x2="60" y2="260" stroke="#333" stroke-width="1" stroke-linecap="round"/>
+<path d="M60 340 C 96 270 120 262 168 262 L 240 262 C 270 262 300 280 330 340 L 420 340" fill="none" stroke="#30D158" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="110" y="358" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#30D158" text-anchor="middle">enter 120</text>
+<text x="290" y="358" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#30D158" text-anchor="middle">exit 180</text>
+<text x="40" y="266" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="end">6%</text>
+<text x="40" y="342" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#a1a1a1" text-anchor="end">0</text>
+<rect x="450" y="260" width="260" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="457" y="274" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">replaces 25 fills + 175 instant .hover()</text>
+<rect x="450" y="288" width="192" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="457" y="302" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">settings rows get the same 6%</text>
+<rect x="450" y="316" width="198" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="457" y="330" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">pressed adds 10% without delay</text>
+<text x="16" y="458" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">ui::interactive(id) wraps motion::HoverFades; theme.element_hover becomes fill.tertiary (see DS-14)</text>
+</svg>

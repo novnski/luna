@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="494" viewBox="0 0 720 494" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="494.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-02 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Diff rows: word highlights on a tint you can see</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="56.0" width="688.0" height="36.0" rx="0" fill="#141415"/>
+<path d="M29.1,72.3 L33.0,76.2 L36.9,72.3" fill="none" stroke="#a9a9ae" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M48.5,68.0 h6.2 l3.4,3.4 v9.5 h-9.5 z" fill="#9aa4b2" opacity="0.35"/>
+<rect x="47.7" y="74.0" width="10.6" height="5.0" rx="1.5" fill="#dea584"/>
+<text x="68.0" y="79.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#c9c9cd" text-anchor="start">crates/ui/src/changes.rs</text>
+<text x="656.0" y="79.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#00d492" text-anchor="end">+2</text>
+<text x="692.0" y="79.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#ff6467" text-anchor="end">−2</text>
+<rect x="16.0" y="92.0" width="688.0" height="21.0" rx="0" fill="#0b0b0c"/>
+<text x="47.0" y="107.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4398</text>
+<text x="83.0" y="107.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4398</text>
+<text x="105.0" y="107.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#85858a" text-anchor="middle" opacity="0.6">·</text>
+<text x="131.0" y="107.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#92929a">/// A diff row&#x27;s tint, sampled from the reference.</tspan></text>
+<rect x="16.0" y="113.0" width="688.0" height="21.0" rx="0" fill="#181011"/>
+<rect x="16.0" y="113.0" width="3.0" height="21.0" rx="0" fill="#913c3e"/>
+<text x="47.0" y="128.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e75b5e" text-anchor="end">4399</text>
+<text x="105.0" y="128.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#ff6467" text-anchor="middle">−</text>
+<text x="131.0" y="128.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#8b7cf6">pub fn </tspan><tspan fill="#60a5fa">diff_row_wash</tspan><tspan fill="#e8e8ea">(tone: </tspan><tspan fill="#c084fc">Hsla</tspan><tspan fill="#e8e8ea">) -&gt; </tspan><tspan fill="#c084fc">Hsla</tspan><tspan fill="#e8e8ea"> {</tspan></text>
+<rect x="16.0" y="134.0" width="688.0" height="21.0" rx="0" fill="#181011"/>
+<rect x="16.0" y="134.0" width="3.0" height="21.0" rx="0" fill="#913c3e"/>
+<text x="47.0" y="149.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e75b5e" text-anchor="end">4400</text>
+<text x="105.0" y="149.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#ff6467" text-anchor="middle">−</text>
+<text x="131.0" y="149.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#e8e8ea">    </tspan><tspan fill="#c084fc">Hsla</tspan><tspan fill="#e8e8ea"> { a: </tspan><tspan fill="#facc15">0.055</tspan><tspan fill="#e8e8ea">, ..tone }</tspan></text>
+<rect x="16.0" y="155.0" width="688.0" height="21.0" rx="0" fill="#0a1613"/>
+<rect x="16.0" y="155.0" width="3.0" height="21.0" rx="0" fill="#057a56"/>
+<text x="83.0" y="170.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#01c085" text-anchor="end">4399</text>
+<text x="105.0" y="170.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#00d492" text-anchor="middle">+</text>
+<text x="131.0" y="170.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#8b7cf6">pub fn </tspan><tspan fill="#60a5fa">diff_row_wash</tspan><tspan fill="#e8e8ea">(tone: </tspan><tspan fill="#c084fc">Hsla</tspan><tspan fill="#e8e8ea">, theme: &amp;</tspan><tspan fill="#c084fc">Theme</tspan><tspan fill="#e8e8ea">) -&gt; </tspan><tspan fill="#c084fc">Hsla</tspan><tspan fill="#e8e8ea"> {</tspan></text>
+<rect x="16.0" y="176.0" width="688.0" height="21.0" rx="0" fill="#0a1613"/>
+<rect x="16.0" y="176.0" width="3.0" height="21.0" rx="0" fill="#057a56"/>
+<text x="83.0" y="191.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#01c085" text-anchor="end">4400</text>
+<text x="105.0" y="191.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#00d492" text-anchor="middle">+</text>
+<text x="131.0" y="191.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#e8e8ea">    </tspan><tspan fill="#c084fc">Hsla</tspan><tspan fill="#e8e8ea"> { a: </tspan><tspan fill="#f472b6">theme.diff_row_alpha</tspan><tspan fill="#e8e8ea">, ..tone }</tspan></text>
+<rect x="16.0" y="197.0" width="688.0" height="21.0" rx="0" fill="#0b0b0c"/>
+<text x="47.0" y="212.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4401</text>
+<text x="83.0" y="212.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4401</text>
+<text x="105.0" y="212.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#85858a" text-anchor="middle" opacity="0.6">·</text>
+<text x="131.0" y="212.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#e8e8ea">}</tspan></text>
+<rect x="129.0" y="177.0" width="330.0" height="19.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="330.0" y="276.0" width="239.2" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="337.0" y="289.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">no word highlight — whole line one tint</text>
+<line x1="449.6" y1="276.0" x2="449.6" y2="196.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="15.0" y="155.0" width="105.0" height="42.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="16.0" y="298.0" width="291.2" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="23.0" y="311.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">4 signals: 3 px bar + tint + coloured № + marker</text>
+<line x1="161.6" y1="298.0" x2="120.0" y2="197.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="91.0" y="92.0" width="28.0" height="126.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="98.0" y="324.0" width="123.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="105.0" y="337.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">28 px marker column</text>
+<line x1="159.9" y1="324.0" x2="119.0" y2="218.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="380.0" y="324.0" width="268.1" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="387.0" y="337.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">row wash α 0.055: #0a1613 on #0b0b0c ≈ 1.1:1</text>
+<text x="16.0" y="368.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">Luna Light</text>
+<rect x="16.0" y="376.0" width="688.0" height="54.0" rx="6" fill="#ffffff"/>
+<rect x="16.0" y="382.0" width="688.0" height="21.0" rx="0" fill="#fef1f2"/>
+<rect x="16.0" y="382.0" width="3.0" height="21.0" rx="0" fill="#f27379"/>
+<text x="47.0" y="397.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e91a23" text-anchor="end">4400</text>
+<text x="105.0" y="397.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#e7000b" text-anchor="middle">−</text>
+<text x="131.0" y="397.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#202631">    </tspan><tspan fill="#7e22ce">Hsla</tspan><tspan fill="#202631"> { a: </tspan><tspan fill="#a16207">0.055</tspan><tspan fill="#202631">, ..tone }</tspan></text>
+<rect x="16.0" y="403.0" width="688.0" height="21.0" rx="0" fill="#f1f9f7"/>
+<rect x="16.0" y="403.0" width="3.0" height="21.0" rx="0" fill="#73c7ab"/>
+<text x="83.0" y="418.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#1aa375" text-anchor="end">4400</text>
+<text x="105.0" y="418.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#009966" text-anchor="middle">+</text>
+<text x="131.0" y="418.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" xml:space="preserve"><tspan fill="#202631">    </tspan><tspan fill="#7e22ce">Hsla</tspan><tspan fill="#202631"> { a: </tspan><tspan fill="#be185d">theme.diff_row_alpha</tspan><tspan fill="#202631">, ..tone }</tspan></text>
+<rect x="16.0" y="438.0" width="372.1" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="23.0" y="451.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">light: emerald-600 at 5.5% = #f1f9f7 on #ffffff — barely there</text>
+</svg>

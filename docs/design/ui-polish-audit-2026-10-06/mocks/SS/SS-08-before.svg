@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="446" viewBox="0 0 720 446" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="446.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-08 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Transient feedback: one animated toast stack</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="52.0" width="392.0" height="340.0" rx="10" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<circle cx="28.0" cy="64.0" r="3" fill="#ff5f57" opacity="0.85"/>
+<circle cx="37.0" cy="64.0" r="3" fill="#febc2e" opacity="0.85"/>
+<circle cx="46.0" cy="64.0" r="3" fill="#28c840" opacity="0.85"/>
+<rect x="148.0" y="76.0" width="144.0" height="310.0" rx="10" fill="#0b0b0c" stroke="#262629" stroke-width="1"/>
+<rect x="24.0" y="86.0" width="116.0" height="34.0" rx="8" fill="#262628"/>
+<rect x="32.0" y="96.0" width="60.0" height="5.0" rx="2" fill="#85858a"/>
+<rect x="32.0" y="106.0" width="90.0" height="6.0" rx="3" fill="#a9a9ae" opacity="0.7"/>
+<rect x="24.0" y="126.0" width="116.0" height="34.0" rx="8" fill="none"/>
+<rect x="32.0" y="136.0" width="60.0" height="5.0" rx="2" fill="#85858a"/>
+<rect x="32.0" y="146.0" width="90.0" height="6.0" rx="3" fill="#a9a9ae" opacity="0.7"/>
+<rect x="24.0" y="166.0" width="116.0" height="34.0" rx="8" fill="none"/>
+<rect x="32.0" y="176.0" width="60.0" height="5.0" rx="2" fill="#85858a"/>
+<rect x="32.0" y="186.0" width="90.0" height="6.0" rx="3" fill="#a9a9ae" opacity="0.7"/>
+<rect x="24.0" y="206.0" width="116.0" height="34.0" rx="8" fill="none"/>
+<rect x="32.0" y="216.0" width="60.0" height="5.0" rx="2" fill="#85858a"/>
+<rect x="32.0" y="226.0" width="90.0" height="6.0" rx="3" fill="#a9a9ae" opacity="0.7"/>
+<text x="304.0" y="96.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#e8e8ea" text-anchor="start">Related chats</text>
+<rect x="304.0" y="108.0" width="98.0" height="24.0" rx="6" fill="none"/>
+<rect x="310.0" y="118.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="304.0" y="138.0" width="98.0" height="24.0" rx="6" fill="#2a2a2d"/>
+<rect x="310.0" y="148.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="304.0" y="168.0" width="98.0" height="24.0" rx="6" fill="none"/>
+<rect x="310.0" y="178.0" width="70.0" height="5.0" rx="2" fill="#a9a9ae" opacity="0.8"/>
+<rect x="160.0" y="332.0" width="120.0" height="46.0" rx="14" fill="#1d1d1f" stroke="#38383c" stroke-width="1"/>
+<text x="172.0" y="352.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">Do anything…</text>
+<rect x="166.0" y="96.0" width="94.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="166.0" y="118.0" width="64.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="166.0" y="140.0" width="94.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="166.0" y="162.0" width="64.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="24.0" y="276.0" width="116.0" height="34.0" rx="6" fill="#1c1a2b" stroke="#38383c" stroke-width="1"/>
+<text x="30.0" y="290.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">That chat isn&#x27;t</text>
+<text x="30.0" y="302.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">available here.</text>
+<text x="134.0" y="302.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="600" fill="#e8e8ea" text-anchor="end">Dismiss</text>
+<rect x="24.0" y="316.0" width="116.0" height="50.0" rx="8" fill="#0e0e0e" stroke="#595959" stroke-width="1"/>
+<rect x="32.0" y="346.0" width="80.0" height="4.0" rx="2" fill="#2c2c30"/>
+<rect x="32.0" y="346.0" width="30.0" height="4.0" rx="2" fill="#f87171"/>
+<circle cx="36.0" cy="380.0" r="6" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<circle cx="58.0" cy="380.0" r="6" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<circle cx="80.0" cy="380.0" r="6" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<rect x="22.0" y="274.0" width="120.0" height="38.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="16.0" y="398.0" width="273.9" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="23.0" y="411.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">pops in (no transition), pushes usage card up</text>
+<line x1="152.9" y1="398.0" x2="142.0" y2="312.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="302.0" y="136.0" width="102.0" height="28.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="250.0" y="372.0" width="158.4" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="257.0" y="385.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">action happened over here</text>
+<line x1="329.2" y1="372.0" x2="329.2" y2="164.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="16.0" y="420.0" width="389.4" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="23.0" y="433.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">lives in the left sidebar: hidden when it is collapsed · one slot</text>
+<text x="428.0" y="66.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e8e8ea" text-anchor="start">4 notice recipes today</text>
+<text x="428.0" y="88.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#8e8e93" text-anchor="start">Sidebar · r6 · 11 px · accent wash · text &#x27;Dismiss&#x27;</text>
+<rect x="428.0" y="94.0" width="276.0" height="26.0" rx="6" fill="#1c1a2b" stroke="#38383c" stroke-width="1"/>
+<text x="436.0" y="111.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">Copied context to a side chat.</text>
+<text x="696.0" y="111.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#e8e8ea" text-anchor="end">Dismiss</text>
+<text x="428.0" y="140.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#8e8e93" text-anchor="start">Workbench · r8 · 12 px · danger border · ✕ 18</text>
+<rect x="428.0" y="146.0" width="276.0" height="34.0" rx="8" fill="#2c2c30" stroke="#7a3b3b" stroke-width="1"/>
+<text x="438.0" y="167.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">No room for another pane here.</text>
+<path d="M683.9,158.9 L690.1,165.1 M690.1,158.9 L683.9,165.1" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="428.0" y="200.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#8e8e93" text-anchor="start">Composer chip · r10 · 12 px · icon · copy</text>
+<rect x="428.0" y="206.0" width="276.0" height="50.0" rx="10" fill="#1f1d10" stroke="#3d3815" stroke-width="1"/>
+<path d="M445.0,215.0 L450.6,224.8 H439.4 z" fill="none" stroke="#e8d77a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="445.0" y1="218.9" x2="445.0" y2="221.4" stroke="#e8d77a" stroke-width="1.3" stroke-linecap="round"/>
+<circle cx="445.0" cy="222.9" r="0.8" fill="#e8d77a"/>
+<text x="458.0" y="225.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e8d77a" text-anchor="start">Draft not saved</text>
+<text x="438.0" y="245.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#d8cf98" text-anchor="start">The engine refused the queued message.</text>
+<text x="428.0" y="276.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#8e8e93" text-anchor="start">Files banner · 27 h band · 10 px · 10.5 px icon</text>
+<rect x="428.0" y="282.0" width="276.0" height="27.0" rx="0" fill="#19170c"/>
+<line x1="428.0" y1="309.0" x2="704.0" y2="309.0" stroke="#3d3815" stroke-width="1" stroke-linecap="round"/>
+<text x="450.0" y="299.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#d8cf98" text-anchor="start">File watching paused: too many changes</text>
+<path d="M443.0,294.5 A3.5,3.5 0 1 1 440.6,291.2" fill="none" stroke="#d8cf98" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M440.6,289.7 L440.7,291.3 L439.1,291.9" fill="none" stroke="#d8cf98" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="424.0" y="76.0" width="284.0" height="238.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+</svg>

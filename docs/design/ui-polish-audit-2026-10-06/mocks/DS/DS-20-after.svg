@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="330" viewBox="0 0 720 330" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="330" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-20 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">One tooltip timing with warm-up</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">tooltip.delay 500 ms cold · 0 ms warm (within 1.5 s of the last tooltip) · fade motion::MICRO</text>
+<line x1="40" y1="170" x2="680" y2="170" stroke="#444" stroke-width="1.2" stroke-linecap="round"/>
+<line x1="40.0" y1="166" x2="40.0" y2="174" stroke="#666" stroke-width="1" stroke-linecap="round"/>
+<text x="40.0" y="188" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="middle">0</text>
+<line x1="146.66666666666669" y1="166" x2="146.66666666666669" y2="174" stroke="#666" stroke-width="1" stroke-linecap="round"/>
+<text x="146.66666666666669" y="188" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="middle">100</text>
+<line x1="253.33333333333334" y1="166" x2="253.33333333333334" y2="174" stroke="#666" stroke-width="1" stroke-linecap="round"/>
+<text x="253.33333333333334" y="188" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="middle">200</text>
+<line x1="360.0" y1="166" x2="360.0" y2="174" stroke="#666" stroke-width="1" stroke-linecap="round"/>
+<text x="360.0" y="188" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="middle">300</text>
+<line x1="466.6666666666667" y1="166" x2="466.6666666666667" y2="174" stroke="#666" stroke-width="1" stroke-linecap="round"/>
+<text x="466.6666666666667" y="188" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="middle">400</text>
+<line x1="573.3333333333334" y1="166" x2="573.3333333333334" y2="174" stroke="#666" stroke-width="1" stroke-linecap="round"/>
+<text x="573.3333333333334" y="188" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="middle">500</text>
+<line x1="680.0" y1="166" x2="680.0" y2="174" stroke="#666" stroke-width="1" stroke-linecap="round"/>
+<text x="680.0" y="188" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="middle">600</text>
+<line x1="40.0" y1="170" x2="40.0" y2="130" stroke="#30D158" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="40.0" cy="170" r="4" fill="#30D158"/>
+<text x="44.0" y="126" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">0 ms · warm</text>
+<line x1="573.3333333333334" y1="170" x2="573.3333333333334" y2="130" stroke="#30D158" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="573.3333333333334" cy="170" r="4" fill="#30D158"/>
+<text x="577.3333333333334" y="126" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">500 ms · cold</text>
+<rect x="40" y="210" width="457" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="47" y="224" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">ui::tooltip(text) owns delay, warm-up, fade and the tooltip_card surface</text>
+<text x="16" y="318" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">pickers::CONTROL_TOOLTIP_DELAY and literal tooltip_show_delay calls removed</text>
+</svg>

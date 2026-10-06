@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="504" viewBox="0 0 720 504">
+<rect width="720" height="504" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-03 · Thought text reflows to the real width; height stays analytic</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="12" y="12" width="420" height="212" rx="10" fill="#0A0A0A" stroke="#1E1E21" stroke-width="1"/>
+<text x="24" y="32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">Side pane · 420 px</text>
+<g transform="translate(30.5,51.0) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="52" y="61.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Thought process</text>
+<text x="80" y="88" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#ABABB0" text-anchor="start" opacity="1.0">The user wants the tool fold to feel</text>
+<text x="80" y="108" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#ABABB0" text-anchor="start" opacity="1.0">smoother. I should check motion.rs for</text>
+<text x="80" y="128" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#ABABB0" text-anchor="start" opacity="1.0">the existing COLLAPSE spec and see</text>
+<text x="80" y="148" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#ABABB0" text-anchor="start" opacity="1.0">whether TOOL_FOLD can reuse it, then</text>
+<text x="80" y="168" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#ABABB0" text-anchor="start" opacity="1.0">measure how the group header computes</text>
+<text x="80" y="188" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#ABABB0" text-anchor="start" opacity="0.35">its height so the analytic tween keeps</text>
+<text x="80" y="210" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#8E8E93" text-anchor="start">Show 1 more line</text>
+<g transform="translate(184.88,200) scale(0.5000)" fill="none" stroke="#8E8E93" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<line x1="446" y1="85" x2="324" y2="124" stroke="#30D158" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="324" cy="124" r="2.6" fill="#30D158"/>
+<rect x="446" y="30" width="262" height="55" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="454" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Wrapped by the text system at the live</text>
+<text x="454" y="61" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">width; 13/20 sans in secondary #ABABB0;</text>
+<text x="454" y="76" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">wrapped line count cached per width</text>
+<line x1="446" y1="167" x2="224" y2="206" stroke="#30D158" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="224" cy="206" r="2.6" fill="#30D158"/>
+<rect x="446" y="112" width="262" height="55" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="454" y="128" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Cap at 6 lines with a 20 px fade, then a</text>
+<text x="454" y="143" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">"Show N more lines" ghost button</text>
+<text x="454" y="158" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">(singular/plural aware)</text>
+<rect x="12" y="236" width="696" height="140" rx="10" fill="#0A0A0A" stroke="#1E1E21" stroke-width="1"/>
+<text x="24" y="256" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">Wide column · 1200 px (drawn at 50%)</text>
+<rect x="60" y="270" width="600.0" height="80" rx="4" fill="#080808" stroke="#202024" stroke-width="1"/>
+<line x1="88.0" y1="266" x2="88.0" y2="354" stroke="#3A3A40" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3" opacity="0.9"/>
+<rect x="88.0" y="280" width="540.0" height="8" rx="4" fill="#ABABB0" opacity="0.9"/>
+<rect x="88.0" y="298" width="532.0" height="8" rx="4" fill="#ABABB0" opacity="0.9"/>
+<rect x="88.0" y="316" width="260.0" height="8" rx="4" fill="#ABABB0" opacity="0.9"/>
+<line x1="88.0" y1="358" x2="632.0" y2="358" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="88.0" y1="354" x2="88.0" y2="362" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="632.0" y1="354" x2="632.0" y2="362" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<text x="360.0" y="371" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#30D158" text-anchor="middle">wrap width = column − 56 px</text>
+<text x="16" y="396" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">ToolDetail::Thought keeps inline runs; detail_height_for() = cached line count × 20 px,</text>
+<text x="16" y="412" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">so the fold tween stays measurement-free (same contract as today).</text>
+</g>
+</svg>

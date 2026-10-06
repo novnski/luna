@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="420.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-09 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Image lightbox: grow from the thumbnail, then offer controls</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="56.0" width="216.0" height="150.0" rx="10" fill="#0b0b0c" stroke="#38383c" stroke-width="1"/>
+<rect x="34.0" y="80.0" width="140.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="34.0" y="94.0" width="110.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="34.0" y="108.0" width="80.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="16.0" y="56.0" width="216.0" height="150.0" rx="10" fill="#000000" opacity="0.0"/>
+<rect x="40.0" y="126.0" width="64.0" height="40.0" rx="3" fill="#46679f" opacity="1.0"/>
+<path d="M40.0,166.0 L62.4,144.0 L75.2,154.0 L86.1,146.0 L104.0,166.0 z" fill="#2f4a78" opacity="1.0"/>
+<circle cx="89.9" cy="137.2" r="3.2" fill="#e9d38a" opacity="1.0"/>
+<text x="124.0" y="224.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a9a9ae" text-anchor="middle">0 ms</text>
+<rect x="248.0" y="56.0" width="216.0" height="150.0" rx="10" fill="#0b0b0c" stroke="#38383c" stroke-width="1"/>
+<rect x="266.0" y="80.0" width="140.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="266.0" y="94.0" width="110.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="266.0" y="108.0" width="80.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="248.0" y="56.0" width="216.0" height="150.0" rx="10" fill="#000000" opacity="0.5459999999999999"/>
+<rect x="275.1" y="88.6" width="138.9" height="86.8" rx="3" fill="#46679f" opacity="1.0"/>
+<path d="M275.1,175.4 L323.7,127.6 L351.5,149.3 L375.1,132.0 L414.0,175.4 z" fill="#2f4a78" opacity="1.0"/>
+<circle cx="383.4" cy="112.9" r="6.944000000000001" fill="#e9d38a" opacity="1.0"/>
+<text x="356.0" y="224.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a9a9ae" text-anchor="middle">120 ms</text>
+<rect x="480.0" y="56.0" width="216.0" height="150.0" rx="10" fill="#0b0b0c" stroke="#38383c" stroke-width="1"/>
+<rect x="498.0" y="80.0" width="140.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="498.0" y="94.0" width="110.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="498.0" y="108.0" width="80.0" height="6.0" rx="3" fill="#38383c"/>
+<rect x="480.0" y="56.0" width="216.0" height="150.0" rx="10" fill="#000000" opacity="0.7"/>
+<rect x="508.0" y="78.0" width="160.0" height="100.0" rx="3" fill="#46679f" opacity="1.0"/>
+<path d="M508.0,178.0 L564.0,123.0 L596.0,148.0 L623.2,128.0 L668.0,178.0 z" fill="#2f4a78" opacity="1.0"/>
+<circle cx="632.8" cy="106.0" r="8.0" fill="#e9d38a" opacity="1.0"/>
+<rect x="604.0" y="62.0" width="86.0" height="20.0" rx="10" fill="#2a2a2e" stroke="#46464c" stroke-width="1" opacity="0.95"/>
+<path d="M611.9,68.9 L618.1,75.1 M618.1,68.9 L611.9,75.1" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="644.0" y="76.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="8.5" font-weight="400" fill="#ffffff" text-anchor="middle">100%</text>
+<text x="674.0" y="76.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="8.5" font-weight="400" fill="#ffffff" text-anchor="middle">Fit</text>
+<text x="588.0" y="224.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#a9a9ae" text-anchor="middle">280 ms</text>
+<rect x="268.0" y="74.0" width="176.0" height="112.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="270.0" y="236.0" width="146.8" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="277.0" y="249.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">frame grows thumb → fit</text>
+<line x1="343.4" y1="236.0" x2="343.4" y2="186.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="602.0" y="60.0" width="90.0" height="24.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="16.0" y="264.0" width="233.5" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="23.0" y="277.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">capsule: ✕ · zoom % · Fit (28 h glass)</text>
+<rect x="320.0" y="264.0" width="262.3" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="327.0" y="277.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">double-click = fit ↔ 100% at cursor, 220 ms</text>
+<rect x="16.0" y="296.0" width="420.0" height="108.0" rx="8" fill="#0e0e0e" stroke="#38383c" stroke-width="1"/>
+<text x="26.0" y="312.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#a9a9ae" text-anchor="start">Frame + scrim (0 → 0.7)</text>
+<line x1="44.0" y1="384.0" x2="424.0" y2="384.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<line x1="44.0" y1="320.0" x2="44.0" y2="384.0" stroke="#38383c" stroke-width="1" stroke-linecap="round"/>
+<text x="44.0" y="397.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">0</text>
+<text x="313.8" y="397.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">200</text>
+<text x="424.0" y="397.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#85858a" text-anchor="middle">280 ms</text>
+<path d="M44.0,384.0 L48.5,379.3 L53.1,374.9 L57.6,370.7 L62.2,366.7 L66.9,362.9 L71.6,359.3 L76.4,355.9 L81.3,352.8 L86.4,349.8 L91.6,347.0 L97.0,344.4 L102.6,342.0 L108.4,339.7 L114.5,337.6 L120.8,335.6 L127.4,333.8 L134.3,332.2 L141.5,330.6 L149.1,329.3 L157.1,328.0 L165.4,326.9 L174.1,325.8 L183.2,324.9 L192.8,324.1 L202.9,323.4 L213.5,322.7 L224.5,322.2 L236.1,321.7 L248.2,321.3 L261.0,321.0 L274.3,320.7 L288.2,320.5 L302.7,320.3 L317.9,320.2 L333.8,320.1 L350.4,320.1 L367.6,320.0 L385.7,320.0 L404.4,320.0 L424.0,320.0" fill="none" stroke="#30D158" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M44.0,320.0 L51.8,320.1 L59.0,320.5 L65.7,321.0 L72.0,321.8 L77.7,322.8 L83.1,323.9 L88.1,325.2 L92.8,326.7 L97.2,328.3 L101.3,330.0 L105.3,331.9 L109.1,333.8 L112.7,335.9 L116.3,338.0 L119.9,340.2 L123.4,342.5 L127.0,344.9 L130.7,347.2 L134.5,349.6 L138.4,352.0 L142.6,354.4 L147.0,356.8 L151.7,359.1 L156.7,361.5 L162.0,363.8 L167.8,366.0 L174.0,368.1 L180.7,370.2 L188.0,372.1 L195.8,374.0 L204.2,375.7 L213.2,377.3 L223.0,378.8 L233.4,380.1 L244.7,381.2 L256.7,382.2 L269.6,383.0 L283.4,383.5 L298.1,383.9 L313.8,384.0 L424.0,384.0" fill="none" stroke="#a9a9ae" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="426.0" y="312.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#a9a9ae" text-anchor="end">close 200 ms</text>
+<text x="351.3" y="312.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#30D158" text-anchor="end">open 280 ms expo-out</text>
+<text x="452.0" y="320.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">PreviewImage { origin: Bounds, … }</text>
+<text x="452.0" y="340.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">Scrim alpha 0 → 0.7 and image frame</text>
+<text x="452.0" y="358.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">thumbnail rect → fitted rect; reverse</text>
+<text x="452.0" y="376.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">on close. Files preview: 8 pt checker</text>
+<text x="452.0" y="394.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">ink(0.04)/ink(0.08) under alpha images.</text>
+</svg>

@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="400.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-13 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Git card: one default action, a toggle that latches</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="56.0" width="470.0" height="320.0" rx="10" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="24.0" y="63.0" width="104.0" height="24.0" rx="6" fill="#232325"/>
+<text x="32.0" y="79.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">Working tree</text>
+<path d="M110.6,73.6 L114.0,76.9 L117.4,73.6" fill="none" stroke="#a9a9ae" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="358.0" y="63.0" width="24.0" height="24.0" rx="6" fill="#2f2f32"/>
+<circle cx="366.8" cy="70.5" r="1.76" fill="none" stroke="#e8e8ea" stroke-width="1.3"/>
+<circle cx="366.8" cy="79.5" r="1.76" fill="none" stroke="#e8e8ea" stroke-width="1.3"/>
+<circle cx="373.5" cy="72.4" r="1.76" fill="none" stroke="#e8e8ea" stroke-width="1.3"/>
+<path d="M366.8,72.3 V77.7 M373.5,74.2 C373.5,76.6 366.8,75.8 366.8,77.7" fill="none" stroke="#e8e8ea" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="401.1" y="70.8" width="9.8" height="8.4" rx="2" fill="none" stroke="#a9a9ae" stroke-width="1.3"/>
+<line x1="406.0" y1="70.8" x2="406.0" y2="79.2" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round"/>
+<path d="M429.1,72.2 H438.2 M429.1,75.7 H436.8 Q438.9,75.7 438.9,77.5 Q438.9,79.2 436.8,79.2 H434.7" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M459.2,70.8 L462.0,73.3 L464.8,70.8 M459.2,79.2 L462.0,76.7 L464.8,79.2" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="17.0" y="96.0" width="468.0" height="230.0" rx="0" fill="#111113"/>
+<text x="28.0" y="118.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">main · 3 changed</text>
+<rect x="28.0" y="135.0" width="12.0" height="12.0" rx="3" fill="#8b7cf6"/>
+<path d="M30.6,141.2 L33.0,143.6 L37.4,138.6" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="48.0" y="145.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">crates/ui/src/changes.rs</text>
+<rect x="422.0" y="131.0" width="50.0" height="22.0" rx="6" fill="#2c2c30" stroke="#38383c" stroke-width="1"/>
+<text x="447.0" y="146.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="middle">Stage</text>
+<rect x="28.0" y="161.0" width="12.0" height="12.0" rx="3" fill="#8b7cf6"/>
+<path d="M30.6,167.2 L33.0,169.6 L37.4,164.6" fill="none" stroke="#ffffff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="48.0" y="171.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">crates/ui/src/theme.rs</text>
+<rect x="422.0" y="157.0" width="50.0" height="22.0" rx="6" fill="#2c2c30" stroke="#38383c" stroke-width="1"/>
+<text x="447.0" y="172.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="middle">Stage</text>
+<rect x="28.0" y="187.0" width="12.0" height="12.0" rx="3" fill="none" stroke="#a9a9ae" stroke-width="1"/>
+<text x="48.0" y="197.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">docs/notes.md</text>
+<rect x="422.0" y="183.0" width="50.0" height="22.0" rx="6" fill="#2c2c30" stroke="#38383c" stroke-width="1"/>
+<text x="447.0" y="198.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="middle">Stage</text>
+<rect x="28.0" y="220.0" width="446.0" height="32.0" rx="8" fill="#1d1d1f" stroke="#38383c" stroke-width="1"/>
+<text x="38.0" y="240.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e8e8ea" text-anchor="start">Tighten diff tint and add word highlights</text>
+<rect x="444.0" y="224.0" width="24.0" height="24.0" rx="6" fill="none"/>
+<path d="M456.0,230.7 Q456.8,235.2 461.3,236.0 Q456.8,236.8 456.0,241.3 Q455.2,236.8 450.7,236.0 Q455.2,235.2 456.0,230.7 z" fill="#8b7cf6"/>
+<rect x="264.0" y="262.0" width="70.0" height="26.0" rx="7" fill="#232325" stroke="#38383c" stroke-width="1"/>
+<text x="299.0" y="279.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e8e8ea" text-anchor="middle">Push</text>
+<rect x="342.0" y="262.0" width="132.0" height="26.0" rx="7" fill="#8b7cf6"/>
+<text x="383.0" y="279.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#ffffff" text-anchor="middle">Commit 2 files</text>
+<line x1="448.0" y1="266.0" x2="448.0" y2="284.0" stroke="#ffffff" stroke-width="1" stroke-linecap="round" opacity="0.35"/>
+<path d="M456.1,273.3 L460.0,277.2 L463.9,273.3" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="340.0" y="260.0" width="136.0" height="30.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="24.0" y="354.0" width="169.9" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="31.0" y="367.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">default: accent · 26 h · r7</text>
+<line x1="193.9" y1="354.0" x2="340.0" y2="290.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="356.0" y="61.0" width="28.0" height="28.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="500.0" y="70.0" width="146.8" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="507.0" y="83.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">header_toggle (latched)</text>
+<line x1="500.0" y1="79.8" x2="384.0" y2="79.8" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="500.0" y="210.0" width="169.9" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="507.0" y="223.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">reveal with COLLAPSE 180 ms</text>
+<rect x="500.0" y="236.0" width="181.5" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="507.0" y="249.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">split chevron = Commit &amp; Push</text>
+<rect x="500.0" y="262.0" width="193.0" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="507.0" y="275.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">Generate = sparkle in the field</text>
+<rect x="500.0" y="288.0" width="164.2" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="507.0" y="301.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">disabled at 0.4 when empty</text>
+</svg>

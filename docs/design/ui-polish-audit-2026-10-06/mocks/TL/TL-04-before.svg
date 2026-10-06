@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="434" viewBox="0 0 720 434">
+<rect width="720" height="434" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-04 · Failed rows paint glyph, label and detail red</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<g transform="translate(45.5,36.0) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="68" y="47.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Ran 1 command · 5 hooks · 4 failed</text>
+<line x1="52.5" y1="58" x2="52.5" y2="68.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 68.0 Q52.5 74.0 58.5 74.0 L68 74.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="52.5" y1="68.0" x2="52.5" y2="90" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(72,66.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="96" y="78.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Hook</text>
+<text x="130.4" y="78.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">SessionStart · startup</text>
+<line x1="52.5" y1="90" x2="52.5" y2="100.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 100.0 Q52.5 106.0 58.5 106.0 L68 106.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="52.5" y1="100.0" x2="52.5" y2="122" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(72,98.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="96" y="110.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Hook</text>
+<text x="130.4" y="110.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">UserPromptSubmit</text>
+<line x1="52.5" y1="122" x2="52.5" y2="132.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 132.0 Q52.5 138.0 58.5 138.0 L68 138.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="52.5" y1="132.0" x2="52.5" y2="154" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(72,130.0) scale(0.6667)" fill="none" stroke="#F87171" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="4"/><path d="M7.5 10l2.5 2-2.5 2M12.5 15h4"/></g>
+<text x="96" y="142.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Run</text>
+<text x="123.8" y="142.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">rm -rf build</text>
+<line x1="52.5" y1="154" x2="52.5" y2="164.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 164.0 Q52.5 170.0 58.5 170.0 L68 170.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="52.5" y1="164.0" x2="52.5" y2="186" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(72,162.0) scale(0.6667)" fill="none" stroke="#F87171" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="96" y="174.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Hook</text>
+<text x="130.4" y="174.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">PreToolUse · Bash</text>
+<line x1="52.5" y1="186" x2="52.5" y2="196.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 196.0 Q52.5 202.0 58.5 202.0 L68 202.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="52.5" y1="196.0" x2="52.5" y2="218" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(72,194.0) scale(0.6667)" fill="none" stroke="#F87171" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="96" y="206.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Hook</text>
+<text x="130.4" y="206.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">PostToolUse · Edit</text>
+<line x1="52.5" y1="218" x2="52.5" y2="228.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M52.5 228.0 Q52.5 234.0 58.5 234.0 L68 234.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(72,226.0) scale(0.6667)" fill="none" stroke="#F87171" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="96" y="238.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Hook</text>
+<text x="130.4" y="238.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Notification</text>
+<rect x="67.5" y="125.5" width="231" height="121" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="40" y="270" width="640" height="30" rx="9" fill="#0F0F0F" stroke="#202020" stroke-width="1"/>
+<rect x="48" y="276" width="18" height="18" rx="5" fill="#1B1B1B"/>
+<g transform="translate(51,279) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5M2 13v3M22 13v3"/><circle cx="9" cy="13.5" r="0.8"/><circle cx="15" cy="13.5" r="0.8"/></g>
+<text x="74" y="289.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#F87171" text-anchor="start">Agent</text>
+<text x="112.9" y="289.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Check docs</text>
+<rect x="654" y="276" width="18" height="18" rx="5" fill="#161616"/>
+<g transform="translate(657.5,279.5) scale(0.4583)" fill="none" stroke="#C9C9CC" stroke-width="2.73" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 16.5l9-9M9 7.5h7.5V15"/></g>
+<text x="646" y="289" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#F87171" text-anchor="end">Failed</text>
+<rect x="41.5" y="271.5" width="637" height="27" rx="8" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<line x1="330" y1="140" x2="300" y2="170" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="300" cy="170" r="2.6" fill="#FF453A"/>
+<rect x="330" y="70" width="274.5" height="70" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="338" y="86" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">4 of 6 rows (and the failed agent card) are</text>
+<text x="338" y="101" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">wall-to-wall #F87171: glyph + label + detail</text>
+<text x="338" y="116" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">(chip_header_row tint, transcript.rs:9031-9036;</text>
+<text x="338" y="131" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start"> activity_rail tint :9385)</text>
+<line x1="440" y1="300" x2="440" y2="285" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="440" cy="285" r="2.6" fill="#FF453A"/>
+<rect x="330" y="300" width="291.0" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="338" y="316" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Red is the loudest thing on screen for an expected</text>
+<text x="338" y="331" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">outcome (a hook blocking a command); the summary</text>
+<text x="338" y="346" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">already says "4 failed".</text>
+</g>
+</svg>

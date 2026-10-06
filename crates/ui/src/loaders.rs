@@ -102,6 +102,41 @@ pub fn luna_loader(
         }))
 }
 
+/// Working orb box: sits on a 12–13 px text line.
+const ORB_BOX: f32 = 12.0;
+/// Solid accent core at full breath.
+const ORB_CORE: f32 = 6.0;
+
+/// The working orb: a solid accent core inside a soft halo, breathing on one
+/// slow sine (scale 0.85→1.0, halo 16%→34%). One calm, continuous motion
+/// reads as "live" at a glance where a sparse dot matrix read as flicker.
+/// Reduced motion rests at full breath and schedules nothing.
+pub fn breathing_orb(theme: &Theme, view: EntityId, cx: &mut App) -> impl IntoElement {
+    let accent = theme.accent;
+    let breath = if cx.reduce_motion() {
+        1.0
+    } else {
+        let t = motion::pulse_delta(&motion::ORB_BREATH, view, cx);
+        0.5 - 0.5 * (t * std::f32::consts::TAU).cos()
+    };
+    let core = ORB_CORE * (0.85 + 0.15 * breath);
+    div()
+        .flex_none()
+        .relative()
+        .size(px(ORB_BOX))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .rounded_full()
+                .bg(accent.opacity(0.16 + 0.18 * breath)),
+        )
+        .child(div().size(px(core)).rounded_full().bg(accent))
+}
+
 pub use luna_proto::motion::{GSPIN_DIM, GSPIN_ROW_TINTS};
 
 /// The gradient matrix spinner (WorkingIndicator), ported from luna's

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="366" viewBox="0 0 720 366" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="366.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-07 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">One tab chip for canvas, right pane and terminal drawer</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<text x="16.0" y="70.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#e8e8ea" text-anchor="start">Canvas tabs</text>
+<text x="16.0" y="86.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#8e8e93" text-anchor="start">28 h · r7 · 72–220 w · 12.5 px · accent 16%</text>
+<rect x="236.0" y="56.0" width="468.0" height="38.0" rx="6" fill="#161618"/>
+<rect x="242.0" y="61.0" width="176.0" height="28.0" rx="7" fill="#1d1b2e"/>
+<circle cx="254.0" cy="75.0" r="4.5" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<text x="264.0" y="79.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12.5" font-weight="500" fill="#e8e8ea" text-anchor="start">Benchmark the cache</text>
+<path d="M403.4,72.4 L408.6,77.6 M408.6,72.4 L403.4,77.6" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="434.0" cy="75.0" r="4.5" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<text x="444.0" y="79.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12.5" font-weight="400" fill="#a9a9ae" text-anchor="start">Main</text>
+<path d="M547.0,71.1 V78.9 M543.1,75.0 H550.9" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="241.0" y="60.0" width="178.0" height="30.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<text x="16.0" y="162.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#e8e8ea" text-anchor="start">Right-pane chips</text>
+<text x="16.0" y="178.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#8e8e93" text-anchor="start">24 h · r6 · fixed 112 w · 11.5 px · wash 0.10</text>
+<rect x="236.0" y="148.0" width="468.0" height="38.0" rx="6" fill="#161618"/>
+<rect x="242.0" y="155.0" width="112.0" height="24.0" rx="6" fill="#2a2a2d"/>
+<circle cx="254.0" cy="167.0" r="4.5" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<text x="264.0" y="171.1" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="500" fill="#e8e8ea" text-anchor="start">Related chats</text>
+<path d="M339.4,164.4 L344.6,169.6 M344.6,164.4 L339.4,169.6" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="370.0" cy="167.0" r="4.5" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<text x="380.0" y="171.1" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">Files</text>
+<path d="M485.0,163.1 V170.9 M481.1,167.0 H488.9" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="241.0" y="154.0" width="114.0" height="26.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<text x="16.0" y="254.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#e8e8ea" text-anchor="start">Terminal drawer</text>
+<text x="16.0" y="270.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#8e8e93" text-anchor="start">bar 40 h · 28 h · r8 · fixed 118 w · 12 px</text>
+<rect x="236.0" y="240.0" width="468.0" height="40.0" rx="6" fill="#090909"/>
+<line x1="236.0" y1="280.0" x2="704.0" y2="280.0" stroke="#2a2a2d" stroke-width="1" stroke-linecap="round"/>
+<rect x="242.0" y="246.0" width="118.0" height="28.0" rx="8" fill="#2f2f32"/>
+<circle cx="254.0" cy="260.0" r="4.5" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<text x="264.0" y="264.3" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e8e8ea" text-anchor="start">zsh</text>
+<path d="M345.4,257.4 L350.6,262.6 M350.6,257.4 L345.4,262.6" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="376.0" cy="260.0" r="4.5" fill="none" stroke="#a9a9ae" stroke-width="1.2"/>
+<text x="386.0" y="264.3" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a9a9ae" text-anchor="start">cargo test</text>
+<path d="M497.0,256.1 V263.9 M493.1,260.0 H500.9" fill="none" stroke="#a9a9ae" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="241.0" y="245.0" width="120.0" height="30.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="236.0" y="330.0" width="406.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="243.0" y="343.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">3 heights · 3 radii · 3 label sizes · 3 active fills · 2 width rules</text>
+</svg>

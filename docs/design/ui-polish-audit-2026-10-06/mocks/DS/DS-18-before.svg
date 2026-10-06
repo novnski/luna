@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="400" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-18 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Sub-11 pt text in everyday chrome</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">text_size(ui_rems(N)) below 11 pt: 9 ×3 · 9.5 ×3 · 10 ×57 · 10.5 ×31 (shown at real size)</text>
+<rect x="24" y="96" width="320" height="130" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<text x="40" y="122" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#e5e5e5" text-anchor="start">Usage</text>
+<text x="40" y="146" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e5e5e5" text-anchor="start">Claude · 5-hour window</text>
+<text x="328" y="146" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#a1a1a1" text-anchor="end">Resets 14:20</text>
+<rect x="40" y="154" width="288" height="6" rx="3" fill="#222" />
+<rect x="40" y="154" width="170" height="6" rx="3" fill="#8b7cf6" />
+<text x="40" y="182" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#f87171" text-anchor="start">Couldn’t refresh usage — retrying in 30 s</text>
+<circle cx="333" cy="143" r="3.5" fill="#FF453A"/>
+<line x1="333" y1="143" x2="380" y2="110" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="380" y="100" width="180" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="387" y="114" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">status 9 pt (usage.rs:1288)</text>
+<circle cx="200" cy="179" r="3.5" fill="#FF453A"/>
+<line x1="200" y1="179" x2="380" y2="140" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="380" y="130" width="174" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="387" y="144" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">error 9 pt (usage.rs:3049)</text>
+<rect x="380" y="166" width="316" height="60" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<text x="396" y="186" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="600" fill="#737373" text-anchor="start" letter-spacing="0.4">MATCHING THREADS</text>
+<text x="396" y="206" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="400" fill="#e5e5e5" text-anchor="start">Fix flaky queue test</text>
+<text x="396" y="219" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">luna · 2 h ago · 14 messages</text>
+<text x="680" y="219" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#FF453A" text-anchor="end">9.5 pt</text>
+<text x="24" y="262" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">Top files below 11 pt: shell/usage.rs 13 · pickers.rs 10 · shell.rs 7 · history.rs 5 · command_palette.rs 4</text>
+<rect x="24" y="284" width="371" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="31" y="298" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">at the 12 px interface setting these render at 6.75–7.9 pt</text>
+<rect x="24" y="312" width="426" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="31" y="326" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">macOS’s smallest text style is 10 pt; readable copy floors at 11 pt</text>
+<text x="16" y="388" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">contrast passes, but size and muted colour compound (muted 10 pt on raised fills)</text>
+</svg>

@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="460" viewBox="0 0 720 460" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="460" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-03 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Row text collides with its control</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Appearance › Accent color at the 20 px interface size (real render, re-drawn 1:1)</text>
+<rect x="24" y="96" width="672" height="80" rx="12" fill="#090909" stroke="#222222" stroke-width="1" />
+<rect x="44" y="118" width="36" height="36" rx="10" fill="#101010" stroke="#222222" stroke-width="1" />
+<svg x="54" y="128" width="16" height="16" viewBox="0 0 24 24" color="#a1a1a1" overflow="visible"><g ><g fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 14.5a3 3 0 1 1 6 0a3 3 0 0 1-6 0Zm-10-5a3 3 0 1 0 6 0a3 3 0 0 0-6 0Z"/><path stroke-linecap="round" d="M16.959 9V2m-10 13v7m10 0v-2m-10-18v2"/></g></g></svg>
+<text x="94" y="130" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="16.25" font-weight="500" fill="#e5e5e5" text-anchor="start">Accent color</text>
+<text x="94" y="156" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="15" font-weight="400" fill="#a1a1a1" text-anchor="start">Green · Controls, glyphs, selections, code, and activity.</text>
+<rect x="424" y="114" width="28" height="28" rx="8" fill="#3a3550" stroke="#444" stroke-width="1" />
+<rect x="458" y="114" width="28" height="28" rx="8" fill="#8b7cf6" stroke="#444" stroke-width="1" />
+<rect x="492" y="114" width="28" height="28" rx="8" fill="#fb923c" stroke="#444" stroke-width="1" />
+<rect x="526" y="114" width="28" height="28" rx="8" fill="#facc15" stroke="#444" stroke-width="1" />
+<rect x="560" y="114" width="28" height="28" rx="8" fill="#4ade80" stroke="#888" stroke-width="1.5" />
+<rect x="594" y="114" width="28" height="28" rx="8" fill="#22d3ee" stroke="#444" stroke-width="1" />
+<rect x="628" y="114" width="28" height="28" rx="8" fill="#60a5fa" stroke="#444" stroke-width="1" />
+<rect x="662" y="114" width="28" height="28" rx="8" fill="#f472b6" stroke="#444" stroke-width="1" />
+<line x1="560" y1="148" x2="588" y2="148" stroke="#4ade80" stroke-width="2" stroke-linecap="round"/>
+<rect x="420" y="140" width="40" height="24" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="3 2" />
+<circle cx="440" cy="166" r="3.5" fill="#FF453A"/>
+<line x1="440" y1="166" x2="364" y2="206" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="364" y="196" width="229" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="371" y="210" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">description runs under the swatches</text>
+<text x="24" y="250" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="600" fill="#a1a1a1" text-anchor="start">Narrow content width (usage-fixture, 600 pt window):</text>
+<rect x="24" y="264" width="260" height="170" rx="12" fill="#090909" stroke="#222222" stroke-width="1" />
+<text x="44" y="290" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#e5e5e5" text-anchor="start">Se…</text>
+<text x="44" y="310" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Choo</text>
+<text x="44" y="328" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">se</text>
+<text x="44" y="346" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">whet</text>
+<text x="44" y="364" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">her</text>
+<text x="44" y="382" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Ente</text>
+<text x="44" y="400" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">r</text>
+<rect x="96" y="330" width="168" height="34" rx="9" fill="#151515" />
+<rect x="98" y="332" width="80" height="30" rx="7" fill="#000" />
+<text x="138" y="351" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Enter</text>
+<text x="220" y="351" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">⌘ Enter</text>
+<circle cx="64" cy="350" r="3.5" fill="#FF453A"/>
+<line x1="64" y1="350" x2="310" y2="310" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="310" y="300" width="192" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="317" y="314" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">text column shrinks to ~50 pt</text>
+<circle cx="250" cy="346" r="3.5" fill="#FF453A"/>
+<line x1="250" y1="346" x2="310" y2="350" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="310" y="340" width="254" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="317" y="354" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">control is flex_none, never wraps below</text>
+<text x="310" y="390" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="start">general.rs:252 send row · widgets.rs:304 card_row</text>
+<text x="310" y="406" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="start">shots/design-system/settings-general-narrow-row-collapse.png</text>
+<text x="16" y="448" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">shots/design-system/appearance-20px-accent-description-overlap.png</text>
+</svg>

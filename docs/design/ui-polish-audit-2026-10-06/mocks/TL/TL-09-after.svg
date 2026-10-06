@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-09 · theme::focus_ring everywhere: 2 px inset accent ring</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="30" y="18" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">group header</text>
+<rect x="28" y="25" width="420" height="28" rx="6" fill="none" stroke="#7C86FF" stroke-width="2"/>
+<g transform="translate(36.5,33.0) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="58" y="43.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Ran 3 commands · edited 2 files</text>
+<text x="30" y="82" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">tool row</text>
+<rect x="57" y="92" width="393" height="28" rx="6" fill="none" stroke="#7C86FF" stroke-width="2"/>
+<line x1="42.5" y1="90" x2="42.5" y2="100.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M42.5 100.0 Q42.5 106.0 48.5 106.0 L58 106.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(62,98.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20l1-4L16 5a2.1 2.1 0 0 1 3 3L8 19z"/><path d="M14 7l3 3"/></g>
+<text x="86" y="110.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Edit</text>
+<text x="120.4" y="110.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">transcript.rs</text>
+<text x="30" y="150" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">trailer / notice action</text>
+<rect x="26" y="158" width="76" height="24" rx="6" fill="none" stroke="#7C86FF" stroke-width="2"/>
+<text x="64" y="174" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#E8E8EA" text-anchor="middle">Send now</text>
+<text x="30" y="212" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">attachment thumb</text>
+<rect x="30" y="222" width="112" height="80" rx="8" fill="#2A2F3A"/>
+<rect x="31" y="223" width="110" height="78" rx="7" fill="none" stroke="#7C86FF" stroke-width="2"/>
+<line x1="470" y1="39" x2="450" y2="39" stroke="#30D158" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="450" cy="39" r="2.6" fill="#30D158"/>
+<rect x="470" y="30" width="230" height="55" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="478" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">focus_visible → theme::focus_ring(style,</text>
+<text x="478" y="61" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">theme.focus_ring()): 2 px inset shadow,</text>
+<text x="478" y="76" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">#7C86FF floored ≥ 3:1, zero layout shift</text>
+<rect x="470" y="150" width="230" height="70" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="478" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Same ring + radius on: group header,</text>
+<text x="478" y="181" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">tool rows, subagent cards (add role</text>
+<text x="478" y="196" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">Button + tab_index), meta-strip</text>
+<text x="478" y="211" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">buttons, expander, jump pill</text>
+</g>
+</svg>

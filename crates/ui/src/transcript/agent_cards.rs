@@ -196,7 +196,7 @@ fn type_badge(theme: &Theme, label: &'static str) -> gpui::Div {
         .bg(crate::theme::ink(0.06))
         .text_size(crate::typography::ui_rems(10.5))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.text_muted)
+        .text_color(theme.content_muted)
         .child(label)
 }
 
@@ -328,7 +328,7 @@ impl Render for AgentCard {
             .child(
                 crate::icons::icon(icon_path)
                     .size(px(12.0))
-                    .text_color(tint.unwrap_or(theme.text_muted)),
+                    .text_color(tint.unwrap_or(theme.content_muted)),
             );
 
         // Status reads like the sidebar: a colored dot and quiet text; only a
@@ -339,7 +339,7 @@ impl Render for AgentCard {
             .flex_none()
             .ml_auto()
             .gap(px(6.0))
-            .text_color(theme.text_muted)
+            .text_color(theme.content_muted)
             .child(
                 div()
                     .size(px(6.0))
@@ -356,7 +356,7 @@ impl Render for AgentCard {
             )
             .when_some(duration, |status, duration| {
                 status
-                    .child(div().text_color(theme.text_faint).child("·"))
+                    .child(div().text_color(theme.content_faint).child("·"))
                     .child(div().child(duration))
             });
 
@@ -410,7 +410,7 @@ impl Render for AgentCard {
                 .flex_none()
                 .max_w_full()
                 .truncate()
-                .text_color(theme.text_muted)
+                .text_color(theme.content_muted)
                 .child(detail)
         });
         let preview = div()
@@ -420,7 +420,7 @@ impl Render for AgentCard {
             .items_center()
             .gap(px(6.0))
             .when(has_detail, |preview| {
-                preview.child(div().flex_none().text_color(theme.text_faint).child("·"))
+                preview.child(div().flex_none().text_color(theme.content_faint).child("·"))
             })
             .child(
                 div()
@@ -433,7 +433,7 @@ impl Render for AgentCard {
 
         // Small labeled actions in the chip's trailing-tile language: muted
         // until hovered, a soft wash, never a raised button.
-        let (muted, faint, text) = (theme.text_muted, theme.text_faint, theme.text);
+        let (muted, faint, text) = (theme.content_muted, theme.content_faint, theme.text);
         let action = move |id: &'static str, label: &'static str, glyph: &'static str| {
             div()
                 .id(id)

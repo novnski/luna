@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="434" viewBox="0 0 720 434">
+<rect width="720" height="434" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-05 · Text tiers collapse: muted ≈ faint ≈ #CACACC</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="30" y="40" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Delegating.</text>
+<g transform="translate(35.5,60.0) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="58" y="71.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">1 hook</text>
+<line x1="42.5" y1="82" x2="42.5" y2="92.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M42.5 92.0 Q42.5 98.0 48.5 98.0 L58 98.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(62,90.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2.2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2.2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2.2"/></g>
+<text x="86" y="102.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Hook</text>
+<text x="120.4" y="102.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C7C7C9" text-anchor="start">PreToolUse · Read</text>
+<text x="86" y="136" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">Show full output (8 B)</text>
+<rect x="30" y="152" width="520" height="30" rx="9" fill="#0F0F0F" stroke="#202020" stroke-width="1"/>
+<rect x="38" y="158" width="18" height="18" rx="5" fill="#1B1B1B"/>
+<g transform="translate(41,161) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5M2 13v3M22 13v3"/><circle cx="9" cy="13.5" r="0.8"/><circle cx="15" cy="13.5" r="0.8"/></g>
+<text x="64" y="171.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#C9C9CC" text-anchor="start">Agent</text>
+<text x="102.9" y="171.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#D4D4D6" text-anchor="start">Map the parser</text>
+<rect x="524" y="158" width="18" height="18" rx="5" fill="#161616"/>
+<g transform="translate(527.5,161.5) scale(0.4583)" fill="none" stroke="#C9C9CC" stroke-width="2.73" stroke-linecap="round" stroke-linejoin="round"><path d="M7.5 16.5l9-9M9 7.5h7.5V15"/></g>
+<text x="516" y="171" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">Done</text>
+<text x="486.0" y="171" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">haiku</text>
+<text x="120" y="38" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">#E8E8EA prose</text>
+<text x="110" y="68" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">#C9C9CC muted</text>
+<text x="290" y="102" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">#C7C7C9 detail</text>
+<text x="230" y="134" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">#CCCCCE faint</text>
+<text x="330" y="199" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">#CCCCCE faint (model, status)</text>
+<text x="30" y="210" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#E8E8EA" text-anchor="start">Authored → rendered in the production Shell (sampled from native-agents fixture PNG):</text>
+<text x="30" y="244" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#C9C9CC" text-anchor="start">text</text>
+<rect x="130" y="230" width="60" height="22" rx="4" fill="#E5E5E5"/>
+<text x="196" y="245" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">#E5E5E5</text>
+<text x="252" y="245" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#9A9AA0" text-anchor="start">→</text>
+<rect x="272" y="230" width="60" height="22" rx="4" fill="#E8E8EA"/>
+<text x="338" y="245" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">#E8E8EA</text>
+<text x="30" y="278" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#C9C9CC" text-anchor="start">text_muted</text>
+<rect x="130" y="264" width="60" height="22" rx="4" fill="#A1A1A1"/>
+<text x="196" y="279" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">#A1A1A1</text>
+<text x="252" y="279" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#9A9AA0" text-anchor="start">→</text>
+<rect x="272" y="264" width="60" height="22" rx="4" fill="#C9C9CC"/>
+<text x="338" y="279" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">#C9C9CC</text>
+<text x="30" y="312" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#C9C9CC" text-anchor="start">text_faint</text>
+<rect x="130" y="298" width="60" height="22" rx="4" fill="#737373"/>
+<text x="196" y="313" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">#737373</text>
+<text x="252" y="313" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#9A9AA0" text-anchor="start">→</text>
+<rect x="272" y="298" width="60" height="22" rx="4" fill="#CCCCCE"/>
+<text x="338" y="313" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">#CCCCCE</text>
+<line x1="400" y1="294" x2="370" y2="294" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="370" cy="294" r="2.6" fill="#FF453A"/>
+<rect x="400" y="228" width="274.5" height="70" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="408" y="244" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">harden_composited_foregrounds (theme.rs:1944)</text>
+<text x="408" y="259" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">floors muted AND faint at 4.6:1 over the</text>
+<text x="408" y="274" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">adverse frost backdrop → both land at ~#CACACC.</text>
+<text x="408" y="289" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">Faint ends up brighter than muted.</text>
+<rect x="30" y="330" width="520" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="38" y="346" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Labels, details, model, status, timestamps, "Show full output" and output</text>
+<text x="38" y="361" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">lines all read as one grey: no secondary/tertiary hierarchy.</text>
+</g>
+</svg>

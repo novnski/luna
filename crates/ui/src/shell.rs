@@ -2508,7 +2508,7 @@ pub struct Shell {
     /// Clears the jump hints when the window deactivates: a Cmd+Tab away
     /// swallows the key-up, so without this the chips stay on screen for good.
     activation_sub: Option<Subscription>,
-    /// 1s heartbeat re-rendering the working indicator (elapsed + flavour word).
+    /// 1s heartbeat re-rendering the working indicator (elapsed time).
     _ticker: Task<()>,
     _state_observation: Subscription,
     _composer_events: Subscription,
@@ -2575,7 +2575,7 @@ impl Shell {
         // Spawn chips open their subagent's transcript as a right-pane tab.
         let transcript_events = cx.subscribe(&transcript, Self::on_transcript_event);
         // Working-indicator heartbeat: notify once a second while a session is
-        // live so elapsed time and the flavour word stay fresh.
+        // live so elapsed time stays fresh.
         let ticker = cx.spawn(async move |this, cx| {
             let mut displayed_minute = Utc::now().timestamp().div_euclid(60);
             loop {
@@ -4455,6 +4455,11 @@ impl Shell {
                     text.clone(),
                     cx,
                 );
+            }
+            TranscriptEvent::InterruptChat { chat_id } => {
+                let chat_id = chat_id.clone();
+                self.composer
+                    .update(cx, |composer, cx| composer.interrupt_chat(chat_id, cx));
             }
             TranscriptEvent::EditEarlierMessage {
                 task_id,
@@ -12962,9 +12967,9 @@ impl Shell {
             .into_any_element()
     }
 
-    /// Working indicator strip: gradient spinner + rotating flavour word (7s,
-    /// seeded per chat) + elapsed, staleness-gated via [`Indicator`]; falls back
-    /// to a "Sending…" bridge and then the engine mode line.
+    /// Status strip above the composer: the working line itself lives in the
+    /// transcript; the strip keeps its height and shows the "Sending" bridge
+    /// and run failures.
     fn render_status_strip(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
         let now = Utc::now();
@@ -13020,18 +13025,12 @@ impl Shell {
                 .child(SharedString::from("Run failed"))
                 .into_any_element(),
             Indicator::None if sending => strip
-                .child(loaders::gradient_spinner(
-                    "sending-indicator",
-                    &theme,
-                    2.5,
-                    cx.entity_id(),
-                    cx,
-                ))
+                .child(loaders::breathing_orb(&theme, cx.entity_id(), cx))
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
-                        .child(SharedString::from("Sending…")),
+                        .child(SharedString::from("Sending")),
                 )
                 .into_any_element(),
             Indicator::None => strip.into_any_element(),

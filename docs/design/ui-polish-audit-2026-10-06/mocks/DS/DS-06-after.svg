@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="430" viewBox="0 0 720 430" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="430" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-06 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Thumbs travel, colors cross-fade</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">switch: 38×22 (macOS regular) or 26×15 (small); on = accent; knob spring 0.32 s, damping 0.86</text>
+<text x="24" y="104" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Frame-by-frame after a click</text>
+<rect x="24" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="57" y="137" width="38" height="22" rx="11.0" fill="#2a2a2a" />
+<circle cx="68.0" cy="148.0" r="9.0" fill="#d4d4d4"/>
+<text x="76" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">0 ms</text>
+<rect x="144" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="177" y="137" width="38" height="22" rx="11.0" fill="#4c4771" />
+<circle cx="193.6" cy="148.0" r="9.0" fill="#e3e3e3"/>
+<text x="196" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">40 ms</text>
+<rect x="264" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="297" y="137" width="38" height="22" rx="11.0" fill="#7065bd" />
+<circle cx="319.52" cy="148.0" r="9.0" fill="#f3f3f3"/>
+<text x="316" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">80 ms</text>
+<rect x="384" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="417" y="137" width="38" height="22" rx="11.0" fill="#8779ee" />
+<circle cx="443.36" cy="148.0" r="9.0" fill="#fdfdfd"/>
+<text x="436" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">140 ms</text>
+<rect x="504" y="116" width="104" height="64" rx="10" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<rect x="537" y="137" width="38" height="22" rx="11.0" fill="#8b7cf6" />
+<circle cx="564.0" cy="148.0" r="9.0" fill="#ffffff"/>
+<text x="556" y="198" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">200 ms</text>
+<rect x="24" y="220" width="445" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="234" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">knob: spring(response .32, damping .86) · track color: 160 ms standard</text>
+<text x="24" y="280" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Segmented: one thumb slides between options (160 ms, standard curve)</text>
+<rect x="24" y="294" width="300" height="32" rx="8" fill="#151515" />
+<rect x="125" y="296" width="98" height="28" rx="6" fill="#2a2a2a" />
+<rect x="26" y="296" width="98" height="28" rx="6" fill="none" stroke="#30D158" stroke-width="1" stroke-dasharray="3 3" />
+<path d="M80 288 C 110 278 140 278 170 288" fill="none" stroke="#30D158" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M164 284 L171 289 L163 291" fill="none" stroke="#30D158" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="75" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">Theme default</text>
+<text x="174" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="middle">Frosted</text>
+<text x="273" y="315" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="middle">Opaque</text>
+<rect x="350" y="300" width="365" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="357" y="314" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">swatches/cards: 2 pt accent ring scales in 0.92→1, 160 ms</text>
+<text x="16" y="418" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">motion::SWITCH / motion::SEGMENT tokens; reduce motion → cross-fade only</text>
+</svg>

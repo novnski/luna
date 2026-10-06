@@ -260,6 +260,48 @@ pub fn observe_window(window: &mut Window, cx: &mut App) -> Subscription {
     })
 }
 
+/// Follow the system "Reduce motion" accessibility setting (UI polish audit
+/// DS-04). GPUI already snaps every `with_animation` and parks the loaders
+/// when the flag is set; this is what sets it. Read when the window opens and
+/// again on every activation change: the setting lives in System Settings, so
+/// a change is always followed by Luna becoming active again.
+pub fn observe_accessibility<T: 'static>(window: &mut Window, cx: &mut gpui::Context<T>) {
+    sync_reduce_motion(cx);
+    cx.observe_window_activation(window, |_, _, cx| sync_reduce_motion(cx))
+        .detach();
+}
+
+fn sync_reduce_motion(cx: &mut App) {
+    // Fixtures and tests pin the flag explicitly; the system never overrides it.
+    if crate::motion::reduced_motion_pinned(cx) {
+        return;
+    }
+    let reduced = system_reduce_motion();
+    if cx.reduce_motion() != reduced {
+        tracing::debug!(reduced, "appearance: system reduce motion changed");
+        cx.set_reduce_motion(reduced);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn system_reduce_motion() -> bool {
+    use objc::runtime::{BOOL, NO, Object};
+    use objc::{class, msg_send, sel, sel_impl};
+    unsafe {
+        let workspace: *mut Object = msg_send![class!(NSWorkspace), sharedWorkspace];
+        if workspace.is_null() {
+            return false;
+        }
+        let reduced: BOOL = msg_send![workspace, accessibilityDisplayShouldReduceMotion];
+        reduced != NO
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn system_reduce_motion() -> bool {
+    false
+}
+
 /// Record the OS appearance and re-apply if it moved.
 fn sync(system: Appearance, cx: &mut App) {
     if !cx.has_global::<AppearanceState>() {

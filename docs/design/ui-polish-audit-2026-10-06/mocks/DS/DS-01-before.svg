@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="640" viewBox="0 0 720 640" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="640" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-01 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">17 font sizes, no scale, no paired leading</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Every literal text_size(ui_rems(N)) in crates/ui/src, at its real size (pt at the 16 px default)</text>
+<text x="28" y="115.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="115.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">9</text>
+<rect x="130" y="106.2" width="2.9596412556053813" height="9" rx="2" fill="#3a3a3a" />
+<text x="138.9596412556054" y="115.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×3</text>
+<text x="28" y="138.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="138.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#FF453A" text-anchor="start">9.5</text>
+<rect x="130" y="129.2" width="2.9596412556053813" height="9" rx="2" fill="#FF453A" />
+<text x="138.9596412556054" y="138.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×3</text>
+<text x="28" y="161.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="161.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">10</text>
+<rect x="130" y="152.2" width="56.233183856502244" height="9" rx="2" fill="#3a3a3a" />
+<text x="192.23318385650225" y="161.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×57</text>
+<text x="28" y="184.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="184.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#FF453A" text-anchor="start">10.5</text>
+<rect x="130" y="175.2" width="30.582959641255606" height="9" rx="2" fill="#FF453A" />
+<text x="166.5829596412556" y="184.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×31</text>
+<text x="28" y="207.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="207.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">11</text>
+<rect x="130" y="198.2" width="220.0" height="9" rx="2" fill="#3a3a3a" />
+<text x="356.0" y="207.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×223</text>
+<text x="28" y="230.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="230.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#FF453A" text-anchor="start">11.5</text>
+<rect x="130" y="221.2" width="52.28699551569507" height="9" rx="2" fill="#FF453A" />
+<text x="188.28699551569508" y="230.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×53</text>
+<text x="28" y="253.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="253.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">12</text>
+<rect x="130" y="244.2" width="154.8878923766816" height="9" rx="2" fill="#3a3a3a" />
+<text x="290.88789237668163" y="253.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×157</text>
+<text x="28" y="276.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="276.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#FF453A" text-anchor="start">12.5</text>
+<rect x="130" y="267.2" width="17.757847533632287" height="9" rx="2" fill="#FF453A" />
+<text x="153.7578475336323" y="276.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×18</text>
+<text x="28" y="299.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="299.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">13</text>
+<rect x="130" y="290.2" width="55.24663677130045" height="9" rx="2" fill="#3a3a3a" />
+<text x="191.24663677130044" y="299.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×56</text>
+<text x="28" y="322.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13.5" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="322.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#FF453A" text-anchor="start">13.5</text>
+<rect x="130" y="313.2" width="2" height="9" rx="2" fill="#FF453A" />
+<text x="138" y="322.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×1</text>
+<text x="28" y="345.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="345.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">14</text>
+<rect x="130" y="336.2" width="19.730941704035875" height="9" rx="2" fill="#3a3a3a" />
+<text x="155.73094170403587" y="345.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×20</text>
+<text x="28" y="368.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="15" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="368.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">15</text>
+<rect x="130" y="359.2" width="3.9461883408071747" height="9" rx="2" fill="#3a3a3a" />
+<text x="139.94618834080717" y="368.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×4</text>
+<text x="28" y="392.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="16" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="392.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">16</text>
+<rect x="130" y="383.0" width="2" height="9" rx="2" fill="#3a3a3a" />
+<text x="138" y="392.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×1</text>
+<text x="28" y="418.0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="18" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="418.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">18</text>
+<rect x="130" y="409.0" width="2.9596412556053813" height="9" rx="2" fill="#3a3a3a" />
+<text x="138.9596412556054" y="418.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×3</text>
+<text x="28" y="446.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="20" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="446.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">20</text>
+<rect x="130" y="437.5" width="2" height="9" rx="2" fill="#3a3a3a" />
+<text x="138" y="446.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×2</text>
+<text x="28" y="479.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="24" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="479.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">29</text>
+<rect x="130" y="470.5" width="2" height="9" rx="2" fill="#3a3a3a" />
+<text x="138" y="479.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×1</text>
+<text x="166" y="479.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#737373" text-anchor="start">(drawn at 24)</text>
+<text x="28" y="513.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="24" font-weight="500" fill="#e5e5e5" text-anchor="start">Aa</text>
+<text x="84" y="513.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#a1a1a1" text-anchor="start">36</text>
+<rect x="130" y="504.5" width="2" height="9" rx="2" fill="#3a3a3a" />
+<text x="138" y="513.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">×1</text>
+<text x="166" y="513.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#737373" text-anchor="start">(drawn at 24)</text>
+<circle cx="118" cy="130" r="3.5" fill="#FF453A"/>
+<line x1="118" y1="130" x2="400" y2="118" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="400" y="108" width="198" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="407" y="122" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">5 half-point sizes · 106 sites</text>
+<circle cx="118" cy="222" r="3.5" fill="#FF453A"/>
+<line x1="118" y1="222" x2="400" y2="176" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="400" y="166" width="303" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="407" y="180" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">11 / 11.5 / 12 / 12.5 / 13 used interchangeably</text>
+<rect x="400" y="220" width="300" height="220" rx="12" fill="#0e0e0e" stroke="#222222" stroke-width="1" />
+<text x="416" y="246" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#737373" text-anchor="start">Row description, 12 pt</text>
+<rect x="416" y="268.0" width="268" height="19.416" rx="0" fill="none" stroke="#FF453A" stroke-width="0.8" stroke-dasharray="3 3" />
+<text x="418" y="281.20288" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">Fit long code lines to the conversation</text>
+<rect x="416" y="287.416" width="268" height="19.416" rx="0" fill="none" stroke="#FF453A" stroke-width="0.8" stroke-dasharray="3 3" />
+<text x="418" y="300.61888" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#a1a1a1" text-anchor="start">instead of scrolling sideways.</text>
+<text x="416" y="328.832" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">line box 19.4 pt = 12 × φ (1.618)</text>
+<text x="416" y="346.832" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#737373" text-anchor="start">GPUI default: style.rs:490 line_height: phi()</text>
+<text x="416" y="364.832" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">Apple footnote 12 pt → 16 pt line (1.33)</text>
+<text x="416" y="382.832" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">670 text_size calls · 112 line_height calls</text>
+<rect x="400" y="460" width="223" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="407" y="474" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">Weights: MEDIUM ×97 · SEMIBOLD ×26</text>
+<rect x="400" y="486" width="241" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="407" y="500" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">NORMAL ×13 · BOLD ×5 → flat hierarchy</text>
+<rect x="400" y="512" width="285" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="407" y="526" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">Root: 14 pt, no line height (shell.rs:14900)</text>
+<text x="16" y="628" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">typography.rs:121 ui_rems(px) accepts any number · tallies: scratchpad/ds/text_size_ui_rems.txt</text>
+</svg>

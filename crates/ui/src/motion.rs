@@ -384,7 +384,7 @@ pub const RESIZE: MotionSpec = MotionSpec::new(200, EASE_OUT);
 /// Terminal tab drag-reorder sliding transforms: 150ms (§1.10).
 pub const TAB_SLIDE: MotionSpec = MotionSpec::new(150, EASE_OUT);
 /// Diff-pane per-file collapse: 180ms height (§1.11).
-pub const COLLAPSE: MotionSpec = MotionSpec::new(180, EASE_OUT);
+pub const COLLAPSE: MotionSpec = DISCLOSURE;
 /// Reversible new-thread ↔ session handoff. The shared composer moves and
 /// morphs on a fast-starting, soft-landing curve while the canvas/transcript
 /// crossfade is staged around it. Slightly longer than a utility transition,
@@ -407,6 +407,46 @@ pub const HOVER_FADE: MotionSpec = MotionSpec::new(150, EASE_TAILWIND);
 pub const LUNA_PULSE: MotionSpec = MotionSpec::new(2400, EASE);
 /// Gradient matrix spinner wave period: 750ms.
 pub const GRADIENT_SPIN: MotionSpec = MotionSpec::new(750, EASE);
+
+// ---------------------------------------------------------------------------
+// Unified motion tokens (UI polish audit DS-15)
+// ---------------------------------------------------------------------------
+//
+// New and migrated UI motion picks from this short ladder instead of a
+// bespoke duration. Exits run at 0.75x their entrance. Reduced motion (the
+// system setting, observed in `crate::appearance`) snaps every oneshot
+// animation and parks every loop.
+
+/// Standard curve: quick start, gentle landing — state changes in place.
+pub const CURVE_STANDARD: CubicBezier = CubicBezier::new(0.2, 0.0, 0.0, 1.0);
+/// Decelerate: things arriving on screen (menus, sheets, panes).
+pub const CURVE_DECELERATE: CubicBezier = EASE_OUT_EXPO;
+/// Accelerate: things leaving the screen.
+pub const CURVE_ACCELERATE: CubicBezier = CubicBezier::new(0.4, 0.0, 1.0, 1.0);
+
+/// Hover, press and tooltip fades.
+pub const MICRO: MotionSpec = MotionSpec::new(120, CURVE_STANDARD);
+/// Switch tracks, segment thumbs, selection rings, chevrons.
+pub const QUICK: MotionSpec = MotionSpec::new(160, CURVE_STANDARD);
+/// Menus and popovers in, tab slides, toasts.
+pub const STANDARD: MotionSpec = MotionSpec::new(240, CURVE_DECELERATE);
+/// Panes, sheets, route changes.
+pub const EMPHASIZED: MotionSpec = MotionSpec::new(360, CURVE_DECELERATE);
+/// Disclosures (tool folds, thinking, settings groups): a critically damped
+/// spring sampled as a curve — fast response, no overshoot, soft landing.
+pub const DISCLOSURE: MotionSpec = MotionSpec::new(300, CubicBezier::new(0.32, 0.72, 0.0, 1.0));
+
+/// The exit counterpart of an entrance spec: 0.75x as long, accelerating.
+pub const fn exit_of(spec: MotionSpec) -> MotionSpec {
+    MotionSpec::new(spec.duration_ms * 3 / 4, CURVE_ACCELERATE)
+}
+
+/// Working-line orb breath: one slow sine per period.
+pub const ORB_BREATH: MotionSpec = MotionSpec::new(1600, EASE);
+/// Working-line text shimmer period (same sweep as the live tool-group title).
+pub const STATUS_SHIMMER: MotionSpec = MotionSpec::new(3400, EASE);
+/// Working-line status change: a short fade and settle.
+pub const STATUS_SWAP: MotionSpec = MotionSpec::new(180, EASE_OUT_QUINT);
 
 // ---------------------------------------------------------------------------
 // Resize-edge feedback
@@ -834,7 +874,19 @@ pub fn speed_scale() -> f32 {
 /// Global reduced-motion flag. gpui snaps every `with_animation` element when
 /// set (end state for oneshots, rest state for loops) and schedules no frames.
 pub fn set_reduced_motion(cx: &mut App, reduced: bool) {
+    cx.set_global(ReducedMotionPin);
     cx.set_reduce_motion(reduced);
+}
+
+/// Marks the reduced-motion flag as pinned by an explicit caller (fixtures,
+/// tests), so the system accessibility observer leaves it alone.
+struct ReducedMotionPin;
+
+impl Global for ReducedMotionPin {}
+
+/// True once [`set_reduced_motion`] pinned the flag.
+pub fn reduced_motion_pinned(cx: &App) -> bool {
+    cx.has_global::<ReducedMotionPin>()
 }
 
 /// Read the global reduced-motion flag.
@@ -984,7 +1036,7 @@ mod tests {
         assert_eq!((SPLASH_OUT.duration_ms, SPLASH_OUT.delay_ms), (500, 150));
         assert_eq!(RESIZE.duration_ms, 200);
         assert_eq!(TAB_SLIDE.duration_ms, 150);
-        assert_eq!(COLLAPSE.duration_ms, 180);
+        assert_eq!(COLLAPSE, DISCLOSURE);
         assert_eq!(NEW_THREAD_TRANSITION.duration_ms, 420);
         assert_eq!(NEW_THREAD_TRANSITION.curve, EASE_RESORT);
         assert_eq!(CHEVRON.duration_ms, 200);

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="314" viewBox="0 0 720 314">
+<rect width="720" height="314" fill="#FBFCFE"/>
+<rect width="720" height="34" fill="#EDEEF1"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#1D1D1F">TL-23 · Light: bubble edge 1.08:1, pending bubble reads disabled</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#5E5E66" text-anchor="end">Luna Light · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="380" y="20" width="300" height="42" rx="16" fill="#F2F3F5"/>
+<text x="396" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#222222" text-anchor="start">yo what is this</text>
+<text x="40" y="110" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#222222" text-anchor="start">Looking at the workspace to see what this is…</text>
+<g opacity="0.65">
+<rect x="440" y="150" width="240" height="42" rx="16" fill="#F2F3F5"/>
+<text x="456" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#222222" text-anchor="start">Ship the release notes</text>
+</g>
+<line x1="290" y1="40" x2="380" y2="40" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="380" cy="40" r="2.6" fill="#FF453A"/>
+<rect x="40" y="16" width="250" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="48" y="32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">wash(0.04) → #F2F3F5 on #FBFCFE:</text>
+<text x="48" y="47" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">1.08:1 — the bubble edge barely exists</text>
+<text x="48" y="62" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">(theme.rs:2308)</text>
+<line x1="270" y1="170" x2="440" y2="170" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="440" cy="170" r="2.6" fill="#FF453A"/>
+<rect x="40" y="160" width="230" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="48" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Pending send = whole bubble at</text>
+<text x="48" y="191" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">opacity .65 (:7026): text drops to</text>
+<text x="48" y="206" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">#6B6F77, reads as disabled</text>
+</g>
+</svg>

@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="560" viewBox="0 0 720 560" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="560" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-15 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">16 UI durations, 6 curves, no springs</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Every MotionSpec / *_MS duration used for UI motion (excl. debounces), on one 0–500 ms axis</text>
+<text x="40" y="102.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">100</text>
+<rect x="70" y="94.0" width="62.0" height="9" rx="2" fill="#444" />
+<text x="138.0" y="102.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">MENU_OUT</text>
+<text x="40" y="116.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">120</text>
+<rect x="70" y="108.5" width="74.4" height="9" rx="2" fill="#444" />
+<text x="150.4" y="116.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">PREVIEW_FADE</text>
+<text x="40" y="131.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">140</text>
+<rect x="70" y="123.0" width="86.8" height="9" rx="2" fill="#FF453A" />
+<text x="162.8" y="131.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">MENU_IN · TOOL_FOLD</text>
+<text x="40" y="145.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">150</text>
+<rect x="70" y="137.5" width="93.0" height="9" rx="2" fill="#444" />
+<text x="169.0" y="145.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">FADE_QUICK · TAB_SLIDE · HOVER · TAB_EXIT</text>
+<text x="40" y="160.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">160</text>
+<rect x="70" y="152.0" width="99.2" height="9" rx="2" fill="#444" />
+<text x="175.2" y="160.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">INSERT_MS</text>
+<text x="40" y="174.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">170</text>
+<rect x="70" y="166.5" width="105.4" height="9" rx="2" fill="#FF453A" />
+<text x="181.4" y="174.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">workbench COLLAPSE_MS</text>
+<text x="40" y="189.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">180</text>
+<rect x="70" y="181.0" width="111.6" height="9" rx="2" fill="#FF453A" />
+<text x="187.6" y="189.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">DIALOG_IN · COLLAPSE</text>
+<text x="40" y="203.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">200</text>
+<rect x="70" y="195.5" width="124.0" height="9" rx="2" fill="#FF453A" />
+<text x="200.0" y="203.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="start">RESIZE · CHEVRON</text>
+<text x="40" y="218.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">220</text>
+<rect x="70" y="210.0" width="136.4" height="9" rx="2" fill="#444" />
+<text x="212.4" y="218.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">EDGE_BOUNCE · AUTO_ADVANCE</text>
+<text x="40" y="232.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">240</text>
+<rect x="70" y="224.5" width="148.8" height="9" rx="2" fill="#444" />
+<text x="224.8" y="232.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">composer morph</text>
+<text x="40" y="247.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">250</text>
+<rect x="70" y="239.0" width="155.0" height="9" rx="2" fill="#444" />
+<text x="231.0" y="247.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">ROUTE_SNAP</text>
+<text x="40" y="261.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">260</text>
+<rect x="70" y="253.5" width="161.2" height="9" rx="2" fill="#444" />
+<text x="237.2" y="261.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">RESORT · scrollbar fade</text>
+<text x="40" y="276.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">360</text>
+<rect x="70" y="268.0" width="223.2" height="9" rx="2" fill="#444" />
+<text x="299.2" y="276.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">TOOL_ROW_REVEAL</text>
+<text x="40" y="290.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">420</text>
+<rect x="70" y="282.5" width="260.4" height="9" rx="2" fill="#444" />
+<text x="336.4" y="290.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">NEW_THREAD</text>
+<text x="40" y="305.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">480</text>
+<rect x="70" y="297.0" width="297.6" height="9" rx="2" fill="#444" />
+<text x="373.6" y="305.0" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">transcript settle</text>
+<text x="40" y="319.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#a1a1a1" text-anchor="start">500</text>
+<rect x="70" y="311.5" width="310.0" height="9" rx="2" fill="#444" />
+<text x="386.0" y="319.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="9.5" font-weight="400" fill="#a1a1a1" text-anchor="start">FADE_IN · SPLASH · SCROLL_GLIDE</text>
+<rect x="40" y="334" width="593" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="47" y="348" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">‘disclosure’ alone has 4 timings: TOOL_FOLD 140 · COLLAPSE_MS 170 · COLLAPSE 180 · CHEVRON 200</text>
+<rect x="40" y="362" width="642" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="47" y="376" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">+ loops: GRADIENT_SPIN 750 · LUNA_PULSE 2400 · stagger 65/90 · 9 MotionSpecs defined outside motion.rs</text>
+<rect x="40" y="410" width="90" height="60" rx="6" fill="#0e0e0e" stroke="#1f1f1f" stroke-width="1" />
+<path d="M40 470 C54.4 410.0 67.0 410.0 130 410" fill="none" stroke="#FF453A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="85.0" y="485" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">EASE_OUT_EXPO</text>
+<rect x="150" y="410" width="90" height="60" rx="6" fill="#0e0e0e" stroke="#1f1f1f" stroke-width="1" />
+<path d="M150 470 C150.0 470.0 202.2 410.0 240 410" fill="none" stroke="#FF453A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="195.0" y="485" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">EASE_OUT</text>
+<rect x="260" y="410" width="90" height="60" rx="6" fill="#0e0e0e" stroke="#1f1f1f" stroke-width="1" />
+<path d="M260 470 C282.5 464.0 282.5 410.0 350 410" fill="none" stroke="#FF453A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="305.0" y="485" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">EASE</text>
+<rect x="370" y="410" width="90" height="60" rx="6" fill="#0e0e0e" stroke="#1f1f1f" stroke-width="1" />
+<path d="M370 470 C389.8 410.0 402.4 410.0 460 410" fill="none" stroke="#FF453A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="415.0" y="485" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">EASE_OUT_QUINT</text>
+<rect x="480" y="410" width="90" height="60" rx="6" fill="#0e0e0e" stroke="#1f1f1f" stroke-width="1" />
+<path d="M480 470 C517.8 470.0 532.2 410.0 570 410" fill="none" stroke="#FF453A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="525.0" y="485" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">EASE_IN_OUT</text>
+<rect x="590" y="410" width="90" height="60" rx="6" fill="#0e0e0e" stroke="#1f1f1f" stroke-width="1" />
+<path d="M590 470 C626.0 470.0 608.0 410.0 680 410" fill="none" stroke="#FF453A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="635.0" y="485" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">EASE_TAILWIND</text>
+<text x="16" y="548" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">menus/dialogs fake scale with fade + translate (motion.rs:24-27); no spring for expand/collapse</text>
+</svg>

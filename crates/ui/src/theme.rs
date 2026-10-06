@@ -694,6 +694,12 @@ pub struct Theme {
     /// value was sampled (#989898) and folding it would shift that label, which
     /// is a palette change dressed up as a refactor.
     pub text_dim: Hsla,
+    /// Secondary text on the content canvas (transcript, previews): floored
+    /// against the canvas as composited instead of the frosted chrome, so it
+    /// keeps a visible step above [`Self::content_faint`] (audit TL-05).
+    pub content_muted: Hsla,
+    /// Tertiary text on the content canvas: timestamps, hints, timers.
+    pub content_faint: Hsla,
 
     // ---- paint: high-contrast solid (primary buttons) ----
     /// The maximum-contrast solid fill: near-white on dark, near-black on light.
@@ -1606,6 +1612,8 @@ impl Theme {
             text_muted: neutral(0.708), // ~neutral-400
             text_faint: neutral(0.556), // ~neutral-500
             text_dim: grey(0x98),
+            content_muted: neutral(0.708),
+            content_faint: neutral(0.556),
             solid: neutral(0.922), // near-white plate
             on_solid: grey(0x0e),  // near-black label
             accent: accent.primary,
@@ -1701,6 +1709,8 @@ impl Theme {
             // too, not just on the white content plane.
             text_faint: neutral(0.535),
             text_dim: neutral(0.50),
+            content_muted: neutral(0.439),
+            content_faint: neutral(0.535),
             solid: neutral(0.205),    // near-black plate, deeper than body text
             on_solid: neutral(0.985), // near-white label
             accent: accent.primary,
@@ -1934,6 +1944,28 @@ impl Theme {
         theme
     }
 
+    /// Content tones: secondary and tertiary text floored on the canvas they
+    /// actually sit on (and its hover/code plate), over the adverse desktop.
+    /// Tertiary reaches the AA floor; secondary keeps at least a 1.35x
+    /// contrast step above it, so three tiers stay three tiers even where
+    /// hardening has to move both (the chrome tones collapse there).
+    fn harden_content_tones(&mut self, authored_muted: Hsla, authored_faint: Hsla) {
+        let backdrop = self.adverse_backdrop();
+        let canvas = flatten(self.canvas_fill(), flatten(self.glass(), backdrop));
+        let surfaces = [canvas, flatten(self.ink(0.035), canvas)];
+        let worst = |color: Hsla| {
+            surfaces
+                .iter()
+                .map(|surface| painted_contrast(color, *surface))
+                .fold(f32::MAX, f32::min)
+        };
+        self.content_faint = legible_on(authored_faint, self.text, &surfaces, TEXT_CONTRAST_TARGET);
+        let secondary_floor = (worst(self.content_faint) * 1.35)
+            .max(TEXT_CONTRAST_TARGET)
+            .min(worst(self.text) * 0.75);
+        self.content_muted = legible_on(authored_muted, self.text, &surfaces, secondary_floor);
+    }
+
     /// Hold foreground-only roles to the WCAG 2.2 AA floors on the surfaces
     /// they are actually painted on as composited (frost over the adverse
     /// desktop, hover/selected washes, the canvas, raised and floating
@@ -1942,6 +1974,7 @@ impl Theme {
     /// 3:1. Only the derived paint color changes; stored preferences don't.
     /// Two passes, because glass coverage depends on the muted role.
     fn harden_composited_foregrounds(&mut self) {
+        let (authored_muted, authored_faint) = (self.text_muted, self.text_faint);
         for _ in 0..2 {
             self.text_muted = self.derive_legible(self.text_muted, TEXT_CONTRAST_TARGET);
             self.text_dim = self.derive_legible(self.text_dim, TEXT_CONTRAST_TARGET);
@@ -1951,6 +1984,7 @@ impl Theme {
             self.success_muted = self.derive_legible(self.success_muted, TEXT_CONTRAST_TARGET);
             self.border_strong = self.derive_legible(self.border_strong, NON_TEXT_CONTRAST_TARGET);
         }
+        self.harden_content_tones(authored_muted, authored_faint);
         // Labels on solid fills: the authored on-color when it reads at AA,
         // else whichever of white/black reads best on that fill.
         self.on_solid = on_fill(self.on_solid, &[self.solid]);

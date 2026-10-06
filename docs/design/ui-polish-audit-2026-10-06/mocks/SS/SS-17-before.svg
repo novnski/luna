@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="430" viewBox="0 0 720 430" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="430.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-17 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Type ramp and radii: few, distinct steps</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<text x="16.0" y="64.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">ui_rems sizes used across the secondary surfaces (count of call sites)</text>
+<text x="16.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="16.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">9</text>
+<text x="16.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×2</text>
+<text x="64.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="64.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">10</text>
+<text x="64.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#FF453A" text-anchor="start">×19</text>
+<text x="112.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="112.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">10.5</text>
+<text x="112.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#FF453A" text-anchor="start">×5</text>
+<text x="160.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="160.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">11</text>
+<text x="160.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×99</text>
+<text x="208.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="208.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">11.5</text>
+<text x="208.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#FF453A" text-anchor="start">×10</text>
+<text x="256.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="256.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">12</text>
+<text x="256.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×39</text>
+<text x="304.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="304.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">13</text>
+<text x="304.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×8</text>
+<text x="352.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="352.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">14</text>
+<text x="352.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×10</text>
+<text x="400.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="15" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="400.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">15</text>
+<text x="400.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×2</text>
+<text x="448.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="16" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="448.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">16</text>
+<text x="448.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×1</text>
+<text x="496.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="17" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="496.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">17</text>
+<text x="496.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×1</text>
+<text x="544.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="19" font-weight="400" fill="#e8e8ea" text-anchor="start">Aa</text>
+<text x="544.0" y="124.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="start">19</text>
+<text x="544.0" y="138.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#85858a" text-anchor="start">×2</text>
+<text x="596.0" y="104.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">+ 29 · 30 · 36</text>
+<rect x="58.0" y="82.0" width="236.0" height="62.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="320.0" y="150.0" width="308.5" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="327.0" y="163.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">10 → 10.5 → 11 → 11.5 → 12: steps too small to read</text>
+<line x1="320.0" y1="150.0" x2="294.0" y2="144.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<text x="16.0" y="200.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">literal radii</text>
+<rect x="16.0" y="210.0" width="48.0" height="34.0" rx="2" fill="#2c2c30"/>
+<text x="40.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a9a9ae" text-anchor="middle">r2</text>
+<rect x="78.0" y="210.0" width="48.0" height="34.0" rx="3" fill="#2c2c30"/>
+<text x="102.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">r3</text>
+<rect x="140.0" y="210.0" width="48.0" height="34.0" rx="4" fill="#2c2c30"/>
+<text x="164.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a9a9ae" text-anchor="middle">r4</text>
+<rect x="202.0" y="210.0" width="48.0" height="34.0" rx="5" fill="#2c2c30"/>
+<text x="226.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">r5</text>
+<rect x="264.0" y="210.0" width="48.0" height="34.0" rx="6" fill="#2c2c30"/>
+<text x="288.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a9a9ae" text-anchor="middle">r6</text>
+<rect x="326.0" y="210.0" width="48.0" height="34.0" rx="7" fill="#2c2c30"/>
+<text x="350.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">r7</text>
+<rect x="388.0" y="210.0" width="48.0" height="34.0" rx="8" fill="#2c2c30"/>
+<text x="412.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a9a9ae" text-anchor="middle">r8</text>
+<rect x="450.0" y="210.0" width="48.0" height="34.0" rx="10" fill="#2c2c30"/>
+<text x="474.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a9a9ae" text-anchor="middle">r10</text>
+<rect x="512.0" y="210.0" width="48.0" height="34.0" rx="12" fill="#2c2c30"/>
+<text x="536.0" y="258.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a9a9ae" text-anchor="middle">r12</text>
+<text x="16.0" y="300.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">UI size 20 px: ui_rems(11) = 13.75 px under line_height(px(16)) — ratio 1.16</text>
+<rect x="16.0" y="308.0" width="688.0" height="64.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<text x="28.0" y="330.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13.75" font-weight="400" fill="#a9a9ae" text-anchor="start">Runs on this device while LUNA is open. Claude&#x27;s own</text>
+<text x="28.0" y="346.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13.75" font-weight="400" fill="#a9a9ae" text-anchor="start">scheduled prompts are listed in the Goal popover, not here.</text>
+<text x="28.0" y="362.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13.75" font-weight="400" fill="#a9a9ae" text-anchor="start">This conversation&#x27;s automations are managed on Studio Mac.</text>
+<rect x="24.0" y="316.0" width="470.0" height="52.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="300.0" y="382.0" width="354.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="307.0" y="395.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">descenders touch: automations.rs ×5, context_transfer.rs ×4</text>
+<line x1="477.4" y1="382.0" x2="477.4" y2="368.0" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+</svg>

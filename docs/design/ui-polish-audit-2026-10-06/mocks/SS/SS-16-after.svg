@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="380.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-16 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Keyboard focus: one visible ring on every control</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<text x="16.0" y="66.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">Files toolbar · focus on Show hidden</text>
+<rect x="16.0" y="74.0" width="330.0" height="38.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="24.0" y="81.0" width="282.0" height="24.0" rx="6" fill="#1d1d1f"/>
+<circle cx="35.3" cy="92.3" r="3.3600000000000003" fill="none" stroke="#85858a" stroke-width="1.4"/>
+<line x1="37.8" y1="94.8" x2="40.2" y2="97.2" stroke="#85858a" stroke-width="1.4" stroke-linecap="round"/>
+<text x="48.0" y="97.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#85858a" text-anchor="start">Search files</text>
+<rect x="315.0" y="82.0" width="22.0" height="22.0" rx="5" fill="none" stroke="#8b7cf6" stroke-width="2"/>
+<path d="M320.7,92.3 Q326.0,97.2 331.3,92.3" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="374.0" y="66.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#8e8e93" text-anchor="start">Diff toolbar · focus on Wrap</text>
+<rect x="374.0" y="74.0" width="330.0" height="38.0" rx="8" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="382.0" y="81.0" width="104.0" height="24.0" rx="6" fill="#232325"/>
+<text x="390.0" y="97.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">Working tree</text>
+<path d="M468.6,91.6 L472.0,94.9 L475.4,91.6" fill="none" stroke="#a9a9ae" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="623.1" y="88.8" width="9.8" height="8.4" rx="2" fill="none" stroke="#a9a9ae" stroke-width="1.3"/>
+<line x1="628.0" y1="88.8" x2="628.0" y2="97.2" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="645.0" y="82.0" width="22.0" height="22.0" rx="5" fill="none" stroke="#8b7cf6" stroke-width="2"/>
+<path d="M651.1,90.2 H660.2 M651.1,93.7 H658.8 Q660.9,93.7 660.9,95.5 Q660.9,97.2 658.8,97.2 H656.7" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M681.2,88.8 L684.0,91.3 L686.8,88.8 M681.2,97.2 L684.0,94.7 L686.8,97.2" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="312.0" y="79.0" width="28.0" height="28.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="120.0" y="130.0" width="146.8" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="127.0" y="143.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">focus_ring · 2 px inset</text>
+<line x1="266.8" y1="130.0" x2="312.0" y2="107.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="642.0" y="79.0" width="28.0" height="28.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="560.0" y="130.0" width="66.0" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="567.0" y="143.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">same ring</text>
+<line x1="626.0" y1="130.0" x2="642.0" y2="107.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<text x="16.0" y="190.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e8e8ea" text-anchor="start">Baked into the shared helpers:</text>
+<text x="28.0" y="214.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">• toolbar_button (Files, Browser)</text>
+<text x="28.0" y="234.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">• header_toggle (Diff, History)</text>
+<text x="28.0" y="254.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">• git_button · PR buttons</text>
+<text x="28.0" y="274.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">• right-surface chip · usage provider tabs</text>
+<text x="380.0" y="214.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">.focus_visible(|s| theme::focus_ring(</text>
+<text x="380.0" y="232.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#e8e8ea" text-anchor="start">    s, theme.focus_ring()))</text>
+<text x="380.0" y="262.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">radius follows the control; delete the</text>
+<text x="380.0" y="280.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">border-colour variants.</text>
+<rect x="16.0" y="316.0" width="221.9" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="23.0" y="329.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">67 of 67 controls show the same ring</text>
+</svg>

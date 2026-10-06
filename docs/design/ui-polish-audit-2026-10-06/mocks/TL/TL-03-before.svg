@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="504" viewBox="0 0 720 504">
+<rect width="720" height="504" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-03 · Thought text: fixed 96-col wrap, then per-line ellipsis</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="12" y="12" width="420" height="212" rx="10" fill="#0A0A0A" stroke="#1E1E21" stroke-width="1"/>
+<text x="24" y="32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">Side pane · 420 px (thought text column 280 px)</text>
+<g transform="translate(29.5,50.0) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<text x="52" y="61.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Thought process</text>
+<text x="80" y="90" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">The user wants the tool fold to feel smoot…</text>
+<text x="80" y="108" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">COLLAPSE spec and see whether TOOL_FOLD ca…</text>
+<text x="80" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">its height so the analytic tween keeps wor…</text>
+<text x="80" y="144" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">… 1 more lines</text>
+<rect x="347.5" y="76.5" width="17" height="55" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="77.5" y="130.5" width="93" height="19" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<line x1="446" y1="85" x2="364" y2="104" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="364" cy="104" r="2.6" fill="#FF453A"/>
+<rect x="446" y="30" width="262" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="454" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Pre-wrapped at 96 columns (≈615 px),</text>
+<text x="454" y="61" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">then each line .truncate()s: ~55% of</text>
+<text x="454" y="76" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">every line is lost in a 280 px column</text>
+<line x1="446" y1="140" x2="172" y2="140" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="172" cy="140" r="2.6" fill="#FF453A"/>
+<rect x="446" y="122" width="262" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="454" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">"… 1 more lines" — no singular</text>
+<text x="454" y="153" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">(more_lines_row, :8853)</text>
+<rect x="12" y="236" width="696" height="140" rx="10" fill="#0A0A0A" stroke="#1E1E21" stroke-width="1"/>
+<text x="24" y="256" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">Wide column · 1200 px (drawn at 50%)</text>
+<rect x="60" y="270" width="600.0" height="80" rx="4" fill="#080808" stroke="#202024" stroke-width="1"/>
+<line x1="88.0" y1="266" x2="88.0" y2="354" stroke="#3A3A40" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3" opacity="0.9"/>
+<rect x="88.0" y="280" width="305.0" height="7" rx="3.5" fill="#CCCCCE" opacity="0.8"/>
+<rect x="88.0" y="296" width="298.0" height="7" rx="3.5" fill="#CCCCCE" opacity="0.8"/>
+<rect x="88.0" y="312" width="302.0" height="7" rx="3.5" fill="#CCCCCE" opacity="0.8"/>
+<rect x="88.0" y="328" width="190.0" height="7" rx="3.5" fill="#CCCCCE" opacity="0.8"/>
+<rect x="400.0" y="276" width="235.0" height="66" rx="4" fill="#FF453A" opacity="0.13"/>
+<text x="517.5" y="314" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="middle">empty ≈ 45%</text>
+<line x1="88.0" y1="358" x2="395.0" y2="358" stroke="#FF453A" stroke-width="1" stroke-linecap="round"/>
+<line x1="88.0" y1="354" x2="88.0" y2="362" stroke="#FF453A" stroke-width="1" stroke-linecap="round"/>
+<line x1="395.0" y1="354" x2="395.0" y2="362" stroke="#FF453A" stroke-width="1" stroke-linecap="round"/>
+<text x="241.5" y="371" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#FF453A" text-anchor="middle">96 cols ≈ 615 px, whatever the width</text>
+<text x="16" y="396" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">transcript.rs:428  const THOUGHT_WRAP_COLS: usize = 96;  Thought rows .truncate() (:8774)</text>
+<rect x="16" y="410" width="500" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="24" y="426" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">The reasoning block is the most-read secondary text in the timeline, and it</text>
+<text x="24" y="441" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">is the only prose that cannot reflow to the pane width.</text>
+</g>
+</svg>

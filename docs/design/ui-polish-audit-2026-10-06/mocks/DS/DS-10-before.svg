@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="520" viewBox="0 0 720 520" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="520" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="102" height="20" rx="10.0" fill="#FF453A" stroke="#FF453A" stroke-width="1" />
+<text x="67.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-10 · BEFORE</text>
+<text x="130.8" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">17 corner radii and colliding names</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Every literal .rounded(px(N)) plus named radius constants, as 44 pt tiles (count below)</text>
+<rect x="24" y="96" width="56" height="44" rx="1" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="52" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">1</text>
+<text x="52" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×3</text>
+<rect x="100" y="96" width="56" height="44" rx="2" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="128" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">2</text>
+<text x="128" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×7</text>
+<rect x="176" y="96" width="56" height="44" rx="3" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="204" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">3</text>
+<text x="204" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×10</text>
+<rect x="252" y="96" width="56" height="44" rx="3.5" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="280" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">3.5</text>
+<text x="280" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×1</text>
+<rect x="328" y="96" width="56" height="44" rx="4" fill="#161616" stroke="#444" stroke-width="1.2" />
+<text x="356" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">4</text>
+<text x="356" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">×38</text>
+<rect x="404" y="96" width="56" height="44" rx="4.5" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="432" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">4.5</text>
+<text x="432" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×1</text>
+<rect x="480" y="96" width="56" height="44" rx="5" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="508" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">5</text>
+<text x="508" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×25</text>
+<rect x="556" y="96" width="56" height="44" rx="5.5" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="584" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">5.5</text>
+<text x="584" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×1</text>
+<rect x="632" y="96" width="56" height="44" rx="6" fill="#161616" stroke="#444" stroke-width="1.2" />
+<text x="660" y="123" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">6</text>
+<text x="660" y="158" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">×115</text>
+<rect x="24" y="192" width="56" height="44" rx="7" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="52" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">7</text>
+<text x="52" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×25</text>
+<rect x="100" y="192" width="56" height="44" rx="8" fill="#161616" stroke="#444" stroke-width="1.2" />
+<text x="128" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">8</text>
+<text x="128" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">×62</text>
+<rect x="176" y="192" width="56" height="44" rx="9" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="204" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">9</text>
+<text x="204" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×14</text>
+<rect x="252" y="192" width="56" height="44" rx="10" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="280" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">10</text>
+<text x="280" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×17</text>
+<rect x="328" y="192" width="56" height="44" rx="12" fill="#161616" stroke="#444" stroke-width="1.2" />
+<text x="356" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">12</text>
+<text x="356" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">×16</text>
+<rect x="404" y="192" width="56" height="44" rx="14" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="432" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">14</text>
+<text x="432" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×6</text>
+<rect x="480" y="192" width="56" height="44" rx="16" fill="#161616" stroke="#444" stroke-width="1.2" />
+<text x="508" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">16</text>
+<text x="508" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">×5</text>
+<rect x="556" y="192" width="56" height="44" rx="26" fill="#161616" stroke="#FF453A" stroke-width="1.2" />
+<text x="584" y="219" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="middle">26</text>
+<text x="584" y="254" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#FF453A" text-anchor="middle">×1</text>
+<text x="24" y="306" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Name collisions</text>
+<text x="24" y="330" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">popover::CARD_RADIUS</text>
+<text x="250" y="330" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">12</text>
+<text x="24" y="348" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">composer/goals::CARD_RADIUS</text>
+<text x="250" y="348" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">16</text>
+<text x="24" y="366" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">Theme::PANEL_RADIUS</text>
+<text x="250" y="366" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">10 (used 1×)</text>
+<text x="24" y="384" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">queue::PANEL_RADIUS</text>
+<text x="250" y="384" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">16</text>
+<text x="24" y="402" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">settings section_card</text>
+<text x="250" y="402" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">12 literal</text>
+<text x="24" y="420" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="start">Theme::CONTROL_RADIUS</text>
+<text x="250" y="420" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="600" fill="#a1a1a1" text-anchor="start">6</text>
+<text x="380" y="306" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="600" fill="#e5e5e5" text-anchor="start">Nested: settings card r12, tile r10 at 14/20 pt inset</text>
+<rect x="380" y="318" width="300" height="100" rx="12" fill="#090909" stroke="#222222" stroke-width="1" />
+<rect x="400" y="332" width="36" height="36" rx="10" fill="#101010" stroke="#222222" stroke-width="1" />
+<text x="448" y="348" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="500" fill="#e5e5e5" text-anchor="start">Theme library</text>
+<circle cx="402" cy="334" r="3.5" fill="#FF453A"/>
+<line x1="402" y1="334" x2="450" y2="388" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<rect x="450" y="378" width="211" height="20" rx="6" fill="#141414" stroke="#FF453A" stroke-width="1.2" />
+<text x="457" y="392" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#FF453A" text-anchor="start">tile nearly as round as its card</text>
+<text x="16" y="508" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">radius tally: scratchpad/ds/radius_px.txt (+ radius_consts.txt) · 296 literal rounded() calls</text>
+</svg>

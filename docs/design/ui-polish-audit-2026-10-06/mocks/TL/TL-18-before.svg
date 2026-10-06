@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="394" viewBox="0 0 720 394">
+<rect width="720" height="394" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-18 · Mermaid: box-in-box, cool grey nodes, source→diagram snap</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="24" y="16" width="440" height="120" rx="10" fill="#0F0F0F" stroke="#1C1C1C" stroke-width="1"/>
+<path d="M24.5 44 V26 a9.5 9.5 0 0 1 9.5 -9.5 H454 a9.5 9.5 0 0 1 9.5 9.5 V44 Z" fill="#141414"/>
+<text x="36" y="34" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9C9CC" text-anchor="start">mermaid</text>
+<rect x="104" y="50" width="280" height="80" rx="0" fill="#0D0D0D"/>
+<rect x="116" y="66" width="66" height="40" rx="2" fill="#343438" stroke="#858585" stroke-width="1"/>
+<text x="149" y="90" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#E8E8EA" text-anchor="middle">Input</text>
+<line x1="182" y1="86" x2="208" y2="86" stroke="#D0D0D0" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M202 82 L208 86 L202 90 Z" fill="#D0D0D0"/>
+<rect x="208" y="66" width="66" height="40" rx="2" fill="#343438" stroke="#858585" stroke-width="1"/>
+<text x="241" y="90" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#E8E8EA" text-anchor="middle">Render</text>
+<line x1="274" y1="86" x2="300" y2="86" stroke="#D0D0D0" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M294 82 L300 86 L294 90 Z" fill="#D0D0D0"/>
+<rect x="300" y="66" width="66" height="40" rx="2" fill="#343438" stroke="#858585" stroke-width="1"/>
+<text x="333" y="90" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#E8E8EA" text-anchor="middle">Chat</text>
+<rect x="103.5" y="49.5" width="281" height="81" rx="0" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<line x1="480" y1="56" x2="384" y2="56" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="384" cy="56" r="2.6" fill="#FF453A"/>
+<rect x="480" y="16" width="226" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="488" y="32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Diagram bg = theme.surface #0D0D0D</text>
+<text x="488" y="47" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">(mermaid.rs:42) inside the frame</text>
+<text x="488" y="62" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">#0F0F0F: a visible inner rectangle</text>
+<line x1="480" y1="84" x2="366" y2="78" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="366" cy="78" r="2.6" fill="#FF453A"/>
+<rect x="480" y="84" width="226" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="488" y="100" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Nodes #343438 (blue-tinted) with a</text>
+<text x="488" y="115" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">#858585 1 px edge and ~2 px corners</text>
+<text x="488" y="130" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">— off the achromatic, rounded system</text>
+<text x="24" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">While the render job is pending the source shows, then hard-swaps:</text>
+<rect x="24" y="178" width="200" height="70" rx="10" fill="#0F0F0F" stroke="#1C1C1C" stroke-width="1"/>
+<text x="36" y="198" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#C9C9CC" text-anchor="start">mermaid</text>
+<text x="36" y="220" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#E8E8EA" text-anchor="start">flowchart LR</text>
+<text x="36" y="236" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#E8E8EA" text-anchor="start">  Input --&gt; Render</text>
+<text x="238" y="218" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="700" fill="#FF453A" text-anchor="start">→ 0 ms →</text>
+<rect x="306" y="178" width="200" height="110" rx="10" fill="#0F0F0F" stroke="#1C1C1C" stroke-width="1"/>
+<rect x="320" y="214" width="50" height="30" rx="2" fill="#343438" stroke="#858585" stroke-width="1"/>
+<rect x="392" y="214" width="50" height="30" rx="2" fill="#343438" stroke="#858585" stroke-width="1"/>
+<line x1="520" y1="178" x2="520" y2="288" stroke="#FF453A" stroke-width="1" stroke-linecap="round"/>
+<line x1="516" y1="178" x2="524" y2="178" stroke="#FF453A" stroke-width="1" stroke-linecap="round"/>
+<line x1="516" y1="288" x2="524" y2="288" stroke="#FF453A" stroke-width="1" stroke-linecap="round"/>
+<text x="526" y="236.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">+40 px jump</text>
+<rect x="24" y="262" width="310" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="32" y="278" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">No placeholder of the final height and no crossfade:</text>
+<text x="32" y="293" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">the row jumps when the diagram lands (diagrams.rs:369)</text>
+</g>
+</svg>

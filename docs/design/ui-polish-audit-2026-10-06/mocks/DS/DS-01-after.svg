@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="600" viewBox="0 0 720 600" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="600" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-01 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">One 9-step type scale with paired line heights</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">TextStyle tokens (values at the 16 px default; all scale with the Interface size setting)</text>
+<text x="28" y="96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start" letter-spacing="0.6">TOKEN</text>
+<text x="130" y="96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start" letter-spacing="0.6">SIZE / LINE</text>
+<text x="230" y="96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start" letter-spacing="0.6">WEIGHT</text>
+<text x="340" y="96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start" letter-spacing="0.6">SPECIMEN</text>
+<text x="560" y="96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#737373" text-anchor="start" letter-spacing="0.6">ABSORBS</text>
+<line x1="28" y1="108" x2="692" y2="108" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="127.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">caption2</text>
+<text x="130" y="127.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">10/13</text>
+<text x="230" y="127.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Regular</text>
+<text x="340" y="127.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#e5e5e5" text-anchor="start">kbd hints, counts, badges</text>
+<text x="560" y="127.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">9 · 9.5 · 10</text>
+<line x1="28" y1="140" x2="692" y2="140" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="159.85" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">caption</text>
+<text x="130" y="159.85" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">11/14</text>
+<text x="230" y="159.85" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Regular/Medium</text>
+<text x="340" y="159.85" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#e5e5e5" text-anchor="start">chrome labels, meta, chips</text>
+<text x="560" y="159.85" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">10.5 · 11 · 11.5</text>
+<line x1="28" y1="172" x2="692" y2="172" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="192.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">footnote</text>
+<text x="130" y="192.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">12/16</text>
+<text x="230" y="192.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Regular</text>
+<text x="340" y="192.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">row descriptions, tool rows</text>
+<text x="560" y="192.2" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">12 · 12.5</text>
+<line x1="28" y1="204" x2="692" y2="204" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="224.55" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">body</text>
+<text x="130" y="224.55" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">13/18</text>
+<text x="230" y="224.55" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Regular/Medium</text>
+<text x="340" y="224.55" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#e5e5e5" text-anchor="start">default UI text, row titles</text>
+<text x="560" y="224.55" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">13 · 13.5</text>
+<line x1="28" y1="236" x2="692" y2="236" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="256.9" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">prose</text>
+<text x="130" y="256.9" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">14/21</text>
+<text x="230" y="256.9" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Regular</text>
+<text x="340" y="256.9" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#e5e5e5" text-anchor="start">chat markdown, composer input</text>
+<text x="560" y="256.9" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">14</text>
+<line x1="28" y1="268" x2="692" y2="268" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="289.25" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">title3</text>
+<text x="130" y="289.25" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">15/20</text>
+<text x="230" y="289.25" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Semibold</text>
+<text x="340" y="289.25" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="15" font-weight="600" fill="#e5e5e5" text-anchor="start">card / dialog titles</text>
+<text x="560" y="289.25" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">15 · 16</text>
+<line x1="28" y1="300" x2="692" y2="300" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="321.95" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">title2</text>
+<text x="130" y="321.95" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">17/22</text>
+<text x="230" y="321.95" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Semibold</text>
+<text x="340" y="321.95" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="17" font-weight="600" fill="#e5e5e5" text-anchor="start">section titles</text>
+<text x="560" y="321.95" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">17 · 18</text>
+<line x1="28" y1="332" x2="692" y2="332" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="356.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">title1</text>
+<text x="130" y="356.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">20/25</text>
+<text x="230" y="356.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Semibold</text>
+<text x="340" y="356.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="20" font-weight="600" fill="#e5e5e5" text-anchor="start">Page title</text>
+<text x="560" y="356.5" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">19 · 20</text>
+<line x1="28" y1="367" x2="692" y2="367" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<text x="28" y="397.1" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">display</text>
+<text x="130" y="397.1" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="400" fill="#e5e5e5" text-anchor="start">26/32</text>
+<text x="230" y="397.1" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a1a1a1" text-anchor="start">Bold</text>
+<text x="340" y="397.1" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="26" font-weight="700" fill="#e5e5e5" text-anchor="start">Empty state</text>
+<text x="560" y="397.1" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="11" font-weight="400" fill="#737373" text-anchor="start">29 · 36 (artwork)</text>
+<line x1="28" y1="409" x2="692" y2="409" stroke="#1c1c1c" stroke-width="1" stroke-linecap="round"/>
+<rect x="28" y="425" width="402" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="35" y="439" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">text(TextStyle::Body) sets size + line height + weight together</text>
+<rect x="28" y="453" width="549" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="35" y="467" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">17 sizes → 9 · weights: Regular 400 · Medium 500 · Semibold 600 (Bold only for display)</text>
+<text x="16" y="588" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">proposal: typography::TextStyle + Styled::text_style(); ui_rems stays the scaling primitive</text>
+</svg>

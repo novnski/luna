@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="380" viewBox="0 0 720 380" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="380" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-19 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">IconButton.sm: 24 pt hit, 12–14 pt glyph</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">Visual chrome can stay small; the interactive box is never below 24 × 24 (28 in toolbars)</text>
+<rect x="40" y="120" width="24" height="24" rx="6" fill="#ffffff0f" stroke="#30D158" stroke-width="1.2" />
+<svg x="45" y="125" width="14" height="14" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="52" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">comment remove</text>
+<text x="52" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#30D158" text-anchor="middle">24×24</text>
+<rect x="172" y="120" width="24" height="24" rx="6" fill="#ffffff0f" stroke="#30D158" stroke-width="1.2" />
+<svg x="177" y="125" width="14" height="14" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="184" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">history search ✕</text>
+<text x="184" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#30D158" text-anchor="middle">24×24</text>
+<rect x="304" y="120" width="24" height="24" rx="6" fill="#ffffff0f" stroke="#30D158" stroke-width="1.2" />
+<svg x="309" y="125" width="14" height="14" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="316" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">file preview</text>
+<text x="316" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#30D158" text-anchor="middle">24×24</text>
+<rect x="436" y="120" width="24" height="24" rx="6" fill="#ffffff0f" stroke="#30D158" stroke-width="1.2" />
+<svg x="441" y="125" width="14" height="14" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="448" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">failure dismiss</text>
+<text x="448" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#30D158" text-anchor="middle">24×24</text>
+<rect x="568" y="120" width="24" height="24" rx="6" fill="#ffffff0f" stroke="#30D158" stroke-width="1.2" />
+<svg x="573" y="125" width="14" height="14" viewBox="0 0 16 16" color="#e5e5e5" overflow="visible"><g fill="none"><path d="m4.75 4.75 6.5 6.5m0-6.5-6.5 6.5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></g></svg>
+<text x="580" y="176" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#a1a1a1" text-anchor="middle">browser go</text>
+<text x="580" y="190" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="600" fill="#30D158" text-anchor="middle">24×24</text>
+<rect x="40" y="250" width="500" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="47" y="264" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">ui::IconButton::sm(icon) — 24 hit, icon.sm 14, radius.sm 6, hover fill.tertiary</text>
+<rect x="40" y="278" width="476" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="47" y="292" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">where layout is tight, grow the hit box with negative margin, not the glyph</text>
+<text x="16" y="368" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">same component as DS-02 (sizes sm/md/lg)</text>
+</svg>

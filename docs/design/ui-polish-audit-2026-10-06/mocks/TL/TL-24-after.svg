@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="534" viewBox="0 0 720 534">
+<rect width="720" height="534" fill="#0A0A0B"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-24 · Option C (recommended) · live status of the actual work</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="16" y="20" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">Turn filmstrip · drawn at 1.45× · status follows the newest unresolved tool; 180 ms crossfade between statuses</text>
+<rect x="16" y="30" width="340" height="82" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 2 s</text>
+<g transform="translate(26,84) scale(1.45)">
+<circle cx="6" cy="-4" r="5.98" fill="#7C86FF" opacity="0.268"/>
+<circle cx="6" cy="-4" r="2.9" fill="#AEB4FF"/>
+<defs><linearGradient id="sc0" x1="1.6000000000000014" x2="78.4" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.060" stop-color="#ABABB0"/><stop offset="0.200" stop-color="#FFFFFF"/><stop offset="0.340" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text xml:space="preserve" x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12"><tspan fill="url(#sc0)">Thinking</tspan><tspan fill="#8E8E93" font-size="11">  ·  2s</tspan></text>
+</g>
+<rect x="368" y="30" width="340" height="82" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="378" y="46" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 6 s</text>
+<g transform="translate(378,84) scale(1.45)">
+<circle cx="6" cy="-4" r="6.06" fill="#7C86FF" opacity="0.28600000000000003"/>
+<circle cx="6" cy="-4" r="2.95" fill="#AEB4FF"/>
+<defs><linearGradient id="sc1" x1="3.4000000000000004" x2="70.6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.310" stop-color="#ABABB0"/><stop offset="0.450" stop-color="#FFFFFF"/><stop offset="0.590" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text xml:space="preserve" x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12"><tspan fill="url(#sc1)">Reading</tspan><tspan fill="#E8E8EA"> transcript.rs</tspan><tspan fill="#8E8E93" font-size="11">  ·  6s</tspan></text>
+</g>
+<rect x="16" y="122" width="340" height="82" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 13 s</text>
+<g transform="translate(26,176) scale(1.45)">
+<circle cx="6" cy="-4" r="6.140000000000001" fill="#7C86FF" opacity="0.304"/>
+<circle cx="6" cy="-4" r="3.0" fill="#AEB4FF"/>
+<defs><linearGradient id="sc2" x1="3.4000000000000004" x2="70.6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.560" stop-color="#ABABB0"/><stop offset="0.700" stop-color="#FFFFFF"/><stop offset="0.840" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text xml:space="preserve" x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12"><tspan fill="url(#sc2)">Running</tspan><tspan fill="#E8E8EA"> cargo test</tspan><tspan fill="#8E8E93" font-size="11">  ·  13s</tspan></text>
+</g>
+<rect x="368" y="122" width="340" height="82" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="378" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">hover</text>
+<text x="698" y="138" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="end">pointer over the line</text>
+<g transform="translate(378,176) scale(1.45)">
+<circle cx="6" cy="-4" r="6.22" fill="#7C86FF" opacity="0.322"/>
+<circle cx="6" cy="-4" r="3.0500000000000003" fill="#AEB4FF"/>
+<defs><linearGradient id="sc3" x1="3.4000000000000004" x2="70.6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.810" stop-color="#ABABB0"/><stop offset="0.950" stop-color="#FFFFFF"/><stop offset="1.000" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text xml:space="preserve" x="16" y="0" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12"><tspan fill="url(#sc3)">Running</tspan><tspan fill="#E8E8EA"> cargo test</tspan><tspan fill="#8E8E93" font-size="11">  ·  13s</tspan><tspan fill="#8E8E93" font-size="11">     </tspan><tspan fill="#ABABB0" font-size="11" font-weight="600" text-decoration="underline">Stop</tspan></text>
+</g>
+<rect x="16" y="222" width="688" height="70" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="238" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">Resting state · 1× (reduced motion: orb static, no sweep, statuses swap instantly)</text>
+<circle cx="34" cy="262" r="6.3" fill="#7C86FF" opacity="0.33999999999999997"/>
+<circle cx="34" cy="262" r="3.1" fill="#AEB4FF"/>
+<defs><linearGradient id="scr" x1="31.4" x2="98.6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#FFFFFF"/><stop offset="0.000" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text xml:space="preserve" x="44" y="266" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12"><tspan fill="url(#scr)">Running</tspan><tspan fill="#E8E8EA"> cargo test</tspan><tspan fill="#8E8E93" font-size="11">  ·  13s</tspan></text>
+<circle cx="306" cy="262" r="6.3" fill="#7C86FF" opacity="0.33999999999999997"/>
+<circle cx="306" cy="262" r="3.1" fill="#AEB4FF"/>
+<defs><linearGradient id="scr2" x1="303.4" x2="370.6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#ABABB0"/><stop offset="0.000" stop-color="#FFFFFF"/><stop offset="0.000" stop-color="#ABABB0"/><stop offset="1" stop-color="#ABABB0"/></linearGradient></defs>
+<text xml:space="preserve" x="316" y="266" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12"><tspan fill="url(#scr2)">Writing</tspan><tspan fill="#8E8E93" font-size="11">  ·  41s</tspan></text>
+<rect x="16" y="304" width="688" height="112" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="28" y="322" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Status source (render_working_trailer)</text>
+<text x="28" y="342" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#9A9AA0" text-anchor="start">newest unresolved tool</text>
+<text x="180" y="342" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9F5D4" text-anchor="start">tool_chip_content(call) → "Running cargo test", "Reading transcript.rs" (middle-truncate paths)</text>
+<text x="28" y="360" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#9A9AA0" text-anchor="start">thought streaming</text>
+<text x="180" y="360" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9F5D4" text-anchor="start">"Thinking"     ·  streaming markdown → "Writing"     ·  subagents → "Waiting on 2 agents"</text>
+<text x="28" y="378" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#9A9AA0" text-anchor="start">send bridge / degraded</text>
+<text x="180" y="378" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9F5D4" text-anchor="start">"Sending" / "Queued — will send automatically" (unchanged semantics)</text>
+<text x="28" y="396" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#9A9AA0" text-anchor="start">nothing known &gt; 20 s</text>
+<text x="180" y="396" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#C9F5D4" text-anchor="start">calm fallback verb (Working, Reasoning, Reviewing); whimsy only as an opt-in setting</text>
+<rect x="16" y="428" width="640" height="40" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="24" y="444" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Recommended: C's content with A's motion — orb + 1.8 s shimmer on the verb, object in primary,</text>
+<text x="24" y="459" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">tabular "· 13s" in tertiary, a quiet Stop action on hover. Tells the user what is happening.</text>
+</g>
+</svg>

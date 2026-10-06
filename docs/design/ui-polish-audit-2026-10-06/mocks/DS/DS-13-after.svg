@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="490" viewBox="0 0 720 490" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif">
+<rect width="720" height="490" fill="#060606"/>
+<rect x="0" y="0" width="720" height="52" rx="0" fill="#0f0f10" />
+<line x1="0" y1="52" x2="720" y2="52" stroke="#262626" stroke-width="1" stroke-linecap="round"/>
+<rect x="16" y="16" width="96" height="20" rx="10.0" fill="#30D158" stroke="#30D158" stroke-width="1" />
+<text x="64.0" y="29.96" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#0b0b0b" text-anchor="middle">DS-13 · AFTER</text>
+<text x="124.60000000000001" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="600" fill="#f2f2f2" text-anchor="start">Four label tiers, named like Apple’s</text>
+<text x="704" y="31" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8a8a8a" text-anchor="end">Luna Dark</text>
+<text x="16" y="74" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#9a9a9a" text-anchor="start">label.primary / secondary / tertiary / quaternary — each floored once in Theme, no call-site opacity</text>
+<rect x="24" y="100" width="672" height="56" rx="10" fill="#090909" stroke="#222222" stroke-width="1" />
+<text x="40" y="124" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">label.primary</text>
+<text x="40" y="143" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">#e5e5e5 · was text</text>
+<text x="300" y="134" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#e5e5e5" text-anchor="start">The quick brown fox — Row description</text>
+<text x="680" y="134" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="end">titles, values</text>
+<rect x="24" y="170" width="672" height="56" rx="10" fill="#090909" stroke="#222222" stroke-width="1" />
+<text x="40" y="194" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">label.secondary</text>
+<text x="40" y="213" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">#a1a1a1 · was text_muted</text>
+<text x="300" y="204" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#a1a1a1" text-anchor="start">The quick brown fox — Row description</text>
+<text x="680" y="204" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="end">descriptions, meta</text>
+<rect x="24" y="240" width="672" height="56" rx="10" fill="#090909" stroke="#222222" stroke-width="1" />
+<text x="40" y="264" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">label.tertiary</text>
+<text x="40" y="283" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">#8a8a8a · was text_faint (floored)</text>
+<text x="300" y="274" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#8a8a8a" text-anchor="start">The quick brown fox — Row description</text>
+<text x="680" y="274" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="end">hints, placeholders, footers</text>
+<rect x="24" y="310" width="672" height="56" rx="10" fill="#090909" stroke="#222222" stroke-width="1" />
+<text x="40" y="334" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="12" font-weight="600" fill="#30D158" text-anchor="start">label.quaternary</text>
+<text x="40" y="353" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10.5" font-weight="400" fill="#737373" text-anchor="start">#5c5c5c · was new</text>
+<text x="300" y="344" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="13" font-weight="400" fill="#5c5c5c" text-anchor="start">The quick brown fox — Row description</text>
+<text x="680" y="344" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#a1a1a1" text-anchor="end">disabled only (exempt)</text>
+<rect x="24" y="392" width="537" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="406" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">readable_muted(x) → label.secondary; text_dim removed; meta_line uses label.secondary</text>
+<rect x="24" y="420" width="346" height="20" rx="6" fill="#141414" stroke="#30D158" stroke-width="1.2" />
+<text x="31" y="434" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#30D158" text-anchor="start">light: #222 / #525252 / #6d6d6d / #a3a3a3 (same roles)</text>
+<text x="16" y="478" font-family="'SF Mono', 'Geist Mono', Menlo, monospace" font-size="10" font-weight="400" fill="#6f6f6f" text-anchor="start">Theme::label(LabelTier) returns the pre-floored colour for the current surface stack</text>
+</svg>

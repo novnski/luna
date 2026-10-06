@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="454" viewBox="0 0 720 454">
+<rect width="720" height="454" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="48.0" height="16" rx="8" fill="#30D158"/>
+<text x="36.0" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">AFTER</text>
+<text x="70.0" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-20 · Speaker changes get 28 px; same-speaker follow-ups 12 px</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<rect x="260" y="12" width="230" height="42" rx="16" fill="#1C1C1C"/>
+<text x="276" y="38" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Map the parser and delegate</text>
+<rect x="290" y="56" width="200" height="22" rx="4" fill="#30D158" opacity="0.07"/>
+<rect x="290" y="56" width="200" height="22" rx="4" fill="none" stroke="#30D158" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="298" y="71" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#30D158" text-anchor="start">lane overlays the gap (24 px)</text>
+<line x1="46" y1="54" x2="46" y2="82" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="42" y1="54" x2="50" y2="54" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="42" y1="82" x2="50" y2="82" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<text x="40" y="71.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#30D158" text-anchor="end">28</text>
+<text x="60" y="98" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Delegating to two watchers.</text>
+<text x="60" y="132" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Two watchers launched.</text>
+<line x1="46" y1="138" x2="46" y2="150" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="42" y1="138" x2="50" y2="138" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="42" y1="150" x2="50" y2="150" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<text x="40" y="147.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#30D158" text-anchor="end">12</text>
+<text x="60" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Background agents finished.</text>
+<text x="260" y="166" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#30D158" text-anchor="start">← same reply</text>
+<rect x="60" y="174" width="200" height="22" rx="4" fill="#30D158" opacity="0.07"/>
+<rect x="60" y="174" width="200" height="22" rx="4" fill="none" stroke="#30D158" stroke-width="1" stroke-dasharray="3 3"/>
+<text x="68" y="189" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#30D158" text-anchor="start">lane (24 px, inside gap)</text>
+<line x1="46" y1="172" x2="46" y2="200" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="42" y1="172" x2="50" y2="172" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<line x1="42" y1="200" x2="50" y2="200" stroke="#30D158" stroke-width="1" stroke-linecap="round"/>
+<text x="40" y="189.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#30D158" text-anchor="end">28</text>
+<rect x="340" y="200" width="150" height="42" rx="16" fill="#1C1C1C"/>
+<text x="356" y="226" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="14" font-weight="400" fill="#E8E8EA" text-anchor="start">Thanks, ship it</text>
+<rect x="506" y="140" width="206" height="85" rx="6" fill="#0E2416" stroke="#30D158" stroke-width="1"/>
+<text x="514" y="156" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#C9F5D4" text-anchor="start">Turn gap 28 px holds the 24 px</text>
+<text x="514" y="171" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">meta lane (absolute, opacity-</text>
+<text x="514" y="186" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">only); consecutive same-role</text>
+<text x="514" y="201" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">entries use MD_BLOCK_GAP 12,</text>
+<text x="514" y="216" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9F5D4" text-anchor="start">lane only on the last one</text>
+</g>
+</svg>

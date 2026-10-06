@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="330" viewBox="0 0 720 330" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="330.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="92.7" height="20.0" rx="10.0" fill="#30D158"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-20 · AFTER</text>
+<text x="120.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Hunk headers sit on the diff&#x27;s own columns</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="64.0" width="688.0" height="27.0" rx="0" fill="#121624"/>
+<text x="44.0" y="81.5" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#9aa3b8" text-anchor="end">4405</text>
+<text x="80.0" y="81.5" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#9aa3b8" text-anchor="end">4405</text>
+<text x="96.0" y="81.5" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="10" font-weight="400" fill="#6d7486" text-anchor="middle">@@</text>
+<text x="112.0" y="81.5" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#a9a9ae" text-anchor="start">pub fn diff_row_paint(</text>
+<rect x="16.0" y="91.0" width="688.0" height="21.0" rx="0" fill="#0b0b0c"/>
+<text x="44.0" y="106.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4405</text>
+<text x="80.0" y="106.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4405</text>
+<text x="96.0" y="106.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#85858a" text-anchor="middle" opacity="0.6">·</text>
+<text x="112.0" y="106.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">    kind: LineKind,</text>
+<rect x="16.0" y="112.0" width="688.0" height="21.0" rx="0" fill="#0b0b0c"/>
+<text x="44.0" y="127.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4406</text>
+<text x="80.0" y="127.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4406</text>
+<text x="96.0" y="127.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#85858a" text-anchor="middle" opacity="0.6">·</text>
+<text x="112.0" y="127.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">    theme: &amp;Theme,</text>
+<rect x="16.0" y="133.0" width="688.0" height="21.0" rx="0" fill="#0b0b0c"/>
+<text x="44.0" y="148.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4407</text>
+<text x="80.0" y="148.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4407</text>
+<text x="96.0" y="148.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#85858a" text-anchor="middle" opacity="0.6">·</text>
+<text x="112.0" y="148.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">) -&gt; (</text>
+<rect x="16.0" y="154.0" width="688.0" height="21.0" rx="0" fill="#0b0b0c"/>
+<text x="44.0" y="169.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4408</text>
+<text x="80.0" y="169.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="11" font-weight="400" fill="#85858a" text-anchor="end">4408</text>
+<text x="96.0" y="169.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#85858a" text-anchor="middle" opacity="0.6">·</text>
+<text x="112.0" y="169.0" font-family="&#x27;SF Mono&#x27;, &#x27;Geist Mono&#x27;, Menlo, monospace" font-size="12" font-weight="400" fill="#e8e8ea" text-anchor="start">    &amp;&#x27;static str,</text>
+<line x1="52.0" y1="58.0" x2="52.0" y2="179.0" stroke="#30D158" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3"/>
+<line x1="88.0" y1="58.0" x2="88.0" y2="179.0" stroke="#30D158" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3"/>
+<line x1="112.0" y1="58.0" x2="112.0" y2="179.0" stroke="#30D158" stroke-width="1" stroke-linecap="round" stroke-dasharray="3 3"/>
+<rect x="18.0" y="66.0" width="70.0" height="23.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="16.0" y="191.0" width="146.8" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="23.0" y="204.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">range in gutter columns</text>
+<line x1="89.4" y1="191.0" x2="88.0" y2="89.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="109.0" y="66.0" width="175.0" height="23.0" rx="4" fill="none" stroke="#30D158" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="340.0" y="191.0" width="164.2" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="347.0" y="204.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">context on the code column</text>
+<line x1="340.0" y1="191.0" x2="284.0" y2="89.0" stroke="#30D158" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="16.0" y="219.0" width="481.8" height="19.5" rx="9.75" fill="#30D158"/>
+<text x="23.0" y="232.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">size = diff_text_size · 11/12 (code-font driven) · height lh + 6 · 8 pt gap above</text>
+</svg>

@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="300" viewBox="0 0 720 300" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="300.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-06 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">One horizontal band: second rows share a centre line</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<g transform="translate(8,48) scale(1.6)">
+<rect x="0.0" y="0.0" width="440.0" height="130.0" rx="8" fill="#161618"/>
+<circle cx="12.0" cy="21.0" r="3.2" fill="#ff5f57" opacity="0.85"/>
+<circle cx="21.0" cy="21.0" r="3.2" fill="#febc2e" opacity="0.85"/>
+<circle cx="30.0" cy="21.0" r="3.2" fill="#28c840" opacity="0.85"/>
+<text x="150.0" y="25.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="8.5" font-weight="500" fill="#e8e8ea" text-anchor="start">Release plan for the v0.6 cut</text>
+<rect x="312.0" y="9.0" width="70.0" height="24.0" rx="6" fill="#2a2a2d"/>
+<text x="330.0" y="25.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="7.2" font-weight="400" fill="#e8e8ea" text-anchor="start">Related chats</text>
+<text x="12.0" y="64.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="9" font-weight="500" fill="#e8e8ea" text-anchor="start">All projects</text>
+<rect x="104.0" y="39.0" width="200.0" height="92.0" rx="12" fill="#0b0b0c" stroke="#262629" stroke-width="1"/>
+<rect x="110.0" y="49.0" width="92.0" height="28.0" rx="7" fill="#1d1b2e"/>
+<text x="118.0" y="66.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="7.8" font-weight="500" fill="#e8e8ea" text-anchor="start">Benchmark the cache</text>
+<rect x="206.0" y="49.0" width="60.0" height="28.0" rx="7" fill="none"/>
+<text x="212.0" y="66.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="7.8" font-weight="400" fill="#a9a9ae" text-anchor="start">Main</text>
+<path d="M317.3,53.1 L321.2,57.0 L317.3,60.9" fill="none" stroke="#a9a9ae" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="326.0" y="60.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="7.5" font-weight="500" fill="#e8e8ea" text-anchor="start">Related chats · Release…</text>
+<text x="312.0" y="88.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="7" font-weight="400" fill="#a9a9ae" text-anchor="start">New thread  Benchmark the cache</text>
+<line x1="0.0" y1="63.0" x2="9.0" y2="63.0" stroke="#30D158" stroke-width="1.1" stroke-linecap="round"/>
+<line x1="80.0" y1="63.0" x2="106.0" y2="63.0" stroke="#30D158" stroke-width="1.1" stroke-linecap="round"/>
+<line x1="290.0" y1="63.0" x2="311.0" y2="63.0" stroke="#30D158" stroke-width="1.1" stroke-linecap="round"/>
+<line x1="428.0" y1="63.0" x2="440.0" y2="63.0" stroke="#30D158" stroke-width="1.1" stroke-linecap="round"/>
+<line x1="296.0" y1="57.0" x2="311.0" y2="57.0" stroke="#FF453A" stroke-width="1.1" stroke-linecap="round"/>
+<line x1="428.0" y1="57.0" x2="440.0" y2="57.0" stroke="#FF453A" stroke-width="1.1" stroke-linecap="round"/>
+<line x1="309.0" y1="57.0" x2="309.0" y2="63.0" stroke="#FF453A" stroke-width="1.1" stroke-linecap="round"/>
+<text x="437.0" y="55.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="5.5" font-weight="600" fill="#FF453A" text-anchor="end">56.3</text>
+<text x="437.0" y="70.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="5.5" font-weight="600" fill="#30D158" text-anchor="end">62.8</text>
+</g>
+<rect x="16.0" y="262.0" width="499.1" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="23.0" y="275.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">canvas strip centre 62.8 pt · right toolbar centre 56.3 pt → 6.5 pt step at the seam</text>
+<rect x="488.0" y="102.4" width="232.0" height="48.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+</svg>

@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="364" viewBox="0 0 720 364">
+<rect width="720" height="364" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-08 · Error and retry states: four unrelated treatments</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="24" y="16" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">a  ErrorChip (transcript.rs:8467)</text>
+<rect x="24" y="22" width="440" height="58" rx="8" fill="#1E1E1E" stroke="#2A2A2A" stroke-width="1"/>
+<g transform="translate(34,31) scale(0.5417)" fill="none" stroke="#C9C9CC" stroke-width="2.31" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 4.6a2 2 0 0 1 3.4 0l7.3 12.6a2 2 0 0 1-1.7 3H4.7a2 2 0 0 1-1.7-3z"/><path d="M12 9.5v4"/><circle cx="12" cy="16.8" r="0.4"/></g>
+<text x="55" y="41.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9C9CC" text-anchor="start">Run error</text>
+<rect x="434" y="28" width="20" height="20" rx="5" fill="#2A2A2A"/>
+<g transform="translate(438,32) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="8.5" y="8.5" width="12" height="12" rx="3"/><path d="M15.5 8.5V6a2.5 2.5 0 0 0-2.5-2.5H6A2.5 2.5 0 0 0 3.5 6v7A2.5 2.5 0 0 0 6 15.5h2.5"/></g>
+<text x="34" y="66" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#E8E8EA" text-anchor="start">stream disconnected before completion: error sending request</text>
+<text x="24" y="106" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">b  Recovery trailer (:6629)</text>
+<text x="24" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Retrying in 12s · attempt 2/5</text>
+<text x="210" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#7C86FF" text-anchor="start">Send now</text>
+<text x="272" y="126" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Cancel</text>
+<text x="24" y="144" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#C9C9CC" text-anchor="start">The provider closed the stream. LUNA will resend from the last delivered turn.</text>
+<text x="24" y="172" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">c  Undelivered send (:6787)</text>
+<text x="24" y="192" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Not delivered — click to retry</text>
+<text x="24" y="216" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">d  Failed tool row (:9031)</text>
+<line x1="36.5" y1="222" x2="36.5" y2="232.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 232.0 Q36.5 238.0 42.5 238.0 L52 238.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(56,230.0) scale(0.6667)" fill="none" stroke="#F87171" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="4"/><path d="M7.5 10l2.5 2-2.5 2M12.5 15h4"/></g>
+<text x="80" y="242.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">Run</text>
+<text x="107.8" y="242.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#F87171" text-anchor="start">pnpm test --filter ui</text>
+<line x1="486" y1="42" x2="464" y2="42" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="464" cy="42" r="2.6" fill="#FF453A"/>
+<rect x="486" y="16" width="222" height="70" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="494" y="32" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Neutral grey r8 card, grey 13 px</text>
+<text x="494" y="47" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">triangle, 11 px "Run error": the</text>
+<text x="494" y="62" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">most serious state has no danger</text>
+<text x="494" y="77" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">colour at all</text>
+<line x1="486" y1="122" x2="324" y2="122" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="324" cy="122" r="2.6" fill="#FF453A"/>
+<rect x="486" y="112" width="222" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="494" y="128" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">(b)(c): bare coloured 12 px text,</text>
+<text x="494" y="143" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">text-link buttons (4 px pad, no</text>
+<text x="494" y="158" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">border); (d): whole row red</text>
+<rect x="24" y="268" width="520" height="25" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="32" y="284" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">No shared glyph, container, radius or button style across the four error states.</text>
+</g>
+</svg>

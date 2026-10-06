@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="594" viewBox="0 0 720 594">
+<rect width="720" height="594" fill="#0A0A0B"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-24 · Working indicator: sparse dots, whimsical verb, flat timer</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="16" y="20" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#9A9AA0" text-anchor="start">As shipped (render_working_trailer, transcript.rs:6868) · drawn at 3×</text>
+<g transform="translate(30,40) scale(3)">
+<rect x="0.0" y="7.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="3.75" y="7.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="7.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="0.0" y="10.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="10.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.30"/>
+<rect x="7.5" y="10.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="14.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.30"/>
+<rect x="3.75" y="14.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.80"/>
+<rect x="7.5" y="14.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.30"/>
+<text xml:space="preserve" x="18" y="16" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#C9C9CC">Marinating…<tspan font-size="11" fill="#CCCCCE">   13s</tspan></text>
+</g>
+<rect x="27.5" y="53.5" width="35" height="35" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="81.5" y="45.5" width="203.0" height="45" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<rect x="303.5" y="49.5" width="56.5" height="39" rx="4" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-dasharray="4 3"/>
+<line x1="45" y1="108" x2="45" y2="88" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="45" cy="88" r="2.6" fill="#FF453A"/>
+<rect x="16" y="108" width="238" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="24" y="124" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">3×3 matrix, 2.5 px cells, rests at 10%:</text>
+<text x="24" y="139" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">only ~29% duty per cell → ~2.6 of 9 dots</text>
+<text x="24" y="154" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">visible; dim dots 1.1:1 on the canvas</text>
+<line x1="330" y1="108" x2="330" y2="90" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="330" cy="90" r="2.6" fill="#FF453A"/>
+<rect x="266" y="108" width="238" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="274" y="124" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Verb 12 px #C9C9CC and timer 11 px</text>
+<text x="274" y="139" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">#CCCCCE: the timer renders brighter</text>
+<text x="274" y="154" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">than the verb; no hierarchy, no separator</text>
+<path d="M512 108 L284 100 L284 88" fill="none" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="284" cy="88" r="2.6" fill="#FF453A"/>
+<rect x="512" y="108" width="190" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="520" y="124" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">"…" is a static U+2026;</text>
+<text x="520" y="139" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">proportional digits; 21</text>
+<text x="520" y="154" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">whimsical verbs (:2319)</text>
+<text x="16" y="196" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Glyph at the 15 Hz loader clock (pulse_delta_slow, 66 ms ticks; period 750 ms) · 4×</text>
+<rect x="16" y="206" width="128" height="92" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 0 ms</text>
+<text x="134" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="end">tick 0</text>
+<g transform="translate(60,226) scale(4)">
+<rect x="0.0" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="3.75" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="0.0" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.50"/>
+<rect x="7.5" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.50"/>
+<rect x="3.75" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="1.00"/>
+<rect x="7.5" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.50"/>
+</g>
+<rect x="156" y="206" width="128" height="92" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="166" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 66 ms</text>
+<text x="274" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="end">tick 1</text>
+<g transform="translate(200,226) scale(4)">
+<rect x="0.0" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="3.75" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="0.0" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.32"/>
+<rect x="7.5" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.32"/>
+<rect x="3.75" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.82"/>
+<rect x="7.5" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.32"/>
+</g>
+<rect x="296" y="206" width="128" height="92" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="306" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 132 ms</text>
+<text x="414" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="end">tick 2</text>
+<g transform="translate(340,226) scale(4)">
+<rect x="0.0" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.17"/>
+<rect x="3.75" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.17"/>
+<rect x="0.0" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.15"/>
+<rect x="7.5" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.15"/>
+<rect x="3.75" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.65"/>
+<rect x="7.5" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.15"/>
+</g>
+<rect x="436" y="206" width="128" height="92" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="446" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 198 ms</text>
+<text x="554" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="end">tick 3</text>
+<g transform="translate(480,226) scale(4)">
+<rect x="0.0" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.97"/>
+<rect x="3.75" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.97"/>
+<rect x="0.0" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="7.5" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+<rect x="3.75" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.47"/>
+<rect x="7.5" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+</g>
+<rect x="576" y="206" width="128" height="92" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="586" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 264 ms</text>
+<text x="694" y="222" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#9A9AA0" text-anchor="end">tick 4</text>
+<g transform="translate(620,226) scale(4)">
+<rect x="0.0" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.80"/>
+<rect x="3.75" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="0.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.80"/>
+<rect x="0.0" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="7.5" y="3.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+<rect x="3.75" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.30"/>
+<rect x="7.5" y="7.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+</g>
+<rect x="16" y="306" width="600" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="24" y="322" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Ramp-up is 8% of 750 ms = 60 ms, shorter than one 66 ms tick: cells pop from 10% to 100%</text>
+<text x="24" y="337" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">in a single frame, then decay; the eye reads a flicker of a few static dots, not a travelling wave.</text>
+<text x="16" y="372" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#E8E8EA" text-anchor="start">Every 7 s the verb hard-cuts and the timer jumps (FLAVOUR_ROTATE_SECS = 7) · 2×</text>
+<rect x="16" y="382" width="330" height="70" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="26" y="398" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 13.99 s</text>
+<g transform="translate(30,416) scale(2)">
+<rect x="0.0" y="-1.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.90"/>
+<rect x="3.75" y="-1.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="-1.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.90"/>
+<rect x="0.0" y="2.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="2.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="7.5" y="2.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="6.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+<rect x="3.75" y="6.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.40"/>
+<rect x="7.5" y="6.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+<text xml:space="preserve" x="18" y="8" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#C9C9CC">Combobulating…<tspan font-size="11" fill="#CCCCCE">   13s</tspan></text>
+</g>
+<rect x="374" y="382" width="330" height="70" rx="10" fill="#0C0C0D" stroke="#1E1E21" stroke-width="1"/>
+<text x="384" y="398" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#F2F2F4" text-anchor="start">t = 14.00 s  (next frame)</text>
+<text x="694" y="398" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="9.5" font-weight="400" fill="#FF453A" text-anchor="end">hard cut</text>
+<g transform="translate(388,416) scale(2)">
+<rect x="0.0" y="-1.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.70"/>
+<rect x="3.75" y="-1.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.10"/>
+<rect x="7.5" y="-1.0" width="2.5" height="2.5" rx="1.25" fill="#A9AFFF" opacity="0.70"/>
+<rect x="0.0" y="2.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="3.75" y="2.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="7.5" y="2.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.10"/>
+<rect x="0.0" y="6.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+<rect x="3.75" y="6.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.20"/>
+<rect x="7.5" y="6.5" width="2.5" height="2.5" rx="1.25" fill="#615FFF" opacity="0.10"/>
+<text xml:space="preserve" x="18" y="8" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" fill="#C9C9CC">Musing…<tspan font-size="11" fill="#CCCCCE">   14s</tspan></text>
+</g>
+<line x1="608.0" y1="440" x2="524.0" y2="440" stroke="#FF453A" stroke-width="1.5" stroke-linecap="round"/>
+<path d="M529.0 436 L524.0 440 L529.0 444" fill="none" stroke="#FF453A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="614.0" y="444" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#FF453A" text-anchor="start">timer jumps 42 px</text>
+<rect x="16" y="466" width="600" height="40" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="24" y="482" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">Word and width change in one frame (no crossfade); "Marinating" while running tests says</text>
+<text x="24" y="497" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">nothing about the work. Same glyph/verb also covers "Sending…" and provider notices.</text>
+</g>
+</svg>

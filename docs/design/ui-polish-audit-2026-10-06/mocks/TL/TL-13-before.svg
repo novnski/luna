@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="434" viewBox="0 0 720 434">
+<rect width="720" height="434" fill="#080808"/>
+<rect width="720" height="34" fill="#141416"/>
+<rect x="12" y="9" width="54.800000000000004" height="16" rx="8" fill="#FF453A"/>
+<text x="39.400000000000006" y="20.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="700" fill="#000" text-anchor="middle" letter-spacing="0.4">BEFORE</text>
+<text x="76.80000000000001" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12.5" font-weight="600" fill="#F2F2F4">TL-13 · Four loader idioms, and running tool rows show none</text>
+<text x="708" y="21.5" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10.5" fill="#9A9AA0" text-anchor="end">Luna Dark · 1x logical px</text>
+<g transform="translate(0,34)">
+<text x="24" y="18" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Turn working · gradient_spinner 3×3, 2.5 px cells (:6868)</text>
+<rect x="24.0" y="30.0" width="2.5" height="2.5" rx="1.25" fill="#9AA2FF" opacity="0.25"/>
+<rect x="27.75" y="30.0" width="2.5" height="2.5" rx="1.25" fill="#9AA2FF" opacity="0.55"/>
+<rect x="31.5" y="30.0" width="2.5" height="2.5" rx="1.25" fill="#9AA2FF" opacity="1.0"/>
+<rect x="24.0" y="33.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.55"/>
+<rect x="27.75" y="33.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="1.0"/>
+<rect x="31.5" y="33.75" width="2.5" height="2.5" rx="1.25" fill="#7C86FF" opacity="0.25"/>
+<rect x="24.0" y="37.5" width="2.5" height="2.5" rx="1.25" fill="#5D5FEF" opacity="1.0"/>
+<rect x="27.75" y="37.5" width="2.5" height="2.5" rx="1.25" fill="#5D5FEF" opacity="0.25"/>
+<rect x="31.5" y="37.5" width="2.5" height="2.5" rx="1.25" fill="#5D5FEF" opacity="0.55"/>
+<text x="42" y="39" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Thinking…</text>
+<text x="106" y="39" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="start">12s</text>
+<text x="24" y="70" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Subagent running · mini_glyph_spinner 2×3 (:9230)</text>
+<rect x="24" y="78" width="420" height="30" rx="9" fill="#0F0F0F" stroke="#202020" stroke-width="1"/>
+<rect x="32" y="84" width="18" height="18" rx="5" fill="#1B1B1B"/>
+<g transform="translate(35,87) scale(0.5000)" fill="none" stroke="#C9C9CC" stroke-width="2.50" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="4"/><path d="M12 8V5M2 13v3M22 13v3"/><circle cx="9" cy="13.5" r="0.8"/><circle cx="15" cy="13.5" r="0.8"/></g>
+<text x="58" y="97" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="500" fill="#C9C9CC" text-anchor="start">Agent</text>
+<text x="104" y="97" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#D4D4D6" text-anchor="start">Read the lexer</text>
+<text x="374" y="97" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#CCCCCE" text-anchor="end">Running</text>
+<rect x="382.0" y="87.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="1.0"/>
+<rect x="385.0" y="87.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.7"/>
+<rect x="385.0" y="90.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.45"/>
+<rect x="385.0" y="93.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.3"/>
+<rect x="382.0" y="93.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.22"/>
+<rect x="382.0" y="90.0" width="2.0" height="2.0" rx="1.0" fill="#7C86FF" opacity="0.18"/>
+<text x="24" y="132" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Active group header · text shimmer sweep, 3.4 s (:1986)</text>
+<g transform="translate(29.5,142) scale(0.5833)" fill="none" stroke="#C9C9CC" stroke-width="2.14" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 9l6.5 6.5L18.5 9"/></g>
+<defs><linearGradient id="sh1" x1="52" x2="160.0" gradientUnits="userSpaceOnUse"><stop offset="0.35000000000000003" stop-color="#C9C9CC"/><stop offset="0.55" stop-color="#FFFFFF"/><stop offset="0.75" stop-color="#C9C9CC"/></linearGradient></defs>
+<text x="52" y="153.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="url(#sh1)" text-anchor="start">Running 3 commands</text>
+<text x="24" y="184" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Blob fetch · text only (:7775)</text>
+<text x="80" y="204" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#CCCCCE" text-anchor="start">Loading full output…</text>
+<text x="24" y="232" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#9A9AA0" text-anchor="start">Unresolved tool row (running for 40 s)</text>
+<line x1="36.5" y1="240" x2="36.5" y2="250.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 250.0 Q36.5 256.0 42.5 256.0 L52 256.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<line x1="36.5" y1="250.0" x2="36.5" y2="272" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<g transform="translate(56,248.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="4"/><path d="M7.5 10l2.5 2-2.5 2M12.5 15h4"/></g>
+<text x="80" y="260.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Run</text>
+<text x="107.8" y="260.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">cargo test --workspace</text>
+<line x1="36.5" y1="272" x2="36.5" y2="282.0" stroke="#262626" stroke-width="1" stroke-linecap="butt"/>
+<path d="M36.5 282.0 Q36.5 288.0 42.5 288.0 L52 288.0" fill="none" stroke="#262626" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+<g transform="translate(56,280.0) scale(0.6667)" fill="none" stroke="#C9C9CC" stroke-width="1.88" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="4"/><path d="M7.5 10l2.5 2-2.5 2M12.5 15h4"/></g>
+<text x="80" y="292.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">Run</text>
+<text x="107.8" y="292.2" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="12" font-weight="400" fill="#C9C9CC" text-anchor="start">cargo fmt --check</text>
+<text x="324" y="260" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">← live</text>
+<text x="324" y="292" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="10" font-weight="600" fill="#FF453A" text-anchor="start">← finished</text>
+<line x1="470" y1="256" x2="320" y2="256" stroke="#FF453A" stroke-width="1.2" stroke-linecap="round"/>
+<circle cx="320" cy="256" r="2.6" fill="#FF453A"/>
+<rect x="470" y="220" width="236" height="70" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="478" y="236" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">A running command and a finished one</text>
+<text x="478" y="251" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">are pixel-identical: only the header</text>
+<text x="478" y="266" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">shimmer says something is live</text>
+<text x="478" y="281" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">(chip_header_row: running = subagents only)</text>
+<rect x="470" y="40" width="236" height="55" rx="6" fill="#2B1311" stroke="#FF453A" stroke-width="1"/>
+<text x="478" y="56" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="500" fill="#FFD0CC" text-anchor="start">3×3 matrix, 2×3 snake, shimmer text</text>
+<text x="478" y="71" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">and plain text: four idioms, no rule</text>
+<text x="478" y="86" font-family="-apple-system, 'SF Pro Text', Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#FFD0CC" text-anchor="start">for which means what</text>
+</g>
+</svg>

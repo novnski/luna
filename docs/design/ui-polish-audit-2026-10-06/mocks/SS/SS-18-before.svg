@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="400" viewBox="0 0 720 400" role="img">
+<rect x="0.0" y="0.0" width="720.0" height="400.0" rx="0" fill="#0c0c0e"/>
+<rect x="16.0" y="14.0" width="98.7" height="20.0" rx="10.0" fill="#FF453A"/>
+<text x="23.0" y="28.2" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="600" fill="#ffffff" text-anchor="start">SS-18 · BEFORE</text>
+<text x="126.7" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="13" font-weight="600" fill="#f2f2f4" text-anchor="start">Files status text you can read and act on</text>
+<text x="704.0" y="28.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11" font-weight="400" fill="#8e8e93" text-anchor="end">Luna Dark</text>
+<rect x="16.0" y="52.0" width="400.0" height="330.0" rx="10" fill="#161618" stroke="#38383c" stroke-width="1"/>
+<rect x="24.0" y="59.0" width="352.0" height="24.0" rx="6" fill="#1d1d1f"/>
+<circle cx="35.3" cy="70.3" r="3.3600000000000003" fill="none" stroke="#85858a" stroke-width="1.4"/>
+<line x1="37.8" y1="72.8" x2="40.2" y2="75.2" stroke="#85858a" stroke-width="1.4" stroke-linecap="round"/>
+<text x="48.0" y="75.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#85858a" text-anchor="start">Search files</text>
+<path d="M386.7,70.3 Q392.0,75.2 397.3,70.3" fill="none" stroke="#a9a9ae" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="17.0" y="90.0" width="398.0" height="27.0" rx="0" fill="#19170c"/>
+<line x1="17.0" y1="117.0" x2="415.0" y2="117.0" stroke="#3d3815" stroke-width="1" stroke-linecap="round"/>
+<path d="M34.6,103.2 A3.4,3.4 0 1 1 32.3,100.1" fill="none" stroke="#d8cf98" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M32.3,98.7 L32.4,100.2 L30.9,100.7" fill="none" stroke="#d8cf98" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="42.0" y="107.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#d8cf98" text-anchor="start">File watching paused: too many changes</text>
+<rect x="342.0" y="93.5" width="64.0" height="20.0" rx="5" fill="none"/>
+<text x="374.0" y="107.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10" font-weight="400" fill="#a9a9ae" text-anchor="middle">Refresh now</text>
+<path d="M27.1,135.8 L31.0,139.7 L34.9,135.8" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M43.0,134.0 h5.0 l1.4,1.7 h6.6 v7.7 h-13.0 z" fill="#6b8fd6" opacity="0.9"/>
+<text x="62.0" y="141.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">src</text>
+<text x="52.0" y="168.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#85858a" text-anchor="start">Loading…</text>
+<path d="M27.1,189.8 L31.0,193.7 L34.9,189.8" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M43.0,188.0 h5.0 l1.4,1.7 h6.6 v7.7 h-13.0 z" fill="#6b8fd6" opacity="0.9"/>
+<text x="62.0" y="195.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">assets</text>
+<text x="52.0" y="222.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#85858a" text-anchor="start">Empty folder</text>
+<path d="M27.1,243.8 L31.0,247.7 L34.9,243.8" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M43.0,242.0 h5.0 l1.4,1.7 h6.6 v7.7 h-13.0 z" fill="#6b8fd6" opacity="0.9"/>
+<text x="62.0" y="249.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">private</text>
+<text x="52.0" y="276.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#e58b8b" text-anchor="start">Permission denied — Retry</text>
+<path d="M27.1,297.8 L31.0,301.7 L34.9,297.8" fill="none" stroke="#85858a" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M43.0,296.0 h5.0 l1.4,1.7 h6.6 v7.7 h-13.0 z" fill="#6b8fd6" opacity="0.9"/>
+<text x="62.0" y="303.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">logs</text>
+<path d="M58.5,320.5 h6.2 l3.4,3.4 v9.5 h-9.5 z" fill="#9aa4b2" opacity="0.35"/>
+<rect x="57.7" y="326.5" width="10.6" height="5.0" rx="1.5" fill="#9aa4b2"/>
+<text x="76.0" y="330.5" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="11.5" font-weight="400" fill="#a9a9ae" text-anchor="start">app.log</text>
+<text x="52.0" y="357.0" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="400" fill="#85858a" text-anchor="start">Load more…</text>
+<rect x="18.0" y="90.0" width="396.0" height="27.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="432.0" y="94.0" width="227.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="439.0" y="107.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">27 h band · 10 px text · 10.5 px icon</text>
+<line x1="432.0" y1="103.8" x2="414.0" y2="103.8" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="36.0" y="155.0" width="120.0" height="19.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="432.0" y="153.0" width="123.7" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="439.0" y="166.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">status rows 10.5 px</text>
+<line x1="432.0" y1="162.8" x2="156.0" y2="162.8" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="36.0" y="263.0" width="190.0" height="19.0" rx="4" fill="none" stroke="#FF453A" stroke-width="1.6" stroke-dasharray="4 3"/>
+<rect x="432.0" y="261.0" width="141.1" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="439.0" y="274.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">&#x27;— Retry&#x27; is just text</text>
+<line x1="432.0" y1="270.8" x2="226.0" y2="270.8" stroke="#FF453A" stroke-width="1.3" stroke-linecap="round"/>
+<rect x="432.0" y="342.0" width="216.1" height="19.5" rx="9.75" fill="#FF453A"/>
+<text x="439.0" y="355.7" font-family="-apple-system, &#x27;SF Pro Text&#x27;, Geist, Helvetica, sans-serif" font-size="10.5" font-weight="600" fill="#ffffff" text-anchor="start">names 11.5 px beside 10.5 px status</text>
+</svg>
