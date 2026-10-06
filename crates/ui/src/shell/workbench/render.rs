@@ -37,8 +37,9 @@ pub(in crate::shell) const VIEWPORT_INSET: f32 = 6.0;
 const OVERFLOW_FADE: f32 = 28.0;
 /// The frame's bottom row (checkout/branch, Git entry point).
 const FRAME_FOOTER_HEIGHT: f32 = 32.0;
-/// Divider hit target, centred on the 1px seam.
-const DIVIDER_HIT: f32 = 8.0;
+/// Divider hit target, centred on the 1px seam (one splitter recipe with
+/// the sidebar seams, audit SH-18).
+const DIVIDER_HIT: f32 = 10.0;
 /// The hairline between a split's two sides.
 const SPLIT_SEAM: f32 = 1.0;
 /// Hover/preview fade and insertion timing (reduced motion: none).
@@ -600,6 +601,8 @@ impl Shell {
         let group: SharedString = format!("wb-divider-{}", split.id).into();
         let active = live.is_some();
         let seam = theme.hairline(0.08);
+        // Hover raises a neutral hairline; only a live drag takes the accent.
+        let hover_seam = theme.hairline(0.18);
         let highlight = theme.accent.opacity(0.55);
         let divider = div()
             .id(SharedString::from(format!("wb-divider-{}", split.id)))
@@ -649,7 +652,9 @@ impl Shell {
                     } else {
                         highlight.opacity(0.0)
                     })
-                    .group_hover(group, move |style| style.bg(highlight)),
+                    .group_hover(group, move |style| {
+                        style.bg(if active { highlight } else { hover_seam })
+                    }),
             )
             .on_drag(
                 WorkbenchDividerDrag {

@@ -420,26 +420,37 @@ pub(super) fn sidebar_disclosure_header(
     label: SharedString,
     chevron: AnyElement,
 ) -> gpui::Div {
+    // macOS-style section header (audit SH-15): a small semibold label, no
+    // rule, and the disclosure chevron only under the pointer.
     div()
+        .group("sidebar-disclosure-header")
         .flex()
         .flex_row()
         .items_center()
         .gap(px(8.0))
         .h(px(SIDEBAR_DISCLOSURE_HEADER_HEIGHT))
         .px(px(Theme::SPACE_SM))
+        .rounded(px(crate::theme::radius::SM))
         .cursor_pointer()
+        .hover(|style| style.bg(crate::theme::sidebar_hover_bg()))
         .child(super::sidebar_faded_label(
             "sidebar-disclosure-label".into(),
             false,
             div()
-                .text_size(crate::typography::ui_rems(12.0))
-                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_size(crate::typography::ui_rems(11.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
                 // A section label: quiet, but held to the text floor.
-                .text_color(theme.readable_muted(0.5))
+                .text_color(theme.readable_faint(0.9))
                 .child(label),
         ))
-        .child(sidebar_separator(theme).flex_1())
-        .child(chevron)
+        .child(div().flex_1())
+        .child(
+            div()
+                .flex_none()
+                .opacity(0.0)
+                .group_hover("sidebar-disclosure-header", |style| style.opacity(1.0))
+                .child(chevron),
+        )
 }
 
 /// One activatable row of the open dropdown, in nav order. `AddSpace` names
@@ -2201,7 +2212,7 @@ impl Shell {
                     .items_center()
                     .gap(px(10.0))
                     .px(px(Theme::SPACE_SM))
-                    .rounded(px(6.0))
+                    .rounded(px(8.0))
                     .cursor_pointer()
                     .tooltip_at(
                         move |_, cx| cx.new(|_| details.clone()).into(),
@@ -2486,7 +2497,7 @@ impl Shell {
                         .items_center()
                         .gap(px(SIDEBAR_ARCHIVED_HARNESS_TITLE_GAP))
                         .px(px(Theme::SPACE_SM))
-                        .rounded(px(6.0))
+                        .rounded(px(8.0))
                         .cursor_pointer()
                         .tooltip_at(
                             move |_, cx| cx.new(|_| details.clone()).into(),

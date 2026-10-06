@@ -8,7 +8,7 @@ Update this file as each finding lands so work can resume after compaction.
 | TL-24 | P1 | Working indicator: sparse flickering dots, random whimsical verb, flat jumping timer (user-requested) | done (milestone A) | Breathing orb, live status from the newest unresolved tool, shimmer, tabular timer, hover Stop; flavour rotation retired |
 | TL-01 | P1 | Expanding a tool row is a 140 ms height-only wipe; four different fold clocks | done (milestone A) | motion::DISCLOSURE (300 ms) for tool rows/groups/diff collapse; body fades in 180 ms, out by 60% |
 | TL-02 | P1 | Disclosure chevrons: three sizes, two behaviours, hidden until hover | done (milestone A) | One 12 px alt-arrow-right rotated by fold progress; always visible at 50%; right-aligned accessory column |
-| TL-03 | P1 | Thought text is hard-wrapped at 96 columns, then each line is truncated | todo | Deferred: needs width-aware thought wrapping with analytic heights |
+| TL-03 | P1 | Thought text is hard-wrapped at 96 columns, then each line is truncated | done (milestone G) | Thought details wrap to the live column (ThoughtColsScope + width-keyed cache); analytic heights use the same budget |
 | TL-04 | P1 | Failed tool rows and agent cards paint everything red | done (milestone A) | Label/detail keep row tones; close-circle glyph + trailing "Failed" |
 | TL-05 | P1 | Text tiers collapse: muted and faint render as the same grey (faint is brighter) | done (milestone A) | content_muted / content_faint floored on the canvas with a 1.35x step; used across transcript + markdown |
 | TL-06 | P1 | Tool output and code blocks are two different components | done (milestone A) | Tool output uses code block recipe (r10, 28 px header, shared copy_action, 12.5/18 mono, horizontal scroll) |
@@ -62,21 +62,21 @@ Update this file as each finding lands so work can resume after compaction.
 | SH-07 | P1 | Light mode: the content plane is a grey tray, darker than the chrome | done (milestone D) | Light canvas_fill = bg @ 0.96; frost density still checked against the old recessed plane (contrast audit passes) |
 | SH-08 | P1 | Light mode: disabled Back/Forward look exactly like enabled controls | done (milestone D) | Theme::disabled_glyph (muted @ 35%) for disabled back/forward |
 | SH-09 | P1 | The sidebar "View options" button keeps a focus ring after mouse use | done (milestone D) | View options uses focus_visible ring instead of in_focus border |
-| SH-10 | P2 | Chrome controls and icons have no size ladder | todo | |
-| SH-11 | P2 | The three sidebar footer buttons disagree on size, tone and hover | todo | |
-| SH-12 | P2 | Hover feedback mixes timing and uses seven different washes | todo | |
-| SH-13 | P2 | Sidebar rows lead with the project, and the trailing corner keeps changing meaning | todo | |
-| SH-14 | P2 | Active, settled and archived rows use different geometry in one column | todo | |
-| SH-15 | P2 | Sidebar section headers: hairline rules, always-on chevrons, uneven grouping | todo | |
+| SH-10 | P2 | Chrome controls and icons have no size ladder | partial | surface_chrome tokens + footer sizes; full control ladder not migrated |
+| SH-11 | P2 | The three sidebar footer buttons disagree on size, tone and hover | done (milestone G) | Footer buttons one recipe: 32 pt, 18 pt icon, muted tone, shared hover; open usage card shows selected wash |
+| SH-12 | P2 | Hover feedback mixes timing and uses seven different washes | partial | Sidebar/footer/menu hovers share washes; other shell .hover() calls remain instant |
+| SH-13 | P2 | Sidebar rows lead with the project, and the trailing corner keeps changing meaning | partial | Not changed: the sidebar row layout is user-tuned (user-request comments); needs design sign-off |
+| SH-14 | P2 | Active, settled and archived rows use different geometry in one column | partial | Shelf rows share radius 8; harness geometry kept (a test pins the deliberate active vs archived hierarchy) |
+| SH-15 | P2 | Sidebar section headers: hairline rules, always-on chevrons, uneven grouping | done (milestone G) | Section headers 11 pt semibold faint, no rule, chevron on hover, hover wash |
 | SH-16 | P2 | Sidebar collapse is a 200 ms clip-wipe | done (milestone D) | Sidebar content slides with the edge and fades over the last 40% of travel |
-| SH-17 | P2 | Switching chats blanks the transcript, then pops the new one in | todo | |
-| SH-18 | P2 | Two different splitters in one window | todo | |
+| SH-17 | P2 | Switching chats blanks the transcript, then pops the new one in | done (milestone G) | Selected transcript fades and settles in (160 ms) once its geometry is ready |
+| SH-18 | P2 | Two different splitters in one window | done (milestone G) | Workbench divider 10 pt hit, neutral hairline on hover, accent only while dragging |
 | SH-19 | P2 | Four keyboard-focus ring recipes, two of them nearly invisible | done (milestone D) | Every shell border-based focus style replaced with theme::focus_ring |
 | SH-20 | P2 | Chrome text drops to 9–10 px, across 15 sizes in the shell | done (milestone D) | All 9–10.5 px shell/palette/popover text raised to 11 px |
 | SH-21 | P2 | Two tooltip styles and three delays | done (milestone D) | SurfaceTabTooltip renders the shared tooltip card; right tabs use text_tooltip |
 | SH-22 | P2 | Tab activation reflows the strip, and the close glyph snaps | done (milestone D) | One tab weight (Medium); activation via fill and colour |
-| SH-23 | P2 | The right-pane picker looks like a wireframe, on a different surface from the centre | todo | |
-| SH-24 | P2 | Three empty states, three different visual languages | todo | |
+| SH-23 | P2 | The right-pane picker looks like a wireframe, on a different surface from the centre | done (milestone G) | Surface picker: filled tiles, no outlines, heading and hint |
+| SH-24 | P2 | Three empty states, three different visual languages | done (milestone G) | Sidebar empty state centred with title and next step using the user's actual shortcut (canvas stays untitled per earlier user request) |
 | SH-25 | P3 | Palette rows: three heights, tiny headers, non-concentric radius | done (milestone D) | PALETTE_ITEM_RADIUS 16−8; palette rows 32 / 44 |
 | SH-26 | P3 | The Activity bell's unread dot floats off the glyph | done (milestone D) | 6 pt unread dot seated on the bell shoulder |
 | DS-01 | P1 | No type scale; 17 sizes and borrowed 1.618 leading | done (milestone F) | typography::TextStyle (caption2…display) + TypeStyleExt::type_style; used for new UI, page titles |
@@ -115,7 +115,7 @@ Update this file as each finding lands so work can resume after compaction.
 | SS-12 | P2 | Empty, loading and error states: six recipes, one spinner, one blank pane | done (milestone E) | surface_chrome::surface_state + state_glyph; Files loading/error; preview states on the shared body |
 | SS-13 | P2 | Git card: four identical buttons, no primary action, a toggle with no state | done (milestone E) | git_primary_button (accent) for Commit; 26 pt buttons, 12 pt labels, Role::Button |
 | SS-14 | P2 | Pane content does not share the toolbar's left edge (8 vs 12 vs 16 vs 20 pt) | done (milestone E) | surface_chrome::CONTENT_INSET 12 for hunk headers, agents empty state, previews |
-| SS-15 | P2 | Agents surface: a wall of engine diagnostics with two row recipes in one pane | todo | todo: agents surface row recipe |
+| SS-15 | P2 | Agents surface: a wall of engine diagnostics with two row recipes in one pane | done (milestone G) | Agents and Work rows: status dot + title, one quiet meta line, engine detail in tooltip |
 | SS-16 | P2 | Keyboard focus is invisible on most secondary-surface controls | done (milestone E) | focus rings on files toolbar, diff header toggles, git buttons (theme::focus_visible_ring helper) |
 | SS-17 | P2 | Type and radius sprawl: 15 text sizes, 9 radii, px line-heights under rem text | done (milestone E) | All ui_rems text below 11 pt raised to 11 across the crate |
 | SS-18 | P2 | Files status text below the readable floor (10–10.5 px, 10.5 px icon) | done (milestone E) | Files status text raised to 11+ |

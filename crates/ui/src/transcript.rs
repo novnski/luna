@@ -444,6 +444,91 @@ fn tool_group_collapses(tools: &[ToolItem]) -> bool {
 /// here — conservative enough to fit the card at typical transcript widths.
 const THOUGHT_WRAP_COLS: usize = 96;
 
+thread_local! {
+    /// The column budget thought text wraps to for the transcript being
+    /// rendered (audit TL-03): [`Transcript::render_tool_group`] scopes it to
+    /// the live column width; row building outside it keeps the default.
+    static THOUGHT_COLS: Cell<usize> = const { Cell::new(THOUGHT_WRAP_COLS) };
+    /// Thought detail lines re-wrapped to a live budget, keyed by source tree
+    /// identity and column count.
+    static THOUGHT_WRAP_CACHE: RefCell<HashMap<(usize, usize), Arc<(Vec<Vec<InlineRun>>, usize)>>> =
+        RefCell::new(HashMap::new());
+}
+
+fn thought_cols() -> usize {
+    THOUGHT_COLS.with(Cell::get)
+}
+
+/// Scope the thought wrap budget for one render; restores the default when
+/// dropped so row building never inherits a render's width.
+struct ThoughtColsScope;
+
+impl ThoughtColsScope {
+    fn new(cols: usize) -> Self {
+        THOUGHT_COLS.with(|c| c.set(cols));
+        Self
+    }
+}
+
+impl Drop for ThoughtColsScope {
+    fn drop(&mut self) {
+        THOUGHT_COLS.with(|c| c.set(THOUGHT_WRAP_COLS));
+    }
+}
+
+/// Columns of 12 pt thought text that fit `text_width` pt (Geist's average
+/// advance is about 0.56 em).
+fn thought_cols_for_width(text_width: f32, ui_scale: f32) -> usize {
+    let advance = TOOL_TEXT_SIZE * ui_scale.max(0.5) * 0.56;
+    ((text_width / advance).floor() as usize).clamp(24, 200)
+}
+
+/// A thought detail's lines at the current wrap budget, with its cut count.
+fn thought_detail_lines(
+    lines: &[Vec<InlineRun>],
+    truncated_by: usize,
+    source: Option<&Arc<BlockTree>>,
+    live: bool,
+) -> Arc<(Vec<Vec<InlineRun>>, usize)> {
+    let cols = thought_cols();
+    let Some(source) = source.filter(|_| cols != THOUGHT_WRAP_COLS) else {
+        return Arc::new((lines.to_vec(), truncated_by));
+    };
+    let key = (Arc::as_ptr(source) as usize, cols);
+    if let Some(hit) = THOUGHT_WRAP_CACHE.with_borrow(|cache| cache.get(&key).cloned()) {
+        return hit;
+    }
+    let (lines, truncated_by) = cap_thought_lines(thought_lines(source), live);
+    let wrapped = Arc::new((lines, truncated_by));
+    THOUGHT_WRAP_CACHE.with_borrow_mut(|cache| {
+        if cache.len() > 512 {
+            cache.clear();
+        }
+        cache.insert(key, wrapped.clone());
+    });
+    wrapped
+}
+
+/// Cap thought lines like tool outputs: the tail while streaming, the head
+/// once settled.
+fn cap_thought_lines(mut lines: Vec<Vec<InlineRun>>, live: bool) -> (Vec<Vec<InlineRun>>, usize) {
+    let truncated_by = lines.len().saturating_sub(OUTPUT_DETAIL_MAX_LINES);
+    if truncated_by > 0 {
+        if live {
+            lines.drain(..truncated_by);
+            while lines
+                .first()
+                .is_some_and(|l| l.iter().all(|r| r.text.trim().is_empty()))
+            {
+                lines.remove(0);
+            }
+        } else {
+            lines.truncate(OUTPUT_DETAIL_MAX_LINES);
+        }
+    }
+    (lines, truncated_by)
+}
+
 /// Flatten a thought's parsed markdown into wrapped, STYLED detail lines —
 /// inline markers render as real styling (bold/italic/code/links) instead of
 /// literal `**` glyphs; blocks flatten structurally (headings bold, list
@@ -508,7 +593,7 @@ fn finish_line(indent: usize, mut line: Vec<InlineRun>) -> Vec<InlineRun> {
 /// hard-split at the budget. Hard breaks (`\n` runs) split into
 /// separately-wrapped segments.
 fn wrap_styled_runs(runs: &[InlineRun], indent: usize, out: &mut Vec<Vec<InlineRun>>) {
-    let budget = THOUGHT_WRAP_COLS.saturating_sub(indent).max(16);
+    let budget = thought_cols().saturating_sub(indent).max(16);
     let mut segments: Vec<Vec<InlineRun>> = vec![Vec::new()];
     for run in runs {
         for (ix, piece) in run.text.split('\n').enumerate() {
@@ -621,7 +706,7 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
                 ..InlineStyle::default()
             };
             for line in code.lines() {
-                for chunk in wrap_cols(line, THOUGHT_WRAP_COLS.saturating_sub(indent).max(16)) {
+                for chunk in wrap_cols(line, thought_cols().saturating_sub(indent).max(16)) {
                     let mut row = indent_run(indent);
                     if !chunk.is_empty() {
                         row.push(InlineRun {
@@ -717,24 +802,7 @@ fn thought_block_lines(block: &Block, indent: usize, out: &mut Vec<Vec<InlineRun
 /// outputs, with the counted tail. `live` = the part is still streaming
 /// (chip defaults open).
 fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
-    let mut lines = thought_lines(tree);
-    let truncated_by = lines.len().saturating_sub(OUTPUT_DETAIL_MAX_LINES);
-    if truncated_by > 0 {
-        // Keep the TAIL while streaming (the fresh thinking is the signal);
-        // settled thoughts keep the head like tool outputs do.
-        if live {
-            lines.drain(..truncated_by);
-            // The cut can land on a block separator — drop the orphan blank.
-            while lines
-                .first()
-                .is_some_and(|l| l.iter().all(|r| r.text.trim().is_empty()))
-            {
-                lines.remove(0);
-            }
-        } else {
-            lines.truncate(OUTPUT_DETAIL_MAX_LINES);
-        }
-    }
+    let (lines, truncated_by) = cap_thought_lines(thought_lines(tree), live);
     ToolItem {
         part_id: part_id.into(),
         call: ToolCall::Unknown {
@@ -747,6 +815,8 @@ fn thought_item(part_id: &str, tree: &BlockTree, live: bool) -> ToolItem {
             Arc::new(ToolDetail::Thought {
                 lines,
                 truncated_by,
+                source: Some(Arc::new(tree.clone())),
+                live,
             })
         }),
         invocation: None,
@@ -777,6 +847,10 @@ pub enum ToolDetail {
     Thought {
         lines: Vec<Vec<InlineRun>>,
         truncated_by: usize,
+        /// The thought's markdown, so the body can re-wrap to the live
+        /// column width (audit TL-03); `lines` are the default-width wrap.
+        source: Option<Arc<BlockTree>>,
+        live: bool,
     },
     /// A file diff, in the changes pane's model: hunks with 3 lines of
     /// context, dual line numbers, and (for recognized languages) syntax
@@ -1299,6 +1373,7 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
             Some(ToolDetail::Thought {
                 lines,
                 truncated_by,
+                ..
             }) => {
                 // Byte-exact plus style bits: a live mend can restyle runs
                 // without changing the flattened length, and the row must
@@ -2175,8 +2250,11 @@ fn detail_height_for(detail: &ToolDetail, theme: Option<&Theme>, ui_scale: f32) 
         ToolDetail::Thought {
             lines,
             truncated_by,
+            source,
+            live,
         } => {
-            let rows = lines.len() + usize::from(*truncated_by > 0);
+            let wrapped = thought_detail_lines(lines, *truncated_by, source.as_ref(), *live);
+            let rows = wrapped.0.len() + usize::from(wrapped.1 > 0);
             rows as f32 * OUTPUT_LINE_HEIGHT * ui_scale + OUTPUT_BODY_PAD
         }
         ToolDetail::Diff { file, .. } => {
@@ -7934,6 +8012,12 @@ impl Transcript {
     ) -> AnyElement {
         let mut fold = self.folds.get(row_id).copied().unwrap_or_default();
         let focus_ring = theme.focus_ring();
+        // Thought details wrap to this column's live text width.
+        let ui_scale = crate::typography::font_size(cx).pixels() / 16.0;
+        let _thought_cols = ThoughtColsScope::new(thought_cols_for_width(
+            (self.content_width - ACTIVITY_GUTTER_WIDTH - ACTIVITY_TEXT_GAP).max(120.0),
+            ui_scale,
+        ));
         // Agent/spawn chips never fold: they are their own row, always open,
         // no "Called N tools" header — a running subagent stays visible.
         let collapses = tool_group_collapses(tools);
@@ -9203,31 +9287,38 @@ fn detail_body(
         ToolDetail::Thought {
             lines,
             truncated_by,
-        } => body
-            .py(px(6.0))
-            .text_size(crate::typography::ui_rems(TOOL_TEXT_SIZE))
-            .children(lines.iter().map(|line| {
-                let row = div()
-                    .h(crate::typography::ui_rems(OUTPUT_LINE_HEIGHT))
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .items_center();
-                let Some((text, runs)) = thought_line_text(line, theme) else {
-                    return row; // blank separator row
-                };
-                row.child(
-                    div()
+            source,
+            live,
+        } => {
+            // Wrapped to the live column (audit TL-03): lines fit the width
+            // instead of a fixed 96 columns cut off per line.
+            let wrapped = thought_detail_lines(lines, *truncated_by, source.as_ref(), *live);
+            let truncated_by = wrapped.1;
+            body.py(px(6.0))
+                .text_size(crate::typography::ui_rems(TOOL_TEXT_SIZE))
+                .children(wrapped.0.iter().map(|line| {
+                    let row = div()
+                        .h(crate::typography::ui_rems(OUTPUT_LINE_HEIGHT))
                         .w_full()
                         .min_w_0()
-                        .truncate()
-                        .child(StyledText::new(text).with_runs(runs)),
-                )
-            }))
-            .when(*truncated_by > 0, |block| {
-                block.child(more_lines_row(*truncated_by, theme, false))
-            })
-            .into_any_element(),
+                        .flex()
+                        .items_center();
+                    let Some((text, runs)) = thought_line_text(line, theme) else {
+                        return row; // blank separator row
+                    };
+                    row.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .truncate()
+                            .child(StyledText::new(text).with_runs(runs)),
+                    )
+                }))
+                .when(truncated_by > 0, |block| {
+                    block.child(more_lines_row(truncated_by, theme, false))
+                })
+                .into_any_element()
+        }
     }
 }
 

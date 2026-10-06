@@ -147,7 +147,7 @@ fn main() -> anyhow::Result<()> {
             let file = luna_ui::changes::parse_patch("diff --git a/demo.rs b/demo.rs\n--- a/demo.rs\n+++ b/demo.rs\n@@ -1,2 +1,2 @@\n-old_value\n+new_value\n context\n\\ No newline at end of file\n").remove(0);
             let details = vec![
                 luna_ui::transcript::ToolDetail::Output { lines: vec!["cargo check --locked".into(), "    Checking luna-ui".into(), "    Finished successfully".into()], truncated_by: 2, raw_text: "cargo check --locked".into() },
-                luna_ui::transcript::ToolDetail::Thought { lines: vec![vec![luna_ui::markdown::parser::InlineRun { text: "Thought text follows the interface font.".into(), style: Default::default() }]], truncated_by: 1 },
+                luna_ui::transcript::ToolDetail::Thought { lines: vec![vec![luna_ui::markdown::parser::InlineRun { text: "Thought text follows the interface font.".into(), style: Default::default() }]], truncated_by: 1 , source: None, live: false },
                 luna_ui::transcript::ToolDetail::Diff { file: std::sync::Arc::new(file), old_text: None, new_text: None },
             ];
             let tools = cx.open_window(WindowOptions {

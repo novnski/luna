@@ -3077,26 +3077,31 @@ impl Shell {
             .role(gpui::Role::Button)
             .aria_label("Toggle usage")
             .aria_expanded(open)
-            .size(px(32.0))
+            .size(px(super::SIDEBAR_FOOTER_BUTTON))
             .track_focus(&self.usage_action_focus)
             .cursor_pointer()
-            .rounded(px(Theme::CONTROL_RADIUS))
-            .bg(theme.glass_hover().opacity(if open { 0.65 } else { 0.0 }))
-            .hover(|el| el.bg(theme.glass_hover().opacity(if open { 0.8 } else { 0.0 })))
+            .rounded(px(crate::theme::radius::MD))
+            // Same footer recipe as its neighbours (audit SH-11); an open
+            // card shows the selected wash.
+            .when(open, |el| el.bg(crate::theme::glass_selected_bg()))
+            .hover(move |el| {
+                el.bg(if open {
+                    crate::theme::glass_selected_bg()
+                } else {
+                    crate::theme::sidebar_hover_bg()
+                })
+            })
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme.text)
             .on_click(cx.listener(|this, _, _, cx| this.toggle_usage_card(cx)))
             .on_key_down(crate::swallow_activation_key)
-            .child(icon(icons::CHART).size(px(18.0)).text_color(theme.text));
-        div()
-            .size(px(36.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(action)
-            .into_any_element()
+            .child(
+                icon(icons::CHART)
+                    .size(px(super::SIDEBAR_FOOTER_ICON))
+                    .text_color(if open { theme.text } else { theme.text_muted }),
+            );
+        action.into_any_element()
     }
 }
 

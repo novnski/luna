@@ -78,41 +78,68 @@ impl Shell {
             } else {
                 metrics
             };
+            // One compact row recipe (audit SS-15): status dot and title,
+            // then a single quiet meta line; no outlined box.
+            let dot = match label {
+                "Done" => theme.readable_tone(theme.success, 1.0),
+                "Failed" => theme.readable_tone(theme.danger, 1.0),
+                "Stopped" => theme.readable_tone(theme.warning, 1.0),
+                "Running" => theme.accent,
+                _ => theme.text_faint,
+            };
+            let failed = label == "Failed";
+            let meta = if activity.is_empty() {
+                metrics.clone()
+            } else {
+                format!("{activity} · {metrics}")
+            };
             content = content.child(
                 div()
                     .id(SharedString::from(format!("agent-{id}")))
-                    .min_h(px(78.0))
                     .flex_none()
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .rounded(px(8.0))
-                    .border_1()
-                    .border_color(theme.border)
+                    .px(px(10.0))
+                    .py(px(7.0))
+                    .rounded(px(crate::theme::radius::MD))
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(px(2.0))
                     .role(gpui::Role::Group)
                     .aria_label(accessible)
                     .child(
                         div()
                             .flex()
-                            .justify_between()
+                            .items_center()
                             .gap(px(8.0))
-                            .child(div().truncate().text_color(theme.text).child(title.clone()))
-                            .child(div().flex_none().text_color(theme.text_muted).child(label)),
+                            .child(div().size(px(7.0)).flex_none().rounded_full().bg(dot))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .truncate()
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_color(if failed {
+                                        theme.readable_tone(theme.danger, 1.0)
+                                    } else {
+                                        theme.text
+                                    })
+                                    .child(title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(theme.readable_muted(0.9))
+                                    .child(label),
+                            ),
                     )
                     .child(
                         div()
+                            .pl(px(15.0))
                             .truncate()
-                            .text_color(theme.text_muted)
-                            .child(activity),
-                    )
-                    .child(
-                        div()
-                            .truncate()
-                            .text_color(theme.text_muted)
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .child(metrics),
+                            .text_size(crate::typography::ui_rems(11.5))
+                            .text_color(theme.readable_muted(0.85))
+                            .child(meta),
                     )
                     .when(available, |row| {
                         row.role(gpui::Role::Button)
@@ -121,7 +148,7 @@ impl Shell {
                                 let ring = theme.focus_ring();
                                 move |style| crate::theme::focus_ring(style, ring)
                             })
-                            .hover(move |style| style.bg(theme.surface_raised))
+                            .hover(|style| style.bg(crate::theme::sidebar_hover_bg()))
                             .cursor_pointer()
                             .on_click(cx.listener(move |shell, _, _, cx| {
                                 if let Some(doc) = doc_id.clone() {
@@ -275,37 +302,71 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
         }
         section = section.child(
             div()
-                .pt(px(4.0))
+                .pt(px(8.0))
+                .px(px(10.0))
                 .text_size(crate::typography::ui_rems(11.0))
-                .text_color(theme.text_faint)
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(theme.readable_faint(0.9))
                 .child(group.title()),
         );
-        for item in items {
-            section = section.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_color(theme.text)
-                            .child(SharedString::from(item.title.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(muted)
-                            .child(SharedString::from(if item.detail.trim().is_empty() {
-                                format!("{} · {}", state_label(item.state), kind_label(item.kind))
-                            } else {
-                                format!(
-                                    "{} · {} · {}",
-                                    state_label(item.state),
-                                    kind_label(item.kind),
-                                    item.detail
-                                )
-                            })),
-                    ),
-            );
+        for (ix, item) in items.into_iter().enumerate() {
+            // The row reads at a glance (audit SS-15): a status dot, the
+            // title and "status · kind"; the engine's lifecycle detail moves
+            // to the row's tooltip.
+            let status = format!("{} · {}", state_label(item.state), kind_label(item.kind));
+            let detail = item.detail.trim().to_string();
+            let failed = state_label(item.state) == "Failed";
+            let dot = match state_label(item.state) {
+                "Failed" => theme.readable_tone(theme.danger, 1.0),
+                "Stopped" => theme.readable_tone(theme.warning, 1.0),
+                "Running" => theme.accent,
+                "Completed" | "Done" => theme.readable_tone(theme.success, 1.0),
+                _ => theme.text_faint,
+            };
+            let row = div()
+                .id(SharedString::from(format!(
+                    "agents-work-{}-{ix}",
+                    group.title()
+                )))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(crate::theme::radius::MD))
+                .flex()
+                .flex_col()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(div().size(px(7.0)).flex_none().rounded_full().bg(dot))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(crate::typography::ui_rems(13.0))
+                                .text_color(if failed {
+                                    theme.readable_tone(theme.danger, 1.0)
+                                } else {
+                                    theme.text
+                                })
+                                .child(SharedString::from(item.title.clone())),
+                        ),
+                )
+                .child(
+                    div()
+                        .pl(px(15.0))
+                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_color(muted)
+                        .child(SharedString::from(status)),
+                );
+            section = section.child(if detail.is_empty() {
+                row.into_any_element()
+            } else {
+                row.tooltip(crate::popover::text_tooltip(detail))
+                    .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
+                    .into_any_element()
+            });
         }
     }
     if view.more_offset.is_some() {

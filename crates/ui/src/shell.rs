@@ -1255,6 +1255,10 @@ impl Render for SurfaceTabTooltip {
             .child(self.text.clone())
     }
 }
+/// Sidebar footer buttons and their glyphs (audit SH-11).
+pub(super) const SIDEBAR_FOOTER_BUTTON: f32 = 32.0;
+pub(super) const SIDEBAR_FOOTER_ICON: f32 = 18.0;
+
 /// Toast capsule height.
 const TOAST_HEIGHT: f32 = 34.0;
 
@@ -9726,18 +9730,47 @@ impl Shell {
                             .children(list_items)
                             .into_any_element()
                     } else {
+                        // A centred, readable empty state with the next step
+                        // (audit SH-24) rather than a faint corner caption.
+                        let new_task = crate::settings::display_combo(
+                            crate::settings::current(cx)
+                                .keymap
+                                .get(crate::settings::ShortcutId::NewSession),
+                        );
+                        let (title, hint): (&str, String) = if activity_unavailable {
+                            (
+                                "Activity is unavailable",
+                                "It will return when the engine reconnects.".into(),
+                            )
+                        } else if activity_view {
+                            (
+                                "Nothing needs attention",
+                                "Running and waiting tasks appear here.".into(),
+                            )
+                        } else {
+                            ("No tasks yet", format!("Start one with {new_task}."))
+                        };
                         div()
                             .px(px(Theme::SPACE_SM))
-                            .pb(px(Theme::SPACE_SM))
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.text_faint)
-                            .child(SharedString::from(if activity_unavailable {
-                                "Activity is temporarily unavailable"
-                            } else if activity_view {
-                                "No tasks need attention or are running"
-                            } else {
-                                "No sessions yet"
-                            }))
+                            .py(px(Theme::SPACE_LG))
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .gap(px(2.0))
+                            .text_center()
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                    .text_color(theme.readable_muted(0.9))
+                                    .child(SharedString::from(title)),
+                            )
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(12.0))
+                                    .text_color(theme.readable_faint(0.9))
+                                    .child(SharedString::from(hint)),
+                            )
                             .into_any_element()
                     })
                     .children(terminal_inventory)
@@ -9837,18 +9870,20 @@ impl Shell {
                     .mx(px(Theme::SPACE_SM))
                     .mt(px(4.0))
                     .mb(px(Theme::SPACE_SM))
-                    .pl(px(3.0))
+                    .pl(px(4.0))
                     .flex()
                     .items_center()
+                    .gap(px(4.0))
                     .child(
                         div()
                             .id("sidebar-settings-action")
                             .role(gpui::Role::Button)
                             .aria_label("Open settings")
-                            .size(px(36.0))
-                            .rounded(px(Theme::CONTROL_RADIUS))
+                            // One footer button recipe (audit SH-11).
+                            .size(px(SIDEBAR_FOOTER_BUTTON))
+                            .rounded(px(crate::theme::radius::MD))
                             .cursor_pointer()
-                            .hover(|el| el.bg(theme.glass_hover()))
+                            .hover(|el| el.bg(crate::theme::sidebar_hover_bg()))
                             .tooltip(|_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
                                     text: "Open settings".into(),
@@ -9864,7 +9899,7 @@ impl Shell {
                             }))
                             .child(
                                 icon(icons::SETTINGS_GEAR)
-                                    .size(px(19.0))
+                                    .size(px(SIDEBAR_FOOTER_ICON))
                                     .text_color(theme.text_muted),
                             ),
                     )
@@ -9873,10 +9908,11 @@ impl Shell {
                             .id("sidebar-devices-action")
                             .role(gpui::Role::Button)
                             .aria_label("Open devices")
-                            .size(px(36.0))
-                            .rounded(px(Theme::CONTROL_RADIUS))
+                            // One footer button recipe (audit SH-11).
+                            .size(px(SIDEBAR_FOOTER_BUTTON))
+                            .rounded(px(crate::theme::radius::MD))
                             .cursor_pointer()
-                            .hover(|el| el.bg(theme.glass_hover()))
+                            .hover(|el| el.bg(crate::theme::sidebar_hover_bg()))
                             .tooltip(|_, cx| {
                                 cx.new(|_| SurfaceTabTooltip {
                                     text: "Open devices".into(),
@@ -9892,7 +9928,7 @@ impl Shell {
                             }))
                             .child(
                                 icon(icons::SMARTPHONE)
-                                    .size(px(18.0))
+                                    .size(px(SIDEBAR_FOOTER_ICON))
                                     .text_color(theme.text_muted),
                             ),
                     )
@@ -12529,19 +12565,39 @@ impl Shell {
                 .relative()
                 .size_full()
                 .overflow_hidden()
-                .child(
-                    div()
+                .child({
+                    let base_opacity = if transcript_geometry_ready || departing_transcript {
+                        dock_frame.transcript()
+                    } else {
+                        0.0
+                    };
+                    let base_top = 8.0 * (1.0 - dock_frame.transcript());
+                    let outlet = div()
                         .relative()
-                        .top(px(8.0 * (1.0 - dock_frame.transcript())))
                         .size_full()
                         .when(departing_transcript, |el| el.w(px(transcript_width)))
-                        .opacity(if transcript_geometry_ready || departing_transcript {
-                            dock_frame.transcript()
-                        } else {
-                            0.0
-                        })
-                        .child(self.transcript.clone()),
-                )
+                        .child(self.transcript.clone());
+                    // A newly selected chat arrives with a short fade and
+                    // settle once its geometry is ready, instead of popping
+                    // in after a blank frame (audit SH-17).
+                    if transcript_geometry_ready && !departing_transcript && !self.reduced_motion {
+                        gpui::AnimationExt::with_animation(
+                            outlet,
+                            SharedString::from(format!("transcript-in-{}", self.active_chat)),
+                            motion::MotionSpec::new(160, motion::CURVE_STANDARD).animation(),
+                            move |el, t| {
+                                el.top(px(base_top + 4.0 * (1.0 - t)))
+                                    .opacity(base_opacity * t)
+                            },
+                        )
+                        .into_any_element()
+                    } else {
+                        outlet
+                            .top(px(base_top))
+                            .opacity(base_opacity)
+                            .into_any_element()
+                    }
+                })
                 // A departing transcript is visual history, not an active
                 // interaction surface bound to the newly blank route.
                 .when(departing_transcript, |el| {
@@ -13353,8 +13409,6 @@ impl Shell {
             .map(|(_, notice)| notice.clone());
         let text = theme.text;
         let muted = theme.text_muted;
-        let border = theme.border;
-        let border_strong = theme.border_strong;
         let related_count = self.active_related_chat_count(cx);
         let related_label: SharedString = match related_count {
             0 => "Related chats".into(),
@@ -13373,20 +13427,19 @@ impl Shell {
                     let ring = theme.focus_ring();
                     move |style| crate::theme::focus_ring(style, ring)
                 })
+                // Filled tiles, not outlined wireframe rows (audit SH-23).
                 .w_full()
                 .h(px(44.0))
                 .px(px(14.0))
-                .rounded(px(10.0))
-                .border_1()
-                .border_color(border)
-                .bg(crate::theme::ink(0.02))
+                .rounded(px(crate::theme::radius::LG))
+                .bg(crate::theme::wash(0.05))
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(px(10.0))
                 .cursor_pointer()
-                .hover(move |s| s.bg(crate::theme::ink(0.05)).border_color(border_strong))
-                .child(icon(icon_path).size(px(15.0)).flex_none().text_color(muted))
+                .hover(move |s| s.bg(crate::theme::wash(0.09)))
+                .child(icon(icon_path).size(px(16.0)).flex_none().text_color(muted))
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(13.0))
@@ -13408,6 +13461,26 @@ impl Shell {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
+                    .child(
+                        div()
+                            .mb(px(4.0))
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(text)
+                                    .child("Open in this pane"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.readable_faint(0.9))
+                                    .child("Pick a surface to work beside the conversation."),
+                            ),
+                    )
                     // The conversation's own surfaces lead; side and child
                     // chats sit together as the two kinds of related chat.
                     .when(!self.active_chat.is_empty(), |el| {
