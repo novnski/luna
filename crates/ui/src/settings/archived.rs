@@ -1,13 +1,22 @@
 //! Settings → Archived (feature-inventory §1.5): archived chats across
 //! devices, with Unarchive (Mutate setChatArchived false).
+//!
+//! One section card per device, in sidebar (recency) order of each device's
+//! newest archived session. Each row is the list-row anatomy: an archive tile,
+//! the session title (wrapping) over a quiet meta line, and an always-visible
+//! Unarchive action, so the action is discoverable by pointer and keyboard and
+//! never shifts the row when it appears.
+
+use std::collections::HashMap;
 
 use gpui::{
-    AnyElement, Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*, px,
+    AnyElement, Context, Entity, SharedString, Subscription, Task, Window, div, prelude::*,
 };
 
+use crate::button::{ButtonKind, ControlSize};
 use crate::popover;
 use crate::settings::widgets;
-use crate::state::AppState;
+use crate::state::{AppState, ConnectionStatus};
 use crate::theme::Theme;
 use luna_proto::Chat;
 
@@ -16,16 +25,40 @@ pub fn archived_chats(chats: &[Chat]) -> Vec<&Chat> {
     chats.iter().filter(|c| c.archived).collect()
 }
 
+/// Archived rows grouped by device, keeping recency order inside each group
+/// and ordering groups by their newest session. Pure.
+fn group_by_device(rows: Vec<Chat>) -> Vec<(String, Vec<Chat>)> {
+    let mut groups: Vec<(String, Vec<Chat>)> = Vec::new();
+    for chat in rows {
+        match groups
+            .iter_mut()
+            .find(|(device, _)| *device == chat.device_id)
+        {
+            Some((_, chats)) => chats.push(chat),
+            None => groups.push((chat.device_id.clone(), vec![chat])),
+        }
+    }
+    groups
+}
+
+/// "Active 3h ago" from the compact sidebar stamp ("now", "3h", "2w"). Pure.
+fn activity_label(time_ago: &str) -> String {
+    if time_ago == "now" {
+        "Active just now".to_string()
+    } else {
+        format!("Active {time_ago} ago")
+    }
+}
+
 pub struct ArchivedPage {
     state: Entity<AppState>,
     scroll: widgets::PageScroll,
-    error: Option<SharedString>,
-    /// Chat with an in-flight unarchive (button shows working state).
-    busy: Option<String>,
-    /// Row index under the pointer — drives the original's `group-hover`
-    /// Unarchive reveal (`opacity-0 group-hover:opacity-100`).
-    hovered: Option<usize>,
-    task: Option<Task<()>>,
+    /// The last failed unarchive: the chat it belongs to and the message,
+    /// shown in that chat's card right under its row.
+    error: Option<(String, SharedString)>,
+    /// In-flight unarchives by chat id. Each keeps its own task, so starting
+    /// a second row never cancels the first one's request.
+    pending: HashMap<String, Task<()>>,
     _observe: Subscription,
 }
 
@@ -36,32 +69,50 @@ impl ArchivedPage {
             state,
             scroll: widgets::PageScroll::default(),
             error: None,
-            busy: None,
-            hovered: None,
-            task: None,
+            pending: HashMap::new(),
             _observe: observe,
         }
     }
 
     fn unarchive(&mut self, chat_id: String, cx: &mut Context<Self>) {
+        // A double click (or Enter then click) on the same row is one request.
+        if self.pending.contains_key(&chat_id) {
+            return;
+        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.error = Some((
+                chat_id,
+                "Unarchive failed: the engine is unavailable.".into(),
+            ));
+            cx.notify();
             return;
         };
-        self.busy = Some(chat_id.clone());
-        self.error = None;
+        if self.error.as_ref().is_some_and(|(id, _)| *id == chat_id) {
+            self.error = None;
+        }
         let intent = serde_json::json!({ "kind": "setArchived", "archived": false });
         let task_id = chat_id.clone();
-        self.task = Some(cx.spawn(async move |this, cx| {
+        let key = chat_id.clone();
+        let task = cx.spawn(async move |this, cx| {
             let result = crate::task_commands::execute(&engine, &task_id, intent).await;
             this.update(cx, |page, cx| {
-                page.busy = None;
+                // Detached, not dropped: this task is the one running.
+                if let Some(task) = page.pending.remove(&key) {
+                    task.detach();
+                }
                 if let Err(err) = result {
-                    page.error = Some(format!("Unarchive failed: {err}").into());
+                    page.error = Some((key, format!("Unarchive failed: {err}").into()));
                 }
                 cx.notify();
             })
             .ok();
-        }));
+        });
+        self.pending.insert(chat_id, task);
+        cx.notify();
+    }
+
+    fn dismiss_error(&mut self, cx: &mut Context<Self>) {
+        self.error = None;
         cx.notify();
     }
 
@@ -69,6 +120,42 @@ impl ArchivedPage {
         if self.scroll.set_list_hovered(*hovered) {
             cx.notify();
         }
+    }
+
+    /// The failed-unarchive strip, inside the card under its row: dismissed
+    /// by its close button (keyboard reachable) or a click on the strip.
+    fn error_row(
+        &self,
+        theme: &Theme,
+        message: SharedString,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        widgets::card_row(theme, false)
+            .child(
+                widgets::error_strip(theme, message)
+                    .mt(crate::typography::ui_rems(0.0))
+                    .w_full()
+                    .id("archived-error")
+                    .cursor_pointer()
+                    .on_click(cx.listener(|this, _, _, cx| this.dismiss_error(cx)))
+                    .child(
+                        crate::button::icon_button(
+                            "archived-error-dismiss",
+                            crate::icons::CLOSE,
+                            ControlSize::Sm,
+                            true,
+                            theme,
+                        )
+                        .ml_auto()
+                        .aria_label("Dismiss error")
+                        .tooltip(popover::text_tooltip("Dismiss"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.dismiss_error(cx);
+                        })),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -86,218 +173,147 @@ impl Render for ArchivedPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let now = chrono::Utc::now();
-        let (rows, device_names): (Vec<Chat>, std::collections::HashMap<String, String>) = {
+        let (rows, device_names, local_id, connection) = {
             let state = self.state.read(cx);
-            let rows = archived_chats(&state.chats).into_iter().cloned().collect();
-            let names = state
+            let rows: Vec<Chat> = archived_chats(&state.chats).into_iter().cloned().collect();
+            let names: HashMap<String, String> = state
                 .devices
                 .iter()
                 .map(|d| (d.id.clone(), d.name.clone()))
                 .collect();
-            (rows, names)
+            (
+                rows,
+                names,
+                state.local_device_id.clone(),
+                state.connection.clone(),
+            )
         };
-        let busy = self.busy.clone();
         let count = rows.len();
 
-        let items: Vec<AnyElement> = rows
-            .into_iter()
-            .enumerate()
-            .map(|(ix, chat)| {
+        let mut sections: Vec<AnyElement> = Vec::new();
+        if rows.is_empty() {
+            // §7 states: skeleton while the engine connects, the connection
+            // error when it failed, otherwise one quiet empty row.
+            let card = widgets::section_card(&theme);
+            let card = match &connection {
+                ConnectionStatus::Connecting => {
+                    card.child(widgets::card_row(&theme, true).child(div().w_full().child(
+                        popover::skeleton_rows("archived-loading", &theme, 3, cx.entity_id(), cx),
+                    )))
+                }
+                ConnectionStatus::Failed(message) => card.child(
+                    widgets::card_row(&theme, true).child(
+                        widgets::error_strip(
+                            &theme,
+                            SharedString::from(format!("Archived sessions can't load: {message}")),
+                        )
+                        .mt(crate::typography::ui_rems(0.0))
+                        .w_full(),
+                    ),
+                ),
+                ConnectionStatus::Ready => card.child(
+                    widgets::card_row(&theme, true)
+                        .child(widgets::row_tile(
+                            &theme,
+                            crate::icons::ARCHIVE_MINIMALISTIC,
+                        ))
+                        .child(widgets::row_text(
+                            &theme,
+                            "Nothing archived",
+                            Some("Right-click a session in the sidebar to archive it.".into()),
+                        )),
+                ),
+            };
+            sections.push(card.into_any_element());
+        }
+
+        for (device_id, chats) in group_by_device(rows) {
+            let is_local = local_id.as_deref() == Some(device_id.as_str());
+            let device_name: SharedString = device_names
+                .get(&device_id)
+                .cloned()
+                .unwrap_or_else(|| "Unknown device".to_string())
+                .into();
+            let sessions = match chats.len() {
+                1 => "1 session".to_string(),
+                n => format!("{n} sessions"),
+            };
+            let description = if is_local {
+                format!("This device · {sessions}")
+            } else {
+                sessions
+            };
+            let mut card = widgets::section_card(&theme).child(widgets::section_header(
+                &theme,
+                device_name,
+                Some(description.into()),
+                Vec::new(),
+            ));
+            for chat in chats {
                 let title: SharedString = chat
                     .title
                     .clone()
                     .unwrap_or_else(|| "Untitled session".into())
                     .into();
-                // Unknown device → no fragment at all (luna renders the
-                // device span only when the name resolves).
-                let device: Option<SharedString> =
-                    device_names.get(&chat.device_id).cloned().map(Into::into);
-                let time_ago: SharedString = crate::state::format_time_ago(
+                let time_ago = crate::state::format_time_ago(
                     chat.last_message_at.unwrap_or(chat.created_at),
                     now,
-                )
-                .into();
-                let location: Option<SharedString> =
-                    crate::state::chat_location(&chat).map(Into::into);
-                let is_busy = busy.as_deref() == Some(chat.id.as_str());
-                let row_hovered = self.hovered == Some(ix);
+                );
+                let mut meta: Vec<AnyElement> = vec![
+                    div()
+                        .child(SharedString::from(activity_label(&time_ago)))
+                        .into_any_element(),
+                ];
+                if let Some(location) = crate::state::chat_location(&chat) {
+                    meta.push(div().child(SharedString::from(location)).into_any_element());
+                }
+                let is_busy = self.pending.contains_key(&chat.id);
                 let chat_id = chat.id.clone();
-                // luna settings.archived.tsx row: archive tile, medium title
-                // + tabular time, quiet device · location meta, Unarchive.
-                div()
-                    .id(("archived-row", ix))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap(px(12.0))
-                    .rounded(px(8.0))
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .bg(crate::motion::hover_blend(
-                        &format!("archived-row-{ix}"),
-                        gpui::transparent_black(),
-                        crate::theme::fill(crate::theme::FillTier::Quaternary),
-                    ))
-                    .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
-                        crate::motion::set_hover(
-                            &format!("archived-row-{ix}"),
-                            *hovered,
-                            crate::motion::reduced_motion(cx),
-                        );
-                        window.refresh();
-                        if *hovered {
-                            this.hovered = Some(ix);
-                        } else if this.hovered == Some(ix) {
-                            this.hovered = None;
-                        }
-                        cx.notify();
+                let unarchive = crate::button::button(
+                    format!("unarchive-{}", chat.id),
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    !is_busy,
+                    &theme,
+                )
+                .aria_label(SharedString::from(format!("Unarchive {title}")))
+                .when(!is_busy, |button| {
+                    button.on_click(cx.listener(move |this, _, _, cx| {
+                        this.unarchive(chat_id.clone(), cx);
                     }))
-                    .child(
-                        div()
-                            .flex_none()
-                            .size(px(32.0))
-                            .rounded(px(6.0))
-                            .border_1()
-                            .border_color(theme.border)
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
-                                    .size(px(16.0))
-                                    .text_color(theme.readable_muted(0.6)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(
-                                        div()
-                                            .min_w_0()
-                                            .truncate()
-                                            .text_size(crate::typography::ui_rems(13.0))
-                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(title),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(crate::typography::ui_rems(11.0))
-                                            .text_color(theme.readable_muted(0.5))
-                                            .child(time_ago),
-                                    ),
-                            )
-                            .child({
-                                // device · location, separator at the line's
-                                // own tone (luna: a plain span inheriting
-                                // `text-muted-foreground/55`).
-                                let mut meta = div()
-                                    .mt(px(2.0))
-                                    .flex()
-                                    .flex_row()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(theme.readable_muted(0.55));
-                                let both = device.is_some() && location.is_some();
-                                if let Some(device) = device {
-                                    meta = meta.child(device);
-                                }
-                                if both {
-                                    meta = meta.child(SharedString::from("·"));
-                                }
-                                if let Some(location) = location {
-                                    meta = meta.child(div().min_w_0().truncate().child(location));
-                                }
-                                meta
-                            }),
-                    )
-                    .child(
-                        // Hidden until the row is hovered (luna `opacity-0
-                        // group-hover:opacity-100`); hover fill is the solid
-                        // accent tone (`hover:bg-accent`).
-                        crate::button::button(
-                            format!("unarchive-{ix}"),
-                            crate::button::ButtonKind::Secondary,
-                            crate::button::ControlSize::Sm,
-                            !is_busy,
+                })
+                .child(crate::button::glyph(
+                    crate::icons::ARCHIVE_UP_MINIMALISTIC,
+                    ControlSize::Sm,
+                ))
+                .child(SharedString::from(if is_busy {
+                    "Unarchiving…"
+                } else {
+                    "Unarchive"
+                }));
+                card = card.child(
+                    widgets::card_row(&theme, false)
+                        .child(widgets::row_tile(
                             &theme,
-                        )
-                        .opacity(if is_busy {
-                            0.45
-                        } else if row_hovered {
-                            1.0
-                        } else {
-                            0.0
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.unarchive(chat_id.clone(), cx);
-                        }))
-                        .child(crate::button::glyph(
-                            crate::icons::ARCHIVE_UP_MINIMALISTIC,
-                            crate::button::ControlSize::Sm,
+                            crate::icons::ARCHIVE_MINIMALISTIC,
                         ))
-                        .child(SharedString::from(if is_busy {
-                            "Unarchiving…"
-                        } else {
-                            "Unarchive"
-                        })),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-
-        let body: AnyElement = if items.is_empty() {
-            // Centered empty state (luna settings.archived.tsx).
-            div()
-                .mt(px(96.0))
-                .flex()
-                .flex_col()
-                .items_center()
-                .text_center()
-                .text_color(theme.readable_muted(0.5))
-                .child(
-                    // `opacity-40` on top of the inherited muted/50 — an
-                    // effectively ~20% glyph (luna settings.archived.tsx).
-                    crate::icons::icon(crate::icons::ARCHIVE_MINIMALISTIC)
-                        .size(px(28.0))
-                        .text_color(theme.decorative_muted(0.2)),
-                )
-                .child(
-                    div()
-                        .mt(px(12.0))
-                        .text_size(crate::typography::ui_rems(14.0))
-                        .child(SharedString::from("Nothing archived")),
-                )
-                .child(
-                    div()
-                        .mt(px(4.0))
-                        .text_size(crate::typography::ui_rems(12.0))
-                        .text_color(theme.readable_muted(0.4))
-                        .child(SharedString::from(
-                            "Right-click a session in the sidebar to archive it.",
-                        )),
-                )
-                .into_any_element()
-        } else {
-            div()
-                .mt(px(24.0))
-                .flex()
-                .flex_col()
-                .gap(px(2.0))
-                .children(items)
-                .into_any_element()
-        };
+                        .child(
+                            widgets::row_text(&theme, title, None)
+                                .child(widgets::meta_line(&theme, meta)),
+                        )
+                        .child(widgets::row_controls().child(unarchive)),
+                );
+                if let Some((_, message)) = self
+                    .error
+                    .as_ref()
+                    .filter(|(id, _)| *id == chat.id)
+                    .cloned()
+                {
+                    card = card.child(self.error_row(&theme, message, cx));
+                }
+            }
+            sections.push(card.into_any_element());
+        }
 
         let scrollbar = popover::rail(self, "archived-page-scrollbar", &theme, cx);
         div()
@@ -313,27 +329,17 @@ impl Render for ArchivedPage {
                     .track_scroll(&self.scroll.scroll)
                     .child(
                         widgets::page_column()
-                            .child(widgets::page_header(
+                            .child(widgets::page_title_bar(
                                 &theme,
                                 "Archived sessions",
                                 (count > 0).then_some(count),
+                                Vec::new(),
                             ))
                             .child(widgets::page_subtitle(
                                 &theme,
                                 "Hidden from the sidebar, never deleted. Unarchiving puts a session back on its device.",
                             ))
-                            .when_some(self.error.clone(), |el, message| {
-                                el.child(
-                                    widgets::error_strip(&theme, message)
-                                        .id("archived-error")
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.error = None;
-                                            cx.notify();
-                                        })),
-                                )
-                            })
-                            .child(body),
+                            .children(sections),
                     ),
             )
             .children(scrollbar)

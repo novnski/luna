@@ -1,24 +1,28 @@
 //! Settings → Devices (feature-inventory §1.5): the device registry — name,
-//! platform, last-seen, presence dot, a "This device" badge, click-to-copy id,
+//! platform, last-seen, presence dot, a "This device" badge, a Copy id action,
 //! and a Rename dialog (Mutate renameDevice).
+//!
+//! One section card of list rows: the platform tile carrying the presence
+//! dot, the device name (wrapping) over a quiet meta line, then the status
+//! badges and the always-visible Copy id and Rename kit actions.
 
 use chrono::{DateTime, Utc};
 use gpui::{
     AnyElement, ClipboardItem, Context, Entity, SharedString, Subscription, Task, Window, div,
-    prelude::*, px,
+    prelude::*,
 };
 use std::time::Duration;
 
 use luna_proto::WorkspaceScope;
 use luna_rpc::methods;
 
-use crate::AccessibleButton as _;
+use crate::button::{ButtonKind, ControlSize};
 use crate::composer::{ComposerInput, ComposerInputEvent};
-use crate::interaction::HoverFill as _;
 use crate::popover;
 use crate::settings::widgets;
-use crate::state::AppState;
+use crate::state::{AppState, ConnectionStatus};
 use crate::theme::Theme;
+use crate::typography::ui_rems;
 
 /// A device that pinged within this window shows a presence dot (engines
 /// heartbeat every 15s; 70s tolerates a couple of missed beats).
@@ -70,7 +74,6 @@ pub struct DevicesPage {
     /// Device id whose id-chip shows "Copied" right now.
     copied: Option<String>,
     error: Option<SharedString>,
-    task: Option<Task<()>>,
     copy_task: Option<Task<()>>,
     _observe: Subscription,
 }
@@ -84,7 +87,6 @@ impl DevicesPage {
             rename: None,
             copied: None,
             error: None,
-            task: None,
             copy_task: None,
             _observe: observe,
         }
@@ -107,15 +109,24 @@ impl DevicesPage {
     }
 
     fn submit_rename(&mut self, cx: &mut Context<Self>) {
+        // An empty name keeps the dialog open instead of silently closing it.
+        let Some(name) = self
+            .rename
+            .as_ref()
+            .map(|dialog| dialog.input.read(cx).text().trim().to_string())
+        else {
+            return;
+        };
+        if name.is_empty() {
+            return;
+        }
+        // Taken once: Enter and a click on Rename can't submit twice.
         let Some(dialog) = self.rename.take() else {
             return;
         };
-        let name = dialog.input.read(cx).text().trim().to_string();
-        if name.is_empty() {
-            cx.notify();
-            return;
-        }
         let Some(engine) = self.state.read(cx).engine().cloned() else {
+            self.error = Some("Rename failed: the engine is unavailable.".into());
+            cx.notify();
             return;
         };
         let params = serde_json::json!({
@@ -123,7 +134,9 @@ impl DevicesPage {
             "deviceId": dialog.device_id,
             "name": name,
         });
-        self.task = Some(cx.spawn(async move |this, cx| {
+        // Detached: a second rename started while this one is in flight must
+        // not cancel it (a single task slot dropped the earlier request).
+        cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::MUTATE, params).await;
             this.update(cx, |page, cx| {
                 if let Err(err) = result {
@@ -132,7 +145,8 @@ impl DevicesPage {
                 cx.notify();
             })
             .ok();
-        }));
+        })
+        .detach();
         cx.notify();
     }
 
@@ -164,16 +178,16 @@ impl DevicesPage {
             .child(popover::dialog_title(&theme, "Rename device"))
             .child(
                 div()
-                    .mt(px(12.0))
+                    .mt(crate::typography::ui_rems(12.0))
                     .child(popover::dialog_field(input.into_any_element())),
             )
             .child(
                 div()
-                    .mt(px(16.0))
+                    .mt(crate::typography::ui_rems(16.0))
                     .flex()
                     .flex_row()
                     .justify_end()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .child(
                         popover::btn_ghost(&theme, "Cancel", "rename-cancel")
                             .id("rename-cancel")
@@ -196,6 +210,186 @@ impl DevicesPage {
         if self.scroll.set_list_hovered(*hovered) {
             cx.notify();
         }
+    }
+
+    fn dismiss_error(&mut self, cx: &mut Context<Self>) {
+        self.error = None;
+        cx.notify();
+    }
+
+    /// One device row: platform tile with the presence dot · name over the
+    /// meta line · status badges · Copy id and Rename.
+    fn device_row(
+        &self,
+        theme: &Theme,
+        device: &luna_proto::Device,
+        is_local: bool,
+        local_only: bool,
+        now: DateTime<Utc>,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let online = device_online(device.last_seen_at, now);
+        let id_copied = self.copied.as_deref() == Some(device.id.as_str());
+        let platform_icon = match device.platform.as_str() {
+            "macos" | "darwin" => crate::icons::LAPTOP,
+            "web" => crate::icons::GLOBAL,
+            "ios" | "android" => crate::icons::SMARTPHONE,
+            _ => crate::icons::MONITOR,
+        };
+        // Presence lives ON the identity tile: a corner dot (success with a
+        // soft glow online, a quiet neutral offline), ringed by the card tone
+        // so it "cuts" the tile. Sized in rems with the tile; the ring is a
+        // hairline-class border and stays in pixels.
+        let success = theme.success;
+        let tile = widgets::row_tile(theme, platform_icon).relative().child(
+            div()
+                .absolute()
+                .bottom(ui_rems(-3.0))
+                .right(ui_rems(-3.0))
+                .size(ui_rems(9.0))
+                .rounded_full()
+                .border_2()
+                .border_color(theme.surface)
+                .when(online, |el| {
+                    el.bg(success).shadow(vec![gpui::BoxShadow {
+                        color: success.opacity(0.55),
+                        offset: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+                        blur_radius: gpui::px(6.0),
+                        spread_radius: gpui::px(0.0),
+                        inset: false,
+                    }])
+                })
+                .when(!online, |el| el.bg(theme.decorative_muted(0.35))),
+        );
+
+        // One quiet meta line: (offline: last seen) · platform · version ·
+        // added · id. Presence comes first when it is the news.
+        let mut meta: Vec<AnyElement> = Vec::new();
+        if !online {
+            meta.push(
+                div()
+                    .child(SharedString::from(format!(
+                        "Last seen {}",
+                        format_last_seen(device.last_seen_at, now)
+                    )))
+                    .into_any_element(),
+            );
+        }
+        meta.push(
+            div()
+                .child(SharedString::from(
+                    platform_label(&device.platform).to_string(),
+                ))
+                .into_any_element(),
+        );
+        if let Some(version) = device.version.as_deref().filter(|v| !v.is_empty()) {
+            meta.push(
+                div()
+                    .child(SharedString::from(format!("v{version}")))
+                    .into_any_element(),
+            );
+        }
+        // "Added {time ago}" (luna settings.devices.tsx).
+        if let Some(created) = device.created_at {
+            meta.push(
+                div()
+                    .child(SharedString::from(format!(
+                        "Added {}",
+                        format_last_seen(Some(created), now)
+                    )))
+                    .into_any_element(),
+            );
+        }
+        // The id is user data: shortened, with the full id in a tooltip. It
+        // reads "Copied" for a moment after Copy id.
+        meta.push(
+            div()
+                .id(SharedString::from(format!("device-id-{}", device.id)))
+                .font_family(theme.font_mono.clone())
+                .text_size(ui_rems(11.0))
+                .text_color(if id_copied {
+                    theme.readable_tone(theme.success_muted, 0.9)
+                } else {
+                    theme.readable_muted(0.8)
+                })
+                .tooltip(popover::text_tooltip(device.id.clone()))
+                .child(SharedString::from(if id_copied {
+                    "Copied".to_string()
+                } else {
+                    short_id(&device.id)
+                }))
+                .into_any_element(),
+        );
+
+        let copy_id = device.id.clone();
+        let rename_id = device.id.clone();
+        let rename_name = device.name.clone();
+        let controls = widgets::row_controls()
+            .when(is_local, |controls| {
+                controls.child(widgets::badge(
+                    theme,
+                    if local_only {
+                        "Local only"
+                    } else {
+                        "This device"
+                    },
+                ))
+            })
+            // This device is online by definition; the badge marks the others.
+            .when(online && !is_local, |controls| {
+                controls.child(widgets::badge_active(theme, "Online"))
+            })
+            .child(
+                crate::button::icon_button(
+                    format!("device-copy-{}", device.id),
+                    if id_copied {
+                        crate::icons::CHECK
+                    } else {
+                        crate::icons::COPY
+                    },
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .aria_label(if id_copied {
+                    "Device id copied"
+                } else {
+                    "Copy device id"
+                })
+                .tooltip(popover::text_tooltip(if id_copied {
+                    "Copied"
+                } else {
+                    "Copy device id"
+                }))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.copy_id(copy_id.clone(), cx);
+                })),
+            )
+            .child(
+                crate::button::button(
+                    format!("device-rename-{}", device.id),
+                    ButtonKind::Ghost,
+                    ControlSize::Sm,
+                    true,
+                    theme,
+                )
+                .aria_label(SharedString::from(format!("Rename {}", device.name)))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open_rename(rename_id.clone(), rename_name.clone(), cx);
+                }))
+                .child(crate::button::glyph(crate::icons::PEN, ControlSize::Sm))
+                .child(SharedString::from("Rename")),
+            );
+
+        // Below the section header, so every row carries its hairline.
+        widgets::card_row(theme, false)
+            .child(tile)
+            .child(
+                widgets::row_text(theme, device.name.clone(), None)
+                    .child(widgets::meta_line(theme, meta)),
+            )
+            .child(controls)
+            .into_any_element()
     }
 }
 
@@ -222,10 +416,14 @@ pub fn platform_label(platform: &str) -> &str {
     }
 }
 
-/// Short device id for the click-to-copy chip (`abcd1234…wxyz`).
+/// Short device id for the meta line (`abcd1234…wxyz`). Counts characters, so
+/// a non-ASCII id never splits inside a code point.
 pub fn short_id(id: &str) -> String {
-    if id.len() > 12 {
-        format!("{}…{}", &id[..8], &id[id.len() - 4..])
+    let chars: Vec<char> = id.chars().collect();
+    if chars.len() > 12 {
+        let head: String = chars[..8].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}…{tail}")
     } else {
         id.to_string()
     }
@@ -235,184 +433,94 @@ impl Render for DevicesPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let now = Utc::now();
-        let (devices, local_id, workspace_scope) = {
+        let (devices, local_id, workspace_scope, connection) = {
             let state = self.state.read(cx);
             (
                 state.devices.clone(),
                 state.local_device_id.clone(),
                 state.workspace_scope,
+                state.connection.clone(),
             )
         };
-        let copied = self.copied.clone();
         let dialog = self.render_rename_dialog(window.viewport_size(), cx);
-        let emerald = theme.success; // emerald-400
         let count = devices.len();
+        let local_only = workspace_scope == Some(WorkspaceScope::Local);
 
-        let rows: Vec<AnyElement> = devices
-            .into_iter()
-            .enumerate()
-            .map(|(ix, device)| {
-                let online = device_online(device.last_seen_at, now);
-                let is_local = local_id.as_deref() == Some(device.id.as_str());
-                let id_copied = copied.as_deref() == Some(device.id.as_str());
-                let copy_id = device.id.clone();
-                let rename_id = device.id.clone();
-                let rename_name = device.name.clone();
-                let platform_icon = match device.platform.as_str() {
-                    "macos" | "darwin" => crate::icons::LAPTOP,
-                    "web" => crate::icons::GLOBAL,
-                    "ios" | "android" => crate::icons::SMARTPHONE,
-                    _ => crate::icons::MONITOR,
-                };
-                // Presence lives ON the identity tile: a corner dot (emerald
-                // online with a soft glow, faint offline), ringed by the card
-                // tone so it "cuts" the tile — luna settings.devices.tsx
-                // `border-2 border-[var(--card)]` +
-                // `shadow-[0_0_6px_rgba(52,211,153,0.55)]`.
-                let tile = widgets::row_tile(&theme, platform_icon).relative().child(
-                    div()
-                        .absolute()
-                        .bottom(px(-3.0))
-                        .right(px(-3.0))
-                        .size(px(9.0))
-                        .rounded_full()
-                        .border_2()
-                        .border_color(theme.surface)
-                        .when(online, |el| {
-                            el.bg(emerald).shadow(vec![gpui::BoxShadow {
-                                color: emerald.opacity(0.55),
-                                offset: gpui::point(px(0.0), px(0.0)),
-                                blur_radius: px(6.0),
-                                spread_radius: px(0.0),
-                                inset: false,
-                            }])
-                        })
-                        .when(!online, |el| el.bg(crate::theme::ink(0.22))),
-                );
-                // One quiet meta line: platform · version · (offline: last
-                // seen) · id chip.
-                let mut meta: Vec<AnyElement> = vec![
-                    div()
-                        .child(SharedString::from(
-                            platform_label(&device.platform).to_string(),
-                        ))
-                        .into_any_element(),
-                ];
-                if let Some(version) = device.version.as_deref().filter(|v| !v.is_empty()) {
-                    meta.push(
-                        div()
-                            .child(SharedString::from(format!("v{version}")))
-                            .into_any_element(),
-                    );
-                }
-                if !online {
-                    meta.push(
-                        div()
-                            .child(SharedString::from(format!(
-                                "Last seen {}",
-                                format_last_seen(device.last_seen_at, now)
-                            )))
-                            .into_any_element(),
-                    );
-                }
-                // "Added {time ago}" — always present (luna settings.devices.tsx).
-                if let Some(created) = device.created_at {
-                    meta.push(
-                        div()
-                            .child(SharedString::from(format!(
-                                "Added {}",
-                                format_last_seen(Some(created), now)
-                            )))
-                            .into_any_element(),
-                    );
-                }
-                meta.push(
-                    div()
-                        .id(("device-id", ix))
-                        .font_family(theme.font_mono.clone())
-                        .text_size(crate::typography::ui_rems(11.0))
+        let mut card = widgets::section_card(&theme);
+        if !devices.is_empty() {
+            card = card.child(widgets::section_header(
+                &theme,
+                "Registered devices",
+                Some("A device is online when it has checked in within about a minute.".into()),
+                Vec::new(),
+            ));
+        }
+        // A failed rename belongs to this list: the strip sits inside the
+        // card, dismissed by its close button or a click on the strip.
+        if let Some(message) = self.error.clone() {
+            card = card.child(
+                widgets::card_row(&theme, devices.is_empty()).child(
+                    widgets::error_strip(&theme, message)
+                        .mt(ui_rems(0.0))
+                        .w_full()
+                        .id("devices-error")
                         .cursor_pointer()
-                        .hover_fg(
-                            format!("device-id-{ix}"),
-                            if id_copied {
-                                theme.readable_tone(theme.success_muted, 0.9)
-                            } else {
-                                theme.readable_muted(0.5)
-                            },
-                            if id_copied {
-                                theme.readable_tone(theme.success_muted, 0.9)
-                            } else {
-                                theme.text_muted
-                            },
+                        .on_click(cx.listener(|this, _, _, cx| this.dismiss_error(cx)))
+                        .child(
+                            crate::button::icon_button(
+                                "devices-error-dismiss",
+                                crate::icons::CLOSE,
+                                ControlSize::Sm,
+                                true,
+                                &theme,
+                            )
+                            .ml_auto()
+                            .aria_label("Dismiss error")
+                            .tooltip(popover::text_tooltip("Dismiss"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.dismiss_error(cx);
+                            })),
+                        ),
+                ),
+            );
+        }
+        let first_row = devices.is_empty() && self.error.is_none();
+        if devices.is_empty() {
+            // §7 states: skeleton while the engine connects, its error when
+            // it failed, otherwise one quiet empty row.
+            card = match &connection {
+                ConnectionStatus::Connecting => card.child(
+                    widgets::card_row(&theme, first_row).child(div().w_full().child(
+                        popover::skeleton_rows("devices-loading", &theme, 2, cx.entity_id(), cx),
+                    )),
+                ),
+                ConnectionStatus::Failed(message) => card.child(
+                    widgets::card_row(&theme, first_row).child(
+                        widgets::error_strip(
+                            &theme,
+                            SharedString::from(format!("Devices can't load: {message}")),
                         )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.copy_id(copy_id.clone(), cx);
-                        }))
-                        .child(SharedString::from(if id_copied {
-                            "Copied".to_string()
-                        } else {
-                            short_id(&device.id)
-                        }))
-                        .into_any_element(),
-                );
-
-                widgets::card_row(&theme, ix == 0)
-                    .child(tile)
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(widgets::row_title(&theme, device.name.clone()))
-                            .child(widgets::meta_line(&theme, meta)),
-                    )
-                    .when(is_local, |el| {
-                        el.child(
-                            div()
-                                .flex_none()
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .text_color(theme.text_muted)
-                                .child(if workspace_scope == Some(WorkspaceScope::Local) {
-                                    "Local only"
-                                } else {
-                                    "This device"
-                                }),
-                        )
-                    })
-                    .child(
-                        // `opacity-70 hover:opacity-100` (luna: also rises on
-                        // row hover — gpui has no group-hover, so the button's
-                        // own hover carries the reveal).
-                        widgets::ghost_action(format!("device-rename-{ix}"), true, &theme)
-                            .accessible_button("Rename device", theme.accent)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.open_rename(rename_id.clone(), rename_name.clone(), cx);
-                            }))
-                            .child(crate::button::glyph(
-                                crate::icons::PEN,
-                                crate::button::ControlSize::Md,
-                            ))
-                            .child(SharedString::from("Rename")),
-                    )
-                    .into_any_element()
-            })
-            .collect();
-
-        let card = widgets::section_card(&theme);
-        let card = if rows.is_empty() {
-            card.child(
-                div()
-                    .px(px(20.0))
-                    .py(px(40.0))
-                    .text_center()
-                    .text_size(crate::typography::ui_rems(14.0))
-                    .text_color(theme.readable_muted(0.6))
-                    .child(SharedString::from("No devices registered")),
-            )
+                        .mt(ui_rems(0.0))
+                        .w_full(),
+                    ),
+                ),
+                ConnectionStatus::Ready => card.child(
+                    widgets::card_row(&theme, first_row)
+                        .child(widgets::row_tile(&theme, crate::icons::MONITOR))
+                        .child(widgets::row_text(
+                            &theme,
+                            "No devices registered",
+                            Some("A device appears here once LUNA runs on it.".into()),
+                        )),
+                ),
+            };
         } else {
-            card.children(rows)
-        };
+            for device in &devices {
+                let is_local = local_id.as_deref() == Some(device.id.as_str());
+                card = card.child(self.device_row(&theme, device, is_local, local_only, now, cx));
+            }
+        }
 
         let scrollbar = popover::rail(self, "devices-page-scrollbar", &theme, cx);
         div()
@@ -428,26 +536,16 @@ impl Render for DevicesPage {
                     .track_scroll(&self.scroll.scroll)
                     .child(
                         widgets::page_column()
-                            .child(widgets::page_header(
+                            .child(widgets::page_title_bar(
                                 &theme,
                                 "Devices",
                                 (count > 0).then_some(count),
+                                Vec::new(),
                             ))
                             .child(widgets::page_subtitle(
                                 &theme,
                                 devices_subtitle(workspace_scope),
                             ))
-                            .when_some(self.error.clone(), |el, message| {
-                                el.child(
-                                    widgets::error_strip(&theme, message)
-                                        .id("devices-error")
-                                        .cursor_pointer()
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.error = None;
-                                            cx.notify();
-                                        })),
-                                )
-                            })
                             .child(card),
                     ),
             )
