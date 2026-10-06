@@ -585,7 +585,8 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
         before_dirs
     );
 
-    // C8: a non-escalating request offers no grant choice.
+    // C8: a non-escalating request is ordinary app coordination. Since
+    // a08e9344 it completes without any card and keeps the requested access.
     let pending = {
         let (http, body, url, token) = (
             http.clone(),
@@ -611,18 +612,18 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
             .await
         })
     };
-    let (request_id, question) = next_card(&mut events).await;
-    assert_card(&question, &["Deny", "Allow once"]);
-    assert_eq!(
-        core.sessions.respond_luna_local_ui_approval(
-            &source,
-            &request_id,
-            ApprovalDecision::ProviderChoice { index: 1 }
-        ),
-        LunaApprovalOutcome::AllowedOnce
-    );
-    let (failed, text) = tool_text(&pending.await.unwrap());
+    let reply = tokio::time::timeout(Duration::from_secs(30), pending)
+        .await
+        .expect("plain create_thread completes without a card")
+        .unwrap();
+    let (failed, text) = tool_text(&reply);
     assert!(!failed, "{text}");
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(event.event, AgentEvent::InputRequested { .. }),
+            "a non-escalating child must not ask for approval"
+        );
+    }
     let plain = child_with_prompt(&core, "Plain brief").unwrap();
     let provisioning = plain.child_thread.unwrap().provisioning.unwrap();
     assert_eq!(provisioning.granted_permission_mode, PermissionMode::Ask);
