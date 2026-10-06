@@ -2676,8 +2676,8 @@ impl AppState {
         }
     }
 
-    /// The "@ device" tag for a space — shared by the space pickers' rows,
-    /// the sidebar filter trigger, and the composer's space chip. Returns
+    /// The "@ device" tag for a space. The sidebar's project dropdown shows
+    /// it only on projects that share a name across machines. Returns
     /// `(tag, offline)`; staleness renders as a disconnected GLYPH at the
     /// call sites (user request), never words in the tag.
     pub fn space_device_tag(&self, space: &Space, now: DateTime<Utc>) -> (String, bool) {

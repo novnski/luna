@@ -838,6 +838,11 @@ pub(super) fn chat_row_height(ui_scale: f32) -> f32 {
 /// Keep adjacent task hitboxes contiguous so vertical pointer movement never
 /// crosses an arrow-cursor strip between clickable rows.
 const SIDEBAR_LIST_GAP: f32 = 0.0;
+/// The sidebar's content inset from the window's left edge. Its right side
+/// has none: the main canvas beside it is inset by the same amount, so rows
+/// sit evenly between the window edge and the canvas border. A gutter on
+/// both sides doubled the right one (user report).
+pub(super) const SIDEBAR_GUTTER: f32 = Theme::SPACE_SM;
 /// One leading grid for every sidebar row kind (audit SH-14): a 16 pt mark
 /// slot and an 8 pt gap put every title on the same column. Marks keep the
 /// row hierarchy inside the slot: active cards a 13 pt mark, the one-line
@@ -8525,7 +8530,9 @@ impl Shell {
         // it, so a hardcoded default here left hover washes stopping short of
         // the sidebar's right edge (user-reported). Device identity lives on
         // the Accounts page now — the one surface where the device matters.
-        let gutter = crate::typography::ui_rems(8.0);
+        // Left only, and fixed like the chat sidebar's: the settings plane's
+        // own inset is the right gutter (see `SIDEBAR_GUTTER`).
+        let gutter = px(SIDEBAR_GUTTER);
         div()
             .w(px(self.settings.sidebar_width))
             .h_full()
@@ -8535,7 +8542,7 @@ impl Shell {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .px(gutter)
+                    .pl(gutter)
                     .flex()
                     .flex_col()
                     .child(
@@ -8573,7 +8580,7 @@ impl Shell {
             .child(
                 div()
                     .flex_none()
-                    .px(gutter)
+                    .pl(gutter)
                     .pb(crate::typography::ui_rems(12.0))
                     .flex()
                     .flex_col()
@@ -9216,7 +9223,7 @@ impl Shell {
             .when_some(
                 drag.filter(|_| crate::click_activation_drag_enabled()),
                 |row, payload| {
-                    let width = self.settings.sidebar_width - 2.0 * Theme::SPACE_SM;
+                    let width = self.settings.sidebar_width - SIDEBAR_GUTTER;
                     row.on_drag(payload, move |payload, _offset, _window, cx| {
                         cx.new(|_| SidebarChatGhost {
                             title: payload.title.clone(),
@@ -9454,7 +9461,8 @@ impl Shell {
                 "connection-pill",
                 div()
                     .id("connection-pill")
-                    .mx(px(Theme::SPACE_SM + 4.0))
+                    .ml(px(SIDEBAR_GUTTER + 4.0))
+                    .mr(px(4.0))
                     .mb(px(Theme::SPACE_SM))
                     .flex()
                     .items_center()
@@ -9886,7 +9894,7 @@ impl Shell {
                     .size_full()
                     .overflow_y_scroll()
                     .track_scroll(&sidebar_scroll)
-                    .px(px(Theme::SPACE_SM))
+                    .pl(px(SIDEBAR_GUTTER))
                     .flex()
                     .flex_col()
                     // No "Sessions" header (user request) — the list
@@ -9935,7 +9943,7 @@ impl Shell {
                     el.child(
                         div()
                             .id("sidebar-notice")
-                            .mx(px(Theme::SPACE_SM))
+                            .ml(px(SIDEBAR_GUTTER))
                             .mb(px(Theme::SPACE_SM))
                             .px(px(Theme::SPACE_SM))
                             .py(px(4.0))
@@ -9988,7 +9996,7 @@ impl Shell {
             .child(
                 div()
                     .id("sidebar-footer-actions")
-                    .mx(px(Theme::SPACE_SM))
+                    .ml(px(SIDEBAR_GUTTER))
                     .mt(px(4.0))
                     .mb(px(Theme::SPACE_SM))
                     .pl(px(4.0))
@@ -10504,7 +10512,7 @@ impl Shell {
 
         let mut strip = div()
             .id("update-strip")
-            .mx(px(Theme::SPACE_SM))
+            .ml(px(SIDEBAR_GUTTER))
             // No bottom margin: the footer actions below carry their own
             // SPACE_SM padding — doubling it read as a hole (user report).
             .px(px(Theme::SPACE_SM))

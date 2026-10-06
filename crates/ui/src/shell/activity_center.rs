@@ -379,6 +379,17 @@ impl Shell {
         }
     }
 
+    /// Present `snapshot` as the engine's latest Activity read (no engine).
+    #[cfg(feature = "appshots-fixture")]
+    pub fn fixture_set_attention_snapshot(
+        &mut self,
+        snapshot: AttentionSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        self.activity.accept_snapshot(snapshot);
+        cx.notify();
+    }
+
     pub(super) fn close_activity(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.activity.view_active = false;
         self.sidebar_prev_order.clear();
@@ -466,32 +477,6 @@ impl Shell {
             keys.insert((chat.device_id.clone(), chat.id.clone()));
         }
         keys
-    }
-
-    /// Keep recent completions discoverable in the bell view after they have
-    /// been read. They do not count as unresolved attention or light its dot.
-    pub(super) fn activity_recent_completion_keys(
-        &self,
-    ) -> std::collections::HashSet<(String, String)> {
-        let cutoff = Utc::now().timestamp_millis() - chrono::Duration::days(7).num_milliseconds();
-        self.activity
-            .snapshot
-            .as_ref()
-            .into_iter()
-            .flat_map(|snapshot| &snapshot.recent)
-            .filter(|item| {
-                item.updated_at_ms >= cutoff
-                    && matches!(
-                        item.kind,
-                        AttentionKind::TaskCompleted | AttentionKind::TaskRecovered
-                    )
-            })
-            .filter_map(|item| {
-                item.task_id
-                    .as_ref()
-                    .map(|task_id| (item.device_id.clone(), task_id.clone()))
-            })
-            .collect()
     }
 
     /// Reading clears review-only rows from Activity, but queued work and

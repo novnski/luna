@@ -86,6 +86,10 @@ name = "sidebar-sections-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "sidebar-polish-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "chat-placement-fixture"
 required-features = ["appshots-fixture"]
 

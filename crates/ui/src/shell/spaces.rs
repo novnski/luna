@@ -232,6 +232,8 @@ pub(super) struct SidebarProbe {
     /// Labels of the scroll list's direct children, in order (their bounds
     /// come from the tracked scroll handle).
     pub scroll_children: Vec<String>,
+    /// The strings a surface rendered this frame, keyed by surface.
+    pub texts: std::collections::HashMap<String, Vec<String>>,
     pub bounds: std::rc::Rc<
         std::cell::RefCell<std::collections::HashMap<String, gpui::Bounds<gpui::Pixels>>>,
     >,
@@ -247,6 +249,7 @@ impl SidebarProbe {
         self.shelf_rows.clear();
         self.shelf_pages.clear();
         self.scroll_children.clear();
+        self.texts.clear();
         self.bounds.borrow_mut().clear();
     }
 }
@@ -360,8 +363,9 @@ fn active_page<'a>(
 }
 
 /// Activity is a view of the existing task rows, not a second inbox. It shows
-/// unresolved attention, live work, and recent completions. A stale session
-/// has fallen back to Idle upstream.
+/// unresolved attention, unread results and live work: a task you have read
+/// and left idle has nothing happening, however recently it finished. A stale
+/// session has fallen back to Idle upstream.
 fn activity_sidebar_bucket(status: ChatIndicator, has_attention: bool) -> Option<u8> {
     if has_attention
         || matches!(
@@ -380,18 +384,9 @@ fn activity_sidebar_bucket(status: ChatIndicator, has_attention: bool) -> Option
     }
 }
 
-#[cfg(test)]
 fn activity_sidebar_chats<'a>(
     rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
     attention_task_keys: &std::collections::HashSet<(String, String)>,
-) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
-    activity_sidebar_chats_with_recent(rows, attention_task_keys, &Default::default())
-}
-
-fn activity_sidebar_chats_with_recent<'a>(
-    rows: Vec<(ChatIndicator, &'a luna_proto::Chat)>,
-    attention_task_keys: &std::collections::HashSet<(String, String)>,
-    recent_completion_keys: &std::collections::HashSet<(String, String)>,
 ) -> Vec<(ChatIndicator, &'a luna_proto::Chat)> {
     let mut rows: Vec<_> = rows
         .into_iter()
@@ -403,7 +398,6 @@ fn activity_sidebar_chats_with_recent<'a>(
                 status
             };
             activity_sidebar_bucket(review_status, attention_task_keys.contains(&key))
-                .or_else(|| recent_completion_keys.contains(&key).then_some(2))
                 .map(|bucket| (bucket, status, chat))
         })
         .collect();
@@ -1191,7 +1185,7 @@ impl Shell {
         let organization_rows = rows;
 
         popover::popover_card(theme)
-            .w(px(self.settings.sidebar_width - 2.0 * Theme::SPACE_SM))
+            .w(px(self.settings.sidebar_width - super::SIDEBAR_GUTTER))
             .track_focus(&focus)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 this.sidebar_view_menu_key(event, cx)
@@ -1228,13 +1222,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self.activity.view_active {
-            return div()
+            let row = div()
                 .flex_none()
                 .flex()
                 .flex_row()
                 .items_center()
                 .gap(crate::typography::ui_rems(4.0))
-                .px(px(Theme::SPACE_SM))
+                .pl(px(super::SIDEBAR_GUTTER))
                 .pt(crate::typography::ui_rems(8.0))
                 .pb(crate::typography::ui_rems(4.0))
                 .child(
@@ -1250,25 +1244,32 @@ impl Shell {
                         .text_color(theme.text)
                         .child("Activity"),
                 )
-                .child(self.render_activity_action(theme, cx))
+                .child(self.render_activity_action(theme, cx));
+            return self
+                .sidebar_probed(row, || {
+                    vec!["header-activity-label".into(), "header-activity".into()]
+                })
                 .into_any_element();
         }
         let filter = self.settings.space_filter.clone();
-        // Name + the dropdown rows' "@ device" tag on the trigger itself, so
-        // the filtered space's host reads without opening the picker.
-        let (label, device_tag): (SharedString, Option<(SharedString, bool)>) = {
+        // Just the project's name: the machine it lives on is noise here
+        // (user request). A disconnected host still shows its glyph.
+        let (label, offline): (SharedString, bool) = {
             let state = self.state.read(cx);
             match filter.as_deref().and_then(|id| state.space_row(id)) {
-                Some(space) => {
-                    let (tag, offline) = state.space_device_tag(space, Utc::now());
-                    (
-                        space.display_name().to_string().into(),
-                        Some((tag.into(), offline)),
-                    )
-                }
-                None => (SharedString::from("All projects"), None),
+                Some(space) => (
+                    space.display_name().to_string().into(),
+                    !state.device_online(&space.device_id, Utc::now()),
+                ),
+                None => (SharedString::from("All projects"), false),
             }
         };
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe
+                .texts
+                .insert("spaces-trigger".into(), vec![label.to_string()]);
+        }
         let open = self.spaces_menu.is_open();
 
         let trigger = div()
@@ -1320,8 +1321,7 @@ impl Shell {
                     .text_color(theme.text_muted),
             )
             // flex_1 pushes the caret to the trigger's right edge and gives
-            // long space names a bound to fade against; the "@ device"
-            // tag hugs the name inside it rather than sitting by the caret.
+            // long space names a bound to fade against.
             .child(
                 div()
                     .flex_1()
@@ -1335,25 +1335,14 @@ impl Shell {
                         false,
                         label,
                     ))
-                    .when_some(device_tag, |el, (tag, offline)| {
-                        el.child(super::sidebar_faded_label(
-                            "spaces-filter-device".into(),
-                            false,
-                            div()
-                                .text_size(crate::typography::ui_rems(11.0))
-                                .font_weight(gpui::FontWeight::NORMAL)
-                                .text_color(theme.readable_muted(0.45))
-                                .child(tag),
-                        ))
-                        // Disconnected glyph, not the word (user request).
-                        .when(offline, |el| {
-                            el.child(
-                                icon(icons::WIFI_OFF)
-                                    .size(crate::typography::ui_rems(12.0))
-                                    .flex_none()
-                                    .text_color(theme.readable_tone(theme.warning, 0.8)),
-                            )
-                        })
+                    // Disconnected glyph, not the word (user request).
+                    .when(offline, |el| {
+                        el.child(
+                            icon(icons::WIFI_OFF)
+                                .size(crate::typography::ui_rems(12.0))
+                                .flex_none()
+                                .text_color(theme.readable_tone(theme.warning, 0.8)),
+                        )
                     }),
             )
             .child(
@@ -1456,19 +1445,26 @@ impl Shell {
             view_trigger
         };
 
-        div()
+        let row = div()
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
             .gap(crate::typography::ui_rems(4.0))
-            .px(px(Theme::SPACE_SM))
+            .pl(px(super::SIDEBAR_GUTTER))
             .pt(crate::typography::ui_rems(8.0))
             .pb(crate::typography::ui_rems(4.0))
             .child(trigger)
             .child(view_trigger)
-            .child(self.render_activity_action(theme, cx))
-            .into_any_element()
+            .child(self.render_activity_action(theme, cx));
+        self.sidebar_probed(row, || {
+            vec![
+                "header-trigger".into(),
+                "header-view".into(),
+                "header-activity".into(),
+            ]
+        })
+        .into_any_element()
     }
 
     /// The dropdown card: search on top, "All projects" + space rows (check on
@@ -1489,9 +1485,9 @@ impl Shell {
         let rows = self.spaces_menu_rows(cx);
         let scrollbar = popover::rail(self, "spaces-menu-scrollbar", theme, cx);
         let filter = self.settings.space_filter.clone();
-        // Keep the host tag so projects with the same name on different
-        // devices remain distinguishable. Consume `rows` to avoid cloning
-        // the list children per frame.
+        // No machine names (user request), except to tell apart projects
+        // that share a name on different machines. Consume `rows` to avoid
+        // cloning the list children per frame.
         let details: Vec<(
             SpacesMenuRow,
             SharedString,
@@ -1500,6 +1496,14 @@ impl Shell {
             bool,
         )> = {
             let state = self.state.read(cx);
+            let mut name_counts: std::collections::HashMap<&str, usize> = Default::default();
+            for row in &rows {
+                if let SpacesMenuRow::Space(id) = row
+                    && let Some(space) = state.space_row(id)
+                {
+                    *name_counts.entry(space.display_name()).or_default() += 1;
+                }
+            }
             rows.into_iter()
                 .map(|row| match row {
                     SpacesMenuRow::All => (
@@ -1514,10 +1518,13 @@ impl Shell {
                         match state.space_row(&id) {
                             Some(space) => {
                                 let (tag, offline) = state.space_device_tag(space, Utc::now());
+                                let shared_name = name_counts
+                                    .get(space.display_name())
+                                    .is_some_and(|count| *count > 1);
                                 (
                                     SpacesMenuRow::Space(id),
                                     space.display_name().to_string().into(),
-                                    Some(tag.into()),
+                                    shared_name.then(|| tag.into()),
                                     offline,
                                     selected,
                                 )
@@ -1537,6 +1544,19 @@ impl Shell {
                 })
                 .collect()
         };
+        #[cfg(feature = "appshots-fixture")]
+        if let Some(probe) = self.sidebar_probe.as_mut() {
+            probe.texts.insert(
+                "spaces-menu".into(),
+                details
+                    .iter()
+                    .map(|(_, label, tag, _, _)| match tag {
+                        Some(tag) => format!("{label} {tag}"),
+                        None => label.to_string(),
+                    })
+                    .collect(),
+            );
+        }
         // The pinned footer's keyboard-nav index: one past the last
         // scrollable row, its permanent place at the end of the nav order.
         let add_index = details.len();
@@ -1613,8 +1633,8 @@ impl Shell {
 
         popover::popover_card(theme)
             // Match the trigger row as the sidebar is resized. Both live
-            // inside the same SPACE_SM horizontal gutters.
-            .w(px(self.settings.sidebar_width - 2.0 * Theme::SPACE_SM))
+            // inside the sidebar's gutter.
+            .w(px(self.settings.sidebar_width - super::SIDEBAR_GUTTER))
             .track_focus(&focus)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 this.spaces_menu_key(event, cx)
@@ -1694,7 +1714,6 @@ impl Shell {
     pub(super) fn sidebar_visible_order(&self, cx: &Context<Self>) -> Vec<String> {
         let filter = self.settings.space_filter.clone();
         let attention_task_keys = self.activity_task_keys(cx);
-        let recent_completion_keys = self.activity_recent_completion_keys();
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let placed = self.effective_placements(cx);
@@ -1713,15 +1732,11 @@ impl Shell {
             &placed,
         );
         let mut chats: Vec<luna_proto::Chat> = if self.activity.view_active {
-            activity_sidebar_chats_with_recent(
-                source,
-                &attention_task_keys,
-                &recent_completion_keys,
-            )
-            .into_iter()
-            .filter(|(_, chat)| !self.pending_task_actions.contains_key(&chat.id))
-            .map(|(_, chat)| chat.clone())
-            .collect()
+            activity_sidebar_chats(source, &attention_task_keys)
+                .into_iter()
+                .filter(|(_, chat)| !self.pending_task_actions.contains_key(&chat.id))
+                .map(|(_, chat)| chat.clone())
+                .collect()
         } else {
             let mut source = source;
             let ranks = self.sidebar_manual_ranks();
@@ -1785,7 +1800,6 @@ impl Shell {
         let filter = self.settings.space_filter.clone();
         let activity_view = self.activity.view_active;
         let attention_task_keys = self.activity_task_keys(cx);
-        let recent_completion_keys = self.activity_recent_completion_keys();
         let mut settlement_task_keys = attention_task_keys.clone();
         settlement_task_keys.extend(self.settlement_blocking_task_keys());
         let placed = self.effective_placements(cx);
@@ -1806,11 +1820,7 @@ impl Shell {
             );
             // Activity is a triage view of what needs you: never capped.
             let chats: Vec<_> = if activity_view {
-                activity_sidebar_chats_with_recent(
-                    source,
-                    &attention_task_keys,
-                    &recent_completion_keys,
-                )
+                activity_sidebar_chats(source, &attention_task_keys)
             } else {
                 let mut source = source;
                 let ranks = self.sidebar_manual_ranks();
@@ -4908,6 +4918,9 @@ impl Shell {
             "scroll": { "offset": offset, "max": f32::from(scroll.max_offset().y) },
             "scrollChildren": scroll_children,
             "bounds": probe.bounds.borrow().iter().map(|(label, bounds)| (label.clone(), rect(*bounds))).collect::<serde_json::Map<_, _>>(),
+            "texts": probe.texts,
+            "activityView": self.activity.view_active,
+            "canvas": self.workbench.geometry.borrow().canvas.map(rect),
         })
     }
 }

@@ -2976,7 +2976,7 @@ impl Shell {
         }
         div()
             .id("usage-sidebar-card")
-            .mx(px(Theme::SPACE_SM))
+            .ml(px(super::SIDEBAR_GUTTER))
             .mb(px(0.0))
             .min_w_0()
             .rounded(px(Theme::PANEL_RADIUS))
