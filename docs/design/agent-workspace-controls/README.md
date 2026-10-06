@@ -13,8 +13,12 @@ delivers the tools.
 `get_workspace` discovers the caller's workspace and defaults.
 `manage_workspace` opens background tabs/splits, closes exact views, archives
 exact related conversations, or creates a persistent context fork. It uses
-canonical task IDs and a current layout revision. `create_thread` continues
-to create fresh helpers and now reports background placement separately.
+canonical task IDs. A pane or split `destination` also needs the current
+layout revision; changes addressed only by chat ID apply to the current
+layout, and a supplied revision is always enforced. `create_thread` continues
+to create fresh helpers and now reports background placement separately. The
+`provider` choices of `create_thread` and `list_child_models` list only
+providers installed and enabled on the device.
 
 Settings → Providers → Defaults for new chats stores model, reasoning and
 model-specific options on the owning local device. Explicit draft choices and

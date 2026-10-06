@@ -39,6 +39,10 @@ pub enum HarnessError {
     NotInstalled(String),
     #[error("harness protocol error: {0}")]
     Protocol(String),
+    /// A LUNA tool refused or failed the call. The text is the tool's own
+    /// reason and reaches the model verbatim, without a protocol prefix.
+    #[error("{0}")]
+    Tool(String),
     /// The adapter has authoritative evidence that the provider rejected the
     /// request before accepting it. Only this typed boundary permits recovery
     /// to resend the frozen original request; generic startup/transport errors

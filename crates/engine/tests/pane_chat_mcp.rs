@@ -196,11 +196,10 @@ fn child_with_prompt(core: &EngineCore, prompt: &str) -> Option<luna_proto::Chat
         })
 }
 
-fn schema_has_new_fields(schema: &Value) {
-    assert_eq!(
-        schema["properties"]["provider"]["enum"],
-        json!(["codex", "claude-code", "opencode"])
-    );
+/// `providers` is what the test registry installs: the schema offers only
+/// providers that can actually run a child on this device.
+fn schema_has_new_fields(schema: &Value, providers: Value) {
+    assert_eq!(schema["properties"]["provider"]["enum"], providers);
     assert_eq!(
         schema["properties"]["modelOptions"]["additionalProperties"]["type"],
         "string"
@@ -355,7 +354,7 @@ async fn codex_create_thread_schema_grant_cap_deny_and_child_identity() {
         .find(|tool| tool["name"] == "create_thread")
         .cloned()
         .expect("create_thread listed");
-    schema_has_new_fields(&create["inputSchema"]);
+    schema_has_new_fields(&create["inputSchema"], json!(["codex"]));
     evidence("codex-create-thread-tool.json", &create);
     // The parent session's instructions name its role.
     let thread_request =
@@ -739,7 +738,10 @@ async fn claude_create_thread_schema_grant_cap_deny_and_child_identity() {
 
     // F3: Claude's LUNA MCP entry lists the same schema; the per-server
     // timeout (QA fix F03) is still attached.
-    schema_has_new_fields(&results["handshake"]["schemas"]["create_thread"]);
+    schema_has_new_fields(
+        &results["handshake"]["schemas"]["create_thread"],
+        json!(["claude-code"]),
+    );
     assert!(
         results["systemPrompt"]
             .as_str()

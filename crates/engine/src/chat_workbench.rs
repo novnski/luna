@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use luna_proto::{
-    ChatWorkbenchMutationResult, ChatWorkbenchSnapshot, MutateChatWorkbenchRequest,
-    valid_workbench_id,
+    ChatWorkbenchCommand, ChatWorkbenchMutationResult, ChatWorkbenchSnapshot,
+    MutateChatWorkbenchRequest, valid_workbench_id,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -19,6 +19,8 @@ use crate::device_write::DeviceWriteHandle;
 const MAX_FILE_BYTES: u64 = 256 * 1024;
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
 const RECEIPT_LIMIT: usize = 64;
+/// Fingerprinted in place of a revision by `mutate_latest`; never a real revision.
+const LATEST_REVISION: u64 = u64::MAX;
 
 #[derive(Clone)]
 pub(crate) struct ChatWorkbenches(Arc<Inner>);
@@ -271,6 +273,43 @@ impl ChatWorkbenches {
         &self,
         request: &MutateChatWorkbenchRequest,
     ) -> Result<ChatWorkbenchMutationResult, EngineError> {
+        self.mutate_with(request, true)
+    }
+
+    /// Applies a command that names no pane or split to the current layout.
+    /// The receipt fingerprints a sentinel instead of the revision, so a retry
+    /// with the same command ID replays rather than conflicting with its own
+    /// first apply.
+    pub(crate) fn mutate_latest(
+        &self,
+        request: &MutateChatWorkbenchRequest,
+    ) -> Result<ChatWorkbenchMutationResult, EngineError> {
+        if !matches!(
+            request.command,
+            ChatWorkbenchCommand::CloseTabs { .. }
+                | ChatWorkbenchCommand::OpenBackgroundTab {
+                    destination: None,
+                    ..
+                }
+        ) {
+            return Err(error(
+                "Only commands without a pane or split destination can skip the revision check",
+            ));
+        }
+        self.mutate_with(
+            &MutateChatWorkbenchRequest {
+                expected_revision: LATEST_REVISION,
+                ..request.clone()
+            },
+            false,
+        )
+    }
+
+    fn mutate_with(
+        &self,
+        request: &MutateChatWorkbenchRequest,
+        check_revision: bool,
+    ) -> Result<ChatWorkbenchMutationResult, EngineError> {
         if !valid_workbench_id(&request.command_id) {
             return Err(error("Invalid workbench command ID"));
         }
@@ -307,7 +346,7 @@ impl ChatWorkbenches {
                 conflict: false,
             });
         }
-        if entry.saved.snapshot.revision != request.expected_revision {
+        if check_revision && entry.saved.snapshot.revision != request.expected_revision {
             return Ok(ChatWorkbenchMutationResult {
                 snapshot: entry.saved.snapshot.clone(),
                 applied: false,

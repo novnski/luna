@@ -43,6 +43,23 @@ impl EngineRpc {
         &self,
         request: MutateChatWorkbenchRequest,
     ) -> Result<luna_proto::ChatWorkbenchMutationResult, RpcError> {
+        self.mutate_chat_workbench_with(request, false)
+    }
+
+    /// Applies a destination-free command to the current layout; the request's
+    /// `expected_revision` is ignored. See `ChatWorkbenches::mutate_latest`.
+    pub(super) fn mutate_chat_workbench_latest(
+        &self,
+        request: MutateChatWorkbenchRequest,
+    ) -> Result<luna_proto::ChatWorkbenchMutationResult, RpcError> {
+        self.mutate_chat_workbench_with(request, true)
+    }
+
+    fn mutate_chat_workbench_with(
+        &self,
+        request: MutateChatWorkbenchRequest,
+        latest: bool,
+    ) -> Result<luna_proto::ChatWorkbenchMutationResult, RpcError> {
         if self.engine_info.profile_id.as_deref() != Some(request.profile_id.as_str()) {
             return Err(RpcError::Failed(
                 "Workbench profile changed; reload before changing this layout".into(),
@@ -73,9 +90,13 @@ impl EngineRpc {
                 "Conversation is unavailable; its tab cannot be opened".into(),
             ));
         }
-        self.chat_workbenches_service()?
-            .mutate(&request)
-            .map_err(|error| RpcError::Failed(error.to_string()))
+        let service = self.chat_workbenches_service()?;
+        if latest {
+            service.mutate_latest(&request)
+        } else {
+            service.mutate(&request)
+        }
+        .map_err(|error| RpcError::Failed(error.to_string()))
     }
 }
 

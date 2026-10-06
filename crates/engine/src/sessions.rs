@@ -4928,7 +4928,7 @@ impl SessionsEngine {
                                 .await
                             };
                             result.map_err(|error| {
-                                luna_harness::HarnessError::Protocol(error.to_string())
+                                luna_harness::HarnessError::Tool(error.to_string())
                             })
                         })
                             as futures::future::BoxFuture<

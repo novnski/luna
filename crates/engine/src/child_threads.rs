@@ -116,6 +116,43 @@ pub(super) struct ProvisionedChildWorktree {
 }
 
 impl EngineRpc {
+    fn provider_available(&self, provider: HarnessId) -> bool {
+        self.registry.descriptors().iter().any(|entry| {
+            entry.id == provider && entry.installed && crate::registry::descriptor_enabled(entry)
+        })
+    }
+
+    /// Child-capable providers installed and enabled on this device.
+    pub(crate) fn available_child_providers(&self) -> Vec<HarnessId> {
+        crate::cross_task_tools::CHILD_PROVIDERS
+            .into_iter()
+            .filter(|id| self.provider_available(*id))
+            .collect()
+    }
+
+    fn provider_unavailable(&self, provider: HarnessId) -> String {
+        let wire = |id: HarnessId| {
+            serde_json::to_value(id)
+                .ok()
+                .and_then(|value| value.as_str().map(str::to_owned))
+                .unwrap_or_else(|| format!("{id:?}"))
+        };
+        let available = self.available_child_providers();
+        let available = if available.is_empty() {
+            "none".to_owned()
+        } else {
+            available
+                .into_iter()
+                .map(wire)
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        format!(
+            "The {} provider is not installed or enabled on this device. Available providers: {available}.",
+            wire(provider)
+        )
+    }
+
     fn child_base_config(
         &self,
         parent: &ChatConfig,
@@ -123,16 +160,10 @@ impl EngineRpc {
     ) -> Result<ChatConfig, crate::EngineError> {
         let provider = request.provider.unwrap_or(parent.harness);
         let same_provider = provider == parent.harness;
-        if provider != HarnessId::Mock
-            && !self.registry.descriptors().iter().any(|entry| {
-                entry.id == provider
-                    && entry.installed
-                    && crate::registry::descriptor_enabled(entry)
-            })
-        {
-            return Err(crate::EngineError::Other(format!(
-                "The {provider:?} provider is not installed or enabled on this device"
-            )));
+        if provider != HarnessId::Mock && !self.provider_available(provider) {
+            return Err(crate::EngineError::Other(
+                self.provider_unavailable(provider),
+            ));
         }
         self.registry.resolve(provider)?;
         let mut config = parent.clone();
@@ -360,12 +391,8 @@ impl EngineRpc {
         }
         let parent_config = parent.config.as_ref().ok_or(CrossTaskError::Unavailable)?;
         let provider = request.provider.unwrap_or(parent_config.harness);
-        if !self.registry.descriptors().iter().any(|entry| {
-            entry.id == provider && entry.installed && crate::registry::descriptor_enabled(entry)
-        }) {
-            return Err(CrossTaskError::Backend(format!(
-                "Provider {provider:?} is not installed or enabled"
-            )));
+        if !self.provider_available(provider) {
+            return Err(CrossTaskError::Backend(self.provider_unavailable(provider)));
         }
         let account = (provider == parent_config.harness)
             .then_some(parent_config.provider_account_id.as_deref())

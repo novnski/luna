@@ -197,13 +197,24 @@ impl EngineRpc {
             .map_err(fail)?
             .has_command(&main, &layout_command_id)
             .map_err(fail)?;
-        if (request.action != Action::ArchiveThreads || request.close_tabs)
-            && request.expected_layout_revision != Some(layout.revision)
-            && !already_placed
-        {
-            return Err(fail(
-                "Layout changed or revision missing; read get_workspace and prepare a new request",
-            ));
+        // The revision guards pane/split references from going stale. Changes
+        // addressed only by chat ID apply to the current layout when it is
+        // omitted; a supplied revision is always enforced.
+        if (request.action != Action::ArchiveThreads || request.close_tabs) && !already_placed {
+            match request.expected_layout_revision {
+                None if request.destination.is_some() => {
+                    return Err(fail(
+                        "expectedLayoutRevision is required with destination; read get_workspace for the current revision and pane/node IDs, then retry",
+                    ));
+                }
+                Some(expected) if expected != layout.revision => {
+                    return Err(fail(format!(
+                        "Layout changed since revision {expected} (now {}); read get_workspace and prepare a new request",
+                        layout.revision
+                    )));
+                }
+                _ => {}
+            }
         }
         let mut targets = Vec::new();
         for id in &request.task_ids {
@@ -280,18 +291,20 @@ impl EngineRpc {
             &fence.source_task_id,
             &format!("workspace:{}", prepared.request.idempotency_key),
         );
+        let expected = prepared.request.expected_layout_revision;
+        let request = MutateChatWorkbenchRequest {
+            main_chat_id: prepared.main_chat_id.clone(),
+            profile_id: prepared.profile_id.clone(),
+            expected_revision: expected.unwrap_or_default(),
+            command_id: format!("agent-layout:{id}"),
+            command,
+        };
         self.sessions
             .with_live_approved_send(fence, || {
-                self.mutate_chat_workbench(MutateChatWorkbenchRequest {
-                    main_chat_id: prepared.main_chat_id.clone(),
-                    profile_id: prepared.profile_id.clone(),
-                    expected_revision: prepared
-                        .request
-                        .expected_layout_revision
-                        .ok_or_else(|| EngineError::Other("Layout revision missing".into()))?,
-                    command_id: format!("agent-layout:{id}"),
-                    command,
-                })
+                match expected {
+                    Some(_) => self.mutate_chat_workbench(request),
+                    None => self.mutate_chat_workbench_latest(request),
+                }
                 .map_err(|error| EngineError::Other(error.to_string()))
             })
             .map_err(fail)

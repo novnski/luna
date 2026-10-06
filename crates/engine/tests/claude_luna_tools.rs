@@ -247,13 +247,19 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
     assert_eq!(attachment["tokenInArgv"], false);
     let allowed = attachment["allowedTools"].as_str().unwrap();
     let tools = run1["handshake"]["tools"].as_array().unwrap();
+    // Claude gets the same LUNA tool set as Codex (crates/engine/tests/cross_task_tools.rs).
     for name in [
         "luna_status",
+        "get_workspace",
+        "manage_workspace",
+        "list_child_models",
+        "create_thread",
         "list_threads",
         "read_thread",
         "wait_threads",
         "send_message_to_thread",
-        "create_thread",
+        "list_automations",
+        "automation_update",
     ] {
         assert!(tools.iter().any(|tool| tool == name), "{name}: {run1:#}");
         assert!(
@@ -330,11 +336,36 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
     .await
     .expect("run 1 retired");
 
+    // The child's own fake turn must finish before it can be archived.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !project_a
+            .join(format!(".luna-claude-turn-{child}.txt"))
+            .exists()
+            || core.sessions.has_live_run(&child)
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("child turn settled");
+
     // Continuity on resume: a new process for the same native session gets a
-    // new endpoint and token with the current tool set.
+    // new endpoint and token with the current tool set. It then replays the
+    // calls from chat f82212c7 (2026-10-06) that failed on Claude: helpers
+    // archived with closeTabs:true and no layout revision, retried verbatim.
+    let archive = serde_json::json!({"action": "archiveThreads", "taskIds": [child],
+        "closeTabs": true, "idempotencyKey": "claude-archive-no-revision"});
     std::fs::write(
         project_a.join(".luna-claude-plan-run2.json"),
-        serde_json::to_vec(&serde_json::json!([{"tool": "luna_status", "arguments": {}}])).unwrap(),
+        serde_json::to_vec(&serde_json::json!([
+            {"tool": "luna_status", "arguments": {}},
+            {"tool": "get_workspace", "arguments": {}},
+            {"tool": "list_child_models", "arguments": {"query": "astra"}},
+            {"tool": "manage_workspace", "arguments": archive},
+            {"tool": "manage_workspace", "arguments": archive},
+            {"tool": "list_automations", "arguments": {}},
+        ]))
+        .unwrap(),
     )
     .unwrap();
     core.sessions
@@ -360,5 +391,38 @@ async fn claude_chat_reads_creates_and_sends_through_luna_mcp_without_extra_appr
     assert_ne!(run2["attachment"]["url"], run1["attachment"]["url"]);
     let (failed, text) = step(&run2, 0);
     assert!(!failed && text.contains(&source), "{text}");
+    let (failed, text) = step(&run2, 1);
+    assert!(!failed, "{text}");
+    let workspace: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(workspace["mainChatId"], source.as_str());
+    assert!(
+        workspace["relatedTaskIds"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!(child)),
+        "{workspace:#}"
+    );
+    let (failed, text) = step(&run2, 2);
+    assert!(!failed, "{text}");
+    let models: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(models["provider"], "claude-code");
+    let (failed, text) = step(&run2, 3);
+    assert!(!failed, "{text}");
+    let archived: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(archived["allArchived"], true, "{archived:#}");
+    assert!(archived["layout"]["error"].is_null(), "{archived:#}");
+    assert!(core.workspace.chat(&child).unwrap().unwrap().archived);
+    let layout: luna_proto::ChatWorkbenchSnapshot =
+        serde_json::from_value(archived["layout"]["snapshot"].clone()).unwrap();
+    assert!(!layout.contains_chat(&child));
+    let (failed, text) = step(&run2, 4);
+    assert!(!failed, "exact retry replays: {text}");
+    let replayed: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(
+        replayed["layout"]["snapshot"],
+        archived["layout"]["snapshot"]
+    );
+    let (failed, text) = step(&run2, 5);
+    assert!(!failed, "{text}");
     core.shutdown().await;
 }

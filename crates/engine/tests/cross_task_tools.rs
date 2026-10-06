@@ -1466,7 +1466,11 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         &a.turn,
         "workspace-stale",
     );
-    assert!(tool_text(&mcp_post(&http, &a.url, &a.token, &stale).await.1).0);
+    let (failed, text) = tool_text(&mcp_post(&http, &a.url, &a.token, &stale).await.1);
+    assert!(
+        failed && text.starts_with("Layout changed since revision"),
+        "{text}"
+    );
     let closed = workspace_call!(
         25,
         "workspace-close",
@@ -1529,10 +1533,82 @@ async fn luna_mcp_endpoint_enforces_identity_fences_and_parks_approval() {
         "workspace-unrelated",
     );
     assert!(tool_text(&mcp_post(&http, &a.url, &a.token, &forbidden).await.1).0);
+
+    // Chat f82212c7 (2026-10-06): an agent archived its helpers with
+    // closeTabs:true and no revision. Views addressed only by chat ID must
+    // apply to the current layout, and the exact retry must replay.
+    let fork3 = workspace_call!(
+        40,
+        "workspace-fork-no-revision",
+        "manage_workspace",
+        serde_json::json!({"action":"forkThread","taskIds":[source],"idempotencyKey":"runtime-fork-three"})
+    );
+    let fork3_id = fork3["taskId"].as_str().unwrap().to_owned();
+    let archive_without_revision = serde_json::json!({"action":"archiveThreads","taskIds":[fork3_id],
+        "closeTabs":true,"idempotencyKey":"runtime-archive-no-revision"});
+    let archived3 = workspace_call!(
+        41,
+        "workspace-archive-no-revision",
+        "manage_workspace",
+        archive_without_revision.clone()
+    );
+    assert_eq!(archived3["allArchived"], true, "{archived3}");
+    assert!(archived3["layout"]["error"].is_null(), "{archived3}");
+    let after_archive: luna_proto::ChatWorkbenchSnapshot =
+        serde_json::from_value(archived3["layout"]["snapshot"].clone()).unwrap();
+    assert!(!after_archive.contains_chat(&fork3_id));
+    assert!(core.workspace.chat(&fork3_id).unwrap().unwrap().archived);
+    let replayed3 = workspace_call!(
+        42,
+        "workspace-archive-no-revision-replay",
+        "manage_workspace",
+        archive_without_revision
+    );
+    assert!(replayed3["layout"]["error"].is_null(), "{replayed3}");
+    assert_eq!(
+        replayed3["layout"]["snapshot"],
+        archived3["layout"]["snapshot"]
+    );
+    // A destination still names panes, so it still needs a fresh revision.
+    let split_without_revision = call(
+        43,
+        "manage_workspace",
+        serde_json::json!({"action":"openTab","taskIds":[child],"idempotencyKey":"runtime-split-no-revision",
+        "destination":{"kind":"split","nodeId":after_archive.root.id(),"edge":"left",
+        "newPaneId":uuid::Uuid::new_v4(),"splitId":uuid::Uuid::new_v4()}}),
+        &a.thread,
+        &a.turn,
+        "workspace-split-no-revision",
+    );
+    let (failed, text) = tool_text(
+        &mcp_post(&http, &a.url, &a.token, &split_without_revision)
+            .await
+            .1,
+    );
+    assert!(
+        failed && text.starts_with("expectedLayoutRevision is required with destination"),
+        "{text}"
+    );
+    // Same chat: the schema offered opencode, which this device lacks.
+    let unavailable = call(
+        44,
+        "list_child_models",
+        serde_json::json!({"provider":"opencode","query":"astra"}),
+        &a.thread,
+        &a.turn,
+        "models-unavailable-provider",
+    );
+    let (failed, text) = tool_text(&mcp_post(&http, &a.url, &a.token, &unavailable).await.1);
+    assert!(failed, "{text}");
+    assert_eq!(
+        text,
+        "The opencode provider is not installed or enabled on this device. Available providers: codex."
+    );
     if let Ok(directory) = std::env::var("AGENT_WORKSPACE_EVIDENCE_DIR") {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(std::path::Path::new(&directory).join("runtime-workspace.json"),serde_json::to_vec_pretty(&serde_json::json!({
-            "provider":"deterministic Codex peer through production MCP", "workspace":workspace,"split":split,"replay":replay,"closed":closed,"fork":fork,"fork2":fork2,"archived":archived
+            "provider":"deterministic Codex peer through production MCP", "workspace":workspace,"split":split,"replay":replay,"closed":closed,"fork":fork,"fork2":fork2,"archived":archived,
+            "fork3":fork3,"archivedWithoutRevision":archived3,"archiveReplay":replayed3
         })).unwrap()).unwrap();
     }
 

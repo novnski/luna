@@ -8528,6 +8528,9 @@ impl CrossTaskBackend for EngineRpc {
     ) -> Result<Value, CrossTaskError> {
         self.apply_agent_workspace(prepared, authority, fence).await
     }
+    fn child_providers(&self) -> Vec<luna_proto::HarnessId> {
+        self.available_child_providers()
+    }
     fn capabilities(&self) -> CrossTaskCapabilities {
         CrossTaskCapabilities {
             workspace: self.chat_workbenches.is_some(),
