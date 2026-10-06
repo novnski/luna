@@ -1061,7 +1061,7 @@ pub(super) fn related_kind_badge(kind: related_chats::RelatedKind, theme: &Theme
         .px(px(4.0))
         .rounded(px(4.0))
         .bg(tone.opacity(0.08))
-        .text_size(crate::typography::ui_rems(10.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .line_height(crate::typography::ui_rems(14.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.readable_on(tone, tone.opacity(0.08), crate::theme::TEXT_CONTRAST_TARGET))
@@ -1242,19 +1242,17 @@ fn sidebar_thread_tooltip_anchor(
 
 impl Render for SurfaceTabTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The shared tooltip look (audit SH-21): one card, caption text.
         let theme = Theme::of(cx);
-        let card = div()
+        crate::popover::tooltip_card(theme)
             .max_w(px(380.0))
-            .px(px(9.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.tooltip_surface())
-            .text_size(crate::typography::ui_rems(10.5))
-            .text_color(theme.text_muted)
-            .child(self.text.clone());
-        crate::frost::frosted(6.0, crate::frost::MENU_BLUR, card)
+            .px(px(8.0))
+            .py(px(5.0))
+            .font_family(theme.font_sans.clone())
+            .text_size(crate::typography::ui_rems(11.0))
+            .line_height(crate::typography::ui_rems(14.0))
+            .text_color(theme.text)
+            .child(self.text.clone())
     }
 }
 /// Drag marker for the terminal-panel height handle.
@@ -8391,12 +8389,27 @@ impl Shell {
         // card's own border provides the separation. The content row spans the
         // full window height (the titlebar overlays it), so the column pads
         // itself below the chrome.
+        // While the width tweens, the content rides the moving edge (slides
+        // out) and fades over the last 40% of travel, instead of a clip
+        // wiping across a stationary sidebar (audit SH-16).
+        let full = self.settings.sidebar_width.max(1.0);
+        let now = self.sidebar_now();
+        let ratio = (now / full).clamp(0.0, 1.0);
+        let content = div()
+            .h_full()
+            .pt(px(Theme::TITLEBAR_HEIGHT))
+            .when(ratio < 1.0, |el| {
+                el.relative()
+                    .left(px(now - full))
+                    .opacity((ratio / 0.4).clamp(0.0, 1.0))
+            })
+            .child(inner);
         div()
             .h_full()
             .flex_none()
             .overflow_hidden()
-            .w(px(self.sidebar_now()))
-            .child(div().h_full().pt(px(Theme::TITLEBAR_HEIGHT)).child(inner))
+            .w(px(now))
+            .child(content)
             .into_any_element()
     }
 
@@ -8763,7 +8776,7 @@ impl Shell {
                     .px(px(4.0))
                     .rounded(px(4.0))
                     .bg(tone.opacity(0.08))
-                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.readable_tone(tone, 0.85))
                     .font_family(theme.font_mono.clone())
@@ -8935,7 +8948,7 @@ impl Shell {
                         status
                             .child(
                                 div()
-                                    .text_size(crate::typography::ui_rems(10.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .font_weight(gpui::FontWeight::MEDIUM)
                                     // The status word is text: its tone,
                                     // held to the text floor.
@@ -8949,7 +8962,7 @@ impl Shell {
                     .h(px(18.0))
                     .flex()
                     .items_center()
-                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .child(time_ago.clone())
                     .into_any_element(),
@@ -8982,7 +8995,7 @@ impl Shell {
                 .child(corner_body)
                 .into_any_element()
         };
-        let (hover, text) = (theme.glass_hover(), theme.text);
+        let (hover, text) = (crate::theme::sidebar_hover_bg(), theme.text);
         let selected_wash = crate::theme::glass_selected_bg();
         let subline = if search_query.is_some() {
             theme.text_muted
@@ -9000,7 +9013,6 @@ impl Shell {
             )
             .into();
             let tone = theme.text_muted;
-            let border_strong = theme.border_strong;
             let click_id = id.clone();
             let tooltip = label.clone();
             div()
@@ -9019,12 +9031,15 @@ impl Shell {
                 .border_1()
                 .border_color(gpui::transparent_black())
                 .bg(tone.opacity(0.08))
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(theme.readable_tone(tone, 0.85))
                 .cursor_pointer()
                 .hover(move |s| s.bg(tone.opacity(0.16)))
-                .focus_visible(move |s| s.border_color(border_strong))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |s| crate::theme::focus_ring(s, ring)
+                })
                 .tooltip(move |_, cx| {
                     cx.new(|_| SurfaceTabTooltip {
                         text: tooltip.clone(),
@@ -9243,7 +9258,7 @@ impl Shell {
                                 .px(px(4.0))
                                 .rounded(px(4.0))
                                 .bg(tone.opacity(0.10))
-                                .text_size(crate::typography::ui_rems(10.0))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .text_color(theme.readable_on(
                                     tone,
@@ -10015,8 +10030,6 @@ impl Shell {
 
     fn render_updates_page(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).clone();
-        let focus_border = theme.border_strong;
-        let focus_accent = theme.accent;
         let status = self.update_status(cx);
         let current = status
             .as_ref()
@@ -10101,7 +10114,10 @@ impl Shell {
                     .role(gpui::Role::Button)
                     .aria_label("Check GitHub Releases for updates")
                     .tab_index(0)
-                    .focus_visible(move |style| style.border_color(focus_border))
+                    .focus_visible({
+                        let ring = theme.focus_ring();
+                        move |style| crate::theme::focus_ring(style, ring)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| this.begin_update_check(cx))),
             );
         }
@@ -10120,7 +10136,10 @@ impl Shell {
                             .role(gpui::Role::Button)
                             .aria_label(label)
                             .tab_index(0)
-                            .focus_visible(move |style| style.border_color(focus_accent))
+                            .focus_visible({
+                                let ring = theme.focus_ring();
+                                move |style| crate::theme::focus_ring(style, ring)
+                            })
                             .on_click(cx.listener(|this, _, _, cx| this.on_update_page_action(cx))),
                     );
                 }
@@ -10131,7 +10150,10 @@ impl Shell {
                         .role(gpui::Role::Button)
                         .aria_label("View latest LUNA release on GitHub")
                         .tab_index(0)
-                        .focus_visible(move |style| style.border_color(focus_accent))
+                        .focus_visible({
+                            let ring = theme.focus_ring();
+                            move |style| crate::theme::focus_ring(style, ring)
+                        })
                         .on_click(cx.listener(|_, _, _, cx| {
                             cx.open_url("https://github.com/novnski/luna/releases/latest");
                         })),
@@ -13226,7 +13248,10 @@ impl Shell {
                 .role(gpui::Role::Button)
                 .aria_label(title)
                 .tab_index(0)
-                .focus_visible(move |style| style.border_color(border_strong))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
                 .w_full()
                 .h(px(44.0))
                 .px(px(14.0))
@@ -13591,12 +13616,14 @@ impl Shell {
                 .id(("right-surface-tab", ix))
                 .debug_selector(|| format!("right-surface-tab-{ix}"))
                 .group(group.clone())
-                .h(px(24.0))
+                // One tab recipe for both strips (audit SH-06): 28 px, r8,
+                // 12.5 px labels, like the canvas tabs.
+                .h(px(28.0))
                 .w(px(CHIP_W))
                 .flex_none()
-                .pl(px(4.0))
+                .pl(px(5.0))
                 .pr(px(8.0))
-                .rounded(px(6.0))
+                .rounded(px(8.0))
                 .flex()
                 .flex_row()
                 .items_center()
@@ -13605,13 +13632,8 @@ impl Shell {
                 .role(gpui::Role::Button)
                 .aria_label(accessible_label)
                 .when_some(detail, |chip, detail| {
-                    chip.tooltip(move |_, cx| {
-                        cx.new(|_| SurfaceTabTooltip {
-                            text: detail.clone(),
-                        })
-                        .into()
-                    })
-                    .tooltip_show_delay(Duration::from_millis(350))
+                    chip.tooltip(crate::popover::text_tooltip(detail))
+                        .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
                 })
                 // The old session-tab strip's solved carve-out: NOT
                 // `.occlude()` — a BlockMouse hitbox ends the hit test,
@@ -13737,7 +13759,7 @@ impl Shell {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(crate::typography::ui_rems(11.5))
+                        .text_size(crate::typography::ui_rems(12.5))
                         .text_color(if is_active {
                             theme.text
                         } else {
@@ -14580,7 +14602,7 @@ fn windows_caption_button(
         .flex()
         .items_center()
         .justify_center()
-        .text_size(crate::typography::ui_rems(10.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(theme.text)
         .hover(move |style| style.bg(hover_bg).text_color(hover_fg))
         .active(move |style| style.bg(active_bg).text_color(active_fg))
@@ -14661,7 +14683,7 @@ fn nav_history_button(
                 icon(icon_path)
                     .size(px(16.0))
                     // Disabled control glyph: exempt, intentionally quiet.
-                    .text_color(theme.decorative_muted(0.35)),
+                    .text_color(theme.disabled_glyph()),
             )
             .into_any_element();
     }

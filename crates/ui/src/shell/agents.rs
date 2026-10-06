@@ -117,7 +117,10 @@ impl Shell {
                     .when(available, |row| {
                         row.role(gpui::Role::Button)
                             .tab_index(0)
-                            .focus_visible(move |style| style.border_color(theme.border_strong))
+                            .focus_visible({
+                                let ring = theme.focus_ring();
+                                move |style| crate::theme::focus_ring(style, ring)
+                            })
                             .hover(move |style| style.bg(theme.surface_raised))
                             .cursor_pointer()
                             .on_click(cx.listener(move |shell, _, _, cx| {
@@ -273,7 +276,7 @@ fn work_section(theme: &Theme, state: &crate::state::AppState) -> Option<AnyElem
         section = section.child(
             div()
                 .pt(px(4.0))
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.text_faint)
                 .child(group.title()),
         );

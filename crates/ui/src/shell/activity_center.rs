@@ -583,7 +583,7 @@ impl Shell {
                     )
                     .child(
                         div()
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_muted)
                             .truncate()
                             .child(format!("{} · {}", device, item.cwd)),
@@ -665,7 +665,7 @@ impl Shell {
                     el.child(
                         div()
                             .px(px(Theme::SPACE_SM))
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.text_muted)
                             .child("Running terminals unavailable. Retrying…"),
                     )
@@ -698,6 +698,8 @@ impl Shell {
                 ) && chat.unseen())
                     || task_keys.contains(&(chat.device_id.clone(), chat.id.clone()))
             });
+        /// Shared unread-dot size.
+        const UNREAD_DOT: f32 = 6.0;
         div()
             .id("sidebar-activity-action")
             .relative()
@@ -721,7 +723,10 @@ impl Shell {
                 gpui::Toggled::False
             })
             .tab_index(0)
-            .focus_visible(move |style| style.border_color(theme.border_strong))
+            .focus_visible({
+                let ring = theme.focus_ring();
+                move |style| crate::theme::focus_ring(style, ring)
+            })
             .bg(if active {
                 theme.glass_hover()
             } else {
@@ -749,12 +754,14 @@ impl Shell {
                 theme.text_muted
             }))
             .when(has_attention, |button| {
+                // Seated on the bell's top-right shoulder (center ≈ 19.5,
+                // 8.5 in the box) instead of floating at the corner (SH-26).
                 button.child(
                     div()
                         .absolute()
-                        .top(px(2.0))
-                        .right(px(2.0))
-                        .size(px(5.0))
+                        .top(px(4.5))
+                        .right(px(5.5))
+                        .size(px(UNREAD_DOT))
                         .rounded_full()
                         .bg(theme.accent),
                 )

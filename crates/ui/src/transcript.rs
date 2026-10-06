@@ -7934,9 +7934,6 @@ impl Transcript {
     ) -> AnyElement {
         let mut fold = self.folds.get(row_id).copied().unwrap_or_default();
         let focus_ring = theme.focus_ring();
-        // Only a live run shows item spinners: once it ends, an unresolved
-        // tool is frozen (interrupted or errored), not running.
-        let run_live = self.chat_run_live(cx);
         // Agent/spawn chips never fold: they are their own row, always open,
         // no "Called N tools" header — a running subagent stays visible.
         let collapses = tool_group_collapses(tools);

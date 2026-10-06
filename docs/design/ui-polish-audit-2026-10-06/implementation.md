@@ -54,31 +54,31 @@ Update this file as each finding lands so work can resume after compaction.
 | CP-23 | P3 | The draft notice repeats its title and spends a row on a text link | done (milestone C) | Notice action in the title row as a 24 pt capsule; duplicated title removed from the message |
 | CP-24 | P3 | Five popover widths and three hairline alphas | done (milestone C) | MENU_HAIRLINE 0.08; MENU_W_S/M/L tokens for picker widths |
 | SH-01 | P0 | Composer notice is a 5% tint, so transcript text shows straight through it | done (milestone A) | Opaque plate (warning 8% flattened over the canvas) + 22% ring |
-| SH-02 | P1 | The selected sidebar row paints exactly the hover fill | todo | |
-| SH-03 | P1 | The tab strip hard-clips tabs, and Main can scroll out of view | todo | |
-| SH-04 | P1 | The command palette re-centres while you type, and appears in a single frame | todo | |
-| SH-05 | P1 | The titlebar repeats the tab's title, on a different left edge | todo | |
-| SH-06 | P1 | Two tab systems in one window, and their header bands sit 6 px apart | todo | |
-| SH-07 | P1 | Light mode: the content plane is a grey tray, darker than the chrome | todo | |
-| SH-08 | P1 | Light mode: disabled Back/Forward look exactly like enabled controls | todo | |
-| SH-09 | P1 | The sidebar "View options" button keeps a focus ring after mouse use | todo | |
+| SH-02 | P1 | The selected sidebar row paints exactly the hover fill | done (milestone D) | glass_selected_bg 0.16/0.10 vs sidebar_hover_bg 0.06/0.04 (no ring, per earlier user request) |
+| SH-03 | P1 | The tab strip hard-clips tabs, and Main can scroll out of view | done (milestone D) | Tab scroller wrapped in edge_faded(24).fade_overflow_x |
+| SH-04 | P1 | The command palette re-centres while you type, and appears in a single frame | done (milestone D) | Palette top-anchored at max(88, 20% vh); 160 ms fade + 6 pt rise |
+| SH-05 | P1 | The titlebar repeats the tab's title, on a different left edge | done (milestone D) | Titlebar carries context only: project (13/600) › device |
+| SH-06 | P1 | Two tab systems in one window, and their header bands sit 6 px apart | done (milestone D) | Right-pane tabs 28 px / r8 / 12.5 px like canvas tabs; canvas tabs r8 |
+| SH-07 | P1 | Light mode: the content plane is a grey tray, darker than the chrome | done (milestone D) | Light canvas_fill = bg @ 0.96; frost density still checked against the old recessed plane (contrast audit passes) |
+| SH-08 | P1 | Light mode: disabled Back/Forward look exactly like enabled controls | done (milestone D) | Theme::disabled_glyph (muted @ 35%) for disabled back/forward |
+| SH-09 | P1 | The sidebar "View options" button keeps a focus ring after mouse use | done (milestone D) | View options uses focus_visible ring instead of in_focus border |
 | SH-10 | P2 | Chrome controls and icons have no size ladder | todo | |
 | SH-11 | P2 | The three sidebar footer buttons disagree on size, tone and hover | todo | |
 | SH-12 | P2 | Hover feedback mixes timing and uses seven different washes | todo | |
 | SH-13 | P2 | Sidebar rows lead with the project, and the trailing corner keeps changing meaning | todo | |
 | SH-14 | P2 | Active, settled and archived rows use different geometry in one column | todo | |
 | SH-15 | P2 | Sidebar section headers: hairline rules, always-on chevrons, uneven grouping | todo | |
-| SH-16 | P2 | Sidebar collapse is a 200 ms clip-wipe | todo | |
+| SH-16 | P2 | Sidebar collapse is a 200 ms clip-wipe | done (milestone D) | Sidebar content slides with the edge and fades over the last 40% of travel |
 | SH-17 | P2 | Switching chats blanks the transcript, then pops the new one in | todo | |
 | SH-18 | P2 | Two different splitters in one window | todo | |
-| SH-19 | P2 | Four keyboard-focus ring recipes, two of them nearly invisible | todo | |
-| SH-20 | P2 | Chrome text drops to 9–10 px, across 15 sizes in the shell | todo | |
-| SH-21 | P2 | Two tooltip styles and three delays | todo | |
-| SH-22 | P2 | Tab activation reflows the strip, and the close glyph snaps | todo | |
+| SH-19 | P2 | Four keyboard-focus ring recipes, two of them nearly invisible | done (milestone D) | Every shell border-based focus style replaced with theme::focus_ring |
+| SH-20 | P2 | Chrome text drops to 9–10 px, across 15 sizes in the shell | done (milestone D) | All 9–10.5 px shell/palette/popover text raised to 11 px |
+| SH-21 | P2 | Two tooltip styles and three delays | done (milestone D) | SurfaceTabTooltip renders the shared tooltip card; right tabs use text_tooltip |
+| SH-22 | P2 | Tab activation reflows the strip, and the close glyph snaps | done (milestone D) | One tab weight (Medium); activation via fill and colour |
 | SH-23 | P2 | The right-pane picker looks like a wireframe, on a different surface from the centre | todo | |
 | SH-24 | P2 | Three empty states, three different visual languages | todo | |
-| SH-25 | P3 | Palette rows: three heights, tiny headers, non-concentric radius | todo | |
-| SH-26 | P3 | The Activity bell's unread dot floats off the glyph | todo | |
+| SH-25 | P3 | Palette rows: three heights, tiny headers, non-concentric radius | done (milestone D) | PALETTE_ITEM_RADIUS 16−8; palette rows 32 / 44 |
+| SH-26 | P3 | The Activity bell's unread dot floats off the glyph | done (milestone D) | 6 pt unread dot seated on the bell shoulder |
 | DS-01 | P1 | No type scale; 17 sizes and borrowed 1.618 leading | todo | |
 | DS-02 | P1 | Nine button/picker recipes; five heights on one page | todo | |
 | DS-03 | P1 | Settings row text runs under its control; no reflow | todo | |

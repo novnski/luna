@@ -1193,7 +1193,7 @@ impl Shell {
                             "spaces-filter-device".into(),
                             false,
                             div()
-                                .text_size(crate::typography::ui_rems(10.0))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .font_weight(gpui::FontWeight::NORMAL)
                                 .text_color(theme.readable_muted(0.45))
                                 .child(tag),
@@ -1241,9 +1241,12 @@ impl Shell {
             .items_center()
             .justify_center()
             .rounded(px(8.0))
-            .border_1()
-            .border_color(theme.border.opacity(0.0))
-            .in_focus(|el| el.border_color(theme.border_strong))
+            // Keyboard focus only (audit SH-09): a mouse click no longer
+            // leaves a ring behind once the menu closes.
+            .focus_visible({
+                let ring = theme.focus_ring();
+                move |style| crate::theme::focus_ring(style, ring)
+            })
             .cursor_pointer()
             .text_color(theme.text_muted)
             .bg(if view_open {
@@ -1430,7 +1433,7 @@ impl Shell {
                                         .max_w(gpui::relative(0.5))
                                         .min_w_0()
                                         .truncate()
-                                        .text_size(crate::typography::ui_rems(10.0))
+                                        .text_size(crate::typography::ui_rems(11.0))
                                         .font_weight(gpui::FontWeight::NORMAL)
                                         .text_color(theme.text_muted)
                                         .child(tag),
@@ -2499,7 +2502,9 @@ impl Shell {
                         )
                         .tooltip_show_delay(Duration::from_millis(300))
                         .when(is_selected, |el| el.bg(selected_wash))
-                        .when(!is_selected, |el| el.hover(|s| s.bg(theme.glass_hover())))
+                        .when(!is_selected, |el| {
+                            el.hover(|s| s.bg(crate::theme::sidebar_hover_bg()))
+                        })
                         .on_hover(cx.listener(move |this, entered: &bool, _, cx| {
                             if *entered {
                                 if this.archived_hover.as_deref() != Some(hover_id.as_str()) {

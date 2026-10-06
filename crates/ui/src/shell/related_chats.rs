@@ -163,7 +163,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let muted = theme.text_muted;
-        let border_strong = theme.border_strong;
         let hover = crate::theme::ink(0.06);
         let back = div()
             .id(SharedString::from(format!("{id}-back")))
@@ -180,7 +179,10 @@ impl Shell {
             .border_color(gpui::transparent_black())
             .cursor_pointer()
             .hover(move |style| style.bg(hover))
-            .focus_visible(move |style| style.border_color(border_strong))
+            .focus_visible({
+                let ring = theme.focus_ring();
+                move |style| crate::theme::focus_ring(style, ring)
+            })
             .tooltip(|_, cx| crate::pickers::ControlTooltip::view("Back to panels", None, cx))
             .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
             .on_click(cx.listener(|this, _, _, cx| this.show_surface_picker(cx)))
@@ -211,7 +213,6 @@ impl Shell {
         theme: &Theme,
     ) -> gpui::Stateful<gpui::Div> {
         let muted = theme.text_muted;
-        let border_strong = theme.border_strong;
         let hover = crate::theme::ink(0.06);
         div()
             .id(id.into())
@@ -231,7 +232,10 @@ impl Shell {
             .text_size(crate::typography::ui_rems(11.5))
             .text_color(theme.text_muted)
             .hover(move |style| style.bg(hover))
-            .focus_visible(move |style| style.border_color(border_strong))
+            .focus_visible({
+                let ring = theme.focus_ring();
+                move |style| crate::theme::focus_ring(style, ring)
+            })
             .on_key_down(crate::swallow_activation_key)
             .child(
                 icon(glyph)

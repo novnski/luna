@@ -12,6 +12,8 @@ use crate::motion::AnimationExt as _;
 /// The same height as the sidebars' surface toolbars, so the canvas tab
 /// strip and the right sidebar's control row read as one aligned band.
 pub(in crate::shell) const STRIP_HEIGHT: f32 = crate::surface_chrome::HEADER_HEIGHT;
+/// Width of the fade at an overflowing tab strip's edges.
+const TAB_STRIP_EDGE_FADE: f32 = 24.0;
 const TAB_HEIGHT: f32 = 28.0;
 const TAB_MIN_WIDTH: f32 = 72.0;
 /// A group narrower than this shows a compact strip (slice 6): one Group
@@ -332,7 +334,7 @@ impl Render for WorkbenchTabGhost {
             .child(
                 div()
                     .flex_none()
-                    .text_size(crate::typography::ui_rems(10.5))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_muted)
                     .child(self.role.display()),
             )
@@ -1152,19 +1154,27 @@ impl Shell {
                         .absolute()
                         .inset_0(),
                     )
+                    // Overflowing tabs dissolve at the strip's edges instead
+                    // of being cut mid-glyph (audit SH-03).
                     .child(
-                        div()
-                            .id(SharedString::from(format!("wb-tabs-{}", pane_id)))
-                            .role(gpui::Role::TabList)
-                            .aria_label("Chat tabs")
-                            .size_full()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .gap(px(2.0))
-                            .overflow_x_scroll()
-                            .track_scroll(&tab_scroll)
-                            .children(tabs),
+                        crate::edge_fade::edge_faded(
+                            TAB_STRIP_EDGE_FADE,
+                            false,
+                            false,
+                            div()
+                                .id(SharedString::from(format!("wb-tabs-{}", pane_id)))
+                                .role(gpui::Role::TabList)
+                                .aria_label("Chat tabs")
+                                .size_full()
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .gap(px(2.0))
+                                .overflow_x_scroll()
+                                .track_scroll(&tab_scroll)
+                                .children(tabs),
+                        )
+                        .fade_overflow_x(&tab_scroll),
                     ),
             )
             .when(!compact, |el| {
@@ -1310,7 +1320,7 @@ impl Shell {
                 .gap(px(3.0))
                 .rounded(px(4.0))
                 .bg(theme.accent_wash)
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(theme.readable_on_tab_badge(
                     theme.accent,
@@ -1377,16 +1387,17 @@ impl Shell {
             .gap(px(6.0))
             .pl(px(8.0))
             .pr(px(if is_main { 8.0 } else { 4.0 }))
-            .rounded(px(7.0))
-            .border_1()
-            .border_color(gpui::transparent_black())
-            .focus_visible(move |style| style.border_color(focus_ring))
+            .rounded(px(8.0))
+            // The shared 2 px inset focus ring (audit SH-19), no border
+            // scaffolding.
+            .focus_visible(move |style| crate::theme::focus_ring(style, focus_ring))
             .cursor_pointer()
             .text_size(crate::typography::ui_rems(12.5))
+            // One weight for every tab (audit SH-22): activation reads
+            // through the fill and text colour, so the strip never reflows.
+            .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(theme.tab_title(active, strip_focused))
-            .when(active, |el| {
-                el.bg(selected_fill).font_weight(gpui::FontWeight::MEDIUM)
-            })
+            .when(active, |el| el.bg(selected_fill))
             .when(!active, |el| {
                 el.hover(|style| style.bg(crate::theme::wash(0.05)))
             })
@@ -2031,7 +2042,6 @@ impl Shell {
         // with a split (a single group has nothing to balance).
         let balance = model::has_split(layout).then(|| {
             let measure = self.workbench.geometry.clone();
-            let ring = theme.focus_ring();
             div()
                 .id("wb-balance-panes")
                 .role(gpui::Role::Button)
@@ -2050,7 +2060,10 @@ impl Shell {
                 .border_color(gpui::transparent_black())
                 .cursor_pointer()
                 .hover(|style| style.bg(crate::theme::wash(0.08)))
-                .focus_visible(move |style| style.border_color(ring))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
                 .on_key_down(crate::swallow_activation_key)
                 .tooltip(|_, cx| {
                     crate::pickers::ControlTooltip::view(

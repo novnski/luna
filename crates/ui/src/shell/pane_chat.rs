@@ -184,7 +184,6 @@ fn header_control<V: 'static>(
     cx: &mut Context<V>,
 ) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
-    let border_strong = theme.border_strong;
     let hover = crate::theme::ink(0.06);
     div()
         .id(id.into())
@@ -201,7 +200,10 @@ fn header_control<V: 'static>(
         .border_color(gpui::transparent_black())
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
-        .focus_visible(move |style| style.border_color(border_strong))
+        .focus_visible({
+            let ring = theme.focus_ring();
+            move |style| crate::theme::focus_ring(style, ring)
+        })
         .on_click(cx.listener(move |view, _, _, cx| action(view, cx)))
         .on_key_down(crate::swallow_activation_key)
 }
@@ -251,7 +253,7 @@ pub(super) fn render_pane_header<V: 'static>(
         .border_1()
         .border_color(theme.border)
         .bg(crate::theme::ink(0.04))
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::ui_rems(11.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.readable_muted(0.75))
         .child(chrome.identity.label());

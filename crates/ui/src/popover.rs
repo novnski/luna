@@ -313,7 +313,8 @@ pub const MENU_W_L: f32 = 320.0;
 pub const CARD_INSET: f32 = 4.0;
 /// Concentric corners: the row radius follows the card's inset curve.
 pub const MENU_ITEM_RADIUS: f32 = CARD_RADIUS - CARD_INSET;
-pub const PALETTE_ITEM_RADIUS: f32 = 14.0 - CARD_INSET;
+/// Palette rows: concentric with the 16 pt card at its 8 pt inset (SH-25).
+pub const PALETTE_ITEM_RADIUS: f32 = 16.0 - 8.0;
 
 pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
     if theme.is_frost() {
@@ -1122,7 +1123,7 @@ pub fn key_cap(_theme: &Theme) -> gpui::Div {
 fn key_hint_label(theme: &Theme, label: &'static str) -> gpui::Div {
     let theme = &theme.for_popup();
     div()
-        .text_size(crate::typography::ui_rems(10.5))
+        .text_size(crate::typography::ui_rems(11.0))
         .text_color(theme.text_muted)
         .child(SharedString::from(label))
 }
@@ -1205,7 +1206,7 @@ pub fn kbd_hint(theme: &Theme, label: &str) -> gpui::Div {
         .py(px(1.0))
         .rounded(px(5.0))
         .bg(ink(0.05))
-        .text_size(crate::typography::ui_rems(10.0))
+        .text_size(crate::typography::ui_rems(11.0))
         .font_family(theme.font_mono.clone())
         .text_color(theme.text_muted)
         .child(SharedString::from(label.to_string()))

@@ -752,7 +752,7 @@ fn pairs(theme: &Theme, backdrop: Hsla) -> Vec<Pair> {
             "composer",
             "placeholder",
             Kind::Text,
-            theme.text_faint,
+            theme.placeholder,
             pill,
         ),
         p(

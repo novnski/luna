@@ -701,7 +701,7 @@ impl Shell {
                 .rounded(px(popover::PALETTE_ITEM_RADIUS))
                 .role(gpui::Role::Button)
                 .aria_label(event.summary.clone())
-                .min_h(px(42.0))
+                .min_h(px(44.0))
                 .py(px(5.0))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.activate_command(entry.clone(), window, cx)
@@ -729,7 +729,7 @@ impl Shell {
                         .child(
                             div()
                                 .truncate()
-                                .text_size(crate::typography::ui_rems(9.5))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(theme.text_faint)
                                 .child(SharedString::from(metadata)),
                         ),
@@ -845,7 +845,7 @@ impl Shell {
                         .id(SharedString::from(format!("command-section-{group:?}")))
                         .px(px(10.0))
                         .pb(px(4.0))
-                        .text_size(crate::typography::ui_rems(9.5))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text_faint)
                         .child(if query.trim().is_empty() {
@@ -891,7 +891,7 @@ impl Shell {
                     .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .role(gpui::Role::Button)
                     .aria_label(label)
-                    .min_h(px(30.0))
+                    .min_h(px(32.0))
                     .py(px(4.0))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_command(entry.clone(), window, cx)
@@ -986,7 +986,7 @@ impl Shell {
                     .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .role(gpui::Role::Button)
                     .aria_label("Show more matching threads")
-                    .min_h(px(30.0))
+                    .min_h(px(32.0))
                     .justify_center()
                     .text_color(theme.text_muted)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1042,7 +1042,7 @@ impl Shell {
                         .id("command-history-status")
                         .px(px(16.0))
                         .py(px(8.0))
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(if danger {
                             theme.danger
                         } else {
@@ -1144,6 +1144,16 @@ impl Shell {
             );
         // Match the composer's 16px backdrop blur, including its opaque fallback.
         let card = crate::frost::frosted(16.0, crate::frost::MENU_BLUR, card);
+        // Arrive as one object: a short fade and 6 pt rise (audit SH-04).
+        let card = gpui::AnimationExt::with_animation(
+            div().relative().child(card),
+            "command-palette-in",
+            crate::motion::MotionSpec::new(160, crate::motion::EASE_OUT_QUINT).animation(),
+            |el, t| el.opacity(t).top(px(6.0 * (1.0 - t))),
+        );
+        // A fixed top anchor: the field stays put while results grow or
+        // shrink below it (centering moved it as you typed).
+        let top = (f32::from(viewport.height) * 0.2).max(88.0);
         Some(
             gpui::deferred(
                 gpui::anchored()
@@ -1157,8 +1167,10 @@ impl Shell {
                             // preserving its color through the frosted palette.
                             .bg(popover::scrim_alpha(0.35))
                             .flex()
+                            .flex_col()
                             .items_center()
-                            .justify_center()
+                            .justify_start()
+                            .pt(px(top))
                             .child(card),
                     ),
             )
@@ -1176,7 +1188,7 @@ fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -> gpui::Div
         .child(popover::kbd_hint(theme, keys))
         .child(
             div()
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.text_muted)
                 .child(label),
         )

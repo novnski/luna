@@ -620,7 +620,7 @@ impl Shell {
                         )
                         .child(
                             div()
-                                .text_size(crate::typography::ui_rems(10.0))
+                                .text_size(crate::typography::ui_rems(11.0))
                                 .text_color(muted)
                                 .child(key),
                         ),

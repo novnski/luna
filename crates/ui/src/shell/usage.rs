@@ -563,7 +563,7 @@ fn usage_chart(
                         .flex_col()
                         .justify_between()
                         .text_align(gpui::TextAlign::Right)
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.text_muted)
                         .children(labels),
                 )
@@ -582,7 +582,7 @@ fn usage_chart(
                 .pl(px(72.0))
                 .flex()
                 .justify_between()
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.text_muted)
                 .children(x_labels),
         )
@@ -603,7 +603,7 @@ fn metric_cell(theme: &Theme, label: &'static str, value: String) -> AnyElement 
         .gap(px(3.0))
         .child(
             div()
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.text_muted)
                 .child(label),
         )
@@ -1028,7 +1028,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                             .child(
                                 div()
                                     .text_color(theme.text_muted)
-                                    .text_size(crate::typography::ui_rems(10.0))
+                                    .text_size(crate::typography::ui_rems(11.0))
                                     .child(format!(
                                         "{} · {} {}",
                                         status,
@@ -1190,7 +1190,7 @@ fn compact_limit_row(
                             .py(px(1.0))
                             .rounded(px(5.0))
                             .bg(palette.badge)
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .line_height(crate::typography::ui_rems(12.0))
                             .text_color(palette.badge_text)
                             .child(compact_plan_label(limit, &plan)),
@@ -1202,7 +1202,7 @@ fn compact_limit_row(
             div()
                 .min_w_0()
                 .truncate()
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .line_height(crate::typography::ui_rems(14.0))
                 .text_color(palette.quiet)
                 .child(account.to_owned()),
@@ -1211,7 +1211,7 @@ fn compact_limit_row(
     if limit.windows.is_empty() {
         row = row.child(
             div()
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .text_color(palette.quiet)
                 .child("Quota unavailable"),
         );
@@ -1234,7 +1234,7 @@ fn compact_limit_row(
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .text_size(crate::typography::ui_rems(10.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .line_height(crate::typography::ui_rems(14.0))
                 .text_color(palette.secondary)
                 .child(
@@ -1285,7 +1285,7 @@ fn compact_limit_row(
         row = row.child(
             div()
                 .truncate()
-                .text_size(crate::typography::ui_rems(9.0))
+                .text_size(crate::typography::ui_rems(11.0))
                 .text_color(palette.status)
                 .child(status),
         );
@@ -2444,7 +2444,7 @@ impl Shell {
                     .child(
                         div()
                             .text_color(theme.text_muted)
-                            .text_size(crate::typography::ui_rems(10.0))
+                            .text_size(crate::typography::ui_rems(11.0))
                             .child(hover_detail.unwrap_or_else(|| {
                                 if hourly {
                                     "Each point covers one hour. Hover for provider values.".into()
@@ -2923,7 +2923,7 @@ impl Shell {
                 content = content.child(
                     div()
                         .p(px(10.0))
-                        .text_size(crate::typography::ui_rems(10.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(palette.quiet)
                         .child("No verified account limits available"),
                 );
@@ -2935,7 +2935,7 @@ impl Shell {
             content = content.child(
                 div()
                     .p(px(10.0))
-                    .text_size(crate::typography::ui_rems(10.0))
+                    .text_size(crate::typography::ui_rems(11.0))
                     .text_color(palette.quiet)
                     .child(if self.usage_refreshing {
                         "Refreshing usage…"
@@ -3046,7 +3046,7 @@ impl Shell {
                     div()
                         .px(px(10.0))
                         .pb(px(7.0))
-                        .text_size(crate::typography::ui_rems(9.0))
+                        .text_size(crate::typography::ui_rems(11.0))
                         .text_color(palette.status)
                         .child(error),
                 )

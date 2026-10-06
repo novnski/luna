@@ -198,7 +198,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let muted = theme.text_muted;
-        let border_strong = theme.border_strong;
         let tooltip_title: SharedString = format!("New thread from {title}").into();
         let crumb = div()
             .id("parent-breadcrumb")
@@ -249,7 +248,10 @@ impl Shell {
                 .tab_index(0)
                 .cursor_pointer()
                 .hover(|style| style.bg(crate::theme::wash(0.11)))
-                .focus_visible(move |style| style.border_color(border_strong))
+                .focus_visible({
+                    let ring = theme.focus_ring();
+                    move |style| crate::theme::focus_ring(style, ring)
+                })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.open_chat(parent_id.clone(), cx);
@@ -298,7 +300,7 @@ impl Shell {
                 })
             })
         };
-        let (title, target, harness, on_canvas): (
+        let (title, target, _harness, on_canvas): (
             SharedString,
             Option<SharedString>,
             Option<luna_proto::HarnessId>,
@@ -316,11 +318,12 @@ impl Shell {
                     let device = state
                         .device_name(&chat.device_id)
                         .unwrap_or("Unknown device");
+                    // Context only (audit SH-05): the chat title already
+                    // names the tab right below, so the titlebar carries
+                    // where it runs — project, then device.
                     (
-                        SharedString::from(transcript::single_line(
-                            &chat.title.clone().unwrap_or_else(|| "New session".into()),
-                        )),
-                        Some(SharedString::from(format!("{folder} @ {device}"))),
+                        SharedString::from(folder),
+                        Some(SharedString::from(device.to_string())),
                         chat.config.as_ref().map(|c| c.harness),
                         false,
                     )
@@ -481,27 +484,16 @@ impl Shell {
                                         .child("›"),
                                 )
                         })
-                        .when_some(
-                            harness.map(crate::pickers::harness_brand_icon),
-                            |el, (path, tint)| {
-                                el.child(
-                                    icon(path)
-                                        .size(px(14.0))
-                                        .flex_none()
-                                        .text_color(tint.unwrap_or(theme.text_muted)),
-                                )
-                            },
-                        )
                         .child(
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(crate::typography::ui_rems(12.0))
-                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_size(crate::typography::ui_rems(13.0))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(if on_canvas {
                                     theme.readable_muted(0.7)
                                 } else {
-                                    theme.text.opacity(0.85)
+                                    theme.text.opacity(0.9)
                                 })
                                 .child(title),
                         )
@@ -509,8 +501,16 @@ impl Shell {
                             el.child(
                                 div()
                                     .flex_none()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.readable_muted(0.5))
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_color(theme.decorative_muted(0.4))
+                                    .child("›"),
+                            )
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(crate::typography::ui_rems(13.0))
+                                    .text_color(theme.readable_muted(0.6))
                                     .child(target),
                             )
                         }),

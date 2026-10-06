@@ -1084,6 +1084,12 @@ impl Theme {
     /// Purely decorative ink: separators ("·", "/", "›"), illustrations and
     /// disabled controls. WCAG exempts these from contrast minimums; never
     /// use this for a label, value, status or control a user must read.
+    /// A disabled control's glyph: visibly unavailable in both appearances
+    /// (audit SH-08 — light used to paint it at full muted strength).
+    pub fn disabled_glyph(&self) -> Hsla {
+        self.text_muted.opacity(0.35)
+    }
+
     pub fn decorative_muted(&self, dark_opacity: f32) -> Hsla {
         if self.appearance.is_light() {
             self.text_muted
@@ -1107,7 +1113,10 @@ impl Theme {
         if self.appearance.is_dark() {
             self.bg.opacity(0.55)
         } else {
-            self.ink(0.035)
+            // Light: the content plane is the bright sheet on the grey
+            // chrome, as in macOS document windows — not a darker tray
+            // (audit SH-07).
+            self.bg.opacity(0.96)
         }
     }
 
@@ -1359,7 +1368,15 @@ impl Theme {
             return hit;
         }
         let backdrop = self.adverse_backdrop();
-        let canvas_fill = self.canvas_fill();
+        // Light frost density is still checked against the darker recessed
+        // plane the canvas used to be: the bright sheet (audit SH-07) reads
+        // trivially, and letting it thin the frost darkened the chrome under
+        // inputs and selections.
+        let canvas_fill = if self.appearance.is_light() {
+            self.ink(0.035)
+        } else {
+            self.canvas_fill()
+        };
         let tab_wash = self.wash(0.09);
         let code_plate = self.ink(0.035);
         let mut chosen = 1.0;
@@ -2345,9 +2362,19 @@ fn band_for(appearance: Appearance) -> Hsla {
 /// [`glass_selected_shadows`] is what distinguishes selection. Selection
 /// *inside floating cards* is different — see [`card_selected_bg`].
 pub fn glass_selected_bg() -> Hsla {
+    // Clearly above the hover wash ([`sidebar_hover_bg`]) so the selected
+    // row never reads like the one under the pointer (audit SH-02).
     match current_appearance() {
-        Appearance::Dark => wash(0.11),
-        Appearance::Light => wash(0.06),
+        Appearance::Dark => wash(0.16),
+        Appearance::Light => wash(0.10),
+    }
+}
+
+/// Sidebar row hover: a light wash, well below [`glass_selected_bg`].
+pub fn sidebar_hover_bg() -> Hsla {
+    match current_appearance() {
+        Appearance::Dark => wash(0.06),
+        Appearance::Light => wash(0.04),
     }
 }
 
