@@ -1,7 +1,20 @@
-//! Shared scaffolding for the settings pages — the original's page rhythm
-//! (`mx-auto max-w-3xl px-6 pb-16 pt-8`), section cards, row layout, badges
-//! and small buttons, so every page reads as the same product surface
-//! (luna settings.devices.tsx / settings.agents.tsx / settings.archived.tsx).
+//! Shared scaffolding for the settings pages, so every page reads as the same
+//! product surface. The design spec is
+//! `docs/design/settings-polish-2026-10-06/spec.md`; in short:
+//!
+//! - A page is a [`page_column`] holding a [`page_title_bar`] (title plus the
+//!   page's own actions at the right), an optional [`page_subtitle`], then
+//!   sections separated by [`SECTION_GAP`].
+//! - A section is ONE card ([`section_card`]) whose title lives inside it, in
+//!   a [`section_header`] (title, description, trailing actions), followed by
+//!   [`card_row`]s divided by hairlines. A title is never left floating
+//!   outside the card it names.
+//! - A row is [`row_text`] (title + wrapping description) and a trailing
+//!   [`row_controls`] column. Rows wrap, so at narrow widths or large
+//!   Interface sizes the controls drop under the text instead of squeezing it.
+//! - Every size that sits next to text is an interface rem
+//!   ([`crate::typography::ui_rems`]), so the whole page follows Appearance →
+//!   Interface size. Only hairlines, corners and shadows stay in pixels.
 
 use gpui::{AnyElement, Context, Pixels, ScrollHandle, SharedString, div, prelude::*, px};
 
@@ -151,17 +164,61 @@ pub fn rail<V: 'static>(
 pub const ROW_TITLE_SIZE: f32 = 13.0;
 pub const ROW_DESCRIPTION_SIZE: f32 = 12.0;
 
-/// Centered page column: `mx-auto w-full max-w-3xl px-6 pb-16 pt-8`.
+/// Space between sections on a page, and between the page header and the
+/// first section.
+pub const SECTION_GAP: f32 = 24.0;
+/// Inner padding of section headers and rows (horizontal).
+pub const ROW_PAD_X: f32 = 16.0;
+/// Inner padding of rows (vertical).
+pub const ROW_PAD_Y: f32 = 12.0;
+/// Minimum width of a row's text column before its controls wrap under it.
+pub const ROW_TEXT_MIN: f32 = 220.0;
+
+/// Centered page column. Width and margins are interface rems: a larger
+/// Interface size widens the column instead of cramming the same text into it.
 pub fn page_column() -> gpui::Div {
     div()
         .w_full()
-        .max_w(px(768.0))
+        .max_w(crate::typography::ui_rems(720.0))
         .mx_auto()
-        .px(px(24.0))
-        .pt(px(32.0))
-        .pb(px(64.0))
+        .px(crate::typography::ui_rems(32.0))
+        .pt(crate::typography::ui_rems(28.0))
+        .pb(crate::typography::ui_rems(72.0))
         .flex()
         .flex_col()
+}
+
+/// The page's title bar: the title (and an optional count) at the left, the
+/// page's own actions (Refresh, a device picker) at the right on the title's
+/// center line. It wraps, so a narrow window moves the actions under the
+/// title instead of overlapping it.
+pub fn page_title_bar(
+    theme: &Theme,
+    title: &str,
+    count: Option<usize>,
+    actions: Vec<AnyElement>,
+) -> gpui::Div {
+    div()
+        .w_full()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .justify_between()
+        .gap_x(crate::typography::ui_rems(16.0))
+        .gap_y(crate::typography::ui_rems(8.0))
+        .child(page_header(theme, title, count))
+        .when(!actions.is_empty(), |bar| {
+            bar.child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap(crate::typography::ui_rems(8.0))
+                    .children(actions),
+            )
+        })
 }
 
 /// Page headline row: `flex items-baseline gap-2.5` — `text-base font-semibold`
@@ -192,12 +249,15 @@ pub fn page_header(theme: &Theme, title: &str, count: Option<usize>) -> gpui::Di
         })
 }
 
-/// Subtitle under the headline: `mt-1 text-[13px] text-muted-foreground`.
+/// Subtitle under the page title: body text in the secondary tone, held to
+/// a readable measure.
 pub fn page_subtitle(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
     div()
-        .mt(px(4.0))
+        .mt(crate::typography::ui_rems(6.0))
+        .max_w(crate::typography::ui_rems(600.0))
         .text_size(crate::typography::ui_rems(13.0))
-        .text_color(theme.text_muted)
+        .line_height(crate::typography::ui_rems(19.0))
+        .text_color(theme.readable_muted(0.9))
         .child(copy.into())
 }
 
@@ -298,12 +358,13 @@ pub fn option_card(
         )
 }
 
-/// Section card: `mt-6 overflow-hidden rounded-xl border border-border bg-card`
-/// — the card tone, thinned to a translucent tint over glass so the card
-/// reads as frost instead of a solid slab ([`Theme::card_glass_bg`]).
+/// Section card: one rounded group on the card tone, thinned to a
+/// translucent tint over glass so it reads as frost instead of a solid slab
+/// ([`Theme::card_glass_bg`]). Put its title inside, with
+/// [`section_header`], then [`card_row`]s.
 pub fn section_card(theme: &Theme) -> gpui::Div {
     div()
-        .mt(px(24.0))
+        .mt(crate::typography::ui_rems(SECTION_GAP))
         .rounded(px(12.0))
         .border_1()
         .border_color(theme.border)
@@ -313,20 +374,139 @@ pub fn section_card(theme: &Theme) -> gpui::Div {
         .flex_col()
 }
 
+/// A section's title block, inside its card: the title (title3 15/20
+/// semibold), an optional wrapping description, and optional trailing actions
+/// on the title's line. Follow it with `card_row(theme, false)` rows so a
+/// hairline separates the header from the content.
+pub fn section_header(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: Option<SharedString>,
+    actions: Vec<AnyElement>,
+) -> gpui::Div {
+    use crate::typography::{TextStyle, TypeStyleExt as _};
+    div()
+        .w_full()
+        .px(crate::typography::ui_rems(ROW_PAD_X))
+        .pt(crate::typography::ui_rems(14.0))
+        .pb(crate::typography::ui_rems(12.0))
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_start()
+        .gap_x(crate::typography::ui_rems(12.0))
+        .gap_y(crate::typography::ui_rems(8.0))
+        .child(
+            div()
+                .flex_1()
+                .min_w(crate::typography::ui_rems(ROW_TEXT_MIN))
+                .flex()
+                .flex_col()
+                .gap(crate::typography::ui_rems(3.0))
+                .child(
+                    div()
+                        .type_style(TextStyle::Title3)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(title.into()),
+                )
+                .when_some(description, |column, description| {
+                    column.child(row_description(theme, description))
+                }),
+        )
+        .when(!actions.is_empty(), |header| {
+            header.child(row_controls().children(actions))
+        })
+}
+
+/// The text column of a row: a title and an optional description that wraps.
+/// It holds a minimum width, so when the row can't fit it beside the controls
+/// the controls wrap below it rather than squeezing the text.
+pub fn row_text(
+    theme: &Theme,
+    title: impl Into<SharedString>,
+    description: Option<SharedString>,
+) -> gpui::Div {
+    div()
+        .flex_1()
+        .min_w(crate::typography::ui_rems(ROW_TEXT_MIN))
+        .flex()
+        .flex_col()
+        .gap(crate::typography::ui_rems(2.0))
+        .child(row_title(theme, title))
+        .when_some(description, |column, description| {
+            column.child(row_description(theme, description))
+        })
+}
+
+/// A row's description: footnote 12/16 in the secondary tone, wrapping.
+pub fn row_description(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .min_w_0()
+        .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
+        .line_height(crate::typography::ui_rems(16.0))
+        .text_color(theme.readable_muted(0.85))
+        .child(copy.into())
+}
+
+/// A row's trailing control column: controls on one line at the right,
+/// vertically centred. When the row wraps it stays right-aligned.
+pub fn row_controls() -> gpui::Div {
+    div()
+        .flex_none()
+        .ml_auto()
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .justify_end()
+        .gap(crate::typography::ui_rems(8.0))
+}
+
+/// A full-width block under a row's text, for controls too wide for the
+/// trailing column (chip groups, lists, editors).
+pub fn row_block() -> gpui::Div {
+    div()
+        .w_full()
+        .mt(crate::typography::ui_rems(10.0))
+        .flex()
+        .flex_row()
+        .flex_wrap()
+        .items_center()
+        .gap(crate::typography::ui_rems(8.0))
+}
+
+/// Fine print under a section card (what a setting affects, a caveat):
+/// footnote text aligned with the card's content edge.
+pub fn section_footer(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
+    div()
+        .mt(crate::typography::ui_rems(8.0))
+        .px(crate::typography::ui_rems(ROW_PAD_X))
+        .text_size(crate::typography::ui_rems(ROW_DESCRIPTION_SIZE))
+        .line_height(crate::typography::ui_rems(16.0))
+        .text_color(theme.readable_muted(0.8))
+        .child(copy.into())
+}
+
 /// One card row: `border-t border-border px-5 py-3.5 first:border-t-0`.
 pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
-    // One compact row anatomy (audit DS-08): ~52 pt with a description,
-    // 16 pt sides, 12 pt between tile, text and control. The row itself has
-    // no hover: it isn't a control, and a wash on it implied a click that
-    // does nothing. Its switches and buttons carry the feedback (audit DS-05).
+    // One row anatomy (audit DS-08), in interface rems: 16 pt sides, 12 pt
+    // above and below, 12 pt between tile, text and controls, at least
+    // 48 pt tall. It wraps: with a [`row_text`] column the controls drop
+    // under the text when they no longer fit beside it. The row itself has
+    // no hover: it isn't a control (audit DS-05).
     div()
-        .px(px(16.0))
-        .py(px(10.0))
+        .w_full()
+        .min_h(crate::typography::ui_rems(48.0))
+        .px(crate::typography::ui_rems(ROW_PAD_X))
+        .py(crate::typography::ui_rems(ROW_PAD_Y))
         .when(!first, |el| el.border_t_1().border_color(theme.border))
         .flex()
         .flex_row()
+        .flex_wrap()
         .items_center()
-        .gap(px(12.0))
+        .gap_x(crate::typography::ui_rems(12.0))
+        .gap_y(crate::typography::ui_rems(10.0))
 }
 
 /// The identity tile on a row: `size-9 rounded-[10px] border bg-white/[0.03]`
@@ -334,17 +514,17 @@ pub fn card_row(theme: &Theme, first: bool) -> gpui::Div {
 pub fn row_tile(theme: &Theme, icon_path: &'static str) -> gpui::Div {
     div()
         .flex_none()
-        .size(px(28.0))
+        .size(crate::typography::ui_rems(28.0))
         .rounded(px(7.0))
         .border_1()
         .border_color(theme.border)
-        .bg(ink(0.03))
+        .bg(theme.fill(crate::theme::FillTier::Quaternary))
         .flex()
         .items_center()
         .justify_center()
         .child(
             crate::icons::icon(icon_path)
-                .size(px(16.0))
+                .size(crate::typography::ui_rems(16.0))
                 .text_color(theme.text_muted),
         )
 }
@@ -352,10 +532,12 @@ pub fn row_tile(theme: &Theme, icon_path: &'static str) -> gpui::Div {
 /// Row title. These metrics intentionally match the Shortcuts rows, whose
 /// title/description rhythm is the reference for the other settings cards.
 pub fn row_title(theme: &Theme, title: impl Into<SharedString>) -> gpui::Div {
+    // Wraps rather than truncating: a clipped setting name is unreadable,
+    // and the row grows instead (it has no fixed height).
     div()
         .min_w_0()
-        .truncate()
         .text_size(crate::typography::ui_rems(ROW_TITLE_SIZE))
+        .line_height(crate::typography::ui_rems(18.0))
         .font_weight(gpui::FontWeight::MEDIUM)
         .text_color(theme.text)
         .child(title.into())
@@ -402,8 +584,8 @@ pub fn meta_line(theme: &Theme, fragments: Vec<AnyElement>) -> gpui::Div {
 pub fn badge(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div {
     div()
         .flex_none()
-        .px(px(8.0))
-        .py(px(2.0))
+        .px(crate::typography::ui_rems(8.0))
+        .py(crate::typography::ui_rems(2.0))
         .rounded_full()
         .border_1()
         .border_color(theme.border)
@@ -419,8 +601,8 @@ pub fn badge_active(theme: &Theme, label: impl Into<SharedString>) -> gpui::Div 
     let emerald_text = theme.success_muted; // emerald-300
     div()
         .flex_none()
-        .px(px(8.0))
-        .py(px(2.0))
+        .px(crate::typography::ui_rems(8.0))
+        .py(crate::typography::ui_rems(2.0))
         .rounded_full()
         .bg(emerald.opacity(0.12))
         .text_size(crate::typography::ui_rems(11.0))
@@ -531,9 +713,9 @@ pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div
     let red = theme.danger; // red-400
     let red_text = theme.danger_muted; // red-300
     div()
-        .mt(px(16.0))
-        .px(px(16.0))
-        .py(px(12.0))
+        .mt(crate::typography::ui_rems(16.0))
+        .px(crate::typography::ui_rems(16.0))
+        .py(crate::typography::ui_rems(12.0))
         .rounded(px(12.0))
         .border_1()
         .border_color(red.opacity(0.2))
@@ -545,9 +727,9 @@ pub fn error_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::Div
         .items_start()
         .gap(px(8.0))
         .child(
-            div().flex_none().mt(px(2.0)).child(
+            div().flex_none().mt(crate::typography::ui_rems(2.0)).child(
                 crate::icons::icon(crate::icons::DANGER_TRIANGLE)
-                    .size(px(16.0))
+                    .size(crate::typography::ui_rems(16.0))
                     .text_color(theme.readable_tone(red_text, 0.9)),
             ),
         )
@@ -561,9 +743,9 @@ pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::D
     let amber = theme.warning; // amber-400
     let amber_text = theme.warning_muted; // amber-200
     div()
-        .mt(px(8.0))
-        .px(px(16.0))
-        .py(px(10.0))
+        .mt(crate::typography::ui_rems(8.0))
+        .px(crate::typography::ui_rems(16.0))
+        .py(crate::typography::ui_rems(10.0))
         .rounded(px(12.0))
         .border_1()
         .border_color(amber.opacity(0.2))
@@ -575,9 +757,9 @@ pub fn warning_strip(theme: &Theme, message: impl Into<SharedString>) -> gpui::D
         .items_start()
         .gap(px(8.0))
         .child(
-            div().flex_none().mt(px(2.0)).child(
+            div().flex_none().mt(crate::typography::ui_rems(2.0)).child(
                 crate::icons::icon(crate::icons::DANGER_TRIANGLE)
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .text_color(theme.readable_tone(amber_text, 0.9)),
             ),
         )

@@ -12,6 +12,11 @@
 //! control column and panel headers, `Lg` for dialogs and the sidebar footer.
 //! Every control eases its hover through [`HoverFill`] and draws the shared
 //! focus ring.
+//!
+//! The ladder is quoted in points at the default 16 px interface size. Heights,
+//! padding, gaps and glyphs are interface rems, so every control grows and
+//! shrinks with Appearance → Interface size alongside its label; only corners
+//! and hairlines stay in pixels.
 
 use gpui::{
     AnyElement, Div, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
@@ -156,12 +161,16 @@ fn control_frame_inner(
         .id(id)
         .role(gpui::Role::Button)
         .flex_none()
-        .h(px(size.height()))
+        .h(crate::typography::ui_rems(size.height()))
         .flex()
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(if size == ControlSize::Sm { 4.0 } else { 6.0 }))
+        .gap(crate::typography::ui_rems(if size == ControlSize::Sm {
+            4.0
+        } else {
+            6.0
+        }))
         .rounded(px(size.radius()))
         .border_1()
         .border_color(gpui::transparent_black())
@@ -204,7 +213,7 @@ pub fn button_keyed(
 ) -> Stateful<Div> {
     let colors = kind_colors(kind, theme);
     let frame = control_frame(id, size, enabled, theme)
-        .px(px(size.pad_x()))
+        .px(crate::typography::ui_rems(size.pad_x()))
         .when_some(colors.border, |el, border| el.border_color(border));
     if enabled {
         frame.hover_fill_fg(key, colors.rest, colors.hover, colors.fg, colors.hover_fg)
@@ -224,7 +233,7 @@ pub fn icon_button(
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
     let frame = control_frame(ElementId::from(id.clone()), size, enabled, theme)
-        .w(px(size.height()))
+        .w(crate::typography::ui_rems(size.height()))
         .child(glyph(glyph_path, size));
     if enabled {
         frame.hover_fill_fg(
@@ -241,7 +250,9 @@ pub fn icon_button(
 
 /// A leading glyph sized for `size`, tinted by the control's text colour.
 pub fn glyph(path: &'static str, size: ControlSize) -> gpui::Svg {
-    crate::icons::icon(path).size(px(size.glyph())).flex_none()
+    crate::icons::icon(path)
+        .size(crate::typography::ui_rems(size.glyph()))
+        .flex_none()
 }
 
 /// A pop-up button: a secondary control showing the current choice and one
@@ -262,7 +273,7 @@ pub fn select(
 /// The pop-up button's single chevron: `alt-arrow-down` at 14 pt.
 pub fn select_chevron(theme: &Theme) -> gpui::Svg {
     crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-        .size(px(14.0))
+        .size(crate::typography::ui_rems(14.0))
         .flex_none()
         .text_color(theme.readable_muted(0.85))
 }
@@ -280,10 +291,10 @@ pub fn select_frame(
     let id: SharedString = id.into();
     let colors = kind_colors(ButtonKind::Secondary, theme);
     let frame = control_frame_inner(ElementId::from(id.clone()), size, enabled, false, theme)
-        .pl(px(size.pad_x()))
-        .pr(px(size.pad_x() - 2.0))
+        .pl(crate::typography::ui_rems(size.pad_x()))
+        .pr(crate::typography::ui_rems(size.pad_x() - 2.0))
         .justify_start()
-        .gap(px(8.0))
+        .gap(crate::typography::ui_rems(8.0))
         .font_weight(FontWeight::NORMAL)
         .when_some(colors.border, |el, border| el.border_color(border))
         .aria_expanded(open);
@@ -329,7 +340,7 @@ pub fn chip(
         )
     };
     let frame = control_frame(ElementId::from(id.clone()), size, enabled, theme)
-        .px(px(size.pad_x()))
+        .px(crate::typography::ui_rems(size.pad_x()))
         .border_color(border)
         .font_weight(if selected {
             FontWeight::MEDIUM
@@ -401,8 +412,10 @@ const SEGMENT_INSET: f32 = 2.0;
 /// than each option swapping its own fill. `on_select` receives the chosen
 /// index; pass `cx.listener(|view, ix: &usize, window, cx| ..)` to reach a view.
 ///
-/// `width` is the whole control's width; options share it equally, which is
-/// what lets the thumb's position be computed without measuring.
+/// `width` is the whole control's width in points at the default interface
+/// size; like the height it is an interface rem, so labels keep their room at
+/// every Interface size. Options share it equally and the thumb is placed by
+/// fraction, so nothing has to be measured.
 #[allow(clippy::too_many_arguments)]
 pub fn segmented(
     id: impl Into<SharedString>,
@@ -415,12 +428,8 @@ pub fn segmented(
 ) -> Stateful<Div> {
     let id: SharedString = id.into();
     let count = segments.len().max(1);
-    // The track's 1 pt hairline and inset both come off the shared width.
-    let inner = width - 2.0 - SEGMENT_INSET * 2.0;
-    let cell = inner / count as f32;
     let selected = selected.min(count - 1);
-    let thumb_x = motion::follow(&format!("{id}-thumb"), selected as f32, motion::QUICK) * cell;
-    let height = size.height();
+    let position = motion::follow(&format!("{id}-thumb"), selected as f32, motion::QUICK);
     let thumb_radius = crate::theme::radius::inner(size.radius(), SEGMENT_INSET);
     let thumb_fill = if theme.appearance.is_light() {
         gpui::white()
@@ -449,13 +458,15 @@ pub fn segmented(
                 })
                 .tab_index(0)
                 .relative()
-                .w(px(cell))
+                .flex_1()
+                .min_w_0()
                 .h_full()
+                .px(crate::typography::ui_rems(6.0))
                 .flex()
                 .flex_row()
                 .items_center()
                 .justify_center()
-                .gap(px(5.0))
+                .gap(crate::typography::ui_rems(5.0))
                 .rounded(px(thumb_radius))
                 .cursor_pointer()
                 .focus_visible(move |style| crate::theme::focus_ring(style, ring))
@@ -478,17 +489,35 @@ pub fn segmented(
                 .when_some(segment.glyph, |el, path| {
                     el.child(glyph(path, ControlSize::Sm))
                 })
-                .child(div().truncate().child(segment.label))
+                .child(div().min_w_0().truncate().child(segment.label))
                 .into_any_element()
         })
         .collect();
+    let thumb = div()
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left(gpui::relative(position / count as f32))
+        .w(gpui::relative(1.0 / count as f32))
+        .rounded(px(thumb_radius))
+        .bg(thumb_fill)
+        .when(theme.appearance.is_light(), |el| {
+            el.border_1()
+                .border_color(theme.separator(false))
+                .shadow(vec![gpui::BoxShadow {
+                    color: gpui::hsla(0.0, 0.0, 0.0, 0.08),
+                    offset: gpui::point(px(0.0), px(1.0)),
+                    blur_radius: px(2.0),
+                    spread_radius: px(0.0),
+                    inset: false,
+                }])
+        });
     div()
         .id(ElementId::from(id.clone()))
         .role(gpui::Role::RadioGroup)
-        .relative()
         .flex_none()
-        .w(px(width))
-        .h(px(height))
+        .w(crate::typography::ui_rems(width))
+        .h(crate::typography::ui_rems(size.height()))
         .p(px(SEGMENT_INSET))
         .rounded(px(size.radius()))
         .bg(theme.fill(FillTier::Quaternary))
@@ -496,32 +525,14 @@ pub fn segmented(
         .border_color(theme.separator(false))
         .text_size(crate::typography::ui_rems(size.text()))
         .child(
-            div()
-                .absolute()
-                .top(px(SEGMENT_INSET))
-                .left(px(SEGMENT_INSET + thumb_x))
-                .w(px(cell))
-                .h(px(height - 2.0 - SEGMENT_INSET * 2.0))
-                .rounded(px(thumb_radius))
-                .bg(thumb_fill)
-                .when(theme.appearance.is_light(), |el| {
-                    el.border_1()
-                        .border_color(theme.separator(false))
-                        .shadow(vec![gpui::BoxShadow {
-                            color: gpui::hsla(0.0, 0.0, 0.0, 0.08),
-                            offset: gpui::point(px(0.0), px(1.0)),
-                            blur_radius: px(2.0),
-                            spread_radius: px(0.0),
-                            inset: false,
-                        }])
-                }),
-        )
-        .child(
-            div()
-                .relative()
-                .size_full()
-                .flex()
-                .flex_row()
-                .children(options),
+            // The content box the thumb's fractions are taken against.
+            div().relative().size_full().child(thumb).child(
+                div()
+                    .relative()
+                    .size_full()
+                    .flex()
+                    .flex_row()
+                    .children(options),
+            ),
         )
 }
