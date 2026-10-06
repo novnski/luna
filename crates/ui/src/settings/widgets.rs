@@ -464,11 +464,12 @@ pub fn row_controls() -> gpui::Div {
 }
 
 /// A full-width block under a row's text, for controls too wide for the
-/// trailing column (chip groups, lists, editors).
+/// trailing column (chip groups, lists, editors). Place it as a child of the
+/// [`card_row`]: the row wraps it onto its own line and its gap spaces it, so
+/// the block adds no margin of its own.
 pub fn row_block() -> gpui::Div {
     div()
         .w_full()
-        .mt(crate::typography::ui_rems(10.0))
         .flex()
         .flex_row()
         .flex_wrap()
