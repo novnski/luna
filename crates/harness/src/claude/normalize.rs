@@ -926,13 +926,19 @@ mod tests {
             "{ev:?}"
         );
         // Unknown recipient (no task_started seen) or a subagent-owned shell
-        // task's task_started: no steer synthesized.
+        // task's task_started: no steer synthesized. The shell's start only
+        // reports its own durable lifecycle (owned background work).
         let mut norm = Normalizer::new();
         let shell_task = crate::claude::wire::parse_frame(
             r#"{"type":"system","subtype":"task_started","task_id":"bg1","tool_use_id":"toolu_bash","task_type":"local_bash"}"#,
         )
         .expect("parses");
-        assert!(norm.normalize(shell_task, false).is_empty());
+        let started = norm.normalize(shell_task, false);
+        assert!(
+            started.iter().all(|event| matches!(event,
+                AgentEvent::NativeTaskChanged { task } if task.kind == luna_proto::NativeTaskKind::Shell)),
+            "{started:?}"
+        );
         let send = crate::claude::wire::parse_frame(
             r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"SendMessage","input":{"to":"bg1","message":"x"}}]}}"#,
         )
