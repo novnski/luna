@@ -312,14 +312,9 @@ struct SidebarViewOptionsTooltip;
 impl Render for SidebarViewOptionsTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.tooltip_surface())
-            .shadow_md()
+        crate::popover::tooltip_card(theme)
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(6.0))
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
             .child("Sidebar view options")
@@ -1039,7 +1034,7 @@ impl Shell {
                     }))
                     .child(
                         icon(icons[ix])
-                            .size(px(15.0))
+                            .size(crate::typography::ui_rems(15.0))
                             .flex_none()
                             .text_color(theme.text_muted),
                     )
@@ -1095,15 +1090,15 @@ impl Shell {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(4.0))
+                .gap(crate::typography::ui_rems(4.0))
                 .px(px(Theme::SPACE_SM))
-                .pt(px(8.0))
-                .pb(px(4.0))
+                .pt(crate::typography::ui_rems(8.0))
+                .pb(crate::typography::ui_rems(4.0))
                 .child(
                     div()
                         .id("sidebar-activity-label")
                         .flex_1()
-                        .h(px(29.0))
+                        .h(crate::typography::ui_rems(29.0))
                         .px(px(Theme::SPACE_SM))
                         .flex()
                         .items_center()
@@ -1137,7 +1132,7 @@ impl Shell {
             .id("spaces-filter")
             .flex_1()
             .min_w_0()
-            .h(px(29.0))
+            .h(crate::typography::ui_rems(29.0))
             .flex()
             .flex_row()
             .items_center()
@@ -1177,7 +1172,7 @@ impl Shell {
             }))
             .child(
                 icon(icons::FOLDER)
-                    .size(px(16.0))
+                    .size(crate::typography::ui_rems(16.0))
                     .flex_none()
                     .text_color(theme.text_muted),
             )
@@ -1191,7 +1186,7 @@ impl Shell {
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(crate::typography::ui_rems(6.0))
                     .child(super::sidebar_faded_label(
                         "spaces-filter-label".into(),
                         false,
@@ -1211,7 +1206,7 @@ impl Shell {
                         .when(offline, |el| {
                             el.child(
                                 icon(icons::WIFI_OFF)
-                                    .size(px(12.0))
+                                    .size(crate::typography::ui_rems(12.0))
                                     .flex_none()
                                     .text_color(theme.readable_tone(theme.warning, 0.8)),
                             )
@@ -1220,7 +1215,7 @@ impl Shell {
             )
             .child(
                 icon(icons::ALT_ARROW_DOWN)
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .flex_none()
                     .text_color(theme.readable_muted(0.6)),
             );
@@ -1301,7 +1296,7 @@ impl Shell {
             .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
             .child(
                 icon(icons::SORT)
-                    .size(px(16.0))
+                    .size(crate::typography::ui_rems(16.0))
                     .text_color(theme.text_muted),
             );
         let view_trigger = if self.sidebar_view_menu.get().is_some() {
@@ -1323,10 +1318,10 @@ impl Shell {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .px(px(Theme::SPACE_SM))
-            .pt(px(8.0))
-            .pb(px(4.0))
+            .pt(crate::typography::ui_rems(8.0))
+            .pb(crate::typography::ui_rems(4.0))
             .child(trigger)
             .child(view_trigger)
             .child(self.render_activity_action(theme, cx))
@@ -1411,7 +1406,7 @@ impl Shell {
                     .flex_col()
                     .gap(px(2.0))
                     // Same scroll budget as the composer project menu.
-                    .max_h(px(224.0))
+                    .max_h(crate::typography::ui_rems(224.0))
                     .children(details.into_iter().enumerate().map(
                         |(ix, (row, label, tag, offline, selected))| {
                             let menu_space = match &row {
@@ -1461,7 +1456,7 @@ impl Shell {
                                 .when(offline, |el| {
                                     el.child(
                                         icon(icons::WIFI_OFF)
-                                            .size(px(12.0))
+                                            .size(crate::typography::ui_rems(12.0))
                                             .flex_none()
                                             .text_color(theme.readable_tone(theme.warning, 0.8)),
                                     )
@@ -1524,7 +1519,7 @@ impl Shell {
                     }))
                     .child(
                         icon(icons::PLUS)
-                            .size(px(12.0))
+                            .size(crate::typography::ui_rems(12.0))
                             .flex_none()
                             .text_color(theme.text_muted),
                     )
@@ -3523,7 +3518,7 @@ impl Shell {
             popover::menu_row(&theme, ix == active, format!("project-result-{ix}"))
                 .id(("project-result", ix))
                 .rounded(px(popover::PALETTE_ITEM_RADIUS))
-                .h(px(32.0))
+                .h(crate::typography::ui_rems(32.0))
                 .flex_none()
         };
         let mut rows = Vec::new();
@@ -3543,14 +3538,23 @@ impl Shell {
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.add_space_pick_device(device.clone(), cx)
                             }))
-                            .child(icon(glyph).size(px(17.0)).text_color(theme.text_muted))
+                            .child(
+                                icon(glyph)
+                                    .size(crate::typography::ui_rems(17.0))
+                                    .text_color(theme.text_muted),
+                            )
                             .child(popover::search_highlight(name.into(), Some(&query), &theme))
                             .child(div().flex_1())
-                            .child(div().size(px(5.0)).rounded_full().bg(if online {
-                                theme.success
-                            } else {
-                                theme.text_faint
-                            }))
+                            .child(
+                                div()
+                                    .size(crate::typography::ui_rems(5.0))
+                                    .rounded_full()
+                                    .bg(if online {
+                                        theme.success
+                                    } else {
+                                        theme.text_faint
+                                    }),
+                            )
                             .into_any_element(),
                     );
                 }
@@ -3565,7 +3569,7 @@ impl Shell {
                             .on_click(cx.listener(|this, _, _, cx| this.add_space_open_active(cx)))
                             .child(
                                 icon(icons::FOLDER)
-                                    .size(px(17.0))
+                                    .size(crate::typography::ui_rems(17.0))
                                     .text_color(theme.text_muted),
                             )
                             .child(
@@ -3589,7 +3593,11 @@ impl Shell {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.add_space_goto_location(name.clone(), path.clone(), cx)
                                 }))
-                                .child(icon(glyph).size(px(17.0)).text_color(theme.text_muted))
+                                .child(
+                                    icon(glyph)
+                                        .size(crate::typography::ui_rems(17.0))
+                                        .text_color(theme.text_muted),
+                                )
                                 .child(popover::search_highlight(
                                     label.into(),
                                     Some(&query),
@@ -3615,7 +3623,7 @@ impl Shell {
                                 )
                                 .child(
                                     icon(icons::FOLDER)
-                                        .size(px(17.0))
+                                        .size(crate::typography::ui_rems(17.0))
                                         .text_color(theme.text_muted),
                                 )
                                 .child(div().min_w_0().truncate().child(label))
@@ -3634,7 +3642,7 @@ impl Shell {
                                 }))
                                 .child(
                                     icon(icons::FOLDER)
-                                        .size(px(17.0))
+                                        .size(crate::typography::ui_rems(17.0))
                                         .text_color(theme.text_muted),
                                 )
                                 .child(popover::search_highlight(
@@ -3646,7 +3654,7 @@ impl Shell {
                                 .when(is_repo, |el| {
                                     el.child(
                                         icon(icons::GIT_BRANCH)
-                                            .size(px(14.0))
+                                            .size(crate::typography::ui_rems(14.0))
                                             .text_color(theme.text_muted),
                                     )
                                 })
@@ -3680,39 +3688,46 @@ impl Shell {
             ));
         } else if let Some(message) = load_error.filter(|_| step == ProjectStep::Folders) {
             results = results.child(
-                popover::error_row(&theme, &message).p(px(14.0)).child(
-                    popover::btn_ghost(&theme, "Retry", "project-retry")
-                        .id("project-retry")
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            let typed_path = this.add_space.as_ref().is_some_and(|flow| {
-                                is_project_path_query(flow.search.read(cx).text())
-                            });
-                            if typed_path {
-                                this.add_space_open_active(cx);
-                            } else {
-                                let path =
-                                    this.add_space.as_ref().and_then(|f| f.browser_path.clone());
-                                this.load_space_folders(path, cx);
-                            }
-                        })),
-                ),
+                popover::error_row(&theme, &message)
+                    .p(crate::typography::ui_rems(14.0))
+                    .child(
+                        popover::btn_ghost(&theme, "Retry", "project-retry")
+                            .id("project-retry")
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                let typed_path = this.add_space.as_ref().is_some_and(|flow| {
+                                    is_project_path_query(flow.search.read(cx).text())
+                                });
+                                if typed_path {
+                                    this.add_space_open_active(cx);
+                                } else {
+                                    let path = this
+                                        .add_space
+                                        .as_ref()
+                                        .and_then(|f| f.browser_path.clone());
+                                    this.load_space_folders(path, cx);
+                                }
+                            })),
+                    ),
             );
         } else if empty {
-            results = results.child(div().p(px(24.0)).text_color(theme.text_muted).child(
-                match step {
-                    ProjectStep::Devices => "No devices found",
-                    ProjectStep::Locations => "No locations found",
-                    ProjectStep::Folders if path_query => "Open Home first to use ~ paths",
-                    ProjectStep::Folders if query.is_empty() => "No folders here",
-                    ProjectStep::Folders => "No folders match",
-                },
-            ));
+            results = results.child(
+                div()
+                    .p(crate::typography::ui_rems(24.0))
+                    .text_color(theme.text_muted)
+                    .child(match step {
+                        ProjectStep::Devices => "No devices found",
+                        ProjectStep::Locations => "No locations found",
+                        ProjectStep::Folders if path_query => "Open Home first to use ~ paths",
+                        ProjectStep::Folders if query.is_empty() => "No folders here",
+                        ProjectStep::Folders => "No folders match",
+                    }),
+            );
         }
         if step == ProjectStep::Locations && drives_loading {
             results = results.child(
                 div()
-                    .px(px(8.0))
-                    .py(px(6.0))
+                    .px(crate::typography::ui_rems(8.0))
+                    .py(crate::typography::ui_rems(6.0))
                     .text_color(theme.text_muted)
                     .text_size(crate::typography::ui_rems(11.0))
                     .child("Loading locations…"),
@@ -3722,12 +3737,12 @@ impl Shell {
             |id: SharedString, name: SharedString, glyph: Option<&'static str>, current: bool| {
                 div()
                     .id(id.clone())
-                    .h(px(26.0))
-                    .px(px(7.0))
+                    .h(crate::typography::ui_rems(26.0))
+                    .px(crate::typography::ui_rems(7.0))
                     .rounded(px(6.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(crate::typography::ui_rems(6.0))
                     .cursor_pointer()
                     .hover_fill_fg(
                         format!("crumb-{id}"),
@@ -3747,7 +3762,7 @@ impl Shell {
                     .when_some(glyph, |el, glyph| {
                         el.child(
                             icon(glyph)
-                                .size(px(14.0))
+                                .size(crate::typography::ui_rems(14.0))
                                 .flex_none()
                                 .text_color(if current {
                                     theme.text
@@ -3756,7 +3771,12 @@ impl Shell {
                                 }),
                         )
                     })
-                    .child(div().max_w(px(140.0)).truncate().child(name))
+                    .child(
+                        div()
+                            .max_w(crate::typography::ui_rems(140.0))
+                            .truncate()
+                            .child(name),
+                    )
             };
         // Keep each chevron with its destination when a long path wraps.
         let segment = |item: gpui::Stateful<gpui::Div>| {
@@ -3766,7 +3786,7 @@ impl Shell {
                 .gap(px(2.0))
                 .child(
                     icon(icons::ALT_ARROW_RIGHT)
-                        .size(px(12.0))
+                        .size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_faint),
                 )
                 .child(item)
@@ -3849,16 +3869,16 @@ impl Shell {
             }
         }
         let crumbs = div()
-            .px(px(14.0))
-            .py(px(8.0))
+            .px(crate::typography::ui_rems(14.0))
+            .py(crate::typography::ui_rems(8.0))
             .flex()
             .items_start()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .text_size(crate::typography::ui_rems(12.0))
             .child(
                 div()
                     .id("project-crumb-back")
-                    .size(px(26.0))
+                    .size(crate::typography::ui_rems(26.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -3878,26 +3898,26 @@ impl Shell {
                     }))
                     .child(
                         icon(icons::ARROW_LEFT)
-                            .size(px(16.0))
+                            .size(crate::typography::ui_rems(16.0))
                             .text_color(theme.text_muted),
                     ),
             )
             .child(
                 div()
                     .w(px(1.0))
-                    .h(px(16.0))
-                    .mt(px(5.0))
+                    .h(crate::typography::ui_rems(16.0))
+                    .mt(crate::typography::ui_rems(5.0))
                     .flex_none()
                     .bg(theme.border),
             )
             .child(trail);
         let header = div()
-            .h(px(58.0))
+            .h(crate::typography::ui_rems(58.0))
             .flex_none()
-            .px(px(18.0))
+            .px(crate::typography::ui_rems(18.0))
             .flex()
             .items_center()
-            .gap(px(12.0))
+            .gap(crate::typography::ui_rems(12.0))
             .border_b_1()
             .border_color(theme.border)
             .child(popover::palette_search_icon(&theme))
@@ -3911,13 +3931,13 @@ impl Shell {
             .child(popover::key_hint_text(&theme, "esc", ""));
         let footer = div()
             .flex_none()
-            .px(px(18.0))
-            .py(px(12.0))
+            .px(crate::typography::ui_rems(18.0))
+            .py(crate::typography::ui_rems(12.0))
             .border_t_1()
             .border_color(theme.border)
             .flex()
             .items_center()
-            .gap(px(18.0))
+            .gap(crate::typography::ui_rems(18.0))
             .child(popover::key_hint_pair(
                 &theme,
                 icons::ARROW_UP,
@@ -3935,13 +3955,13 @@ impl Shell {
                         "project-add",
                     )
                     .id("project-add")
-                    .h(px(22.0))
+                    .h(crate::typography::ui_rems(22.0))
                     .py(px(0.0))
                     .flex_none()
                     .flex()
                     .flex_row()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .when(busy || listing.is_none() || path_query, |el| {
                         el.opacity(0.5)
                     })
@@ -3978,8 +3998,8 @@ impl Shell {
                 .when_some(error, |el, error| {
                     el.child(
                         div()
-                            .px(px(18.0))
-                            .pb(px(8.0))
+                            .px(crate::typography::ui_rems(18.0))
+                            .pb(crate::typography::ui_rems(8.0))
                             .text_color(theme.readable_tone(theme.danger, 1.0))
                             .child(error),
                     )
@@ -4090,7 +4110,7 @@ impl Shell {
             let rename_id = space_id.clone();
             let delete_id = space_id.clone();
             let menu = popover::popover_card(&theme)
-                .w(px(170.0))
+                .w(crate::typography::ui_rems(170.0))
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.close_space_menu(cx);
                 }))
@@ -4102,7 +4122,11 @@ impl Shell {
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.open_rename_space(rename_id.clone(), cx)
                         }))
-                        .child(icon(icons::PEN).size(px(16.0)).text_color(theme.text_muted))
+                        .child(
+                            icon(icons::PEN)
+                                .size(crate::typography::ui_rems(16.0))
+                                .text_color(theme.text_muted),
+                        )
                         .child(SharedString::from("Rename…")),
                 )
                 .child(popover::menu_separator())
@@ -4117,7 +4141,7 @@ impl Shell {
                         }))
                         .child(
                             icon(icons::TRASH_BIN_MINIMALISTIC)
-                                .size(px(16.0))
+                                .size(crate::typography::ui_rems(16.0))
                                 .text_color(theme.readable_icon(theme.danger)),
                         )
                         .child(SharedString::from("Remove…")),
@@ -4147,16 +4171,16 @@ impl Shell {
                 .child(popover::dialog_title(&theme, "Rename project"))
                 .child(
                     div()
-                        .mt(px(12.0))
+                        .mt(crate::typography::ui_rems(12.0))
                         .child(popover::dialog_field(input.into_any_element())),
                 )
                 .child(
                     div()
-                        .mt(px(16.0))
+                        .mt(crate::typography::ui_rems(16.0))
                         .flex()
                         .flex_row()
                         .justify_end()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         .child(
                             popover::btn_ghost(&theme, "Cancel", "rename-space-cancel")
                                 .id("rename-space-cancel")
@@ -4207,17 +4231,17 @@ impl Shell {
             };
             let card = popover::dialog_card(&theme)
                 .child(popover::dialog_title(&theme, "Remove project?"))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, copy)))
-                .child(div().mt(px(6.0)).child(popover::dialog_body(&theme,
+                .child(div().mt(crate::typography::ui_rems(6.0)).child(popover::dialog_body(&theme, copy)))
+                .child(div().mt(crate::typography::ui_rems(6.0)).child(popover::dialog_body(&theme,
                     "Every session in this project, including any side chat listed in the count, is deleted. Side chats outside this project, project files, shared attachments, synced copies and provider-private data remain. LUNA cleans up local transcript snapshots, unsent drafts, terminal history and verified unshared draft uploads. Remote cleanup is unavailable; deletion stops if this project contains remote sessions.",
                 )))
                 .child(
                     div()
-                        .mt(px(16.0))
+                        .mt(crate::typography::ui_rems(16.0))
                         .flex()
                         .flex_row()
                         .justify_end()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         .child(
                             popover::btn_ghost(&theme, "Cancel", "delete-space-cancel")
                                 .id("delete-space-cancel")

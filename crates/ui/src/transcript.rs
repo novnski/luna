@@ -1268,16 +1268,16 @@ fn goal_achieved_row(label: SharedString, theme: &Theme) -> AnyElement {
         .role(gpui::Role::Status)
         .aria_label(label.clone())
         .pt(px(2.0))
-        .pb(px(6.0))
+        .pb(crate::typography::ui_rems(6.0))
         .w_full()
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(crate::typography::ui_rems(6.0))
         .text_size(crate::typography::ui_rems(12.0))
         .text_color(theme.readable_muted(0.82))
         .child(
             crate::icons::icon(crate::icons::TARGET)
-                .size(px(13.0))
+                .size(crate::typography::ui_rems(13.0))
                 .text_color(theme.readable_tone(theme.success, 0.9)),
         )
         .child(label)
@@ -6359,7 +6359,7 @@ impl Transcript {
                 })
                 .flex()
                 .items_center()
-                .gap(px(5.0))
+                .gap(crate::typography::ui_rems(5.0))
                 .text_size(crate::typography::ui_rems(13.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
@@ -6376,7 +6376,7 @@ impl Transcript {
                         .with_transformation(gpui::Transformation::rotate(gpui::radians(
                             if expanded { std::f32::consts::PI } else { 0.0 },
                         )))
-                        .size(px(12.0))
+                        .size(crate::typography::ui_rems(12.0))
                         .text_color(theme.content_muted)
                         .group_hover("user-message-toggle", |s| s.text_color(theme.text)),
                 )
@@ -7191,7 +7191,7 @@ impl Transcript {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .text_size(crate::typography::ui_rems(WORKING_STATUS_SIZE))
             .line_height(crate::typography::ui_rems(WORKING_STATUS_LINE_HEIGHT))
             .child(verb_el)
@@ -7248,8 +7248,8 @@ impl Transcript {
                             .aria_label("Stop the current turn")
                             .tab_index(0)
                             .flex_none()
-                            .ml(px(4.0))
-                            .px(px(6.0))
+                            .ml(crate::typography::ui_rems(4.0))
+                            .px(crate::typography::ui_rems(6.0))
                             .rounded(px(Theme::CONTROL_RADIUS))
                             .cursor_pointer()
                             .text_size(crate::typography::ui_rems(WORKING_TIMER_SIZE))
@@ -7364,8 +7364,8 @@ impl Transcript {
                                 .flex_wrap()
                                 .justify_end()
                                 .items_center()
-                                .gap(px(6.0))
-                                .pb(px(6.0))
+                                .gap(crate::typography::ui_rems(6.0))
+                                .pb(crate::typography::ui_rems(6.0))
                                 .children(badges.iter().enumerate().map(|(bix, badge)| {
                                     crate::badges::render(
                                         SharedString::from(format!("{}#badge{bix}", row.id)),
@@ -7391,17 +7391,17 @@ impl Transcript {
                                 .flex()
                                 .justify_end()
                                 .items_end()
-                                .gap(px(8.0))
+                                .gap(crate::typography::ui_rems(8.0))
                                 .when(pending, |el| {
                                     el.child(
                                         div()
                                             .flex_none()
-                                            .pb(px(12.0))
+                                            .pb(crate::typography::ui_rems(12.0))
                                             .id(SharedString::from(format!("{}-sending", row.id)))
                                             .tooltip(crate::popover::text_tooltip("Sending…"))
                                             .child(
                                                 crate::icons::icon(crate::icons::CLOCK_CIRCLE)
-                                                    .size(px(12.0))
+                                                    .size(crate::typography::ui_rems(12.0))
                                                     .text_color(theme.content_faint),
                                             ),
                                     )
@@ -7423,8 +7423,8 @@ impl Transcript {
                                             }])
                                         })
                                         .rounded(px(Theme::BUBBLE_RADIUS))
-                                        .px(px(16.0))
-                                        .py(px(10.0))
+                                        .px(crate::typography::ui_rems(16.0))
+                                        .py(crate::typography::ui_rems(10.0))
                                         .text_size(crate::typography::ui_rems(14.0))
                                         .line_height(crate::typography::ui_rems(USER_LINE_HEIGHT))
                                         .text_color(theme.text)
@@ -7772,7 +7772,7 @@ impl Transcript {
                 .flex_row()
                 .items_center()
                 .gap(px(2.0))
-                .child(div().mr(px(6.0)));
+                .child(div().mr(crate::typography::ui_rems(6.0)));
             let metadata = metadata
                 .child(timestamp)
                 .children(side_action)
@@ -7783,8 +7783,8 @@ impl Transcript {
             // The lane fits the 24 px action buttons plus a 4 px lead, so a
             // finished reply doesn't trail a tall empty band (audit TL-20).
             div()
-                .h(px(META_LANE_HEIGHT))
-                .pt(px(META_LANE_HEIGHT - 24.0))
+                .h(crate::typography::ui_rems(META_LANE_HEIGHT))
+                .pt(crate::typography::ui_rems(META_LANE_HEIGHT - 24.0))
                 .w_full()
                 .flex()
                 .items_center()
@@ -7835,7 +7835,11 @@ impl Transcript {
             .w_full()
             .flex()
             .justify_center()
-            .pt(px(top_gap))
+            // Turn and block rhythm is an interface rem, matching the live
+            // row's `render_tree` gaps so the live→split handoff stays put;
+            // the first row's gap carries the measured titlebar, in px.
+            .when(ix == 0, |row| row.pt(px(top_gap)))
+            .when(ix > 0, |row| row.pt(crate::typography::ui_rems(top_gap)))
             .pb(px(bottom_pad))
             // Keep side gutters as the configurable column shrinks to fit;
             // a narrow view narrows them (`transcript_row_gutter`).
@@ -8935,7 +8939,7 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
         .role(gpui::Role::Button)
         .aria_label("Copy error")
         .tab_index(0)
-        .size(px(24.0))
+        .size(crate::typography::ui_rems(24.0))
         .flex_none()
         .rounded(px(crate::theme::radius::SM))
         .flex()
@@ -8955,12 +8959,12 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
         })
         .child(
             crate::icons::icon(crate::icons::COPY)
-                .size(px(12.0))
+                .size(crate::typography::ui_rems(12.0))
                 .text_color(theme.content_muted),
         )
         .into_any_element();
     div()
-        .py(px(4.0))
+        .py(crate::typography::ui_rems(4.0))
         .w_full()
         .child(transcript_notice(
             theme.danger,
@@ -8987,26 +8991,26 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
         "Awaiting your answer…".into()
     };
     div()
-        .py(px(4.0))
+        .py(crate::typography::ui_rems(4.0))
         .w_full()
         .child(
             div()
-                .h(px(34.0))
+                .h(crate::typography::ui_rems(34.0))
                 .w_full()
                 .flex()
                 .items_center()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .overflow_hidden()
                 .rounded(px(crate::theme::radius::LG))
                 .border_1()
                 .border_color(crate::theme::hairline(0.08))
                 .bg(crate::theme::ink(0.045))
-                .px(px(8.0))
+                .px(crate::typography::ui_rems(8.0))
                 .text_size(crate::typography::ui_rems(12.0))
                 .child(
                     div()
                         .flex_none()
-                        .size(px(20.0))
+                        .size(crate::typography::ui_rems(20.0))
                         .rounded(px(crate::theme::radius::SM))
                         .bg(crate::theme::ink(0.09))
                         .flex()
@@ -9014,7 +9018,7 @@ fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement
                         .justify_center()
                         .child(
                             crate::icons::icon(crate::icons::CHAT_ROUND_LINE)
-                                .size(px(12.0))
+                                .size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.content_muted),
                         ),
                 )
@@ -9506,11 +9510,11 @@ impl gpui::Render for ChildInspectionTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = &Theme::of(cx).for_popup();
         let card = crate::popover::popover_card(theme)
-            .w(px(340.0))
-            .p(px(12.0))
+            .w(crate::typography::ui_rems(340.0))
+            .p(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col()
-            .gap(px(7.0))
+            .gap(crate::typography::ui_rems(7.0))
             .children(self.lines.iter().map(|line| {
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
@@ -10371,7 +10375,7 @@ fn meta_action(
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
-        .size(px(24.0))
+        .size(crate::typography::ui_rems(24.0))
         .flex()
         .items_center()
         .justify_center()
@@ -10387,7 +10391,7 @@ fn meta_action(
         .tooltip(crate::popover::text_tooltip(label))
         .child(
             crate::icons::icon(icon)
-                .size(px(14.0))
+                .size(crate::typography::ui_rems(14.0))
                 .text_color(theme.content_muted),
         )
 }
@@ -10424,8 +10428,8 @@ fn trailer_action(
         .aria_label(label)
         .tab_index(0)
         .flex_none()
-        .h(px(24.0))
-        .px(px(10.0))
+        .h(crate::typography::ui_rems(24.0))
+        .px(crate::typography::ui_rems(10.0))
         .flex()
         .items_center()
         .rounded(px(crate::theme::radius::SM))
@@ -10460,21 +10464,21 @@ fn transcript_notice(
         .border_1()
         .border_color(tone.opacity(0.24))
         .bg(tone.opacity(0.08))
-        .px(px(12.0))
-        .py(px(10.0))
+        .px(crate::typography::ui_rems(12.0))
+        .py(crate::typography::ui_rems(10.0))
         .flex()
         .flex_col()
-        .gap(px(4.0))
+        .gap(crate::typography::ui_rems(4.0))
         .child(
             div()
-                .min_h(px(24.0))
+                .min_h(crate::typography::ui_rems(24.0))
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .child(
                     crate::icons::icon(icon)
-                        .size(px(14.0))
+                        .size(crate::typography::ui_rems(14.0))
                         .flex_none()
                         .text_color(glyph),
                 )
@@ -10492,8 +10496,8 @@ fn transcript_notice(
         .when_some(detail, |card, detail| {
             card.child(
                 div()
-                    .pl(px(22.0))
-                    .max_w(px(680.0))
+                    .pl(crate::typography::ui_rems(22.0))
+                    .max_w(crate::typography::ui_rems(680.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .line_height(crate::typography::ui_rems(17.0))
                     .text_color(theme.content_muted)

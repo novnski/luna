@@ -34,15 +34,16 @@ pub(crate) const CONTENT_INSET: f32 = 12.0;
 
 pub(crate) fn input() -> Div {
     div()
-        .h(px(CONTROL_SIZE))
+        // Holds a rem-sized input line; the toolbar it sits in has the room.
+        .h(crate::typography::ui_rems(CONTROL_SIZE))
         .min_w_0()
         .flex_1()
-        .px(px(8.0))
+        .px(crate::typography::ui_rems(8.0))
         .rounded(px(CONTROL_RADIUS))
         .bg(crate::theme::ink(0.035))
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(crate::typography::ui_rems(6.0))
         .text_size(crate::typography::ui_rems(12.0))
 }
 
@@ -80,9 +81,9 @@ pub(crate) fn surface_state(
         .flex_col()
         .items_center()
         .justify_center()
-        .gap(px(6.0))
+        .gap(crate::typography::ui_rems(6.0))
         .px(px(CONTENT_INSET))
-        .child(div().mb(px(4.0)).child(glyph))
+        .child(div().mb(crate::typography::ui_rems(4.0)).child(glyph))
         .child(
             div()
                 .text_size(crate::typography::ui_rems(13.0))
@@ -93,7 +94,7 @@ pub(crate) fn surface_state(
         .when_some(body, |el, body| {
             el.child(
                 div()
-                    .max_w(px(280.0))
+                    .max_w(crate::typography::ui_rems(280.0))
                     .text_center()
                     .text_size(crate::typography::ui_rems(12.0))
                     .line_height(crate::typography::ui_rems(18.0))
@@ -102,14 +103,14 @@ pub(crate) fn surface_state(
             )
         })
         .when_some(action, |el, action| {
-            el.child(div().mt(px(6.0)).child(action))
+            el.child(div().mt(crate::typography::ui_rems(6.0)).child(action))
         })
 }
 
 /// The surface-state glyph: a 28 pt icon in the faint tone.
 pub(crate) fn state_glyph(icon: &'static str, theme: &Theme) -> gpui::AnyElement {
     crate::icons::icon(icon)
-        .size(px(28.0))
+        .size(crate::typography::ui_rems(28.0))
         .text_color(theme.text_faint)
         .into_any_element()
 }

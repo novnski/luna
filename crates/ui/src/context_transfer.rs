@@ -591,11 +591,11 @@ pub(crate) fn render_preview_body(
     let small = |text: SharedString, color: gpui::Hsla| {
         div()
             .text_size(crate::typography::ui_rems(11.0))
-            .line_height(px(16.0))
+            .line_height(crate::typography::ui_rems(16.0))
             .text_color(color)
             .child(text)
     };
-    let body = div().flex().flex_col().gap(px(6.0));
+    let body = div().flex().flex_col().gap(crate::typography::ui_rems(6.0));
     let preview = match &flow.preview {
         PreviewState::Loading => {
             return body.child(small("Preparing the preview on the host…".into(), muted));
@@ -626,13 +626,13 @@ pub(crate) fn render_preview_body(
         div()
             .flex()
             .flex_row()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .text_size(crate::typography::ui_rems(11.0))
-            .line_height(px(16.0))
+            .line_height(crate::typography::ui_rems(16.0))
             .child(
                 div()
                     .flex_none()
-                    .w(px(64.0))
+                    .w(crate::typography::ui_rems(64.0))
                     .text_color(muted)
                     .child(SharedString::from(item.role.clone())),
             )
@@ -673,7 +673,7 @@ pub(crate) fn render_preview_body(
     body = body.child(
         div()
             .id("transfer-included")
-            .max_h(px(120.0))
+            .max_h(crate::typography::ui_rems(120.0))
             .overflow_y_scroll()
             .flex()
             .flex_col()
@@ -684,7 +684,7 @@ pub(crate) fn render_preview_body(
         body = body.child(small("Left out:".into(), muted)).child(
             div()
                 .id("transfer-omitted")
-                .max_h(px(72.0))
+                .max_h(crate::typography::ui_rems(72.0))
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
@@ -714,13 +714,13 @@ pub(crate) fn render_preview_body(
         body = body.child(
             div()
                 .id("transfer-exact-text")
-                .max_h(px(180.0))
+                .max_h(crate::typography::ui_rems(180.0))
                 .overflow_y_scroll()
-                .p(px(8.0))
+                .p(crate::typography::ui_rems(8.0))
                 .rounded(px(6.0))
                 .bg(theme.ink(0.04))
                 .text_size(crate::typography::ui_rems(11.0))
-                .line_height(px(16.0))
+                .line_height(crate::typography::ui_rems(16.0))
                 .text_color(theme.text)
                 .child(SharedString::from(preview.text.clone())),
         );
@@ -751,7 +751,7 @@ pub(crate) fn apply_line(theme: &Theme, flow: &TransferFlow) -> Option<gpui::Sta
         div()
             .id("transfer-apply-state")
             .text_size(crate::typography::ui_rems(11.0))
-            .line_height(px(16.0))
+            .line_height(crate::typography::ui_rems(16.0))
             .text_color(color)
             .child(text),
     )

@@ -502,25 +502,30 @@ impl Shell {
                 }
             }))
             .child(popover::dialog_title(&theme, &title))
-            .child(div().mt(px(6.0)).child(popover::dialog_body(&theme, body)))
+            .child(
+                div()
+                    .mt(crate::typography::ui_rems(6.0))
+                    .child(popover::dialog_body(&theme, body)),
+            )
             .child(
                 div()
                     .id("findings-preview")
-                    .mt(px(10.0))
-                    .max_h(px(380.0))
+                    .mt(crate::typography::ui_rems(10.0))
+                    .max_h(crate::typography::ui_rems(380.0))
                     .overflow_y_scroll()
                     .child(crate::context_transfer::render_preview_body(
                         &theme, flow, toggle,
                     )),
             )
             .children(
-                crate::context_transfer::apply_line(&theme, flow).map(|line| line.mt(px(6.0))),
+                crate::context_transfer::apply_line(&theme, flow)
+                    .map(|line| line.mt(crate::typography::ui_rems(6.0))),
             )
             .when(refresh, |card| {
                 card.child(
                     div()
                         .id("findings-refresh")
-                        .mt(px(6.0))
+                        .mt(crate::typography::ui_rems(6.0))
                         .accessible_button("Refresh the preview", theme.accent)
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(theme.accent)
@@ -534,11 +539,11 @@ impl Shell {
             })
             .child(
                 div()
-                    .mt(px(14.0))
+                    .mt(crate::typography::ui_rems(14.0))
                     .flex()
                     .flex_row()
                     .justify_end()
-                    .gap(px(8.0))
+                    .gap(crate::typography::ui_rems(8.0))
                     .child(
                         popover::btn_ghost(&theme, "Cancel", "findings-cancel")
                             .id("findings-cancel")

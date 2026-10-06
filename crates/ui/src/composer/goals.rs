@@ -302,11 +302,11 @@ fn render_schedules(schedules: &[NativeSchedule], below_goal: bool, theme: &Them
                 .min_w_0()
                 .flex()
                 .items_center()
-                .gap(px(7.0))
+                .gap(crate::typography::ui_rems(7.0))
                 .text_size(crate::typography::ui_rems(12.0))
                 .child(
                     crate::icons::icon(crate::icons::CLOCK_CIRCLE)
-                        .size(px(13.0))
+                        .size(crate::typography::ui_rems(13.0))
                         .text_color(theme.readable_muted(0.7)),
                 )
                 .child(
@@ -336,17 +336,17 @@ fn render_schedules(schedules: &[NativeSchedule], below_goal: bool, theme: &Them
         .role(Role::Group)
         .aria_label(title.clone())
         .aria_description(CLAUDE_SCHEDULE_LIFETIME)
-        .mx(px(12.0))
-        .mb(px(10.0))
+        .mx(crate::typography::ui_rems(12.0))
+        .mb(crate::typography::ui_rems(10.0))
         .when(below_goal, |el| {
-            el.pt(px(8.0))
+            el.pt(crate::typography::ui_rems(8.0))
                 .border_t_1()
                 .border_color(theme.border.opacity(0.7))
         })
-        .when(!below_goal, |el| el.pt(px(10.0)))
+        .when(!below_goal, |el| el.pt(crate::typography::ui_rems(10.0)))
         .flex()
         .flex_col()
-        .gap(px(6.0))
+        .gap(crate::typography::ui_rems(6.0))
         .child(
             div()
                 .pl(px(2.0))
@@ -361,13 +361,13 @@ fn render_schedules(schedules: &[NativeSchedule], below_goal: bool, theme: &Them
                 .pl(px(2.0))
                 .flex()
                 .flex_col()
-                .gap(px(5.0))
+                .gap(crate::typography::ui_rems(5.0))
                 .children(rows),
         )
         .when(count > SHOWN, |el| {
             el.child(
                 div()
-                    .pl(px(22.0))
+                    .pl(crate::typography::ui_rems(22.0))
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.readable_muted(0.72))
                     .child(format!("+{} more", count - SHOWN)),
@@ -779,7 +779,7 @@ impl Composer {
         let wash = theme.ink(0.08);
         let glyph = if spinning {
             div()
-                .size(px(GLYPH))
+                .size(crate::typography::ui_rems(GLYPH))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -793,7 +793,11 @@ impl Composer {
                 .into_any_element()
         } else {
             crate::icons::icon(glyph)
-                .size(px(if icon_only { GLYPH } else { 12.0 }))
+                .size(crate::typography::ui_rems(if icon_only {
+                    GLYPH
+                } else {
+                    12.0
+                }))
                 .text_color(rest)
                 .when(enabled, |icon| {
                     icon.group_hover(group.clone(), move |style| style.text_color(hover))
@@ -809,14 +813,18 @@ impl Composer {
             .tab_index(0)
             .tab_stop(enabled)
             .group(group)
-            .h(px(24.0))
-            .when(icon_only, |button| button.w(px(24.0)))
-            .when(!icon_only, |button| button.px(px(8.0)))
+            .h(crate::typography::ui_rems(24.0))
+            .when(icon_only, |button| {
+                button.w(crate::typography::ui_rems(24.0))
+            })
+            .when(!icon_only, |button| {
+                button.px(crate::typography::ui_rems(8.0))
+            })
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .gap(px(5.0))
+            .gap(crate::typography::ui_rems(5.0))
             .rounded(px(6.0))
             .text_size(crate::typography::ui_rems(11.5))
             .text_color(rest)
@@ -884,9 +892,10 @@ impl Composer {
             return None;
         }
         let label = crate::pickers::chip_text_width(GOAL_CHIP_LABEL, window, Theme::of(cx));
+        let scale = Theme::of(cx).ui_scale();
         Some((
-            2.0 * GOAL_CHIP_PAD_X + GOAL_CHIP_ICON + GOAL_CHIP_ICON_GAP + label,
-            crate::pickers::ACCESS_CHIP_SIZE,
+            (2.0 * GOAL_CHIP_PAD_X + GOAL_CHIP_ICON + GOAL_CHIP_ICON_GAP) * scale + label,
+            crate::pickers::ACCESS_CHIP_SIZE * scale,
         ))
     }
 
@@ -917,15 +926,17 @@ impl Composer {
                 .aria_description(provider.mode_on_description())
                 .tab_index(0)
                 .flex_none()
-                .h(px(crate::pickers::CONTROL_HEIGHT))
+                .h(crate::typography::ui_rems(crate::pickers::CONTROL_HEIGHT))
                 .when(icon_only, |chip| {
-                    chip.w(px(crate::pickers::ACCESS_CHIP_SIZE))
+                    chip.w(crate::typography::ui_rems(crate::pickers::ACCESS_CHIP_SIZE))
                         .justify_center()
                 })
-                .when(!icon_only, |chip| chip.px(px(GOAL_CHIP_PAD_X)))
+                .when(!icon_only, |chip| {
+                    chip.px(crate::typography::ui_rems(GOAL_CHIP_PAD_X))
+                })
                 .flex()
                 .items_center()
-                .gap(px(GOAL_CHIP_ICON_GAP))
+                .gap(crate::typography::ui_rems(GOAL_CHIP_ICON_GAP))
                 .rounded_full()
                 .text_size(crate::typography::ui_rems(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
@@ -953,7 +964,7 @@ impl Composer {
                 })
                 .child(
                     crate::icons::icon(crate::icons::TARGET)
-                        .size(px(GOAL_CHIP_ICON))
+                        .size(crate::typography::ui_rems(GOAL_CHIP_ICON))
                         .text_color(rest),
                 )
                 .when(!icon_only, |chip| chip.child(GOAL_CHIP_LABEL))
@@ -1113,14 +1124,14 @@ impl Composer {
             .flex_1()
             .min_w_0()
             .h_full()
-            .pl(px(14.0))
-            .pr(px(6.0))
+            .pl(crate::typography::ui_rems(14.0))
+            .pr(crate::typography::ui_rems(6.0))
             .flex()
             .items_center()
-            .gap(px(7.0))
+            .gap(crate::typography::ui_rems(7.0))
             .child(
                 crate::icons::icon(crate::icons::TARGET)
-                    .size(px(GLYPH))
+                    .size(crate::typography::ui_rems(GLYPH))
                     .text_color(tone),
             )
             .child(
@@ -1158,7 +1169,7 @@ impl Composer {
                         .flex_none()
                         .flex()
                         .items_center()
-                        .gap(px(7.0))
+                        .gap(crate::typography::ui_rems(7.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .font_features(crate::typography::tabular_figures())
                         .text_color(if live {
@@ -1176,7 +1187,7 @@ impl Composer {
                         .flex_none()
                         .flex()
                         .items_center()
-                        .gap(px(7.0))
+                        .gap(crate::typography::ui_rems(7.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.readable_muted(0.75))
                         .child(div().text_color(theme.readable_faint(0.8)).child("·"))
@@ -1277,7 +1288,7 @@ impl Composer {
                     .id("goal-progress")
                     .role(Role::ProgressIndicator)
                     .aria_label("Goal change in progress")
-                    .size(px(24.0))
+                    .size(crate::typography::ui_rems(24.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1309,7 +1320,7 @@ impl Composer {
         }
         let header = div()
             .id("goal-bar-header")
-            .h(px(HEADER_HEIGHT))
+            .h(crate::typography::ui_rems(HEADER_HEIGHT))
             .flex_none()
             .flex()
             .items_center()
@@ -1318,7 +1329,7 @@ impl Composer {
                 div()
                     .flex_none()
                     .h_full()
-                    .pr(px(8.0))
+                    .pr(crate::typography::ui_rems(8.0))
                     .flex()
                     .items_center()
                     .gap(px(2.0))
@@ -1355,10 +1366,10 @@ impl Composer {
                         .id("goal-checker")
                         .role(Role::Status)
                         .aria_label(text.clone())
-                        .mx(px(14.0))
+                        .mx(crate::typography::ui_rems(14.0))
                         .mt(px(-6.0))
-                        .mb(px(8.0))
-                        .pl(px(21.0))
+                        .mb(crate::typography::ui_rems(8.0))
+                        .pl(crate::typography::ui_rems(21.0))
                         .truncate()
                         .text_size(crate::typography::ui_rems(11.5))
                         .text_color(theme.readable_muted(0.72))
@@ -1387,22 +1398,28 @@ impl Composer {
             div()
                 .id("goal-error")
                 .role(Role::Alert)
-                .mx(px(12.0))
-                .mb(px(10.0))
-                .pl(px(10.0))
-                .pr(px(4.0))
-                .py(px(4.0))
+                .mx(crate::typography::ui_rems(12.0))
+                .mb(crate::typography::ui_rems(10.0))
+                .pl(crate::typography::ui_rems(10.0))
+                .pr(crate::typography::ui_rems(4.0))
+                .py(crate::typography::ui_rems(4.0))
                 .rounded(px(8.0))
                 .border_1()
                 .border_color(theme.danger.opacity(0.22))
                 .bg(theme.danger.opacity(0.07))
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(crate::typography::ui_rems(6.0))
                 .text_size(crate::typography::ui_rems(11.5))
                 .line_height(crate::typography::ui_rems(16.0))
                 .text_color(theme.readable_tone(theme.danger_muted, 0.92))
-                .child(div().flex_1().min_w_0().py(px(3.0)).child(error))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .py(crate::typography::ui_rems(3.0))
+                        .child(error),
+                )
                 .child(refresh)
         });
 
@@ -1454,7 +1471,7 @@ impl Composer {
             div()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
+                .gap(crate::typography::ui_rems(4.0))
                 .child(
                     div()
                         .text_size(crate::typography::ui_rems(11.0))
@@ -1463,8 +1480,8 @@ impl Composer {
                 )
                 .child(
                     div()
-                        .px(px(10.0))
-                        .py(px(6.0))
+                        .px(crate::typography::ui_rems(10.0))
+                        .py(crate::typography::ui_rems(6.0))
                         .rounded(px(8.0))
                         .border_1()
                         .border_color(theme.border)
@@ -1523,12 +1540,12 @@ impl Composer {
             .aria_label("Edit goal")
             .border_t_1()
             .border_color(theme.border.opacity(0.6))
-            .px(px(14.0))
-            .pt(px(10.0))
-            .pb(px(12.0))
+            .px(crate::typography::ui_rems(14.0))
+            .pt(crate::typography::ui_rems(10.0))
+            .pb(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col()
-            .gap(px(10.0))
+            .gap(crate::typography::ui_rems(10.0))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if event.keystroke.key == "escape" && this.goal_ui.pending.is_none() {
                     cx.stop_propagation();
@@ -1540,11 +1557,11 @@ impl Composer {
                 div()
                     .flex()
                     .items_end()
-                    .gap(px(10.0))
-                    .child(field("Token budget", budget).w(px(180.0)))
+                    .gap(crate::typography::ui_rems(10.0))
+                    .child(field("Token budget", budget).w(crate::typography::ui_rems(180.0)))
                     .child(
                         div()
-                            .pb(px(8.0))
+                            .pb(crate::typography::ui_rems(8.0))
                             .text_size(crate::typography::ui_rems(11.0))
                             .text_color(theme.readable_faint(0.9))
                             .child("Optional. Leave blank for no limit."),
@@ -1554,7 +1571,7 @@ impl Composer {
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
+                    .gap(crate::typography::ui_rems(6.0))
                     .child(
                         div()
                             .id("goal-updated")

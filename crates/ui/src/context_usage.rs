@@ -46,9 +46,11 @@ const RING_GAP: f32 = 5.0;
 /// row, so the row can give the label up before it truncates anything.
 pub fn chip_widths(label: &str, window: &gpui::Window, theme: &Theme) -> (f32, f32) {
     let text = crate::pickers::chip_text_width(label, window, theme);
+    // Rem-sized chip geometry around text measured at the live size.
+    let scale = theme.ui_scale();
     (
-        2.0 * CHIP_PAD_X + RING + RING_GAP + text,
-        2.0 * CHIP_PAD_X + RING,
+        (2.0 * CHIP_PAD_X + RING + RING_GAP) * scale + text,
+        (2.0 * CHIP_PAD_X + RING) * scale,
     )
 }
 
@@ -102,7 +104,7 @@ pub fn render(
             arc(fraction.unwrap_or(0.0).clamp(0.0, 1.0) as f32, ring_color);
         },
     )
-    .size(px(RING));
+    .size(crate::typography::ui_rems(RING));
     let label = label(usage, compact_status);
     let accessible: SharedString = match compact_status {
         ContextOperationStatus::Running => "Context window: compacting".into(),
@@ -116,9 +118,9 @@ pub fn render(
         .flex_none()
         .flex()
         .items_center()
-        .gap(px(RING_GAP))
-        .h(px(crate::pickers::CONTROL_HEIGHT))
-        .px(px(CHIP_PAD_X))
+        .gap(crate::typography::ui_rems(RING_GAP))
+        .h(crate::typography::ui_rems(crate::pickers::CONTROL_HEIGHT))
+        .px(crate::typography::ui_rems(CHIP_PAD_X))
         .rounded_full()
         .text_size(crate::typography::ui_rems(12.0))
         .text_color(color)
@@ -196,10 +198,10 @@ impl Render for UsageCard {
         let theme = &Theme::of(cx).for_popup();
         let card = crate::popover::popover_card(theme)
             .bg(theme.tooltip_surface())
-            .p(px(12.0))
+            .p(crate::typography::ui_rems(12.0))
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .child(
                 div()
                     .text_size(crate::typography::ui_rems(12.0))

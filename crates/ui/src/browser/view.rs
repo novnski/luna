@@ -112,15 +112,15 @@ impl BrowserSurface {
         };
         let mut content = div()
             .w_full()
-            .max_w(px(280.0))
+            .max_w(crate::typography::ui_rems(280.0))
             .flex_shrink_0()
             .my_auto()
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .child(
                 div()
-                    .mb(px(4.0))
+                    .mb(crate::typography::ui_rems(4.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(theme.text_muted)
                     .child(subtitle),
@@ -141,13 +141,13 @@ impl BrowserSurface {
                         service.id
                     )))
                     .w_full()
-                    .h(px(56.0))
-                    .px(px(14.0))
+                    .h(crate::typography::ui_rems(56.0))
+                    .px(crate::typography::ui_rems(14.0))
                     .rounded(px(10.0))
                     .border_1()
                     .flex()
                     .items_center()
-                    .gap(px(10.0))
+                    .gap(crate::typography::ui_rems(10.0))
                     .hover_colors(
                         format!("preview-row-{}", service.id),
                         crate::interaction::HoverColors {
@@ -218,8 +218,8 @@ impl BrowserSurface {
                                 "open-preview-{}",
                                 service.id
                             )))
-                            .h(px(28.0))
-                            .px(px(6.0))
+                            .h(crate::typography::ui_rems(28.0))
+                            .px(crate::typography::ui_rems(6.0))
                             .flex_shrink_0()
                             .rounded(px(6.0))
                             .flex()
@@ -254,7 +254,7 @@ impl BrowserSurface {
             };
             content = content.child(
                 div()
-                    .p(px(16.0))
+                    .p(crate::typography::ui_rems(16.0))
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(theme.border)
@@ -276,7 +276,7 @@ impl BrowserSurface {
         content = content.child(
             div()
                 .id("preview-enter-address")
-                .mt(px(8.0))
+                .mt(crate::typography::ui_rems(8.0))
                 .text_size(crate::typography::ui_rems(11.0))
                 .text_color(theme.text_muted)
                 .cursor_pointer()
@@ -322,18 +322,18 @@ impl BrowserSurface {
             .flex()
             .items_center()
             .justify_center()
-            .p(px(24.0))
+            .p(crate::typography::ui_rems(24.0))
             .child(
                 div()
                     .w_full()
-                    .max_w(px(300.0))
+                    .max_w(crate::typography::ui_rems(300.0))
                     .flex()
                     .flex_col()
                     .items_center()
-                    .gap(px(12.0))
+                    .gap(crate::typography::ui_rems(12.0))
                     .child(
                         div()
-                            .size(px(44.0))
+                            .size(crate::typography::ui_rems(44.0))
                             .rounded(px(12.0))
                             .border_1()
                             .border_color(theme.border)
@@ -343,13 +343,13 @@ impl BrowserSurface {
                             .justify_center()
                             .child(
                                 icons::icon(icons::GLOBE)
-                                    .size(px(22.0))
+                                    .size(crate::typography::ui_rems(22.0))
                                     .text_color(theme.text_muted),
                             ),
                     )
                     .child(
                         div()
-                            .mt(px(4.0))
+                            .mt(crate::typography::ui_rems(4.0))
                             .text_size(crate::typography::ui_rems(14.0))
                             .font_weight(gpui::FontWeight::MEDIUM)
                             .text_color(theme.text)
@@ -365,10 +365,10 @@ impl BrowserSurface {
                     )
                     .child(
                         div()
-                            .mt(px(6.0))
+                            .mt(crate::typography::ui_rems(6.0))
                             .id("browser-empty-action")
-                            .h(px(28.0))
-                            .px(px(10.0))
+                            .h(crate::typography::ui_rems(28.0))
+                            .px(crate::typography::ui_rems(10.0))
                             .rounded(px(6.0))
                             .border_1()
                             .border_color(theme.border)
@@ -389,7 +389,7 @@ impl BrowserSurface {
                             )
                             .flex()
                             .items_center()
-                            .gap(px(8.0))
+                            .gap(crate::typography::ui_rems(8.0))
                             .text_size(crate::typography::ui_rems(12.0))
                             .text_color(theme.text)
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -499,7 +499,7 @@ impl Render for BrowserSurface {
             )
             .child(
                 icons::icon(icons::GLOBE)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .flex_none()
                     .text_color(theme.text_faint),
             )
@@ -507,7 +507,7 @@ impl Render for BrowserSurface {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .h(px(16.0))
+                    .h(crate::typography::ui_rems(16.0))
                     .overflow_hidden()
                     .child(self.address.clone()),
             )
@@ -515,7 +515,7 @@ impl Render for BrowserSurface {
                 el.child(
                     div()
                         .id("browser-go")
-                        .size(px(18.0))
+                        .size(crate::typography::ui_rems(18.0))
                         .flex_none()
                         .rounded(px(3.0))
                         .flex()
@@ -529,7 +529,7 @@ impl Render for BrowserSurface {
                         .on_click(cx.listener(|this, _, w, cx| this.submit(w, cx)))
                         .child(
                             icons::icon(icons::RETURN)
-                                .size(px(12.0))
+                                .size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.text_muted),
                         ),
                 )
@@ -684,13 +684,13 @@ impl Render for BrowserSurface {
             .on_action(cx.listener(|this, _: &super::Back, _, _| this.history(false)))
             .on_action(cx.listener(|this, _: &super::Forward, _, _| this.history(true)))
             .child(toolbar)
-            .when_some(self.validation.clone(), |el, message| el.child(div().px(px(12.0)).py(px(8.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.readable_tone(theme.danger, 1.0)).child(message)))
-            .when(remote_loopback, |el| el.child(div().px(px(12.0)).py(px(8.0)).border_b_1().border_color(theme.border)
+            .when_some(self.validation.clone(), |el, message| el.child(div().px(crate::typography::ui_rems(12.0)).py(crate::typography::ui_rems(8.0)).text_size(crate::typography::ui_rems(11.0)).text_color(theme.readable_tone(theme.danger, 1.0)).child(message)))
+            .when(remote_loopback, |el| el.child(div().px(crate::typography::ui_rems(12.0)).py(crate::typography::ui_rems(8.0)).border_b_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_muted)
                 .child("Localhost opens on this device. Open a detected preview from a new tab to reach your other device.")))
             .child(body)
-            .when(external, |el| el.child(div().h(px(26.0)).px(px(10.0)).flex().items_center().gap(px(5.0)).border_t_1().border_color(theme.border)
+            .when(external, |el| el.child(div().h(crate::typography::ui_rems(26.0)).px(crate::typography::ui_rems(10.0)).flex().items_center().gap(crate::typography::ui_rems(5.0)).border_t_1().border_color(theme.border)
                 .text_size(crate::typography::ui_rems(11.0)).text_color(theme.text_faint)
-                .child(icons::icon(icons::ARROW_UP_RIGHT).size(px(11.0))).child("Opens in your default browser")))
+                .child(icons::icon(icons::ARROW_UP_RIGHT).size(crate::typography::ui_rems(11.0))).child("Opens in your default browser")))
     }
 }

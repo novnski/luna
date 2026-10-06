@@ -504,11 +504,11 @@ impl Transcript {
                 let card: Option<AnyElement> = is_hovered.then(|| {
                     let theme = theme.for_popup();
                     let card = popover::popover_card(&theme)
-                        .w(px(280.0))
+                        .w(crate::typography::ui_rems(280.0))
                         .p(px(Theme::SPACE_SM))
                         .flex()
                         .flex_col()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .child(
                             div()
                                 .text_size(crate::typography::ui_rems(12.0))

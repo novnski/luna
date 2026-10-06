@@ -413,9 +413,9 @@ impl Render for HistoryColumnGhost {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         div()
-            .h(px(24.0))
-            .min_w(px(64.0))
-            .px(px(9.0))
+            .h(crate::typography::ui_rems(24.0))
+            .min_w(crate::typography::ui_rems(64.0))
+            .px(crate::typography::ui_rems(9.0))
             .flex()
             .items_center()
             .justify_center()
@@ -1219,11 +1219,11 @@ impl Render for HistoryRefTooltip {
         let width = (longest as f32 * 6.4 + 16.0).clamp(72.0, 360.0);
         div()
             .w(px(width))
-            .px(px(8.0))
-            .py(px(6.0))
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(6.0))
             .flex()
             .flex_col()
-            .gap(px(3.0))
+            .gap(crate::typography::ui_rems(3.0))
             .rounded(px(5.0))
             .border_1()
             .border_color(theme.border_strong)
@@ -1249,16 +1249,12 @@ struct HistoryAuthorTooltip {
 impl Render for HistoryAuthorTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
+        // Estimated at the 16 px baseline, then scaled like the text.
         let width = (self.name.chars().count() as f32 * 6.2 + 16.0).clamp(72.0, 260.0);
-        div()
-            .w(px(width))
-            .px(px(8.0))
-            .py(px(5.0))
-            .rounded(px(5.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.tooltip_surface())
-            .shadow_md()
+        crate::popover::tooltip_card(theme)
+            .w(crate::typography::ui_rems(width))
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(5.0))
             .truncate()
             .whitespace_nowrap()
             .text_size(crate::typography::ui_rems(11.0))
@@ -1557,12 +1553,12 @@ impl Render for GitHistoryFetchButton {
         div()
             .id("history-fetch-all")
             .h(px(crate::surface_chrome::CONTROL_SIZE))
-            .px(px(8.0))
+            .px(crate::typography::ui_rems(8.0))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
             .bg(if fetching {
                 crate::theme::wash(0.05)
@@ -1743,7 +1739,7 @@ impl Render for GitHistorySearchControl {
             .into_any_element()
         } else {
             crate::icons::icon(crate::icons::MAGNIFER)
-                .size(px(11.0))
+                .size(crate::typography::ui_rems(11.0))
                 .flex_none()
                 .text_color(theme.text_faint)
                 .into_any_element()
@@ -1752,19 +1748,19 @@ impl Render for GitHistorySearchControl {
             .id("history-search-expanded")
             .h(px(crate::surface_chrome::CONTROL_SIZE))
             .w(px(HISTORY_SEARCH_WIDTH))
-            .min_w(px(80.0))
+            .min_w(crate::typography::ui_rems(80.0))
             .flex_shrink(1.0)
             .overflow_hidden()
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .pl(px(crate::surface_chrome::EDGE_INSET))
             .pr(px(2.0))
             .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
             .bg(crate::theme::ink(0.035))
             .child(
                 div()
-                    .size(px(14.0))
+                    .size(crate::typography::ui_rems(14.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -1773,7 +1769,7 @@ impl Render for GitHistorySearchControl {
             )
             .child(
                 div()
-                    .h(px(14.0))
+                    .h(crate::typography::ui_rems(14.0))
                     .flex_1()
                     .min_w_0()
                     .flex()
@@ -1785,7 +1781,7 @@ impl Render for GitHistorySearchControl {
                 div()
                     .id("history-search-close")
                     // A 24 pt hit box in a 16 pt footprint (audit DS-19).
-                    .size(px(24.0))
+                    .size(crate::typography::ui_rems(24.0))
                     .m(px(-4.0))
                     .flex_none()
                     .flex()
@@ -1803,7 +1799,7 @@ impl Render for GitHistorySearchControl {
                     })
                     .child(
                         crate::icons::icon(crate::icons::CLOSE)
-                            .size(px(9.0))
+                            .size(crate::typography::ui_rems(9.0))
                             .text_color(theme.text_faint),
                     ),
             )
@@ -1858,7 +1854,7 @@ impl Render for GitHistoryCount {
                         .min_w_0()
                         .flex()
                         .items_center()
-                        .gap(px(10.0))
+                        .gap(crate::typography::ui_rems(10.0))
                         .when_some(count, |element, count| {
                             element.child(
                                 div()
@@ -1887,7 +1883,7 @@ impl Render for GitHistoryCount {
                                         .flex_none()
                                         .flex()
                                         .items_center()
-                                        .gap(px(4.0))
+                                        .gap(crate::typography::ui_rems(4.0))
                                         .when(ahead > 0, |comparison| {
                                             comparison.child(
                                                 div()
@@ -3206,7 +3202,7 @@ impl GitHistory {
         let theme = &theme.for_popup();
         let show_name = configured_author_display(cx) == GitHistoryAuthorDisplay::Name;
         popover::popover_card(theme)
-            .w(px(116.0))
+            .w(crate::typography::ui_rems(116.0))
             .p(px(popover::CARD_INSET))
             .rounded(px(9.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_author_menu(cx)))
@@ -3214,8 +3210,8 @@ impl GitHistory {
                 popover::menu_row(theme, false, "history-author-display-name")
                     .id("history-author-display-name")
                     .gap(px(0.0))
-                    .px(px(7.0))
-                    .py(px(4.0))
+                    .px(crate::typography::ui_rems(7.0))
+                    .py(crate::typography::ui_rems(4.0))
                     .rounded(px(9.0 - popover::CARD_INSET))
                     .text_size(crate::typography::ui_rems(11.5))
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -3224,16 +3220,20 @@ impl GitHistory {
                         this.close_author_menu(cx);
                     }))
                     .child(div().flex_1().child("Name"))
-                    .child(div().w(px(12.0)).flex_none().flex().justify_end().when(
-                        show_name,
-                        |element| {
-                            element.child(
-                                crate::icons::icon(crate::icons::CHECK)
-                                    .size(px(10.0))
-                                    .text_color(theme.text_muted),
-                            )
-                        },
-                    )),
+                    .child(
+                        div()
+                            .w(crate::typography::ui_rems(12.0))
+                            .flex_none()
+                            .flex()
+                            .justify_end()
+                            .when(show_name, |element| {
+                                element.child(
+                                    crate::icons::icon(crate::icons::CHECK)
+                                        .size(crate::typography::ui_rems(10.0))
+                                        .text_color(theme.text_muted),
+                                )
+                            }),
+                    ),
             )
             .into_any_element()
     }
@@ -3243,46 +3243,49 @@ impl GitHistory {
         let columns = configured_columns(cx);
         let widths = configured_column_widths(cx);
         let order = configured_column_order(cx);
-        let option =
-            |label: &'static str,
-             checked: bool,
-             column: GitHistoryColumn,
-             index: usize,
-             cx: &mut Context<Self>| {
-                popover::menu_row(
-                    theme,
-                    false,
-                    SharedString::from(format!("history-column-option-{index}")),
-                )
-                .id(("history-column-option", index))
-                .gap(px(0.0))
-                .px(px(7.0))
-                .py(px(4.0))
-                .rounded(px(9.0 - popover::CARD_INSET))
-                .text_size(crate::typography::ui_rems(11.5))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.toggle_column(column, cx);
-                }))
-                .child(div().flex_1().child(label))
-                .child(div().w(px(12.0)).flex_none().flex().justify_end().when(
-                    checked,
-                    |element| {
+        let option = |label: &'static str,
+                      checked: bool,
+                      column: GitHistoryColumn,
+                      index: usize,
+                      cx: &mut Context<Self>| {
+            popover::menu_row(
+                theme,
+                false,
+                SharedString::from(format!("history-column-option-{index}")),
+            )
+            .id(("history-column-option", index))
+            .gap(px(0.0))
+            .px(crate::typography::ui_rems(7.0))
+            .py(crate::typography::ui_rems(4.0))
+            .rounded(px(9.0 - popover::CARD_INSET))
+            .text_size(crate::typography::ui_rems(11.5))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.toggle_column(column, cx);
+            }))
+            .child(div().flex_1().child(label))
+            .child(
+                div()
+                    .w(crate::typography::ui_rems(12.0))
+                    .flex_none()
+                    .flex()
+                    .justify_end()
+                    .when(checked, |element| {
                         element.child(
                             crate::icons::icon(crate::icons::CHECK)
-                                .size(px(10.0))
+                                .size(crate::typography::ui_rems(10.0))
                                 .text_color(theme.text_muted),
                         )
-                    },
-                ))
-            };
+                    }),
+            )
+        };
         let defaults = GitHistoryColumns::default();
         let can_reset = columns != defaults
             || widths != GitHistoryColumnWidths::default()
             || order != GitHistoryColumnOrder::default();
 
         popover::popover_card(theme)
-            .w(px(132.0))
+            .w(crate::typography::ui_rems(132.0))
             .p(px(popover::CARD_INSET))
             .rounded(px(9.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_column_menu(cx)))
@@ -3304,15 +3307,15 @@ impl GitHistory {
                         menu.child(
                             div()
                                 .h(px(1.0))
-                                .mx(px(5.0))
+                                .mx(crate::typography::ui_rems(5.0))
                                 .my(px(2.0))
                                 .bg(crate::theme::hairline(0.08)),
                         )
                         .child(
                             popover::menu_row(theme, false, "history-columns-reset")
                                 .id("history-columns-reset")
-                                .px(px(7.0))
-                                .py(px(4.0))
+                                .px(crate::typography::ui_rems(7.0))
+                                .py(crate::typography::ui_rems(4.0))
                                 .rounded(px(9.0 - popover::CARD_INSET))
                                 .text_size(crate::typography::ui_rems(11.5))
                                 .text_color(theme.text_muted)
@@ -4337,7 +4340,7 @@ impl Render for GitHistory {
                 .flex()
                 .items_center()
                 .justify_center()
-                .px(px(20.0))
+                .px(crate::typography::ui_rems(20.0))
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(if active_error.is_some() {
                     theme.warning
@@ -4368,11 +4371,11 @@ impl Render for GitHistory {
             .when_some(self.fetch_error.clone(), |element, error| {
                 element.child(
                     div()
-                        .h(px(28.0))
+                        .h(crate::typography::ui_rems(28.0))
                         .flex_none()
                         .flex()
                         .items_center()
-                        .px(px(8.0))
+                        .px(crate::typography::ui_rems(8.0))
                         .border_b_1()
                         .border_color(theme.danger.opacity(0.16))
                         .bg(theme.danger.opacity(0.05))
@@ -4396,11 +4399,11 @@ impl Render for GitHistory {
                 |element, error| {
                     element.child(
                         div()
-                            .h(px(28.0))
+                            .h(crate::typography::ui_rems(28.0))
                             .flex_none()
                             .flex()
                             .items_center()
-                            .px(px(8.0))
+                            .px(crate::typography::ui_rems(8.0))
                             .border_b_1()
                             .border_color(theme.danger.opacity(0.16))
                             .bg(theme.danger.opacity(0.05))

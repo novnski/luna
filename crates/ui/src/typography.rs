@@ -505,6 +505,8 @@ pub fn init(
     let effective = resolve_effective(&requested, &availability);
     let terminal_effective = resolve_effective_mono(&terminal_requested, &availability, true);
     let code_effective = resolve_effective_mono(&code_requested, &availability, false);
+    #[cfg(feature = "appshots-fixture")]
+    let size = fixture_size_override().unwrap_or(size);
     cx.set_global(TypographyState {
         requested,
         effective,
@@ -518,6 +520,19 @@ pub fn init(
         availability,
         generation: 0,
     });
+}
+
+/// Fixture-only Interface size override (`LUNA_FIXTURE_UI_SIZE=12|16|20`), so
+/// every headless capture can be repeated at the ends of the scale without
+/// each fixture growing its own flag. Never compiled into the app.
+#[cfg(feature = "appshots-fixture")]
+fn fixture_size_override() -> Option<UiFontSize> {
+    let pixels = std::env::var("LUNA_FIXTURE_UI_SIZE")
+        .ok()?
+        .trim()
+        .parse::<u8>()
+        .ok()?;
+    Some(UiFontSize(pixels).normalized())
 }
 
 pub fn requested(cx: &App) -> UiFontFamily {

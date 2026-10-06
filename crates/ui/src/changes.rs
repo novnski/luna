@@ -1764,14 +1764,9 @@ struct DiffHeaderTooltip(&'static str);
 impl Render for DiffHeaderTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.tooltip_surface())
-            .shadow_md()
+        crate::popover::tooltip_card(theme)
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(6.0))
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
             .child(self.0)
@@ -3633,7 +3628,7 @@ impl Changes {
         };
         let chevron: AnyElement = div()
             .flex_none()
-            .size(px(14.0))
+            .size(crate::typography::ui_rems(14.0))
             .flex()
             .items_center()
             .justify_center()
@@ -3642,7 +3637,7 @@ impl Changes {
                     .with_transformation(gpui::Transformation::rotate(gpui::radians(
                         std::f32::consts::FRAC_PI_2 * open_progress,
                     )))
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .text_color(theme.readable_muted(0.7)),
             )
             .into_any_element();
@@ -3668,7 +3663,7 @@ impl Changes {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .px(px(Theme::SPACE_MD))
             .cursor_pointer()
             .hover_fill(presentation.element_id(ix), rest_bg, hover_bg)
@@ -3682,7 +3677,7 @@ impl Changes {
                     crate::file_icons::FileIconIdentity::file(&file.path),
                     theme.appearance,
                 )
-                .size(px(14.0))
+                .size(crate::typography::ui_rems(14.0))
                 .flex_none(),
             )
             .child(
@@ -3902,7 +3897,7 @@ impl Changes {
                     div()
                         .flex_none()
                         .h(px(crate::surface_chrome::CONTROL_SIZE))
-                        .px(px(6.0))
+                        .px(crate::typography::ui_rems(6.0))
                         .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
                         .flex()
                         .items_center()
@@ -3948,12 +3943,12 @@ impl Changes {
         let scope_trigger = div()
             .id("changes-scope-trigger")
             .h(px(crate::surface_chrome::CONTROL_SIZE))
-            .px(px(8.0))
+            .px(crate::typography::ui_rems(8.0))
             .flex_none()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(6.0))
+            .gap(crate::typography::ui_rems(6.0))
             .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
             .cursor_pointer()
             .bg(motion::hover_blend(
@@ -3988,7 +3983,7 @@ impl Changes {
             )
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .text_color(theme.readable_muted(0.7)),
             );
         let trigger = if scope == DiffScope::History {
@@ -3997,10 +3992,10 @@ impl Changes {
             div()
                 .id("history-surface-title")
                 .min_w_0()
-                .max_w(px(160.0))
+                .max_w(crate::typography::ui_rems(160.0))
                 .truncate()
                 .h(px(crate::surface_chrome::CONTROL_SIZE))
-                .px(px(8.0))
+                .px(crate::typography::ui_rems(8.0))
                 .flex_shrink(1.0)
                 .flex()
                 .items_center()
@@ -4057,7 +4052,7 @@ impl Changes {
                         div()
                             .id("changes-git-actions")
                             .h(px(crate::surface_chrome::CONTROL_SIZE))
-                            .px(px(8.0))
+                            .px(crate::typography::ui_rems(8.0))
                             .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
                             .flex()
                             .items_center()
@@ -4118,7 +4113,7 @@ impl Changes {
         let theme = &theme.for_popup();
         let current = self.scope;
         popover::popover_card(theme)
-            .w(px(180.0))
+            .w(crate::typography::ui_rems(180.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_scope_menu(cx)))
             .child(
                 // The 2px row gap every other menu carries — rows straight on
@@ -4167,7 +4162,7 @@ impl Changes {
         let trigger = div()
             .id("changes-ref-trigger")
             .h(px(crate::surface_chrome::CONTROL_SIZE))
-            .px(px(6.0))
+            .px(crate::typography::ui_rems(6.0))
             // Shrinkable, like the branch label beside it — a flex_none
             // trigger with a long base name plowed over the header buttons
             // (user report); both sides truncate instead.
@@ -4176,7 +4171,7 @@ impl Changes {
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .rounded(px(6.0))
             .cursor_pointer()
             .bg(motion::hover_blend(
@@ -4213,7 +4208,7 @@ impl Changes {
             )
             .child(
                 crate::icons::icon(crate::icons::ALT_ARROW_DOWN)
-                    .size(px(11.0))
+                    .size(crate::typography::ui_rems(11.0))
                     .flex_none()
                     .text_color(theme.readable_muted(0.7)),
             );
@@ -4235,7 +4230,7 @@ impl Changes {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(6.0))
+                .gap(crate::typography::ui_rems(6.0))
                 // Extra room off the scope dropdown (row gap alone read
                 // cramped — user report).
                 .ml(px(crate::surface_chrome::CONTROL_GAP))
@@ -4251,7 +4246,7 @@ impl Changes {
                 )
                 .child(
                     crate::icons::icon(crate::icons::ARROW_RIGHT)
-                        .size(px(12.0))
+                        .size(crate::typography::ui_rems(12.0))
                         .flex_none()
                         .text_color(theme.text_faint),
                 )
@@ -4279,8 +4274,8 @@ impl Changes {
 
         let list: AnyElement = if rows.is_empty() {
             div()
-                .px(px(8.0))
-                .py(px(6.0))
+                .px(crate::typography::ui_rems(8.0))
+                .py(crate::typography::ui_rems(6.0))
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
                 .child(SharedString::from(if branches.is_empty() {
@@ -4295,7 +4290,7 @@ impl Changes {
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
-                .max_h(px(240.0))
+                .max_h(crate::typography::ui_rems(240.0))
                 .overflow_y_scroll()
                 .track_scroll(&list_scroll)
                 .children(rows.into_iter().enumerate().map(|(row_ix, branch_ix)| {
@@ -4330,7 +4325,7 @@ impl Changes {
         };
 
         popover::popover_card(theme)
-            .w(px(240.0))
+            .w(crate::typography::ui_rems(240.0))
             .track_focus(&focus)
             .on_key_down(
                 cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| this.ref_menu_key(event, cx)),
@@ -4355,7 +4350,7 @@ impl Changes {
                 .flex()
                 .flex_row()
                 .items_center()
-                .gap(px(10.0))
+                .gap(crate::typography::ui_rems(10.0))
                 .px(px(Theme::SPACE_LG))
                 .border_b_1()
                 .border_color(crate::theme::hairline(0.06))
@@ -4391,7 +4386,7 @@ impl Changes {
                         div()
                             .flex_none()
                             .text_size(crate::typography::ui_rems(11.0))
-                            .px(px(6.0))
+                            .px(crate::typography::ui_rems(6.0))
                             .py(px(2.0))
                             .rounded(px(4.0))
                             .bg(theme.warning.opacity(0.08))
@@ -5410,7 +5405,7 @@ impl Render for Changes {
                     div()
                         .flex_none()
                         .px(px(Theme::SPACE_MD))
-                        .py(px(4.0))
+                        .py(crate::typography::ui_rems(4.0))
                         .border_b_1()
                         .border_color(theme.border)
                         .text_size(crate::typography::ui_rems(11.0))

@@ -70,18 +70,13 @@ impl ChangeRequestTooltip {
 impl Render for ChangeRequestTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
-        let card = div()
-            .max_w(px(320.0))
-            .px(px(9.0))
-            .py(px(7.0))
+        let card = crate::popover::tooltip_card(theme)
+            .max_w(crate::typography::ui_rems(320.0))
+            .px(crate::typography::ui_rems(9.0))
+            .py(crate::typography::ui_rems(7.0))
             .flex()
             .flex_col()
-            .gap(px(3.0))
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.tooltip_surface())
-            .shadow_md()
+            .gap(crate::typography::ui_rems(3.0))
             .child(
                 div()
                     .text_size(crate::typography::ui_rems(11.0))
@@ -175,7 +170,7 @@ pub(crate) fn pull_request_badge_with_query(
         .when(composer, |element| {
             element.child(
                 crate::icons::icon(crate::icons::PULL_REQUEST)
-                    .size(px(11.0))
+                    .size(crate::typography::ui_rems(11.0))
                     .flex_none()
                     .text_color(theme.readable_tone(color, 0.85)),
             )

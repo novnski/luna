@@ -18,7 +18,7 @@ use gpui::{
 use std::time::{Duration, Instant};
 
 use crate::motion::{self, LUNA_PULSE};
-use crate::theme::{Theme, hairline, ink};
+use crate::theme::Theme;
 
 // ---------------------------------------------------------------------------
 // Loadable — async slot state shared by pickers/settings pages
@@ -302,9 +302,12 @@ pub fn classify_key(key: &str, cmd: bool, ctrl: bool) -> MenuKey {
 pub const CARD_RADIUS: f32 = 12.0;
 
 pub const MENU_GAP: f32 = 2.0;
-/// One hairline alpha for every separator inside floating menus (CP-24).
+/// One hairline alpha for every separator inside floating menus (CP-24). The
+/// kit's own separators paint [`crate::theme::separator`] (the same 8%, but
+/// tinted by the palette); this stays for callers that need the number.
 pub const MENU_HAIRLINE: f32 = 0.08;
 /// Menu width tokens (CP-24): content may widen a card, never shrink it.
+/// Quoted at the 16 px baseline; the kit lays them out as interface rems.
 pub const MENU_W_S: f32 = 240.0;
 pub const MENU_W_M: f32 = 280.0;
 pub const MENU_W_L: f32 = 320.0;
@@ -347,12 +350,16 @@ pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
 /// [`Theme::tooltip_surface`] fill (never translucent, never frosted), a
 /// strong hairline and a soft shadow. Content sets its own padding/width.
 pub fn tooltip_card(theme: &Theme) -> gpui::Div {
+    // Tooltips lay out as their own root, outside the window's element tree,
+    // so they inherit GPUI's default family unless the card names the
+    // interface font itself.
     div()
         .rounded(px(8.0))
         .border_1()
         .border_color(theme.border_strong)
         .bg(theme.tooltip_surface())
         .shadow(crate::theme::tooltip_shadows())
+        .font_family(theme.font_sans.clone())
 }
 
 /// The one plain-text tooltip (UI polish audit CP-12, SH-21, DS-20): the
@@ -367,10 +374,12 @@ impl gpui::Render for TextTooltip {
         // a fixed width instead of running one wide line.
         let wraps = self.0.chars().count() > 48;
         tooltip_card(theme)
-            .when(wraps, |card| card.w(px(TOOLTIP_MAX_WIDTH)))
+            .when(wraps, |card| {
+                card.w(crate::typography::ui_rems(TOOLTIP_MAX_WIDTH))
+            })
             .when(!wraps, |card| card.whitespace_nowrap())
-            .px(px(8.0))
-            .py(px(5.0))
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(5.0))
             .font_family(theme.font_sans.clone())
             .type_style(TextStyle::Caption)
             .text_color(theme.text)
@@ -983,9 +992,9 @@ pub fn menu_row(theme: &Theme, active: bool, fade_key: impl Into<SharedString>) 
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(10.0))
-        .px(px(8.0))
-        .py(px(6.0))
+        .gap(crate::typography::ui_rems(10.0))
+        .px(crate::typography::ui_rems(8.0))
+        .py(crate::typography::ui_rems(6.0))
         .rounded(px(MENU_ITEM_RADIUS))
         .text_size(crate::typography::ui_rems(13.0))
         .cursor_pointer();
@@ -1040,10 +1049,10 @@ pub fn menu_row_nav(theme: &Theme, selected: bool, highlighted: bool) -> gpui::D
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(10.0))
-        .pl(px(8.0))
-        .pr(px(MENU_CHECK_COLUMN))
-        .py(px(6.0))
+        .gap(crate::typography::ui_rems(10.0))
+        .pl(crate::typography::ui_rems(8.0))
+        .pr(crate::typography::ui_rems(MENU_CHECK_COLUMN))
+        .py(crate::typography::ui_rems(6.0))
         .rounded(px(MENU_ITEM_RADIUS))
         .text_size(crate::typography::ui_rems(13.0))
         .cursor_pointer()
@@ -1059,12 +1068,12 @@ pub fn menu_row_nav(theme: &Theme, selected: bool, highlighted: bool) -> gpui::D
                     .absolute()
                     .top_0()
                     .bottom_0()
-                    .right(px(8.0))
+                    .right(crate::typography::ui_rems(8.0))
                     .flex()
                     .items_center()
                     .child(
                         crate::icons::icon(crate::icons::CHECK)
-                            .size(px(14.0))
+                            .size(crate::typography::ui_rems(14.0))
                             .text_color(theme.text),
                     ),
             )
@@ -1076,7 +1085,7 @@ pub fn menu_row_nav(theme: &Theme, selected: bool, highlighted: bool) -> gpui::D
 /// without the check column.
 pub fn menu_row_cursor(theme: &Theme, highlighted: bool) -> gpui::Div {
     menu_row_nav(theme, false, highlighted)
-        .pr(px(8.0))
+        .pr(crate::typography::ui_rems(8.0))
         .rounded(px(STACK_POPUP_ROW_RADIUS))
 }
 
@@ -1106,9 +1115,9 @@ pub fn menu_step_where(
 pub fn menu_heading(theme: &Theme, label: &str) -> gpui::Div {
     let theme = &theme.for_popup();
     div()
-        .px(px(8.0))
-        .pb(px(4.0))
-        .pt(px(6.0))
+        .px(crate::typography::ui_rems(8.0))
+        .pb(crate::typography::ui_rems(4.0))
+        .pt(crate::typography::ui_rems(6.0))
         // 11 pt semibold: the menu ramp's floor (audit CP-14).
         .text_size(crate::typography::ui_rems(11.0))
         .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -1140,7 +1149,7 @@ pub fn menu_separator() -> gpui::Div {
         .h(px(1.0))
         .mx(px(-CARD_INSET))
         .my(px(MENU_GAP))
-        .bg(hairline(MENU_HAIRLINE))
+        .bg(crate::theme::separator(false))
 }
 
 /// The recessed band tone for a palette/picker header or footer strip — a
@@ -1163,7 +1172,7 @@ pub fn palette_card(theme: &Theme, width: Pixels, corner_radius: f32) -> gpui::D
         .w(width)
         .rounded(px(corner_radius))
         .border_1()
-        .border_color(hairline(0.10))
+        .border_color(crate::theme::separator(false))
         .bg(surface_bg(theme))
         .shadow_lg()
         .overflow_hidden()
@@ -1176,14 +1185,14 @@ pub fn palette_card(theme: &Theme, width: Pixels, corner_radius: f32) -> gpui::D
 /// A compact search glyph with the same 16px slot as palette action icons.
 pub fn palette_search_icon(theme: &Theme) -> gpui::Div {
     div()
-        .size(px(16.0))
+        .size(crate::typography::ui_rems(16.0))
         .flex_none()
         .flex()
         .items_center()
         .justify_center()
         .child(
             crate::icons::icon(crate::icons::PALETTE_SEARCH)
-                .size(px(16.0))
+                .size(crate::typography::ui_rems(16.0))
                 .text_color(theme.text_muted),
         )
 }
@@ -1193,15 +1202,15 @@ pub fn palette_search_icon(theme: &Theme) -> gpui::Div {
 /// chips ("⌘K", "esc").
 pub fn key_cap(_theme: &Theme) -> gpui::Div {
     div()
-        .h(px(22.0))
-        .px(px(5.0))
+        .h(crate::typography::ui_rems(22.0))
+        .px(crate::typography::ui_rems(5.0))
         .rounded(px(5.0))
         .flex()
         .flex_row()
         .items_center()
         .justify_center()
-        .gap(px(4.0))
-        .bg(ink(0.05))
+        .gap(crate::typography::ui_rems(4.0))
+        .bg(crate::theme::fill(crate::theme::FillTier::Quaternary))
 }
 
 /// The tiny verb after a key-cap.
@@ -1221,11 +1230,11 @@ pub fn key_hint(theme: &Theme, icon_path: &'static str, label: &'static str) -> 
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(5.0))
+        .gap(crate::typography::ui_rems(5.0))
         .child(
             key_cap(theme).child(
                 crate::icons::icon(icon_path)
-                    .size(px(12.5))
+                    .size(crate::typography::ui_rems(12.5))
                     .text_color(theme.text_muted),
             ),
         )
@@ -1240,7 +1249,7 @@ pub fn key_hint_text(theme: &Theme, cap: &'static str, label: &'static str) -> g
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(5.0))
+        .gap(crate::typography::ui_rems(5.0))
         .child(
             key_cap(theme)
                 .text_size(crate::typography::ui_rems(11.0))
@@ -1264,18 +1273,23 @@ pub fn key_hint_pair(
         .flex()
         .flex_row()
         .items_center()
-        .gap(px(5.0))
+        .gap(crate::typography::ui_rems(5.0))
         .child(
             key_cap(theme)
                 .child(
                     crate::icons::icon(first)
-                        .size(px(12.5))
+                        .size(crate::typography::ui_rems(12.5))
                         .text_color(theme.text_muted),
                 )
-                .child(div().w(px(1.0)).h(px(11.0)).bg(hairline(0.10)))
+                .child(
+                    div()
+                        .w(px(1.0))
+                        .h(crate::typography::ui_rems(11.0))
+                        .bg(crate::theme::separator(false)),
+                )
                 .child(
                     crate::icons::icon(second)
-                        .size(px(12.5))
+                        .size(crate::typography::ui_rems(12.5))
                         .text_color(theme.text_muted),
                 ),
         )
@@ -1287,10 +1301,10 @@ pub fn kbd_hint(theme: &Theme, label: &str) -> gpui::Div {
     let theme = &theme.for_popup();
     div()
         .flex_none()
-        .px(px(5.0))
-        .py(px(1.0))
+        .px(crate::typography::ui_rems(5.0))
+        .py(crate::typography::ui_rems(1.0))
         .rounded(px(5.0))
-        .bg(ink(0.05))
+        .bg(crate::theme::fill(crate::theme::FillTier::Quaternary))
         .text_size(crate::typography::ui_rems(11.0))
         .font_family(theme.font_mono.clone())
         .text_color(theme.text_muted)
@@ -1303,11 +1317,11 @@ pub fn kbd_hint(theme: &Theme, label: &str) -> gpui::Div {
 /// p-1, only a 4px bottom margin).
 pub fn search_input_frame(_theme: &Theme, input: AnyElement) -> gpui::Div {
     div()
-        .mb(px(4.0))
-        .px(px(10.0))
-        .py(px(6.0))
+        .mb(crate::typography::ui_rems(4.0))
+        .px(crate::typography::ui_rems(10.0))
+        .py(crate::typography::ui_rems(6.0))
         .rounded(px(8.0))
-        .bg(ink(0.04))
+        .bg(crate::theme::fill(crate::theme::FillTier::Quaternary))
         .text_size(crate::typography::ui_rems(13.0))
         .child(input)
 }
@@ -1318,10 +1332,10 @@ pub fn search_input_frame(_theme: &Theme, input: AnyElement) -> gpui::Div {
 /// p-1 inset, unlike [`menu_separator`]'s mx-1).
 pub fn menu_section() -> gpui::Div {
     div()
-        .mt(px(4.0))
-        .pt(px(4.0))
+        .mt(crate::typography::ui_rems(4.0))
+        .pt(crate::typography::ui_rems(4.0))
         .border_t_1()
-        .border_color(hairline(MENU_HAIRLINE))
+        .border_color(crate::theme::separator(false))
         .flex()
         .flex_col()
         .gap(px(2.0))
@@ -1335,12 +1349,12 @@ pub fn menu_section() -> gpui::Div {
 /// would show through the translucent card, so only opaque cards use it.
 pub fn dialog_card(theme: &Theme) -> gpui::Div {
     div()
-        .w(px(360.0))
-        .p(px(20.0))
+        .w(crate::typography::ui_rems(360.0))
+        .p(crate::typography::ui_rems(20.0))
         .rounded(px(16.0))
         .bg(surface_bg(theme))
         .border_1()
-        .border_color(hairline(0.10))
+        .border_color(crate::theme::separator(false))
         .when(!theme.is_frost(), |el| el.shadow_lg())
         .flex()
         .flex_col()
@@ -1370,12 +1384,12 @@ pub fn dialog_body(theme: &Theme, copy: impl Into<SharedString>) -> gpui::Div {
 pub fn dialog_field(input: AnyElement) -> gpui::Div {
     div()
         .w_full()
-        .px(px(12.0))
-        .py(px(8.0))
+        .px(crate::typography::ui_rems(12.0))
+        .py(crate::typography::ui_rems(8.0))
         .rounded(px(8.0))
         .border_1()
-        .border_color(hairline(0.08))
-        .bg(ink(0.04))
+        .border_color(crate::theme::separator(false))
+        .bg(crate::theme::fill(crate::theme::FillTier::Quaternary))
         .text_size(crate::typography::ui_rems(14.0))
         .child(input)
 }
@@ -1453,22 +1467,24 @@ pub fn btn_danger(theme: &Theme, label: &str) -> DialogButton {
 /// `h-7 animate-pulse rounded-md bg-white/[0.04]`).
 pub fn skeleton_rows(
     _id: &'static str,
-    _theme: &Theme,
+    theme: &Theme,
     count: usize,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
-    let wash = ink(0.04);
+    // Bars are interface rems like the rows they stand in for, on the
+    // theme's quietest fill instead of a raw wash.
+    let wash = theme.fill(crate::theme::FillTier::Quaternary);
     let delta = motion::pulse_delta(&LUNA_PULSE, view, cx);
     div()
         .flex()
         .flex_col()
-        .gap(px(6.0))
-        .py(px(4.0))
+        .gap(crate::typography::ui_rems(6.0))
+        .py(crate::typography::ui_rems(4.0))
         .children((0..count).map(move |i| {
             let phase = motion::staggered_phase(delta, i, 0.08);
             div()
-                .h(px(28.0))
+                .h(crate::typography::ui_rems(28.0))
                 .rounded(px(Theme::CONTROL_RADIUS))
                 .bg(wash)
                 .opacity(0.35 + 0.4 * motion::pulse_wave(phase))
@@ -1482,10 +1498,10 @@ pub fn skeleton_rows(
 pub fn skeleton_bar(width: f32, view: gpui::EntityId, cx: &mut gpui::App) -> AnyElement {
     let delta = motion::pulse_delta(&LUNA_PULSE, view, cx);
     div()
-        .w(px(width))
-        .h(px(11.0))
+        .w(crate::typography::ui_rems(width))
+        .h(crate::typography::ui_rems(11.0))
         .rounded(px(5.5))
-        .bg(ink(0.08))
+        .bg(crate::theme::fill(crate::theme::FillTier::Tertiary))
         .opacity(0.35 + 0.4 * motion::pulse_wave(motion::staggered_phase(delta, 0, 0.0)))
         .into_any_element()
 }
@@ -1497,24 +1513,24 @@ pub fn skeleton_bar(width: f32, view: gpui::EntityId, cx: &mut gpui::App) -> Any
 /// randomness (randomness would repaint differently every open).
 pub fn skeleton_menu_rows(
     _id: &'static str,
-    _theme: &Theme,
+    theme: &Theme,
     count: usize,
     view: gpui::EntityId,
     cx: &mut gpui::App,
 ) -> AnyElement {
     const WIDTHS: [f32; 4] = [0.42, 0.58, 0.48, 0.66];
-    let wash = ink(0.05);
+    let wash = theme.fill(crate::theme::FillTier::Quaternary);
     let delta = motion::pulse_delta(&LUNA_PULSE, view, cx);
     div()
         .flex()
         .flex_col()
-        .gap(px(8.0))
-        .py(px(6.0))
-        .px(px(4.0))
+        .gap(crate::typography::ui_rems(8.0))
+        .py(crate::typography::ui_rems(6.0))
+        .px(crate::typography::ui_rems(4.0))
         .children((0..count).map(move |i| {
             let phase = motion::staggered_phase(delta, i, 0.08);
             div()
-                .h(px(14.0))
+                .h(crate::typography::ui_rems(14.0))
                 .w(gpui::relative(WIDTHS[i % WIDTHS.len()]))
                 .rounded(px(7.0))
                 .bg(wash)
@@ -1529,8 +1545,8 @@ pub fn error_row(theme: &Theme, message: &str) -> gpui::Div {
     div()
         .flex()
         .flex_col()
-        .gap(px(6.0))
-        .p(px(Theme::SPACE_SM))
+        .gap(crate::typography::ui_rems(6.0))
+        .p(crate::typography::ui_rems(Theme::SPACE_SM))
         .text_size(crate::typography::ui_rems(12.0))
         .text_color(theme.readable_tone(theme.danger, 1.0))
         .child(gpui::SharedString::from(message.to_string()))

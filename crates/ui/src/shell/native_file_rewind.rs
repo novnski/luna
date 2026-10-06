@@ -68,15 +68,15 @@ fn accessible_button(
 pub(super) fn section(files: &NativeFiles, theme: &Theme, cx: &mut Context<Shell>) -> AnyElement {
     let muted = |copy: String| {
         div()
-            .mt(px(6.0))
+            .mt(crate::typography::ui_rems(6.0))
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text_muted)
             .child(SharedString::from(copy))
     };
     let mut body = div()
         .id("history-rewind-native-files")
-        .mt(px(12.0))
-        .p(px(10.0))
+        .mt(crate::typography::ui_rems(12.0))
+        .p(crate::typography::ui_rems(10.0))
         .rounded(px(10.0))
         .border_1()
         .border_color(crate::theme::hairline(0.10))
@@ -121,8 +121,8 @@ pub(super) fn section(files: &NativeFiles, theme: &Theme, cx: &mut Context<Shell
         let list = view.files_changed.iter().take(6).fold(
             div()
                 .id("history-rewind-native-file-list")
-                .mt(px(4.0))
-                .max_h(px(96.0))
+                .mt(crate::typography::ui_rems(4.0))
+                .max_h(crate::typography::ui_rems(96.0))
                 .overflow_y_scroll()
                 .flex()
                 .flex_col()
@@ -145,7 +145,11 @@ pub(super) fn section(files: &NativeFiles, theme: &Theme, cx: &mut Context<Shell
     if let Some(view) = view {
         body = body.child(muted(view.limitations.clone()));
     }
-    let buttons = div().mt(px(8.0)).flex().justify_end().gap(px(8.0));
+    let buttons = div()
+        .mt(crate::typography::ui_rems(8.0))
+        .flex()
+        .justify_end()
+        .gap(crate::typography::ui_rems(8.0));
     let buttons = match files {
         NativeFiles::Idle | NativeFiles::Failed(_) => buttons.child(accessible_button(
             popover::btn_ghost(

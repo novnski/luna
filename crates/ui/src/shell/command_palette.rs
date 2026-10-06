@@ -701,14 +701,14 @@ impl Shell {
                 .rounded(px(popover::PALETTE_ITEM_RADIUS))
                 .role(gpui::Role::Button)
                 .aria_label(event.summary.clone())
-                .min_h(px(44.0))
-                .py(px(5.0))
+                .min_h(crate::typography::ui_rems(44.0))
+                .py(crate::typography::ui_rems(5.0))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.activate_command(entry.clone(), window, cx)
                 }))
                 .child(
                     icon(icons::LIST)
-                        .size(px(16.0))
+                        .size(crate::typography::ui_rems(16.0))
                         .flex_none()
                         .text_color(theme.text_muted),
                 )
@@ -828,8 +828,10 @@ impl Shell {
             let mut row = div()
                 .id(("command-result", ix))
                 .flex_none()
-                .when(ix == 0, |row| row.pt(px(8.0)))
-                .when(ix + 1 == entries.len(), |row| row.pb(px(8.0)));
+                .when(ix == 0, |row| row.pt(crate::typography::ui_rems(8.0)))
+                .when(ix + 1 == entries.len(), |row| {
+                    row.pb(crate::typography::ui_rems(8.0))
+                });
             if let Some(group) = entry.group()
                 && (if query.trim().is_empty() {
                     previous_group != Some(group)
@@ -838,13 +840,17 @@ impl Shell {
                 })
             {
                 if ix > 0 {
-                    row = row.child(spaces::sidebar_separator(&theme).w_full().my(px(7.0)));
+                    row = row.child(
+                        spaces::sidebar_separator(&theme)
+                            .w_full()
+                            .my(crate::typography::ui_rems(7.0)),
+                    );
                 }
                 row = row.child(
                     div()
                         .id(SharedString::from(format!("command-section-{group:?}")))
-                        .px(px(10.0))
-                        .pb(px(4.0))
+                        .px(crate::typography::ui_rems(10.0))
+                        .pb(crate::typography::ui_rems(4.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .font_weight(gpui::FontWeight::MEDIUM)
                         .text_color(theme.text_faint)
@@ -891,14 +897,14 @@ impl Shell {
                     .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .role(gpui::Role::Button)
                     .aria_label(label)
-                    .min_h(px(32.0))
-                    .py(px(4.0))
+                    .min_h(crate::typography::ui_rems(32.0))
+                    .py(crate::typography::ui_rems(4.0))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.activate_command(entry.clone(), window, cx)
                     }))
                     .child(
                         icon(glyph)
-                            .size(px(16.0))
+                            .size(crate::typography::ui_rems(16.0))
                             .flex_none()
                             .text_color(theme.text_muted),
                     )
@@ -986,7 +992,7 @@ impl Shell {
                     .rounded(px(popover::PALETTE_ITEM_RADIUS))
                     .role(gpui::Role::Button)
                     .aria_label("Show more matching threads")
-                    .min_h(px(32.0))
+                    .min_h(crate::typography::ui_rems(32.0))
                     .justify_center()
                     .text_color(theme.text_muted)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1001,7 +1007,7 @@ impl Shell {
             } else {
                 unreachable!()
             };
-            rows.push(row.child(div().px(px(8.0)).child(content)));
+            rows.push(row.child(div().px(crate::typography::ui_rems(8.0)).child(content)));
         }
         let has_search_results = entries
             .iter()
@@ -1040,8 +1046,8 @@ impl Shell {
                 el.child(
                     div()
                         .id("command-history-status")
-                        .px(px(16.0))
-                        .py(px(8.0))
+                        .px(crate::typography::ui_rems(16.0))
+                        .py(crate::typography::ui_rems(8.0))
                         .text_size(crate::typography::ui_rems(11.0))
                         .text_color(if danger {
                             theme.danger
@@ -1055,12 +1061,12 @@ impl Shell {
                 el.child(
                     div()
                         .w_full()
-                        .py(px(24.0))
-                        .px(px(16.0))
+                        .py(crate::typography::ui_rems(24.0))
+                        .px(crate::typography::ui_rems(16.0))
                         .flex()
                         .flex_col()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .text_size(crate::typography::ui_rems(13.0))
                         .child("No results")
                         .child(
@@ -1075,7 +1081,9 @@ impl Shell {
         let card = div()
             .id("command-palette")
             .track_focus(&focus)
-            .w(px(560.0_f32.min(f32::from(viewport.width) - 32.0)))
+            .w(px(
+                (560.0 * theme.ui_scale()).min(f32::from(viewport.width) - 32.0)
+            ))
             .flex()
             .flex_col()
             .rounded(px(16.0))
@@ -1104,13 +1112,13 @@ impl Shell {
             )
             .child(
                 div()
-                    .min_h(px(44.0))
+                    .min_h(crate::typography::ui_rems(44.0))
                     .flex_none()
-                    .px(px(16.0))
-                    .py(px(8.0))
+                    .px(crate::typography::ui_rems(16.0))
+                    .py(crate::typography::ui_rems(8.0))
                     .flex()
                     .items_center()
-                    .gap(px(10.0))
+                    .gap(crate::typography::ui_rems(10.0))
                     .border_b_1()
                     .border_color(crate::theme::hairline(0.06))
                     .child(popover::palette_search_icon(&theme))
@@ -1130,14 +1138,14 @@ impl Shell {
             .child(
                 div()
                     .flex_none()
-                    .px(px(16.0))
-                    .py(px(7.0))
+                    .px(crate::typography::ui_rems(16.0))
+                    .py(crate::typography::ui_rems(7.0))
                     .border_t_1()
                     .border_color(crate::theme::hairline(0.06))
                     .flex()
                     .flex_wrap()
                     .items_center()
-                    .gap(px(12.0))
+                    .gap(crate::typography::ui_rems(12.0))
                     .child(command_key_hint(&theme, "↑ ↓", "Navigate"))
                     .child(command_key_hint(&theme, "↵", "Select"))
                     .child(command_key_hint(&theme, "Esc", "Close")),
@@ -1184,7 +1192,7 @@ fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -> gpui::Div
     div()
         .flex()
         .items_center()
-        .gap(px(5.0))
+        .gap(crate::typography::ui_rems(5.0))
         .child(popover::kbd_hint(theme, keys))
         .child(
             div()

@@ -62,9 +62,10 @@ pub const TABLE_MIN_COLUMN_CONTENT: f32 = 48.0;
 /// `table.minColumnWidth`). Naturally narrower columns keep their content
 /// width; wider ones wrap down to this floor, then the table scrolls.
 pub const TABLE_MIN_COLUMN_WIDTH: f32 = 96.0;
-/// Hairline tone (luna md theme `table.borderColor`: rgba(255,255,255,0.1)).
+/// Row rules: the theme separator (luna md theme `table.borderColor`), so
+/// tables follow the palette like every other hairline.
 pub fn table_hairline() -> Hsla {
-    crate::theme::hairline(0.10)
+    crate::theme::separator(false)
 }
 
 /// Options for one rendered tree (a transcript row or a whole live message).
@@ -325,14 +326,9 @@ struct CodeBlockTooltip(&'static str);
 impl Render for CodeBlockTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
-        div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .rounded(px(crate::theme::radius::SM))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.tooltip_surface())
-            .shadow_md()
+        crate::popover::tooltip_card(theme)
+            .px(crate::typography::ui_rems(8.0))
+            .py(crate::typography::ui_rems(6.0))
             .text_size(crate::typography::ui_rems(11.0))
             .text_color(theme.text)
             .child(self.0)
@@ -437,7 +433,7 @@ pub fn render_tree(
     div()
         .flex()
         .flex_col()
-        .gap(px(MD_BLOCK_GAP))
+        .gap(crate::typography::ui_rems(MD_BLOCK_GAP))
         .children(tree.blocks.iter().enumerate().map(|(ix, top)| {
             let document = highlight(ix);
             let extra = if ix > 0 {
@@ -457,7 +453,10 @@ pub fn render_tree(
                     .map(|document| document.lines.as_slice()),
             );
             if extra > 0.0 {
-                div().pt(px(extra)).child(block).into_any_element()
+                div()
+                    .pt(crate::typography::ui_rems(extra))
+                    .child(block)
+                    .into_any_element()
             } else {
                 block
             }
@@ -546,12 +545,12 @@ pub fn render_block(
             .bg(theme.accent.opacity(0.05))
             .rounded_tr(px(6.0))
             .rounded_br(px(6.0))
-            .pl(px(12.0))
-            .pr(px(10.0))
-            .py(px(6.0))
+            .pl(crate::typography::ui_rems(12.0))
+            .pr(crate::typography::ui_rems(10.0))
+            .py(crate::typography::ui_rems(6.0))
             .flex()
             .flex_col()
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .text_color(theme.content_muted)
             .children(children.iter().enumerate().map(|(ci, child)| {
                 render_block(
@@ -571,7 +570,7 @@ pub fn render_block(
         } => div()
             .flex()
             .flex_col()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .children(items.iter().enumerate().map(|(item_ix, item)| {
                 // Accent markers (the inline-code hue): ordered numbers as
                 // tinted text, unordered as a REAL 5px disc — the glyph "•"
@@ -594,8 +593,8 @@ pub fn render_block(
                     };
                     div()
                         .flex_none()
-                        .min_w(px(18.0))
-                        .h(px(MD_LINE_HEIGHT))
+                        .min_w(crate::typography::ui_rems(18.0))
+                        .h(crate::typography::ui_rems(MD_LINE_HEIGHT))
                         .flex()
                         .items_center()
                         .child(
@@ -612,7 +611,7 @@ pub fn render_block(
                                 cx.stop_propagation()
                             })
                             .accessibility_label(label)
-                            .size(px(16.0))
+                            .size(crate::typography::ui_rems(16.0))
                             .border_1()
                             .rounded(px(crate::theme::radius::XS))
                             .border_color(if task.checked {
@@ -631,7 +630,7 @@ pub fn render_block(
                             .when(task.checked, |checkbox| {
                                 checkbox.child(
                                     crate::icons::icon(crate::icons::CHECK)
-                                        .size(px(12.0))
+                                        .size(crate::typography::ui_rems(12.0))
                                         .text_color(theme.bg),
                                 )
                             })
@@ -647,7 +646,7 @@ pub fn render_block(
                     match ordered_start {
                         Some(start) => div()
                             .flex_none()
-                            .min_w(px(18.0))
+                            .min_w(crate::typography::ui_rems(18.0))
                             .text_size(crate::typography::ui_rems(MD_TEXT_SIZE))
                             .line_height(crate::typography::ui_rems(MD_LINE_HEIGHT))
                             .text_color(theme.readable_tone(theme.accent, 1.0))
@@ -655,53 +654,58 @@ pub fn render_block(
                             .into_any_element(),
                         None => div()
                             .flex_none()
-                            .min_w(px(18.0))
+                            .min_w(crate::typography::ui_rems(18.0))
                             // Center the disc on the first text line's cap band.
-                            .h(px(MD_LINE_HEIGHT))
+                            .h(crate::typography::ui_rems(MD_LINE_HEIGHT))
                             .flex()
                             .items_center()
                             .child(
                                 div()
                                     .ml(px(1.0))
-                                    .w(px(5.0))
-                                    .h(px(5.0))
+                                    .w(crate::typography::ui_rems(5.0))
+                                    .h(crate::typography::ui_rems(5.0))
                                     .rounded_full()
                                     .bg(theme.accent),
                             )
                             .into_any_element(),
                     }
                 };
-                div().flex().flex_row().gap(px(8.0)).child(marker).child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .gap(px(4.0))
-                        .children(item.iter().enumerate().map(|(ci, child)| {
-                            let task_body;
-                            let child = if ci == 0 && task.is_some() {
-                                let Block::Paragraph { runs } = child else {
-                                    unreachable!()
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(crate::typography::ui_rems(8.0))
+                    .child(marker)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(crate::typography::ui_rems(4.0))
+                            .children(item.iter().enumerate().map(|(ci, child)| {
+                                let task_body;
+                                let child = if ci == 0 && task.is_some() {
+                                    let Block::Paragraph { runs } = child else {
+                                        unreachable!()
+                                    };
+                                    task_body = Block::Paragraph {
+                                        runs: runs.iter().skip(1).cloned().collect(),
+                                    };
+                                    &task_body
+                                } else {
+                                    child
                                 };
-                                task_body = Block::Paragraph {
-                                    runs: runs.iter().skip(1).cloned().collect(),
-                                };
-                                &task_body
-                            } else {
-                                child
-                            };
-                            render_block(
-                                child,
-                                top_ix,
-                                list_child_ix(ix, item_ix, ci),
-                                opts,
-                                theme,
-                                window,
-                                None,
-                            )
-                        })),
-                )
+                                render_block(
+                                    child,
+                                    top_ix,
+                                    list_child_ix(ix, item_ix, ci),
+                                    opts,
+                                    theme,
+                                    window,
+                                    None,
+                                )
+                            })),
+                    )
             }))
             .into_any_element(),
         Block::Table {
@@ -809,7 +813,13 @@ fn render_table(
     let has_header = !header.is_empty();
 
     // Flatten every cell (cache-aware) and take per-column max-content widths.
+    // Cells render at the interface rem, so they are shaped at that size and
+    // the widths are kept in 16 px-baseline units: the column floors, padding
+    // and the table minimum then scale together with the text instead of
+    // squeezing larger type into columns measured for 14 px.
     let text_system = window.text_system();
+    let ui_scale = f32::from(window.rem_size()) / 16.0;
+    let cell_text_size = px(MD_TEXT_SIZE * ui_scale);
     let mut flats: Vec<Vec<Option<Rc<FlatText>>>> = Vec::with_capacity(all.len());
     let mut content = vec![0.0f32; cols];
     for (r, row) in all.iter().enumerate() {
@@ -833,7 +843,12 @@ fn render_table(
                     .as_ref()
                     .filter(|ui| ui.source_session.is_some())
                     .map(|_| {
-                        super::link_presentation::present(&flat, px(560.), px(MD_TEXT_SIZE), window)
+                        super::link_presentation::present(
+                            &flat,
+                            px(560. * ui_scale),
+                            cell_text_size,
+                            window,
+                        )
                     });
                 let flat = measured.as_ref().unwrap_or(&flat);
                 // Cell sources are single-line; guard anyway (same byte count,
@@ -845,9 +860,9 @@ fn render_table(
                 };
                 let width = f32::from(
                     text_system
-                        .shape_line(line, px(MD_TEXT_SIZE), &flat.runs, None)
+                        .shape_line(line, cell_text_size, &flat.runs, None)
                         .width(),
-                );
+                ) / ui_scale;
                 if width > *natural {
                     *natural = width;
                 }
@@ -867,7 +882,7 @@ fn render_table(
         .flex()
         .flex_col()
         .w_full()
-        .min_w(px(geo.min_table_width));
+        .min_w(crate::typography::ui_rems(geo.min_table_width));
     for (r, row) in flats.iter().enumerate() {
         if r > 0 {
             inner = inner.child(div().flex_none().h(px(TABLE_DIVIDER)).w_full().bg(hairline));
@@ -878,8 +893,8 @@ fn render_table(
                 .flex_grow(geo.naturals[c])
                 .flex_shrink(geo.naturals[c])
                 .flex_basis(px(0.0))
-                .min_w(px(geo.minimums[c]))
-                .p(px(TABLE_CELL_PADDING))
+                .min_w(crate::typography::ui_rems(geo.minimums[c]))
+                .p(crate::typography::ui_rems(TABLE_CELL_PADDING))
                 .text_size(crate::typography::ui_rems(MD_TEXT_SIZE))
                 .line_height(crate::typography::ui_rems(MD_LINE_HEIGHT));
             cell = match align.get(c).copied().unwrap_or_default() {
@@ -1699,7 +1714,7 @@ fn text_element(
             return div()
                 .flex()
                 .flex_col()
-                .gap(px(8.0))
+                .gap(crate::typography::ui_rems(8.0))
                 .children(elements)
                 .into_any_element();
         }
@@ -1746,10 +1761,10 @@ fn text_element(
             .min_w_0()
             .flex()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .child(
                 div()
-                    .size(px(20.0))
+                    .size(crate::typography::ui_rems(20.0))
                     .flex_none()
                     .flex()
                     .items_center()
@@ -1761,7 +1776,7 @@ fn text_element(
                             crate::file_icons::FileIconIdentity::file(&path),
                             theme.appearance,
                         )
-                        .size(px(14.0)),
+                        .size(crate::typography::ui_rems(14.0)),
                     ),
             )
             .child(div().min_w_0().flex_1().child(inner))
@@ -1909,7 +1924,7 @@ fn render_code_block(
                 return div()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(crate::typography::ui_rems(4.0))
                     .child(source)
                     .child(
                         div()

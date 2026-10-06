@@ -920,7 +920,7 @@ impl MarkdownPreview {
             .w_full()
             .max_w(px(loaded.width))
             .mx_auto()
-            .max_h(px(480.0))
+            .max_h(crate::typography::ui_rems(480.0))
             .aspect_ratio(loaded.width / loaded.height)
             .cursor_pointer()
             .role(gpui::Role::Button)
@@ -1066,13 +1066,13 @@ impl MarkdownPreview {
                                 diagram_owner.clone(),
                             ),
                             Some(Err(error)) => div()
-                                .p(px(12.0))
+                                .p(crate::typography::ui_rems(12.0))
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.readable_tone(theme.warning_muted, 1.0))
                                 .child(error.clone())
                                 .into_any_element(),
                             None => div()
-                                .p(px(12.0))
+                                .p(crate::typography::ui_rems(12.0))
                                 .text_color(theme.text_muted)
                                 .child(if diagram_allowed.contains(code) {
                                     "Rendering diagram…"
@@ -1100,8 +1100,11 @@ impl MarkdownPreview {
                     image: Some(Rc::new(move |image, id, theme| {
                         match images.get(&image.source) {
                             Some(Ok(loaded)) => {
-                                let mut el = div().flex().flex_col().gap(px(4.0)).child(
-                                    Self::media_element(
+                                let mut el = div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap(crate::typography::ui_rems(4.0))
+                                    .child(Self::media_element(
                                         loaded,
                                         id,
                                         if image.alt.is_empty() {
@@ -1110,8 +1113,7 @@ impl MarkdownPreview {
                                             image.alt.clone()
                                         },
                                         image_owner.clone(),
-                                    ),
-                                );
+                                    ));
                                 if let Some(target) = image.link.clone() {
                                     let link = image_link.clone();
                                     el = el.child(
@@ -1204,46 +1206,56 @@ impl MarkdownPreview {
                         // its button never leaves the hover group.
                         .group(group.clone())
                         .child(
-                            div().w_full().flex().justify_center().px(px(24.0)).child(
-                                div()
-                                    .w_full()
-                                    .max_w(px(MAX_PREVIEW_CONTENT_WIDTH))
-                                    .min_w_0()
-                                    .relative()
-                                    .when_some(comment_line, |el, line| {
-                                        el.child(
-                                            div()
-                                                .absolute()
-                                                .left(px(-20.0))
-                                                .top(px(3.0))
-                                                .opacity(0.0)
-                                                .group_hover(group, |style| style.opacity(1.0))
-                                                .child(crate::comment_ui::render_comment_adder(
-                                                    format!("{}-comment-add-{ix}", self.scope)
-                                                        .into(),
-                                                    &theme,
-                                                    cx,
-                                                    move |this, window, cx| {
-                                                        this.open_comment(
-                                                            line,
-                                                            &comment_source,
-                                                            window,
+                            div()
+                                .w_full()
+                                .flex()
+                                .justify_center()
+                                .px(crate::typography::ui_rems(24.0))
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .max_w(px(MAX_PREVIEW_CONTENT_WIDTH))
+                                        .min_w_0()
+                                        .relative()
+                                        .when_some(comment_line, |el, line| {
+                                            el.child(
+                                                div()
+                                                    .absolute()
+                                                    .left(px(-20.0))
+                                                    .top(px(3.0))
+                                                    .opacity(0.0)
+                                                    .group_hover(group, |style| style.opacity(1.0))
+                                                    .child(
+                                                        crate::comment_ui::render_comment_adder(
+                                                            format!(
+                                                                "{}-comment-add-{ix}",
+                                                                self.scope
+                                                            )
+                                                            .into(),
+                                                            &theme,
                                                             cx,
-                                                        )
-                                                    },
-                                                )),
-                                        )
-                                    })
-                                    .child(render::render_block(
-                                        &top.block,
-                                        ix,
-                                        ix,
-                                        &opts,
-                                        &theme,
-                                        window,
-                                        self.highlights.get(&ix).map(|h| h.lines.as_slice()),
-                                    )),
-                            ),
+                                                            move |this, window, cx| {
+                                                                this.open_comment(
+                                                                    line,
+                                                                    &comment_source,
+                                                                    window,
+                                                                    cx,
+                                                                )
+                                                            },
+                                                        ),
+                                                    ),
+                                            )
+                                        })
+                                        .child(render::render_block(
+                                            &top.block,
+                                            ix,
+                                            ix,
+                                            &opts,
+                                            &theme,
+                                            window,
+                                            self.highlights.get(&ix).map(|h| h.lines.as_slice()),
+                                        )),
+                                ),
                         )
                         .children(comments)
                         .into_any_element(),
@@ -1287,7 +1299,7 @@ impl Render for MarkdownPreview {
             .min_h_0()
             .flex()
             .flex_col()
-            .py(px(16.0))
+            .py(crate::typography::ui_rems(16.0))
             .font_family(theme.font_sans.clone())
             .text_color(theme.text)
             .track_focus(&self.focus)
@@ -1321,7 +1333,7 @@ impl Render for MarkdownPreview {
             .when(self.loading, |el| {
                 el.child(
                     div()
-                        .px(px(24.0))
+                        .px(crate::typography::ui_rems(24.0))
                         .text_color(theme.text_muted)
                         .child("Loading preview…"),
                 )
@@ -1329,7 +1341,7 @@ impl Render for MarkdownPreview {
             .when(self.truncated, |el| {
                 el.child(
                     div()
-                        .px(px(24.0))
+                        .px(crate::typography::ui_rems(24.0))
                         .text_color(theme.readable_tone(theme.warning_muted, 1.0))
                         .child("Large file preview is truncated and read-only."),
                 )

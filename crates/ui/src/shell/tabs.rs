@@ -201,15 +201,15 @@ impl Shell {
         let tooltip_title: SharedString = format!("New thread from {title}").into();
         let crumb = div()
             .id("parent-breadcrumb")
-            .max_w(px(240.0))
+            .max_w(crate::typography::ui_rems(240.0))
             .min_w_0()
             .flex_none()
-            .h(px(22.0))
-            .px(px(6.0))
+            .h(crate::typography::ui_rems(22.0))
+            .px(crate::typography::ui_rems(6.0))
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
+            .gap(crate::typography::ui_rems(4.0))
             .rounded(px(6.0))
             .border_1()
             .border_color(gpui::transparent_black())
@@ -225,7 +225,7 @@ impl Shell {
             .tooltip_show_delay(crate::pickers::CONTROL_TOOLTIP_DELAY)
             .child(
                 icon(icons::BOT)
-                    .size(px(12.0))
+                    .size(crate::typography::ui_rems(12.0))
                     .flex_none()
                     .text_color(muted),
             )
@@ -418,13 +418,13 @@ impl Shell {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(4.0))
+                        .gap(crate::typography::ui_rems(4.0))
                         .overflow_hidden()
                         // 8 + the trigger's own 8px pad = the pane's 16px
                         // text gutter. The 4px right padding is the stable
                         // gap before the fixed toggle.
-                        .pl(px(8.0))
-                        .pr(px(4.0))
+                        .pl(crate::typography::ui_rems(8.0))
+                        .pr(crate::typography::ui_rems(4.0))
                         .child(
                             div()
                                 .flex_1()
@@ -460,7 +460,7 @@ impl Shell {
             .flex()
             .items_center()
             .pt(px(Theme::TITLEBAR_TOP_PAD))
-            .gap(px(8.0))
+            .gap(crate::typography::ui_rems(8.0))
             .pl(px(row_left))
             .pr(px(self.titlebar_right_pad(TITLEBAR_ACTION_EDGE_INSET)))
             // In panel takeover the header strip spans the whole band — the
@@ -473,7 +473,7 @@ impl Shell {
                         .flex()
                         .flex_row()
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(crate::typography::ui_rems(6.0))
                         .when_some(parent_crumb, |el, crumb| {
                             el.child(self.render_parent_breadcrumb(crumb, &theme, cx))
                                 .child(

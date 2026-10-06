@@ -194,7 +194,7 @@ fn header_control<V: 'static>(
         .flex_none()
         .flex()
         .items_center()
-        .gap(px(4.0))
+        .gap(crate::typography::ui_rems(4.0))
         .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
         .border_1()
         .border_color(gpui::transparent_black())
@@ -230,8 +230,8 @@ pub(super) fn render_pane_header<V: 'static>(
         actions.back,
         cx,
     )
-    .pl(px(4.0))
-    .pr(px(8.0))
+    .pl(crate::typography::ui_rems(4.0))
+    .pr(crate::typography::ui_rems(8.0))
     .text_color(muted)
     .tooltip(move |_, cx| {
         cx.new(|_| SurfaceTabTooltip {
@@ -240,14 +240,18 @@ pub(super) fn render_pane_header<V: 'static>(
         .into()
     })
     .tooltip_show_delay(crate::popover::TOOLTIP_DELAY)
-    .child(icon(icons::ALT_ARROW_LEFT).size(px(14.0)).text_color(muted))
+    .child(
+        icon(icons::ALT_ARROW_LEFT)
+            .size(crate::typography::ui_rems(14.0))
+            .text_color(muted),
+    )
     .child(actions.back_label);
     let badge = div()
         .id("pane-chat-identity")
         .role(gpui::Role::Label)
         .aria_label(chrome.identity.label())
         .flex_none()
-        .px(px(6.0))
+        .px(crate::typography::ui_rems(6.0))
         .py(px(1.0))
         .rounded(px(4.0))
         .border_1()
@@ -314,13 +318,13 @@ pub(super) fn render_pane_header<V: 'static>(
             show_parent,
             cx,
         )
-        .h(px(18.0))
-        .px(px(4.0))
+        .h(crate::typography::ui_rems(18.0))
+        .px(crate::typography::ui_rems(4.0))
         .min_w_0()
         .text_color(theme.readable_muted(0.7))
         .child(
             icon(icons::ARROW_UP_RIGHT)
-                .size(px(11.0))
+                .size(crate::typography::ui_rems(11.0))
                 .flex_none()
                 .text_color(theme.readable_muted(0.6)),
         )
@@ -336,30 +340,36 @@ pub(super) fn render_pane_header<V: 'static>(
     let strip = div()
         .w_full()
         .flex_none()
-        .px(px(12.0))
-        .py(px(5.0))
+        .px(crate::typography::ui_rems(12.0))
+        .py(crate::typography::ui_rems(5.0))
         .flex()
         .items_center()
-        .gap(px(6.0))
+        .gap(crate::typography::ui_rems(6.0))
         .border_b_1()
         .border_color(theme.border)
         .text_size(crate::typography::ui_rems(11.5))
         .min_w_0()
         .when_some(chrome.status.clone(), |el, (label, color, _)| {
-            el.child(div().size(px(6.0)).flex_none().rounded_full().bg(color))
-                .child(
-                    div()
-                        .flex_none()
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(color)
-                        .child(label),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(theme.decorative_muted(0.4))
-                        .child("·"),
-                )
+            el.child(
+                div()
+                    .size(crate::typography::ui_rems(6.0))
+                    .flex_none()
+                    .rounded_full()
+                    .bg(color),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(color)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_color(theme.decorative_muted(0.4))
+                    .child("·"),
+            )
         })
         .child(div().min_w_0().child(parent))
         .when_some(chrome.meta.clone(), |el, meta| {
@@ -440,7 +450,7 @@ fn render_side_header<V: 'static>(
         )
         .flex_1()
         .min_w_0()
-        .px(px(6.0))
+        .px(crate::typography::ui_rems(6.0))
         .child(title_text)
         .tooltip(move |_, cx| {
             crate::pickers::ControlTooltip::view(
@@ -455,7 +465,7 @@ fn render_side_header<V: 'static>(
             .id("pane-chat-title")
             .flex_1()
             .min_w_0()
-            .px(px(6.0))
+            .px(crate::typography::ui_rems(6.0))
             .child(title_text)
             .tooltip(move |_, cx| {
                 crate::pickers::ControlTooltip::view(
@@ -845,8 +855,8 @@ impl PaneChatView {
                 .id("pane-chat-read-only")
                 .w_full()
                 .flex_none()
-                .px(px(16.0))
-                .py(px(12.0))
+                .px(crate::typography::ui_rems(16.0))
+                .py(crate::typography::ui_rems(12.0))
                 .border_t_1()
                 .border_color(theme.border)
                 .text_color(theme.text_muted)

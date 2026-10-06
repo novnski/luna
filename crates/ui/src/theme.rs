@@ -840,6 +840,13 @@ pub const TEXT_CONTRAST_TARGET: f32 = 4.6;
 pub const NON_TEXT_CONTRAST_TARGET: f32 = 3.1;
 
 impl Theme {
+    /// Interface size over the 16 px baseline. Layout math that must agree
+    /// with rem-sized elements ([`crate::typography::ui_rems`]) multiplies its
+    /// 16 px-baseline constants by this; code and terminal geometry never do.
+    pub fn ui_scale(&self) -> f32 {
+        self.ui_font_size / 16.0
+    }
+
     /// Secondary text. Dark appearance keeps the quieter opacity a caller
     /// asks for, but never below the text contrast floor on any surface it
     /// actually sits on (see [`Self::legible`]); light keeps the authored

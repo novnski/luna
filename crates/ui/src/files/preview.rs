@@ -667,9 +667,9 @@ impl Render for FileEditorTooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         let card = div()
-            .max_w(px(360.0))
-            .px(px(9.0))
-            .py(px(6.0))
+            .max_w(crate::typography::ui_rems(360.0))
+            .px(crate::typography::ui_rems(9.0))
+            .py(crate::typography::ui_rems(6.0))
             .rounded(px(6.0))
             .border_1()
             .border_color(theme.border)
@@ -2133,14 +2133,14 @@ impl FilesSurface {
             .when(lifecycle_pending, |element| {
                 element.child(
                     div()
-                        .min_h(px(32.0))
-                        .py(px(6.0))
+                        .min_h(crate::typography::ui_rems(32.0))
+                        .py(crate::typography::ui_rems(6.0))
                         .flex_none()
-                        .px(px(10.0))
+                        .px(crate::typography::ui_rems(10.0))
                         .flex()
                         .flex_wrap()
                         .items_center()
-                        .gap(px(8.0))
+                        .gap(crate::typography::ui_rems(8.0))
                         .border_b_1()
                         .border_color(theme.warning.opacity(0.25))
                         .bg(theme.warning.opacity(0.055))
@@ -2204,14 +2204,14 @@ impl FilesSurface {
                 |element| {
                     element.child(
                         div()
-                            .min_h(px(32.0))
-                            .py(px(6.0))
+                            .min_h(crate::typography::ui_rems(32.0))
+                            .py(crate::typography::ui_rems(6.0))
                             .flex_none()
-                            .px(px(10.0))
+                            .px(crate::typography::ui_rems(10.0))
                             .flex()
                             .flex_wrap()
                             .items_center()
-                            .gap(px(8.0))
+                            .gap(crate::typography::ui_rems(8.0))
                             .border_b_1()
                             .border_color(theme.warning.opacity(0.25))
                             .bg(theme.warning.opacity(0.055))
@@ -2234,7 +2234,7 @@ impl FilesSurface {
                                     .flex()
                                     .flex_wrap()
                                     .items_center()
-                                    .gap(px(8.0))
+                                    .gap(crate::typography::ui_rems(8.0))
                                     .when(!confirming_reload, |actions| {
                                         actions
                                             .child(
@@ -2403,9 +2403,9 @@ impl FilesSurface {
             let leaf = index + 1 == parts.len();
             if index > 0 {
                 crumbs = crumbs.child(
-                    div().flex_none().mx(px(3.0)).child(
+                    div().flex_none().mx(crate::typography::ui_rems(3.0)).child(
                         crate::icons::icon(crate::icons::ALT_ARROW_RIGHT)
-                            .size(px(10.0))
+                            .size(crate::typography::ui_rems(10.0))
                             .text_color(theme.readable_faint(0.65)),
                     ),
                 );
@@ -2413,7 +2413,9 @@ impl FilesSurface {
             crumbs = crumbs.child(
                 div()
                     .when(leaf, |el| el.flex_shrink_0().max_w_full())
-                    .when(!leaf, |el| el.min_w(px(16.0)).flex_shrink(1.0))
+                    .when(!leaf, |el| {
+                        el.min_w(crate::typography::ui_rems(16.0)).flex_shrink(1.0)
+                    })
                     .truncate()
                     .font_family(theme.font_sans.clone())
                     .text_size(crate::typography::ui_rems(if leaf { 12.0 } else { 11.0 }))
@@ -2437,7 +2439,7 @@ impl FilesSurface {
                     crate::file_icons::FileIconIdentity::file(path),
                     theme.appearance,
                 )
-                .size(px(14.0))
+                .size(crate::typography::ui_rems(14.0))
                 .flex_none(),
             )
             .child(crumbs)
@@ -2490,7 +2492,7 @@ impl FilesSurface {
                     div()
                         .id("files-save-status")
                         .h(px(crate::surface_chrome::CONTROL_SIZE))
-                        .px(px(6.0))
+                        .px(crate::typography::ui_rems(6.0))
                         .rounded(px(crate::surface_chrome::CONTROL_RADIUS))
                         .flex()
                         .items_center()
@@ -2819,9 +2821,9 @@ impl FilesSurface {
             .when(truncated, |element| {
                 element.child(
                     div()
-                        .h(px(28.0))
+                        .h(crate::typography::ui_rems(28.0))
                         .flex_none()
-                        .px(px(10.0))
+                        .px(crate::typography::ui_rems(10.0))
                         .border_b_1()
                         .border_color(theme.border)
                         .bg(theme.warning.opacity(0.045))
@@ -3055,7 +3057,8 @@ impl FilesSurface {
                     .text_color(theme.text_dim)
                     .child(SharedString::from(comment.body)),
             );
-        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card).elevated()
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+            .elevated()
             .into_any_element()
     }
 
@@ -3131,7 +3134,8 @@ impl FilesSurface {
                         .on_click(cx.listener(|this, _, _, cx| this.commit_editor_comment(cx))),
                     ),
             );
-        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card).elevated()
+        crate::frost::frosted(crate::popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+            .elevated()
             .into_any_element()
     }
 
@@ -3417,8 +3421,8 @@ fn editor_comment_action(
         .tab_index(0)
         .focus_visible(move |style| crate::theme::focus_ring(style, focus))
         .on_key_down(crate::swallow_activation_key)
-        .h(px(22.0))
-        .px(px(10.0))
+        .h(crate::typography::ui_rems(22.0))
+        .px(crate::typography::ui_rems(10.0))
         .flex()
         .items_center()
         .rounded(px(6.0))
@@ -3457,7 +3461,7 @@ fn banner_action(
         .role(gpui::Role::Button)
         .aria_label(label)
         .tab_index(0)
-        .px(px(4.0))
+        .px(crate::typography::ui_rems(4.0))
         .rounded(px(Theme::CONTROL_RADIUS))
         .text_color(color)
         .cursor_pointer()
@@ -3478,7 +3482,7 @@ fn centered_state(message: impl Into<SharedString>, color: gpui::Hsla) -> AnyEle
         .px(px(crate::surface_chrome::CONTENT_INSET))
         .child(
             div()
-                .max_w(px(280.0))
+                .max_w(crate::typography::ui_rems(280.0))
                 .text_center()
                 .text_size(crate::typography::ui_rems(12.0))
                 .line_height(crate::typography::ui_rems(18.0))
