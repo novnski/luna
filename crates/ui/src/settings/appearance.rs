@@ -1861,8 +1861,19 @@ impl AppearancePage {
                 let active = family == effective;
                 let focused = family == selected;
                 let label = SharedString::from(family.label().to_owned());
-                popover::menu_row_nav(theme, active, focused, format!("{slug}-font-option-{ix}"))
+                let hover_family = family.clone();
+                popover::menu_row_nav(theme, active, focused)
                     .id(SharedString::from(format!("{slug}-font-option-{ix}")))
+                    .when(available, |row| {
+                        row.on_mouse_move(cx.listener(
+                            move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                if *this.selected_font(kind) != hover_family {
+                                    this.set_selected_font(kind, hover_family.clone());
+                                    cx.notify();
+                                }
+                            },
+                        ))
+                    })
                     .role(gpui::Role::Button)
                     .aria_label(format!("{} family: {}", kind.label(), family.label()))
                     .when(available, |row| {
@@ -1874,13 +1885,6 @@ impl AppearancePage {
                     })
                     .when(!available, |row| row.opacity(0.45))
                     .child(div().flex_1().min_w_0().truncate().child(label))
-                    .child(div().w(px(18.0)).flex_none().when(active, |slot| {
-                        slot.child(
-                            icons::icon(icons::CHECK)
-                                .size(px(14.0))
-                                .text_color(theme.selected_row_icon(theme.accent)),
-                        )
-                    }))
                     .into_any_element()
             })
             .collect();
@@ -2004,29 +2008,23 @@ impl AppearancePage {
             .iter()
             .enumerate()
             .map(|(ix, label)| {
-                popover::menu_row_nav(
-                    theme,
-                    ix == current,
-                    ix == selected,
-                    format!("{slug}-font-size-option-{ix}"),
-                )
-                .id(SharedString::from(format!("{slug}-font-size-option-{ix}")))
-                .role(gpui::Role::Button)
-                .aria_label(format!("{} size: {}", kind.label(), label))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    cx.stop_propagation();
-                    this.set_selected_size_ix(kind, ix);
-                    this.commit_size(kind, window, cx);
-                }))
-                .child(div().flex_1().child(label.clone()))
-                .child(div().w(px(18.0)).flex_none().when(ix == current, |slot| {
-                    slot.child(
-                        icons::icon(icons::CHECK)
-                            .size(px(14.0))
-                            .text_color(theme.selected_row_icon(theme.accent)),
-                    )
-                }))
-                .into_any_element()
+                popover::menu_row_nav(theme, ix == current, ix == selected)
+                    .id(SharedString::from(format!("{slug}-font-size-option-{ix}")))
+                    .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                        if this.selected_size_ix(kind) != ix {
+                            this.set_selected_size_ix(kind, ix);
+                            cx.notify();
+                        }
+                    }))
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("{} size: {}", kind.label(), label))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.set_selected_size_ix(kind, ix);
+                        this.commit_size(kind, window, cx);
+                    }))
+                    .child(div().flex_1().child(label.clone()))
+                    .into_any_element()
             })
             .collect();
 

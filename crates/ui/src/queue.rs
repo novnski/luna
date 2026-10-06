@@ -73,7 +73,8 @@ const ROW_GAP: f32 = 0.0;
 const ROW_SLOT: f32 = ROW_HEIGHT + ROW_GAP;
 const ROW_PAD_X: f32 = 8.0;
 const ROW_RADIUS: f32 = 8.0;
-const PANEL_RADIUS: f32 = 16.0;
+/// The stack ladder's tray step (audit CP-20).
+const PANEL_RADIUS: f32 = crate::popover::STACK_TRAY_RADIUS;
 const PANEL_PAD_TOP: f32 = 0.0;
 /// The custom 24px queue glyphs have quieter geometry than the legacy set, so
 /// render them slightly larger to preserve the previous optical weight.

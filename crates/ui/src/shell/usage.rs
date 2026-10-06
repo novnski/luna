@@ -3089,7 +3089,7 @@ impl Shell {
             .size(px(super::SIDEBAR_FOOTER_BUTTON))
             .track_focus(&self.usage_action_focus)
             .cursor_pointer()
-            .rounded(px(crate::theme::radius::MD))
+            .rounded(px(crate::surface_chrome::RADIUS_L))
             // Same footer recipe as its neighbours (audit SH-11); an open
             // card shows the selected wash.
             .hover_fill(

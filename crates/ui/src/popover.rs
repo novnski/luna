@@ -316,6 +316,25 @@ pub const MENU_ITEM_RADIUS: f32 = CARD_RADIUS - CARD_INSET;
 /// Palette rows: concentric with the 16 pt card at its 8 pt inset (SH-25).
 pub const PALETTE_ITEM_RADIUS: f32 = 16.0 - 8.0;
 
+/// The radius ladder for cards stacked above the composer pill (audit
+/// CP-20), stepping down concentrically from the pill's 26 pt corner:
+/// full-width completion popups, then trays, then notices. Anchored menus
+/// keep [`CARD_RADIUS`].
+pub const STACK_POPUP_RADIUS: f32 = 20.0;
+/// The full-width popup's inset, and its rows' concentric corner.
+pub const STACK_POPUP_INSET: f32 = 6.0;
+pub const STACK_POPUP_ROW_RADIUS: f32 = STACK_POPUP_RADIUS - STACK_POPUP_INSET;
+pub const STACK_TRAY_RADIUS: f32 = 18.0;
+pub const STACK_NOTICE_RADIUS: f32 = 14.0;
+
+/// The card for a full-width popup above the composer (audit CP-20): the
+/// menu card on the stack ladder's popup step.
+pub fn stack_popup_card(theme: &Theme) -> gpui::Div {
+    popover_card(theme)
+        .rounded(px(STACK_POPUP_RADIUS))
+        .p(px(STACK_POPUP_INSET))
+}
+
 pub fn surface_bg(theme: &Theme) -> gpui::Hsla {
     if theme.is_frost() {
         theme.composer_sidebar_tint()
@@ -497,6 +516,12 @@ fn exit_progress(since: std::time::Instant) -> f32 {
 /// primitive ignores `element_opacity`, so without this the glass slab would
 /// hold full strength through the fade and pop off at unmount.
 fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
+    frosted_menu_rounded(exit, content, CARD_RADIUS)
+}
+
+/// [`frosted_menu`] for a card with its own corner (the frost mask must
+/// match the card's rounding).
+fn frosted_menu_rounded(exit: Option<f32>, content: AnyElement, radius: f32) -> AnyElement {
     let blur = crate::frost::MENU_BLUR * (1.0 - exit.unwrap_or(0.0));
     // Outside-dismiss listeners run during capture. Consume that same press
     // during bubble, after dismissal, so content behind the menu cannot act
@@ -517,7 +542,7 @@ fn frosted_menu(exit: Option<f32>, content: AnyElement) -> AnyElement {
     // a dark stain); the frost's outside rings carry the elevation instead.
     // Opaque cards carry [`crate::theme::menu_shadows`].
     crate::frost::frosted(
-        CARD_RADIUS,
+        radius,
         blur,
         div()
             .relative()
@@ -810,7 +835,8 @@ pub fn full_width_menu_above(
     closing: Option<std::time::Instant>,
 ) -> AnyElement {
     let exit = closing.map(exit_progress);
-    let content = frosted_menu(exit, content);
+    // Full-width popups sit on the stack ladder's popup step (CP-20).
+    let content = frosted_menu_rounded(exit, content, STACK_POPUP_RADIUS);
     div()
         .absolute()
         .bottom_full()
@@ -998,23 +1024,79 @@ pub fn menu_hover_bg() -> gpui::Hsla {
     }
 }
 
-/// [`menu_row`] with a distinct keyboard-navigation highlight: a selected row
-/// carries the full `bg-white/10` wash, the keyboard cursor the lighter
-/// `bg-white/[0.08]` (luna's `data-[highlighted]` styling) — two selected-
-/// looking rows never appear at once.
-pub fn menu_row_nav(
-    theme: &Theme,
-    selected: bool,
-    highlighted: bool,
-    fade_key: impl Into<SharedString>,
-) -> gpui::Div {
-    let row = menu_row(theme, selected, fade_key);
-    if !selected && highlighted {
-        row.bg(crate::theme::card_selected_bg())
-            .text_color(theme.text)
-    } else {
-        row
+/// Right padding a [`menu_row_nav`] reserves for its selection check.
+pub const MENU_CHECK_COLUMN: f32 = 28.0;
+
+/// A row of a keyboard-navigable menu (audit CP-13): ONE highlight, which the
+/// arrow keys and the pointer share, the way native menus behave. Only the
+/// cursor row (`highlighted`) carries the wash; the current choice
+/// (`selected`) is told by a trailing check, so two washed rows never show at
+/// once. There is no separate hover wash: the caller moves its cursor on
+/// pointer motion (`.on_mouse_move`, which fires only when the pointer really
+/// moves, never when rows scroll under a still pointer).
+pub fn menu_row_nav(theme: &Theme, selected: bool, highlighted: bool) -> gpui::Div {
+    div()
+        .relative()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(10.0))
+        .pl(px(8.0))
+        .pr(px(MENU_CHECK_COLUMN))
+        .py(px(6.0))
+        .rounded(px(MENU_ITEM_RADIUS))
+        .text_size(crate::typography::ui_rems(13.0))
+        .cursor_pointer()
+        .text_color(if highlighted || selected {
+            theme.text
+        } else {
+            theme.text.opacity(0.9)
+        })
+        .when(highlighted, |row| row.bg(crate::theme::card_selected_bg()))
+        .when(selected, |row| {
+            row.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(8.0))
+                    .flex()
+                    .items_center()
+                    .child(
+                        crate::icons::icon(crate::icons::CHECK)
+                            .size(px(14.0))
+                            .text_color(theme.text),
+                    ),
+            )
+        })
+}
+
+/// [`menu_row_nav`] for a list with a cursor but no current choice (the
+/// composer's `@`, `/` and `#` completions): the same single shared highlight,
+/// without the check column.
+pub fn menu_row_cursor(theme: &Theme, highlighted: bool) -> gpui::Div {
+    menu_row_nav(theme, false, highlighted)
+        .pr(px(8.0))
+        .rounded(px(STACK_POPUP_ROW_RADIUS))
+}
+
+/// [`menu_step`] that skips rows `enabled` rejects (unavailable choices).
+/// `None` when no row is enabled.
+pub fn menu_step_where(
+    active: Option<usize>,
+    count: usize,
+    delta: isize,
+    enabled: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    let mut at = active;
+    for _ in 0..count {
+        let next = menu_step(at, count, delta)?;
+        if enabled(next) {
+            return Some(next);
+        }
+        at = Some(next);
     }
+    None
 }
 
 /// Small uppercase section heading inside a floating menu (luna

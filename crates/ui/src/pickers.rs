@@ -74,6 +74,7 @@ fn workspace_footer_row() -> gpui::Div {
 
 use crate::AccessibleButton as _;
 use crate::composer::{ComposerInput, ComposerInputEvent};
+use crate::interaction::HoverFill as _;
 use crate::motion;
 use crate::popover::TooltipAboveExt as _;
 use crate::popover::{self, Loadable, MenuKey};
@@ -2214,13 +2215,24 @@ impl Pickers {
             },
             PickerKind::Branch => self.selected_ref_index(cx),
             PickerKind::HarnessModel => self.selected_model_index(cx),
-            PickerKind::Permission => match self.permission_choice_state(cx) {
-                PermissionChoiceState::Selected(PermissionMode::Full) => 1,
-                PermissionChoiceState::Selected(PermissionMode::Auto)
-                | PermissionChoiceState::Selected(PermissionMode::Ask)
-                | PermissionChoiceState::LegacyAsk
-                | PermissionChoiceState::Unselected => 0,
-            },
+            // On the current choice; with none (or an unavailable one), on
+            // the first choice that can be picked (audit CP-13).
+            PickerKind::Permission => {
+                let current = match self.permission_choice_state(cx) {
+                    PermissionChoiceState::Selected(PermissionMode::Full) => Some(1),
+                    PermissionChoiceState::Selected(PermissionMode::Auto) => Some(0),
+                    PermissionChoiceState::Selected(PermissionMode::Ask)
+                    | PermissionChoiceState::LegacyAsk
+                    | PermissionChoiceState::Unselected => None,
+                };
+                current
+                    .filter(|ix| self.permission_row_enabled(*ix, cx))
+                    .or_else(|| {
+                        (0..PERMISSION_OPTIONS.len())
+                            .find(|ix| self.permission_row_enabled(*ix, cx))
+                    })
+                    .unwrap_or(0)
+            }
             PickerKind::Space => self.selected_space_index(cx),
             PickerKind::Device => self.selected_device_index(cx),
         };
@@ -4046,37 +4058,42 @@ impl Pickers {
                                 let label: SharedString = device.name.clone().into();
                                 let is_selected = effective.as_deref() == Some(device.id.as_str());
                                 let pick_id = device.id.clone();
-                                popover::menu_row_nav(
-                                    &theme,
-                                    is_selected,
-                                    ix == active,
-                                    format!("device-row-{ix}"),
-                                )
-                                .id(("device-row", ix))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.pick_device(pick_id.clone(), cx);
-                                }))
-                                .child(div().flex_1().min_w_0().truncate().child(label))
-                                // The local device wears a muted right-aligned "You"
-                                // instead of a "(this device)" suffix in the name.
-                                .when(is_local, |el| {
-                                    el.child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(crate::typography::ui_rems(11.0))
-                                            .text_color(theme.text_muted)
-                                            .child(SharedString::from("You")),
-                                    )
-                                })
-                                // Disconnected glyph, not the word (user request).
-                                .when(!online, |el| {
-                                    el.child(
-                                        crate::icons::icon(crate::icons::WIFI_OFF)
-                                            .size(px(12.0))
-                                            .flex_none()
-                                            .text_color(theme.readable_tone(theme.warning, 0.8)),
-                                    )
-                                })
+                                popover::menu_row_nav(&theme, is_selected, ix == active)
+                                    .id(("device-row", ix))
+                                    .on_mouse_move(cx.listener(
+                                        move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                            if this.active != ix {
+                                                this.active = ix;
+                                                cx.notify();
+                                            }
+                                        },
+                                    ))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.pick_device(pick_id.clone(), cx);
+                                    }))
+                                    .child(div().flex_1().min_w_0().truncate().child(label))
+                                    // The local device wears a muted right-aligned "You"
+                                    // instead of a "(this device)" suffix in the name.
+                                    .when(is_local, |el| {
+                                        el.child(
+                                            div()
+                                                .flex_none()
+                                                .text_size(crate::typography::ui_rems(11.0))
+                                                .text_color(theme.text_muted)
+                                                .child(SharedString::from("You")),
+                                        )
+                                    })
+                                    // Disconnected glyph, not the word (user request).
+                                    .when(!online, |el| {
+                                        el.child(
+                                            crate::icons::icon(crate::icons::WIFI_OFF)
+                                                .size(px(12.0))
+                                                .flex_none()
+                                                .text_color(
+                                                    theme.readable_tone(theme.warning, 0.8),
+                                                ),
+                                        )
+                                    })
                             },
                         )),
                 )
@@ -4132,24 +4149,27 @@ impl Pickers {
                             let label: SharedString = space.display_name().to_string().into();
                             let is_selected = selected.as_deref() == Some(space.id.as_str());
                             let pick_id = space.id.clone();
-                            popover::menu_row_nav(
-                                &theme,
-                                is_selected,
-                                ix == active,
-                                format!("space-row-{ix}"),
-                            )
-                            .id(("space-row", ix))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.pick_space(pick_id.clone(), cx);
-                            }))
-                            .child(div().flex_1().min_w_0().truncate().child(label))
+                            popover::menu_row_nav(&theme, is_selected, ix == active)
+                                .id(("space-row", ix))
+                                .on_mouse_move(cx.listener(
+                                    move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                        if this.active != ix {
+                                            this.active = ix;
+                                            cx.notify();
+                                        }
+                                    },
+                                ))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.pick_space(pick_id.clone(), cx);
+                                }))
+                                .child(div().flex_1().min_w_0().truncate().child(label))
                         })),
                 )
                 .children(scrollbar)
                 .into_any_element()
         };
         // Action row under a hairline: mint a project.
-        let new_project = popover::menu_row_nav(&theme, false, false, "project-new".to_string())
+        let new_project = popover::menu_row(&theme, false, "project-new".to_string())
             .id("project-new")
             .on_click(cx.listener(|this, _, window, cx| {
                 this.dismiss(cx);
@@ -4313,7 +4333,16 @@ impl Pickers {
                     None => 0,
                 };
                 let current = (self.active != NO_ACTIVE_ROW).then_some(self.active);
-                self.active = popover::menu_step(current, count, delta).unwrap_or(0);
+                self.active = if self.open_kind() == Some(PickerKind::Permission) {
+                    // Arrows skip choices that can't be picked (audit CP-13).
+                    popover::menu_step_where(current, count, delta, |ix| {
+                        self.permission_row_enabled(ix, cx)
+                    })
+                    .or(current)
+                    .unwrap_or(0)
+                } else {
+                    popover::menu_step(current, count, delta).unwrap_or(0)
+                };
                 // Keep the highlighted MODEL row in view (the rows are the
                 // scroll container's direct children, so indices map 1:1);
                 // the traits chips below live in the pinned tray and never
@@ -5534,7 +5563,7 @@ impl Pickers {
                     .border_color(theme.border)
                     .text_color(theme.text)
                     .cursor_pointer()
-                    .hover(|s| s.bg(theme.element_hover))
+                    .hover_wash(id)
                     .on_click(cx.listener(move |this, _, _, cx| match kind {
                         PickerKind::Branch | PickerKind::Checkout => this.ensure_refs(true, cx),
                         PickerKind::HarnessModel => {
@@ -5650,30 +5679,31 @@ impl Pickers {
                                     };
                                     let is_switching =
                                         switching.as_deref() == Some(row.name.as_str());
-                                    popover::menu_row_nav(
-                                        &theme,
-                                        is_selected,
-                                        ix == active,
-                                        format!("branch-row-{ix}"),
-                                    )
-                                    .id(("branch-row", ix))
-                                    .when(switching.is_some(), |el| el.opacity(0.55))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.pick_ref(row.clone(), cx);
-                                    }))
-                                    .child(div().flex_1().min_w_0().truncate().child(label))
-                                    .when(is_switching, |el| {
-                                        el.child(
-                                            div()
-                                                .flex_none()
-                                                .text_size(crate::typography::ui_rems(11.0))
-                                                .text_color(theme.text_muted)
-                                                .child(SharedString::from("switching…")),
-                                        )
-                                    })
-                                    .when_some(
-                                        tag,
-                                        |el, tag| {
+                                    popover::menu_row_nav(&theme, is_selected, ix == active)
+                                        .id(("branch-row", ix))
+                                        .on_mouse_move(cx.listener(
+                                            move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                                if this.active != ix {
+                                                    this.active = ix;
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ))
+                                        .when(switching.is_some(), |el| el.opacity(0.55))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.pick_ref(row.clone(), cx);
+                                        }))
+                                        .child(div().flex_1().min_w_0().truncate().child(label))
+                                        .when(is_switching, |el| {
+                                            el.child(
+                                                div()
+                                                    .flex_none()
+                                                    .text_size(crate::typography::ui_rems(11.0))
+                                                    .text_color(theme.text_muted)
+                                                    .child(SharedString::from("switching…")),
+                                            )
+                                        })
+                                        .when_some(tag, |el, tag| {
                                             el.child(
                                                 div()
                                                     .flex_none()
@@ -5681,8 +5711,7 @@ impl Pickers {
                                                     .text_color(theme.text_muted)
                                                     .child(SharedString::from(tag)),
                                             )
-                                        },
-                                    )
+                                        })
                                 },
                             )),
                     )
@@ -5726,6 +5755,13 @@ impl Pickers {
         popover.into_any_element()
     }
 
+    /// Whether permission row `ix` can be picked right now.
+    fn permission_row_enabled(&self, ix: usize, cx: &App) -> bool {
+        PERMISSION_OPTIONS
+            .get(ix)
+            .is_some_and(|(mode, _, _)| self.permission_unavailable_reason(cx, *mode).is_none())
+    }
+
     fn render_permission_popover(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx).for_popup();
         let choice = self.permission_choice_state(cx);
@@ -5754,59 +5790,49 @@ impl Pickers {
                     } else {
                         description.into()
                     };
-                    popover::menu_row_nav(
-                        &theme,
-                        selected,
-                        ix == self.active,
-                        format!("permission-row-{ix}"),
-                    )
-                    .id(("permission-row", ix))
-                    .when(!supported, |row| row.opacity(0.48))
-                    .when(warning && supported, |row| {
-                        row.text_color(theme.readable_tone(theme.warning, 1.0))
-                    })
-                    .when(supported, |row| {
-                        row.cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.pick_permission(mode, cx);
-                            }))
-                    })
-                    .child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(2.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .justify_between()
-                                    .child(label)
-                                    .when(selected, |row| {
-                                        row.child(
-                                            crate::icons::icon(crate::icons::CHECK)
-                                                .size(px(14.0))
-                                                .text_color(if warning {
-                                                    theme.readable_icon(theme.warning)
-                                                } else {
-                                                    theme.text
-                                                }),
-                                        )
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .text_size(crate::typography::ui_rems(11.0))
-                                    .text_color(if warning && supported {
-                                        theme.warning.opacity(0.72)
-                                    } else {
-                                        theme.text_faint
-                                    })
-                                    .child(description),
-                            ),
-                    )
+                    popover::menu_row_nav(&theme, selected, ix == self.active)
+                        .id(("permission-row", ix))
+                        // The pointer moves the cursor, never onto an
+                        // unavailable choice (audit CP-13).
+                        .when(supported, |row| {
+                            row.on_mouse_move(cx.listener(
+                                move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                    if this.active != ix {
+                                        this.active = ix;
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                        })
+                        .when(!supported, |row| row.opacity(0.48))
+                        .when(warning && supported, |row| {
+                            row.text_color(theme.readable_tone(theme.warning, 1.0))
+                        })
+                        .when(supported, |row| {
+                            row.cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.pick_permission(mode, cx);
+                                }))
+                        })
+                        .child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(div().flex().items_center().justify_between().child(label))
+                                .child(
+                                    div()
+                                        .text_size(crate::typography::ui_rems(11.0))
+                                        .text_color(if warning && supported {
+                                            theme.warning.opacity(0.72)
+                                        } else {
+                                            theme.text_faint
+                                        })
+                                        .child(description),
+                                ),
+                        )
                 },
             ))
             .when_some(self.permission_error.clone(), |panel, error| {
@@ -5857,28 +5883,31 @@ impl Pickers {
                     .enumerate()
                     .map(|(ix, (kind, label, icon_path))| {
                         let is_selected = current == kind;
-                        popover::menu_row_nav(
-                            &theme,
-                            is_selected,
-                            ix == active,
-                            format!("checkout-row-{ix}"),
-                        )
-                        .id(("checkout-row", ix))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.pick_checkout(kind, cx);
-                        }))
-                        .child(
-                            crate::icons::icon(icon_path)
-                                .size(px(14.0))
-                                .text_color(theme.text_muted),
-                        )
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .child(SharedString::from(label)),
-                        )
+                        popover::menu_row_nav(&theme, is_selected, ix == active)
+                            .id(("checkout-row", ix))
+                            .on_mouse_move(cx.listener(
+                                move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                    if this.active != ix {
+                                        this.active = ix;
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.pick_checkout(kind, cx);
+                            }))
+                            .child(
+                                crate::icons::icon(icon_path)
+                                    .size(px(14.0))
+                                    .text_color(theme.text_muted),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child(SharedString::from(label)),
+                            )
                     }),
             )
             .into_any_element()
@@ -5933,14 +5962,30 @@ impl Pickers {
                                 } else {
                                     theme.text_muted
                                 })
-                                .bg(if is_selected {
-                                    theme.accent.opacity(0.14)
-                                } else {
-                                    crate::theme::ink(0.04)
+                                .when(!(account.switchable || account.active), |el| {
+                                    el.bg(if is_selected {
+                                        theme.accent.opacity(0.14)
+                                    } else {
+                                        crate::theme::fill(crate::theme::FillTier::Quaternary)
+                                    })
                                 })
                                 .when(account.switchable || account.active, |el| {
                                     el.cursor_pointer()
-                                        .hover(|s| s.bg(crate::theme::ink(0.08)))
+                                        .hover_fill(
+                                            format!("codex-account-{ix}"),
+                                            if is_selected {
+                                                theme.accent.opacity(0.14)
+                                            } else {
+                                                crate::theme::fill(
+                                                    crate::theme::FillTier::Quaternary,
+                                                )
+                                            },
+                                            if is_selected {
+                                                theme.accent.opacity(0.2)
+                                            } else {
+                                                crate::theme::fill(crate::theme::FillTier::Tertiary)
+                                            },
+                                        )
                                         .on_click(cx.listener(move |this, _, _, cx| {
                                             this.pick_provider_account(account_id.clone(), cx);
                                         }))
@@ -6139,9 +6184,7 @@ impl Pickers {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .when(!favorites_view, |el| {
-                    el.hover(|s| s.bg(crate::theme::ink(0.06)))
-                })
+                .when(!favorites_view, |el| el.hover_wash("model-tab-favorites"))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.setting_menu = None;
                     this.model_rail = ModelRail::Favorites;
@@ -6181,7 +6224,7 @@ impl Pickers {
                         .justify_center()
                         .cursor_pointer()
                         .when(locked && effective != Some(harness), |el| el.opacity(0.7))
-                        .when(!is_viewed, |el| el.hover(|s| s.bg(crate::theme::ink(0.06))))
+                        .when(!is_viewed, |el| el.hover_wash(format!("harness-tab-{ix}")))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.setting_menu = None;
                             this.model_rail = ModelRail::Harness;
@@ -6234,7 +6277,7 @@ impl Pickers {
                     .flex()
                     .items_center()
                     .cursor_pointer()
-                    .hover(|style| style.bg(crate::theme::ink(0.06)))
+                    .hover_wash(id)
                     .child(label)
             };
             let panel = div()
@@ -6361,7 +6404,7 @@ impl Pickers {
                         } else {
                             gpui::Toggled::False
                         })
-                        .hover(|style| style.bg(crate::theme::ink(0.05)))
+                        .hover_wash("provider-switch-handoff")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_provider_switch_handoff();
                             cx.notify();
@@ -6412,7 +6455,7 @@ impl Pickers {
                                 .flex()
                                 .items_center()
                                 .cursor_pointer()
-                                .hover(|style| style.bg(crate::theme::ink(0.06)))
+                                .hover_wash("provider-switch-cancel")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.cancel_provider_switch_confirmation();
                                     cx.notify();
@@ -6429,8 +6472,11 @@ impl Pickers {
                                 .flex()
                                 .items_center()
                                 .cursor_pointer()
-                                .bg(theme.accent.opacity(0.16))
-                                .hover(|style| style.bg(theme.accent.opacity(0.24)))
+                                .hover_fill(
+                                    "provider-switch-confirm",
+                                    theme.accent.opacity(0.16),
+                                    theme.accent.opacity(0.24),
+                                )
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.confirm_provider_switch(target, cx);
                                 }))
@@ -6641,7 +6687,7 @@ impl Pickers {
                 .border_1()
                 .border_color(if on { theme.focus_ring() } else { theme.border })
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::ink(0.05)))
+                .hover_wash(id)
                 .flex()
                 .flex_col()
                 .gap(px(2.0))
@@ -6751,16 +6797,22 @@ impl Pickers {
                 .rounded(px(6.0))
                 .flex()
                 .items_center()
-                .when(primary, |el| el.bg(theme.accent.opacity(0.16)))
                 .when(enabled, |el| {
-                    el.cursor_pointer().hover(move |style| {
-                        style.bg(if primary {
+                    el.cursor_pointer().hover_fill(
+                        id,
+                        if primary {
+                            theme.accent.opacity(0.16)
+                        } else {
+                            gpui::transparent_black()
+                        },
+                        if primary {
                             theme.accent.opacity(0.24)
                         } else {
-                            crate::theme::ink(0.06)
-                        })
-                    })
+                            crate::theme::fill(crate::theme::FillTier::Tertiary)
+                        },
+                    )
                 })
+                .when(!enabled && primary, |el| el.bg(theme.accent.opacity(0.16)))
                 .when(!enabled, |el| el.opacity(0.5))
                 .child(label)
         };
@@ -7161,7 +7213,7 @@ impl Pickers {
                 .flex()
                 .items_center()
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::ink(0.06)))
+                .hover_wash("transfer-details-back")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.transfer_details = None;
                     this.transfer_details_task = None;
@@ -7221,8 +7273,7 @@ impl Pickers {
             .items_center()
             .gap(px(8.0))
             .when(compact_enabled, |row| {
-                row.cursor_pointer()
-                    .hover(|style| style.bg(crate::theme::ink(0.05)))
+                row.cursor_pointer().hover_wash("context-compact")
             })
             .when(!compact_enabled, |row| row.opacity(0.5))
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -7250,7 +7301,7 @@ impl Pickers {
             .items_center()
             .gap(px(8.0))
             .cursor_pointer()
-            .hover(|style| style.bg(crate::theme::ink(0.05)))
+            .hover_wash("context-clear")
             .on_click(cx.listener(|this, _, _, cx| {
                 if this.clear_context_confirmation {
                     this.clear_context_confirmation = false;
@@ -7288,7 +7339,7 @@ impl Pickers {
                         .items_center()
                         .gap(px(8.0))
                         .cursor_pointer()
-                        .hover(|style| style.bg(crate::theme::ink(0.05)))
+                        .hover_wash(format!("context-transfer-{ix}"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.open_transfer_details(receipt.clone(), cx)
                         }))
@@ -7527,7 +7578,7 @@ impl Pickers {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .hover(|s| s.bg(crate::theme::ink(0.08)))
+                .hover_wash(format!("model-star-{ix}"))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     cx.stop_propagation();
                     this.toggle_model_favorite(harness, &star_model, cx);

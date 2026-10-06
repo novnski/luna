@@ -76,8 +76,9 @@ impl GoalProvider {
     }
 }
 const MESSAGE_PLACEHOLDER: &str = "Do anything…";
-/// The queue tray's corner, so stacked trays read as one family.
-const CARD_RADIUS: f32 = 16.0;
+/// The queue tray's corner, so stacked trays read as one family: the stack
+/// ladder's tray step (audit CP-20).
+const CARD_RADIUS: f32 = crate::popover::STACK_TRAY_RADIUS;
 const HEADER_HEIGHT: f32 = 38.0;
 const GLYPH: f32 = 14.0;
 /// LUNA's working glyph (3×3 accent cells), ~10px at this cell size.
@@ -820,18 +821,19 @@ impl Composer {
             .text_size(crate::typography::ui_rems(11.5))
             .text_color(rest)
             .when(primary, |button| {
-                button.bg(accent).font_weight(gpui::FontWeight::MEDIUM)
+                button.font_weight(gpui::FontWeight::MEDIUM)
             })
+            .when(primary && !enabled, |button| button.bg(accent))
             .when(enabled && primary, |button| {
                 button
                     .cursor_pointer()
-                    .hover(move |style| style.bg(accent_strong))
+                    .hover_fill(SharedString::from(id), accent, accent_strong)
                     .focus_visible(move |style| style.bg(accent_strong))
             })
             .when(enabled && !primary, |button| {
                 button
                     .cursor_pointer()
-                    .hover(move |style| style.bg(wash).text_color(hover))
+                    .hover_fill_fg(SharedString::from(id), wash.opacity(0.0), wash, rest, hover)
                     .focus_visible(move |style| style.bg(accent.opacity(0.18)).text_color(accent))
             })
             // The control that is working keeps full strength for its spinner.
@@ -928,9 +930,8 @@ impl Composer {
                 .text_size(crate::typography::ui_rems(12.0))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_color(rest)
-                .bg(accent.opacity(0.14))
                 .cursor_pointer()
-                .hover(move |style| style.bg(accent.opacity(0.2)).text_color(rest))
+                .hover_fill("goal-mode", accent.opacity(0.14), accent.opacity(0.2))
                 .focus_visible({
                     let ring = theme.focus_ring();
                     move |style| crate::theme::focus_ring(style, ring)

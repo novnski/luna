@@ -1269,8 +1269,8 @@ impl Render for SurfaceTabTooltip {
     }
 }
 /// Sidebar footer buttons and their glyphs (audit SH-11).
-pub(super) const SIDEBAR_FOOTER_BUTTON: f32 = 32.0;
-pub(super) const SIDEBAR_FOOTER_ICON: f32 = 18.0;
+pub(super) const SIDEBAR_FOOTER_BUTTON: f32 = crate::surface_chrome::CONTROL_L;
+pub(super) const SIDEBAR_FOOTER_ICON: f32 = crate::surface_chrome::ICON_L;
 
 /// Toast capsule height.
 const TOAST_HEIGHT: f32 = 34.0;
@@ -9938,7 +9938,7 @@ impl Shell {
                             .aria_label("Open settings")
                             // One footer button recipe (audit SH-11).
                             .size(px(SIDEBAR_FOOTER_BUTTON))
-                            .rounded(px(crate::theme::radius::MD))
+                            .rounded(px(crate::surface_chrome::RADIUS_L))
                             .cursor_pointer()
                             .hover_wash("sidebar-settings-action")
                             .tooltip(|_, cx| {
@@ -9967,7 +9967,7 @@ impl Shell {
                             .aria_label("Open devices")
                             // One footer button recipe (audit SH-11).
                             .size(px(SIDEBAR_FOOTER_BUTTON))
-                            .rounded(px(crate::theme::radius::MD))
+                            .rounded(px(crate::surface_chrome::RADIUS_L))
                             .cursor_pointer()
                             .hover_wash("sidebar-devices-action")
                             .tooltip(|_, cx| {

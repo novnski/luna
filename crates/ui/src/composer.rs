@@ -39,6 +39,7 @@ use luna_rpc::{RpcError, methods};
 
 use crate::appshots::{self, CapturedAppshot};
 use crate::attachments::{self, StagedAttachment};
+use crate::interaction::HoverFill as _;
 use crate::motion;
 use crate::notice::{notice_action, notice_chip};
 use crate::pickers::{DraftConfig, Pickers};
@@ -4711,6 +4712,32 @@ fn command_kind(harness: Option<HarnessId>, command: &SlashCommand) -> SlashComm
 /// candidate list is fetched per harness (`ListCommands`, revalidated once per
 /// popup open) and filtered locally per keystroke — no RPC, debounce, or
 /// skeleton churn while typing.
+/// The completion popups' exit phase (audit CP-11): they used to vanish in
+/// one frame on Esc or accept while every picker plays [`motion::MENU_OUT`].
+/// Each popup keeps a copy of its last open state; when its token closes,
+/// that copy renders for the exit's span with the menu-out fade and dead
+/// hit-testing, then drops. No close path has to know about it.
+#[derive(Default)]
+struct CompletionExits {
+    slash_last: Option<SlashState>,
+    slash: Option<(SlashState, std::time::Instant)>,
+    mention_last: Option<FileMentionState>,
+    mention: Option<(FileMentionState, std::time::Instant)>,
+    chat_reference_last: Option<chat_references::ChatReferenceState>,
+    chat_reference: Option<(chat_references::ChatReferenceState, std::time::Instant)>,
+    /// The stash list's open flag last frame, and its exit start.
+    stash_open: bool,
+    stash: Option<std::time::Instant>,
+}
+
+/// Whether an exit that began at `since` is still playing.
+fn completion_exit_live(since: std::time::Instant) -> bool {
+    since.elapsed()
+        < crate::motion::MENU_OUT
+            .total()
+            .mul_f32(crate::motion::speed_scale())
+}
+
 #[derive(Debug, Clone, Default)]
 struct SlashState {
     token: Option<MentionToken>,
@@ -4881,6 +4908,8 @@ pub struct Composer {
     /// File-mention popup row scroll (same treatment).
     mention_scroll: gpui::ScrollHandle,
     chat_reference: chat_references::ChatReferenceState,
+    /// The completion popups' exit phase (audit CP-11).
+    completion_exits: CompletionExits,
     /// Shared scrollbar hover/drag state for both popups' floating rails —
     /// they never show at once (mutually exclusive by token shape).
     popup_bar: crate::popover::MenuScrollbarState,
@@ -5319,6 +5348,7 @@ impl Composer {
             slash_scroll: gpui::ScrollHandle::new(),
             mention_scroll: gpui::ScrollHandle::new(),
             chat_reference: Default::default(),
+            completion_exits: CompletionExits::default(),
             popup_bar: crate::popover::MenuScrollbarState::default(),
             current_key,
             sending: false,
@@ -8455,7 +8485,11 @@ impl Composer {
                 .rounded(px(14.0))
                 .overflow_hidden()
                 .cursor_pointer()
-                .hover(|style| style.bg(crate::theme::ink(0.045)))
+                .hover_fill(
+                    format!("composer-appshot-{ix}"),
+                    gpui::transparent_black(),
+                    crate::theme::fill(crate::theme::FillTier::Quaternary),
+                )
                 .tooltip(move |_, cx| {
                     cx.new(|_| crate::popover::TextTooltip(preview_label.clone()))
                         .into()
@@ -8871,9 +8905,39 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         self.ensure_native_catalog(false, cx);
+        if self.mention.token.is_some() {
+            self.completion_exits.mention = None;
+            let popup = self.render_file_mention_popup_body(theme, None, window, cx);
+            self.completion_exits.mention_last = Some(self.mention.clone());
+            return popup;
+        }
+        if let Some(last) = self.completion_exits.mention_last.take()
+            && self.completion_slot_free()
+        {
+            self.completion_exits.mention = Some((last, std::time::Instant::now()));
+            self.schedule_completion_exit_reap(cx);
+        }
+        let (held, since) = self.completion_exits.mention.clone()?;
+        if !completion_exit_live(since) || !self.completion_slot_free() {
+            self.completion_exits.mention = None;
+            return None;
+        }
+        let live = std::mem::replace(&mut self.mention, held);
+        let popup = self.render_file_mention_popup_body(theme, Some(since), window, cx);
+        self.mention = live;
+        popup
+    }
+
+    fn render_file_mention_popup_body(
+        &mut self,
+        theme: &Theme,
+        closing: Option<std::time::Instant>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
         let theme = &theme.for_popup();
         let token = self.mention.token.as_ref()?;
-        let mut card = crate::popover::popover_card(theme)
+        let mut card = crate::popover::stack_popup_card(theme)
             .w_full()
             .max_h(px(320.0))
             .overflow_hidden()
@@ -8885,7 +8949,9 @@ impl Composer {
                     window.focus(&this.input.focus_handle(cx), cx);
                 }),
             )
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_mention(cx)));
+            .when(closing.is_none(), |card| {
+                card.on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_mention(cx)))
+            });
         let file_count = self.mention.results.len();
         // Options only; Retry is a separate button after the listbox.
         let set_size = file_count + self.mention.native_results.len();
@@ -8935,8 +9001,16 @@ impl Composer {
                 };
                 let kind = if result.is_dir { "Folder" } else { "File" };
                 rows.push(
-                    crate::popover::menu_row(theme, selected, format!("file-mention-result-{ix}"))
+                    crate::popover::menu_row_cursor(theme, selected)
                         .id(("file-mention-result", ix))
+                        // The pointer and the arrow keys share one cursor
+                        // (audit CP-13).
+                        .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                            if this.mention.active != Some(ix) {
+                                this.mention.active = Some(ix);
+                                cx.notify();
+                            }
+                        }))
                         .role(Role::ListBoxOption)
                         .aria_label(format!("{kind} {}", result.path))
                         .aria_selected(selected)
@@ -9002,77 +9076,85 @@ impl Composer {
                 };
                 let enabled = semantics.enabled;
                 rows.push(
-                    crate::popover::menu_row(
-                        theme,
-                        selected,
-                        format!("native-mention-result-{ix}"),
-                    )
-                    .id(("native-mention-result", ix))
-                    .role(Role::ListBoxOption)
-                    .aria_label(semantics.label)
-                    .aria_description(semantics.description)
-                    .aria_selected(selected)
-                    .aria_position_in_set(ix + 1)
-                    .aria_size_of_set(set_size)
-                    .when(selected, |row| row.aria_active_descendant())
-                    // Disabled rows expose no Click action and report Disabled.
-                    .when(enabled, |row| {
-                        row.on_click(cx.listener(move |this, _, _, cx| {
-                            this.mention.active = Some(ix);
-                            this.accept_mention(cx);
-                        }))
-                    })
-                    .when(!enabled, |row| {
-                        row.cursor_default()
-                            .opacity(0.55)
-                            .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
-                    })
-                    // Glyph, then a title-over-subtitle stack on one text
-                    // column, then the kind label right-aligned (audit
-                    // CP-04: the row is flex_row, so a second child landed
-                    // as a zig-zag trailing column).
-                    .child(
-                        crate::icons::icon(crate::icons::MAGIC_WAND_3)
-                            .flex_none()
-                            .size(px(14.0))
-                            .text_color(theme.readable_icon(theme.warning)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap(px(1.0))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(crate::typography::ui_rems(13.0))
-                                    .text_color(theme.text)
-                                    .child(result.name.clone()),
-                            )
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(theme.text_muted)
-                                    .child(
-                                        result
-                                            .description
-                                            .clone()
-                                            .unwrap_or_else(|| result.id.clone()),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .text_color(theme.text_muted)
-                            .child(integrations::kind_label(result.kind)),
-                    )
-                    .into_any_element(),
+                    crate::popover::menu_row_cursor(theme, selected)
+                        .id(("native-mention-result", ix))
+                        .when(enabled, |row| {
+                            row.on_mouse_move(cx.listener(
+                                move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                    if this.mention.active != Some(ix) {
+                                        this.mention.active = Some(ix);
+                                        cx.notify();
+                                    }
+                                },
+                            ))
+                        })
+                        .role(Role::ListBoxOption)
+                        .aria_label(semantics.label)
+                        .aria_description(semantics.description)
+                        .aria_selected(selected)
+                        .aria_position_in_set(ix + 1)
+                        .aria_size_of_set(set_size)
+                        .when(selected, |row| row.aria_active_descendant())
+                        // Disabled rows expose no Click action and report Disabled.
+                        .when(enabled, |row| {
+                            row.on_click(cx.listener(move |this, _, _, cx| {
+                                this.mention.active = Some(ix);
+                                this.accept_mention(cx);
+                            }))
+                        })
+                        .when(!enabled, |row| {
+                            row.cursor_default()
+                                .opacity(0.55)
+                                .a11y_synthetic_children(|builder| {
+                                    builder.parent_node().set_disabled()
+                                })
+                        })
+                        // Glyph, then a title-over-subtitle stack on one text
+                        // column, then the kind label right-aligned (audit
+                        // CP-04: the row is flex_row, so a second child landed
+                        // as a zig-zag trailing column).
+                        .child(
+                            crate::icons::icon(crate::icons::MAGIC_WAND_3)
+                                .flex_none()
+                                .size(px(14.0))
+                                .text_color(theme.readable_icon(theme.warning)),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .gap(px(1.0))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(crate::typography::ui_rems(13.0))
+                                        .text_color(theme.text)
+                                        .child(result.name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_color(theme.text_muted)
+                                        .child(
+                                            result
+                                                .description
+                                                .clone()
+                                                .unwrap_or_else(|| result.id.clone()),
+                                        ),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(crate::typography::ui_rems(11.0))
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .text_color(theme.text_muted)
+                                .child(integrations::kind_label(result.kind)),
+                        )
+                        .into_any_element(),
                 );
             }
             card = card.child(
@@ -9123,8 +9205,16 @@ impl Composer {
                             .child(notice.clone()),
                     )
                     .child(
-                        crate::popover::menu_row(theme, retry_active, "retry-native-catalog")
+                        crate::popover::menu_row_cursor(theme, retry_active)
                             .id("retry-native-catalog")
+                            .on_mouse_move(cx.listener(
+                                move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                    if this.mention.active != Some(retry_index) {
+                                        this.mention.active = Some(retry_index);
+                                        cx.notify();
+                                    }
+                                },
+                            ))
                             .role(Role::Button)
                             .aria_label("Retry native integrations discovery")
                             .aria_description(notice)
@@ -9145,7 +9235,7 @@ impl Composer {
         Some(crate::popover::full_width_menu_above(
             "file-mention-popup",
             card.into_any_element(),
-            None,
+            closing,
         ))
     }
 
@@ -9426,9 +9516,62 @@ impl Composer {
         self.sync_mention_controls(cx);
     }
 
+    /// Repaint once an exit's span has run, so the held popup unmounts.
+    fn schedule_completion_exit_reap(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(
+                    crate::motion::MENU_OUT
+                        .total()
+                        .mul_f32(crate::motion::speed_scale())
+                        .saturating_add(std::time::Duration::from_millis(20)),
+                )
+                .await;
+            this.update(cx, |_, cx| cx.notify()).ok();
+        })
+        .detach();
+    }
+
+    /// No other completion is opening: an exit would otherwise fade under
+    /// the next popup in the same spot.
+    fn completion_slot_free(&self) -> bool {
+        self.slash.token.is_none()
+            && self.mention.token.is_none()
+            && self.chat_reference.token.is_none()
+    }
+
     fn render_slash_popup(
         &mut self,
         theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if self.slash.token.is_some() {
+            self.completion_exits.slash = None;
+            let popup = self.render_slash_popup_body(theme, None, cx);
+            self.completion_exits.slash_last = Some(self.slash.clone());
+            return popup;
+        }
+        if let Some(last) = self.completion_exits.slash_last.take()
+            && self.completion_slot_free()
+        {
+            self.completion_exits.slash = Some((last, std::time::Instant::now()));
+            self.schedule_completion_exit_reap(cx);
+        }
+        let (held, since) = self.completion_exits.slash.clone()?;
+        if !completion_exit_live(since) || !self.completion_slot_free() {
+            self.completion_exits.slash = None;
+            return None;
+        }
+        let live = std::mem::replace(&mut self.slash, held);
+        let popup = self.render_slash_popup_body(theme, Some(since), cx);
+        self.slash = live;
+        popup
+    }
+
+    fn render_slash_popup_body(
+        &mut self,
+        theme: &Theme,
+        closing: Option<std::time::Instant>,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let theme = &theme.for_popup();
@@ -9438,7 +9581,7 @@ impl Composer {
         let sigil = self.slash_sigil();
         // Full pill width at the mention card's height budget — both composer
         // completions share the same surface shape.
-        let mut card = crate::popover::popover_card(theme)
+        let mut card = crate::popover::stack_popup_card(theme)
             .w_full()
             .max_h(px(320.0))
             .overflow_hidden()
@@ -9448,7 +9591,11 @@ impl Composer {
                     window.focus(&this.input.focus_handle(cx), cx);
                 }),
             )
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_slash(cx)));
+            // A held exit copy must not dismiss the live (already closed)
+            // token a second time.
+            .when(closing.is_none(), |card| {
+                card.on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_slash(cx)))
+            });
         if self.slash.loading && commands.is_empty() {
             card = card.child(crate::popover::skeleton_rows(
                 "slash-loading",
@@ -9503,8 +9650,14 @@ impl Composer {
                 }
                 let description: SharedString = description.into();
                 rows.push(
-                    crate::popover::menu_row(theme, selected, format!("slash-result-{row_ix}"))
+                    crate::popover::menu_row_cursor(theme, selected)
                         .id(("slash-result", row_ix))
+                        .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                            if this.slash.active != Some(row_ix) {
+                                this.slash.active = Some(row_ix);
+                                cx.notify();
+                            }
+                        }))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.slash.active = Some(row_ix);
                             this.accept_slash(cx);
@@ -9584,7 +9737,7 @@ impl Composer {
         Some(crate::popover::full_width_menu_above(
             "slash-popup",
             card.into_any_element(),
-            None,
+            closing,
         ))
     }
 
@@ -12102,45 +12255,46 @@ impl Composer {
         crate::frost::frosted(surface_radius, 16.0, panel).into_any_element()
     }
 
+    /// The prompt-stash list (audit CP-11): the shared full-width menu above
+    /// the pill, with the menu card, rows, frost and enter/exit motion of the
+    /// completion popups instead of an inline hand-rolled card.
     fn render_stash_menu(
         &mut self,
         theme: &Theme,
         cx: &mut Context<Self>,
-    ) -> Option<gpui::Stateful<gpui::Div>> {
-        if !self.stash_menu_open {
-            return None;
-        }
-        let busy = self.stash_task.is_some();
+    ) -> Option<gpui::AnyElement> {
+        let closing = if self.stash_menu_open {
+            self.completion_exits.stash_open = true;
+            self.completion_exits.stash = None;
+            None
+        } else {
+            if std::mem::take(&mut self.completion_exits.stash_open) {
+                self.completion_exits.stash = Some(std::time::Instant::now());
+                self.schedule_completion_exit_reap(cx);
+            }
+            let since = self.completion_exits.stash?;
+            if !completion_exit_live(since) {
+                self.completion_exits.stash = None;
+                return None;
+            }
+            Some(since)
+        };
+        let busy = self.stash_task.is_some() || closing.is_some();
         let popup_theme = theme.for_popup();
-        let popup_focus = popup_theme.border_strong;
-        let mut rows = div()
-            .id("composer-stash-list")
-            .w_full()
-            .max_h(px(220.0))
-            .overflow_y_scroll()
-            .rounded(px(crate::popover::CARD_RADIUS))
-            .border_1()
-            .border_color(theme.border)
-            .bg(crate::popover::surface_bg(theme))
-            .when(!theme.is_frost(), |panel| {
-                panel.shadow(crate::theme::menu_shadows())
-            })
-            .p(px(crate::popover::CARD_INSET))
-            .flex()
-            .flex_col()
-            .gap(px(2.0));
+        let mut rows: Vec<gpui::AnyElement> = Vec::new();
         if self.stash_entries.is_empty() {
-            rows = rows.child(
+            rows.push(
                 div()
                     .px(px(8.0))
-                    .py(px(10.0))
+                    .py(px(8.0))
                     .text_size(crate::typography::ui_rems(12.0))
                     .text_color(popup_theme.text_muted)
-                    .child(if busy {
+                    .child(if self.stash_task.is_some() {
                         "Loading saved prompts…"
                     } else {
                         "No saved prompts yet"
-                    }),
+                    })
+                    .into_any_element(),
             );
         }
         for entry in self.stash_entries.iter().cloned() {
@@ -12148,47 +12302,22 @@ impl Composer {
             let id = entry.id.clone();
             let attachment_count = entry.attachments.len();
             let label = entry.label.clone();
-            rows = rows.child(
-                div()
+            rows.push(
+                crate::popover::menu_row(&popup_theme, false, format!("composer-stash-row-{id}"))
+                    .rounded(px(crate::popover::STACK_POPUP_ROW_RADIUS))
                     .id(SharedString::from(format!("composer-stash-row-{id}")))
-                    .w_full()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .rounded(px(8.0))
+                    .role(gpui::Role::Button)
+                    .aria_label(format!("Restore saved prompt: {label}"))
                     .when(!busy, |row| {
-                        row.hover(|style| style.bg(theme.glass_hover()))
+                        row.tab_index(0)
+                            .focus_visible(crate::theme::focus_visible_ring)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.restore_stashed_prompt(restore.clone(), cx);
+                            }))
+                            .on_key_down(crate::swallow_activation_key)
                     })
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("composer-stash-restore-{id}")))
-                            .role(gpui::Role::Button)
-                            .aria_label(format!("Restore saved prompt: {label}"))
-                            .flex_1()
-                            .min_w_0()
-                            .px(px(8.0))
-                            .py(px(8.0))
-                            .when(!busy, |button| {
-                                button
-                                    .tab_index(0)
-                                    .focus_visible(move |style| {
-                                        crate::theme::focus_ring(style, popup_focus)
-                                    })
-                                    .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.restore_stashed_prompt(restore.clone(), cx);
-                                    }))
-                            })
-                            .when(busy, |button| button.opacity(0.5))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_size(crate::typography::ui_rems(12.0))
-                                    .text_color(popup_theme.text)
-                                    .child(entry.label),
-                            ),
-                    )
+                    .when(busy, |row| row.cursor_default())
+                    .child(div().flex_1().min_w_0().truncate().child(entry.label))
                     .when(attachment_count > 0, |row| {
                         row.child(
                             div()
@@ -12202,37 +12331,42 @@ impl Composer {
                         )
                     })
                     .child(
-                        div()
-                            .id(SharedString::from(format!("composer-stash-delete-{id}")))
-                            .role(gpui::Role::Button)
-                            .aria_label(format!("Delete saved prompt: {label}"))
-                            .px(px(8.0))
-                            .py(px(8.0))
-                            .rounded(px(6.0))
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(popup_theme.text_muted)
-                            .when(!busy, |button| {
-                                button
-                                    .tab_index(0)
-                                    .focus_visible(move |style| {
-                                        crate::theme::focus_ring(style, popup_focus)
-                                    })
-                                    .cursor_pointer()
-                                    .hover(|style| {
-                                        style.text_color(
-                                            theme.readable_tone(theme.danger_muted, 1.0),
-                                        )
-                                    })
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.delete_stashed_prompt(id.clone(), cx);
-                                    }))
-                            })
-                            .when(busy, |button| button.opacity(0.5))
-                            .child("Delete"),
-                    ),
+                        crate::button::button(
+                            format!("composer-stash-delete-{id}"),
+                            crate::button::ButtonKind::Ghost,
+                            crate::button::ControlSize::Sm,
+                            !busy,
+                            &popup_theme,
+                        )
+                        .aria_label(format!("Delete saved prompt: {label}"))
+                        .when(!busy, |button| {
+                            button.on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.delete_stashed_prompt(id.clone(), cx);
+                            }))
+                        })
+                        .child("Delete"),
+                    )
+                    .into_any_element(),
             );
         }
-        Some(rows)
+        let card = crate::popover::stack_popup_card(&popup_theme)
+            .w_full()
+            .child(
+                div()
+                    .id("composer-stash-list")
+                    .max_h(px(220.0))
+                    .overflow_y_scroll()
+                    .flex()
+                    .flex_col()
+                    .gap(px(crate::popover::MENU_GAP))
+                    .children(rows),
+            );
+        Some(crate::popover::full_width_menu_above(
+            "composer-stash-menu",
+            card.into_any_element(),
+            closing,
+        ))
     }
 
     /// Whether the compact controls tray (a narrow composer's More) is open.
@@ -12674,7 +12808,8 @@ impl Render for Composer {
                             .mt(px(6.0))
                             .px(px(12.0))
                             .py(px(10.0))
-                            .rounded(px(10.0))
+                            // The stack ladder's notice step (audit CP-20).
+                            .rounded(px(crate::popover::STACK_NOTICE_RADIUS))
                             .border_1()
                             .border_color(theme.border)
                             .bg(theme.surface_card)
@@ -12713,7 +12848,11 @@ impl Render for Composer {
                                             .tab_index(0)
                                             .cursor_pointer()
                                             .text_color(theme.text_muted)
-                                            .hover(move |style| style.bg(hover_bg))
+                                            .hover_fill(
+                                                "composer-discard-unsent",
+                                                hover_bg.opacity(0.0),
+                                                hover_bg,
+                                            )
                                             .child("Discard saved copy")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.discard_latest_submission(cx);
@@ -12729,7 +12868,11 @@ impl Render for Composer {
                                             .cursor_pointer()
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .text_color(theme.readable_tone(theme.accent, 1.0))
-                                            .hover(move |style| style.bg(hover_bg))
+                                            .hover_fill(
+                                                "composer-restore-unsent",
+                                                hover_bg.opacity(0.0),
+                                                hover_bg,
+                                            )
                                             .child("Restore message")
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 this.recover_latest_submission(cx);
@@ -13282,7 +13425,8 @@ impl Render for Composer {
             // the file-mention and slash tokens are mutually exclusive.
             .children(self.render_file_mention_popup(&theme, window, cx))
             .children(self.render_chat_reference_popup(&theme, cx))
-            .children(self.render_slash_popup(&theme, cx));
+            .children(self.render_slash_popup(&theme, cx))
+            .children(self.render_stash_menu(&theme, cx));
         // Restore the original chip-only selector treatment: destination at
         // the top-right, no surrounding surface. Cancel the column gap as the
         // row collapses so the pill never jumps at the route boundary.
@@ -13318,8 +13462,7 @@ impl Render for Composer {
         } else {
             container
         };
-        let stash_menu = self.render_stash_menu(&theme, cx);
-        let container = container.children(stash_menu).child(pill_surface);
+        let container = container.child(pill_surface);
 
         // The lower slot keeps a stable footprint for Git projects while its
         // old floating checkout/ref controls dissolve into the session footer.

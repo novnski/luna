@@ -1021,34 +1021,30 @@ impl Shell {
             .copied()
             .enumerate()
             .map(|(ix, row)| {
-                popover::menu_row_nav(
-                    theme,
-                    selected[ix],
-                    active == Some(ix),
-                    format!("sidebar-view-row-{ix}"),
-                )
-                .id(("sidebar-view-row", ix))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    if let Some(menu) = this.sidebar_view_menu.open_mut() {
-                        menu.active = None;
-                    }
-                    this.activate_sidebar_view_row(row, cx)
-                }))
-                .child(
-                    icon(icons[ix])
-                        .size(px(15.0))
-                        .flex_none()
-                        .text_color(theme.text_muted),
-                )
-                .child(div().flex_1().child(SharedString::from(labels[ix])))
-                .child(div().w(px(14.0)).flex_none().when(selected[ix], |el| {
-                    el.child(
-                        icon(icons::CHECK)
-                            .size(px(14.0))
+                popover::menu_row_nav(theme, selected[ix], active == Some(ix))
+                    .id(("sidebar-view-row", ix))
+                    .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                        if let Some(menu) = this.sidebar_view_menu.open_mut()
+                            && menu.active != Some(ix)
+                        {
+                            menu.active = Some(ix);
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(menu) = this.sidebar_view_menu.open_mut() {
+                            menu.active = None;
+                        }
+                        this.activate_sidebar_view_row(row, cx)
+                    }))
+                    .child(
+                        icon(icons[ix])
+                            .size(px(15.0))
+                            .flex_none()
                             .text_color(theme.text_muted),
                     )
-                }))
-                .into_any_element()
+                    .child(div().flex_1().child(SharedString::from(labels[ix])))
+                    .into_any_element()
             })
             .collect();
         let settle_rows = rows.split_off(8);
@@ -1423,47 +1419,53 @@ impl Shell {
                                 _ => None,
                             };
                             let activate = row;
-                            popover::menu_row_nav(
-                                theme,
-                                selected,
-                                ix == active,
-                                format!("spaces-menu-row-{ix}"),
-                            )
-                            .id(("spaces-menu-row", ix))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.activate_spaces_menu_row(activate.clone(), cx);
-                            }))
-                            .when_some(menu_space, |el, space_id| {
-                                el.on_mouse_down(
-                                    MouseButton::Right,
-                                    cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                                        this.space_menu.open((space_id.clone(), event.position));
-                                        cx.notify();
-                                    }),
-                                )
-                            })
-                            .child(div().flex_1().min_w_0().truncate().child(label))
-                            .when_some(tag, |el, tag| {
-                                el.child(
-                                    div()
-                                        .max_w(gpui::relative(0.5))
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(crate::typography::ui_rems(11.0))
-                                        .font_weight(gpui::FontWeight::NORMAL)
-                                        .text_color(theme.text_muted)
-                                        .child(tag),
-                                )
-                            })
-                            // Disconnected glyph, not the word (user request).
-                            .when(offline, |el| {
-                                el.child(
-                                    icon(icons::WIFI_OFF)
-                                        .size(px(12.0))
-                                        .flex_none()
-                                        .text_color(theme.readable_tone(theme.warning, 0.8)),
-                                )
-                            })
+                            popover::menu_row_nav(theme, selected, ix == active)
+                                .id(("spaces-menu-row", ix))
+                                .on_mouse_move(cx.listener(
+                                    move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                                        if let Some(menu) = this.spaces_menu.open_mut()
+                                            && menu.active != ix
+                                        {
+                                            menu.active = ix;
+                                            cx.notify();
+                                        }
+                                    },
+                                ))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.activate_spaces_menu_row(activate.clone(), cx);
+                                }))
+                                .when_some(menu_space, |el, space_id| {
+                                    el.on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                                            this.space_menu
+                                                .open((space_id.clone(), event.position));
+                                            cx.notify();
+                                        }),
+                                    )
+                                })
+                                .child(div().flex_1().min_w_0().truncate().child(label))
+                                .when_some(tag, |el, tag| {
+                                    el.child(
+                                        div()
+                                            .max_w(gpui::relative(0.5))
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(crate::typography::ui_rems(11.0))
+                                            .font_weight(gpui::FontWeight::NORMAL)
+                                            .text_color(theme.text_muted)
+                                            .child(tag),
+                                    )
+                                })
+                                // Disconnected glyph, not the word (user request).
+                                .when(offline, |el| {
+                                    el.child(
+                                        icon(icons::WIFI_OFF)
+                                            .size(px(12.0))
+                                            .flex_none()
+                                            .text_color(theme.readable_tone(theme.warning, 0.8)),
+                                    )
+                                })
                             // No check glyph — the selected row's wash (menu_row's
                             // active styling) is the selection signal.
                         },
@@ -1507,29 +1509,32 @@ impl Shell {
                     .bg(theme.border.opacity(0.6)),
             )
             .child(
-                popover::menu_row_nav(
-                    theme,
-                    false,
-                    active == add_index,
-                    "spaces-menu-add".to_string(),
-                )
-                .id("spaces-menu-add")
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.activate_spaces_menu_row(SpacesMenuRow::AddSpace, cx);
-                }))
-                .child(
-                    icon(icons::PLUS)
-                        .size(px(12.0))
-                        .flex_none()
-                        .text_color(theme.text_muted),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .child(SharedString::from("New project…")),
-                ),
+                popover::menu_row_nav(theme, false, active == add_index)
+                    .id("spaces-menu-add")
+                    .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                        if let Some(menu) = this.spaces_menu.open_mut()
+                            && menu.active != add_index
+                        {
+                            menu.active = add_index;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.activate_spaces_menu_row(SpacesMenuRow::AddSpace, cx);
+                    }))
+                    .child(
+                        icon(icons::PLUS)
+                            .size(px(12.0))
+                            .flex_none()
+                            .text_color(theme.text_muted),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(SharedString::from("New project…")),
+                    ),
             )
             .into_any_element()
     }
@@ -3992,7 +3997,10 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(crate::frost::frosted(14.0, crate::frost::MENU_BLUR, card).elevated()),
+                            .child(
+                                crate::frost::frosted(14.0, crate::frost::MENU_BLUR, card)
+                                    .elevated(),
+                            ),
                     ),
             )
             .priority(2)

@@ -183,6 +183,21 @@ pub(super) struct ChatReferenceState {
     task: Option<Task<()>>,
     pub(super) scroll: gpui::ScrollHandle,
 }
+impl ChatReferenceState {
+    /// What the popup shows, for its exit copy (audit CP-11): no task, no
+    /// scope, no dismissal memory.
+    pub(super) fn exit_copy(&self) -> Self {
+        Self {
+            token: self.token.clone(),
+            items: self.items.clone(),
+            active: self.active,
+            loading: self.loading,
+            scroll: self.scroll.clone(),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for ChatReferenceState {
     fn default() -> Self {
         Self {
@@ -558,9 +573,39 @@ impl Composer {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if self.chat_reference.token.is_some() {
+            self.completion_exits.chat_reference = None;
+            let popup = self.render_chat_reference_popup_body(theme, None, cx);
+            self.completion_exits.chat_reference_last = Some(self.chat_reference.exit_copy());
+            return popup;
+        }
+        if let Some(last) = self.completion_exits.chat_reference_last.take()
+            && self.completion_slot_free()
+        {
+            self.completion_exits.chat_reference = Some((last, std::time::Instant::now()));
+            self.schedule_completion_exit_reap(cx);
+        }
+        let since = self.completion_exits.chat_reference.as_ref()?.1;
+        if !completion_exit_live(since) || !self.completion_slot_free() {
+            self.completion_exits.chat_reference = None;
+            return None;
+        }
+        let held = self.completion_exits.chat_reference.as_ref()?.0.exit_copy();
+        let live = std::mem::replace(&mut self.chat_reference, held);
+        let popup = self.render_chat_reference_popup_body(theme, Some(since), cx);
+        self.chat_reference = live;
+        popup
+    }
+
+    fn render_chat_reference_popup_body(
+        &mut self,
+        theme: &Theme,
+        closing: Option<std::time::Instant>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         self.chat_reference.token.as_ref()?;
         let theme = theme.for_popup();
-        let mut card = crate::popover::popover_card(&theme)
+        let mut card = crate::popover::stack_popup_card(&theme)
             .w_full()
             .max_h(px(320.0))
             .overflow_hidden()
@@ -570,7 +615,11 @@ impl Composer {
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| window.focus(&this.input.focus_handle(cx), cx)),
             )
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.dismiss_chat_references(cx)));
+            .when(closing.is_none(), |card| {
+                card.on_mouse_down_out(
+                    cx.listener(|this, _, _, cx| this.dismiss_chat_references(cx)),
+                )
+            });
         if self.chat_reference.items.is_empty() {
             card = card.child(if self.chat_reference.loading {
                 crate::popover::skeleton_rows(
@@ -648,7 +697,7 @@ impl Composer {
         Some(crate::popover::full_width_menu_above(
             "chat-reference-popup",
             card.into_any_element(),
-            None,
+            closing,
         ))
     }
 
@@ -688,8 +737,15 @@ impl Composer {
             .harness
             .map(crate::pickers::harness_brand_icon)
             .unwrap_or((crate::icons::CHAT_ROUND_LINE, None));
-        crate::popover::menu_row(theme, selected, format!("chat-reference-option-{index}"))
+        crate::popover::menu_row_cursor(theme, selected)
             .id(("chat-reference-option", index))
+            // The pointer and the arrow keys share one cursor (audit CP-13).
+            .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                if this.chat_reference.active != Some(index) {
+                    this.chat_reference.active = Some(index);
+                    cx.notify();
+                }
+            }))
             .role(gpui::Role::ListBoxOption)
             .aria_label(format!("#{}", record.title))
             .aria_description(detail)

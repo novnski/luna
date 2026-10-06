@@ -54,7 +54,8 @@ pub fn notice_chip(
         .flex()
         .flex_col()
         .gap(px(6.0))
-        .rounded(px(crate::theme::radius::LG))
+        // The stack ladder's notice step above the pill (audit CP-20).
+        .rounded(px(crate::popover::STACK_NOTICE_RADIUS))
         .border_1()
         .border_color(accent.opacity(0.22))
         .bg(plate)

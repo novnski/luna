@@ -9,7 +9,7 @@
 //! key share one fade. Derive the key from the same data as the element id,
 //! prefixed by the surface (`"tab-close-{id}"`).
 
-use gpui::{Div, Hsla, SharedString, Stateful, StatefulInteractiveElement, Styled};
+use gpui::{Hsla, SharedString, StatefulInteractiveElement, Styled};
 
 use crate::motion;
 use crate::theme::{FillTier, fill};
@@ -66,7 +66,7 @@ pub trait HoverFill: Sized {
     ) -> Self;
 }
 
-impl HoverFill for Stateful<Div> {
+impl<E: StatefulInteractiveElement + Styled> HoverFill for E {
     fn hover_fill(self, key: impl Into<SharedString>, rest: Hsla, hover: Hsla) -> Self {
         let key = key.into();
         self.bg(motion::hover_blend(&key, rest, hover))

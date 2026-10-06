@@ -4302,26 +4302,29 @@ impl Changes {
                     let name = branches[branch_ix].clone();
                     let selected = current.as_deref() == Some(name.as_str());
                     let label = name.clone();
-                    popover::menu_row_nav(
-                        theme,
-                        selected,
-                        row_ix == active,
-                        format!("changes-ref-row-{row_ix}"),
-                    )
-                    .id(("changes-ref-row", row_ix))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_base_ref(name.clone(), cx);
-                        this.close_ref_menu(cx);
-                    }))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .font_family(theme.font_mono.clone())
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .child(SharedString::from(label)),
-                    )
+                    popover::menu_row_nav(theme, selected, row_ix == active)
+                        .id(("changes-ref-row", row_ix))
+                        .on_mouse_move(cx.listener(move |this, _: &gpui::MouseMoveEvent, _, cx| {
+                            if let Some(menu) = this.ref_menu.open_mut()
+                                && menu.active != row_ix
+                            {
+                                menu.active = row_ix;
+                                cx.notify();
+                            }
+                        }))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_base_ref(name.clone(), cx);
+                            this.close_ref_menu(cx);
+                        }))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(theme.font_mono.clone())
+                                .text_size(crate::typography::ui_rems(12.0))
+                                .child(SharedString::from(label)),
+                        )
                 }))
                 .into_any_element()
         };
