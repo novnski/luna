@@ -2565,6 +2565,9 @@ pub fn live_status(rows: &[Row]) -> LiveStatus {
 
 /// The present-tense status for one running tool call.
 fn tool_status(call: &ToolCall) -> LiveStatus {
+    if let Some(kind) = luna_proto::view::ThreadTool::of(call) {
+        return LiveStatus::word(kind.status());
+    }
     let (label, detail) = tool_chip_content(call);
     let file = |detail: &str| {
         let trimmed = detail.trim_end_matches('/');
@@ -9094,6 +9097,11 @@ fn tool_icon_path(call: &ToolCall) -> &'static str {
         ToolCall::Todo { .. } => crate::icons::CHECKLIST,
         call if is_agent_call(call) => crate::icons::BOT,
         ToolCall::Unknown { name, .. } if name == "Wait for agents" => crate::icons::STOPWATCH,
+        call if luna_proto::view::ThreadTool::of(call)
+            == Some(luna_proto::view::ThreadTool::Wait) =>
+        {
+            crate::icons::STOPWATCH
+        }
         ToolCall::Mcp { .. } => crate::icons::MCP_MARK,
         call if call.native_hook_name().is_some() => crate::icons::WEBHOOK,
         ToolCall::ComputerUse { .. } => crate::icons::CURSOR,

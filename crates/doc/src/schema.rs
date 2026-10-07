@@ -1434,6 +1434,14 @@ impl<'a> SegmentWriter<'a> {
         (self.entry_index, self.written)
     }
 
+    /// Another entry has landed below this streaming one since it began — a
+    /// child notice, peer note or marker written by a different path. The
+    /// writer must stop growing this entry above that newer entry, or new
+    /// output reads as if it happened before it.
+    pub fn is_buried(&self) -> bool {
+        self.doc.doc.get_list("messages").len() > self.entry_index + 1
+    }
+
     fn entry_map(&self) -> Result<LoroMap, DocError> {
         let messages = self.doc.doc.get_list("messages");
         match messages.get(self.entry_index) {

@@ -399,6 +399,63 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     }
 }
 
+/// One of LUNA's own thread tools. Every provider reaches them on the `luna`
+/// MCP server, and the doc strips MCP inputs, so the tool name is all a
+/// viewport has to say what the agent is doing with its threads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThreadTool {
+    Create,
+    Wait,
+    Read,
+    Message,
+    List,
+    Models,
+}
+
+impl ThreadTool {
+    pub fn of(call: &crate::ToolCall) -> Option<Self> {
+        let crate::ToolCall::Mcp { server, tool, .. } = call else {
+            return None;
+        };
+        if server != "luna" {
+            return None;
+        }
+        Some(match tool.as_str() {
+            "create_thread" => Self::Create,
+            "wait_threads" => Self::Wait,
+            "read_thread" => Self::Read,
+            "send_message_to_thread" => Self::Message,
+            "list_threads" => Self::List,
+            "list_child_models" => Self::Models,
+            _ => return None,
+        })
+    }
+
+    /// The chip detail beside the "Threads" label.
+    pub fn action(self) -> &'static str {
+        match self {
+            Self::Create => "Create a thread",
+            Self::Wait => "Wait for replies",
+            Self::Read => "Read a thread",
+            Self::Message => "Message a thread",
+            Self::List => "List threads",
+            Self::Models => "Check available models",
+        }
+    }
+
+    /// The working line while the call runs.
+    pub fn status(self) -> &'static str {
+        match self {
+            Self::Create => "Creating a thread",
+            Self::Wait => "Waiting for thread replies",
+            Self::Read => "Reading a thread",
+            Self::Message => "Messaging a thread",
+            Self::List => "Listing threads",
+            Self::Models => "Checking available models",
+        }
+    }
+}
+
 /// Per-kind chip label + one-line detail. Labels match luna's `describeTool`
 /// (tool-chip.tsx) exactly, so the two viewports name a tool identically.
 pub fn tool_chip_content(call: &crate::ToolCall) -> (&'static str, String) {
@@ -431,7 +488,10 @@ fn tool_chip_content_raw(call: &crate::ToolCall) -> (&'static str, String) {
             let done = items.iter().filter(|i| i.done).count();
             ("Todo", format!("{done}/{} done", items.len()))
         }
-        ToolCall::Mcp { server, tool, .. } => ("MCP", format!("{server} · {tool}")),
+        ToolCall::Mcp { server, tool, .. } => match ThreadTool::of(call) {
+            Some(kind) => ("Threads", kind.action().to_owned()),
+            None => ("MCP", format!("{server} · {tool}")),
+        },
         ToolCall::ComputerUse {
             action,
             app,
@@ -484,12 +544,35 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     let mut fetches = 0usize;
     let mut images = 0usize;
     let mut todos = 0usize;
+    let mut created_threads = 0usize;
+    let mut read_threads = 0usize;
+    let mut messaged_threads = 0usize;
+    let mut waited = false;
     let mut other = 0usize;
     let mut hooks = 0usize;
     let mut failed = 0usize;
     for (call, is_error) in tools {
         if *is_error {
             failed += 1;
+        }
+        match ThreadTool::of(call) {
+            Some(ThreadTool::Create) => {
+                created_threads += 1;
+                continue;
+            }
+            Some(ThreadTool::Read) => {
+                read_threads += 1;
+                continue;
+            }
+            Some(ThreadTool::Message) => {
+                messaged_threads += 1;
+                continue;
+            }
+            Some(ThreadTool::Wait) => {
+                waited = true;
+                continue;
+            }
+            Some(ThreadTool::List | ThreadTool::Models) | None => {}
         }
         match call {
             ToolCall::Exec { .. } => commands += 1,
@@ -538,6 +621,27 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     }
     if todos > 0 {
         segments.push("updated todos".to_string());
+    }
+    if created_threads > 0 {
+        segments.push(format!(
+            "created {}",
+            plural(created_threads, "thread", "threads")
+        ));
+    }
+    if messaged_threads > 0 {
+        segments.push(format!(
+            "messaged {}",
+            plural(messaged_threads, "thread", "threads")
+        ));
+    }
+    if waited {
+        segments.push("waited for replies".to_string());
+    }
+    if read_threads > 0 {
+        segments.push(format!(
+            "read {}",
+            plural(read_threads, "thread", "threads")
+        ));
     }
     if other > 0 {
         segments.push(format!("called {}", plural(other, "tool", "tools")));

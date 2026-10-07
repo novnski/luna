@@ -7683,6 +7683,45 @@ fn sync_segment<'a>(
     Ok(())
 }
 
+/// Close a live segment that newer timeline entries have buried. The first
+/// `keep` folded parts stay in it, above those entries; the rest move to a
+/// fresh entry that the next flush writes below them.
+#[allow(clippy::too_many_arguments)]
+fn close_buried_segment<'a>(
+    inner: &Inner,
+    chat_id: &str,
+    doc: &'a SessionDoc,
+    writer: &mut Option<SegmentWriter<'a>>,
+    entry_id: &mut String,
+    segment_started: &mut i64,
+    device_id: &str,
+    folded: &mut Vec<MessagePart>,
+    keep: usize,
+    tool_entry_by_id: &mut std::collections::HashMap<String, String>,
+) {
+    let fresh = folded.split_off(keep.min(folded.len()));
+    if let Err(err) = finish_segment(
+        doc,
+        writer.take(),
+        entry_id,
+        device_id,
+        *segment_started,
+        folded,
+        MessageStatus::Complete,
+    ) {
+        tracing::warn!(chat = %chat_id, error = %err, "buried segment finish failed");
+    }
+    inner.note_message(chat_id, &folded_text(folded));
+    *entry_id = new_id();
+    *segment_started = now_ms();
+    for part in &fresh {
+        if let MessagePart::Tool { id, .. } = part {
+            tool_entry_by_id.insert(id.clone(), entry_id.clone());
+        }
+    }
+    *folded = fresh;
+}
+
 fn finish_segment<'a>(
     doc: &'a SessionDoc,
     writer: Option<SegmentWriter<'a>>,
@@ -8171,6 +8210,8 @@ async fn drive_run(
     let mut entry_id = new_id();
     let mut segment_started = now_ms();
     let mut writer: Option<SegmentWriter<'_>> = None;
+    // The provider closed a message; text or thinking after it is a new one.
+    let mut message_ended = false;
     let mut provider_checkpoint_id: Option<String> = None;
     let mut dirty = false;
     let mut flush_at = tokio::time::Instant::now();
@@ -9785,10 +9826,67 @@ async fn drive_run(
         // background re-invocations) must not wipe the segment being written.
         let skip_fold = matches!(&event, AgentEvent::SessionStarted { .. }) && !folded.is_empty();
         if !skip_fold {
+            // CHRONOLOGICAL TIMELINE: an entry another path appended below the
+            // live segment mid-turn (child created/result notices, markers)
+            // must stay below everything the agent does after it. The segment
+            // closes when NEW output arrives — a new part, or text/thinking
+            // that starts a new provider message — never inside a growing
+            // text, and never on a bare boundary (the turn's last entry must
+            // exist for its Done). Updates to parts already written (tool
+            // results, activity) keep resolving in place through the
+            // prior-segment routing above.
+            let next_message = message_ended
+                && matches!(
+                    &event,
+                    AgentEvent::TextDelta { text } | AgentEvent::ReasoningDelta { text }
+                        if !text.is_empty()
+                );
+            if next_message && writer.as_ref().is_some_and(SegmentWriter::is_buried) {
+                let keep = folded.len();
+                close_buried_segment(
+                    &inner,
+                    &chat_id,
+                    doc_ref,
+                    &mut writer,
+                    &mut entry_id,
+                    &mut segment_started,
+                    &device_id,
+                    &mut folded,
+                    keep,
+                    &mut tool_entry_by_id,
+                );
+                dirty = false;
+            }
+            let parts_before = folded.len();
             fold_event_into_parts(&mut folded, &event);
             // The small output preview lives in the doc; an output ref points
             // back to the host journal for lazy full-text reads. No R2 upload.
             luna_doc::apply_journal_output_refs(&chat_id, &mut folded);
+            if folded.len() > parts_before && writer.as_ref().is_some_and(SegmentWriter::is_buried)
+            {
+                close_buried_segment(
+                    &inner,
+                    &chat_id,
+                    doc_ref,
+                    &mut writer,
+                    &mut entry_id,
+                    &mut segment_started,
+                    &device_id,
+                    &mut folded,
+                    parts_before,
+                    &mut tool_entry_by_id,
+                );
+                dirty = false;
+            }
+        }
+        match &event {
+            AgentEvent::AssistantMessageCompleted { .. } => message_ended = true,
+            AgentEvent::TextDelta { text } | AgentEvent::ReasoningDelta { text }
+                if !text.is_empty() =>
+            {
+                message_ended = false
+            }
+            _ => {}
         }
 
         if let AgentEvent::Done { status, error, .. } = &event {
