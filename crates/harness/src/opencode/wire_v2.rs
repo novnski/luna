@@ -34,6 +34,11 @@ pub(super) fn normalize_v2_frame(
 ) -> Vec<Value> {
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
     let data = event.get("data").cloned().unwrap_or(Value::Null);
+    // `form.created` carries its owner inside the form (`data.form.sessionID`,
+    // possibly the MCP `"global"` sentinel), so it routes before the gate.
+    if kind == "form.created" {
+        return v2_form_created(&data);
+    }
     if data
         .get("sessionID")
         .and_then(Value::as_str)
@@ -175,6 +180,9 @@ fn v2_session_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
                     "info": {
                         "id": id,
                         "parentID": data.get("parentID").cloned().unwrap_or(Value::Null),
+                        // The child's agent: its permission ceiling is
+                        // compiled against that agent's own rules.
+                        "agent": data.get("agent").cloned().unwrap_or(Value::Null),
                         "title": data
                             .get("title")
                             .or_else(|| data.get("slug"))
@@ -333,12 +341,14 @@ fn v2_tool_frames(
     Some(frames)
 }
 
-/// Requests that wait on the user: permissions (and, later, forms).
+/// Requests that wait on the user: permission asks and their settlement,
+/// form settlement (`form.created` routes before the session gate), and the
+/// `session.permissions` readback of applied rules. All pass through with
+/// their v2 fields (`oc2:schema/src/permission.ts`, `form.ts`).
 fn v2_request_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
     let frames = match kind {
-        // Same event name as 1.x; preserve permission details for the reply
-        // and any interactive approval. Observed live on 2.0.3 when a tool
-        // reaches outside the workspace.
+        // `{id, sessionID, action, resources, save?, metadata?, source?,
+        // message?}` — read by the approval card.
         "permission.asked" => {
             if data.get("id").and_then(Value::as_str).is_none() {
                 return Some(Vec::new());
@@ -348,9 +358,33 @@ fn v2_request_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
                 "properties": data
             })]
         }
+        // `permission.replied {sessionID, requestID, reply}`,
+        // `form.replied {id, sessionID, answer}`, `form.cancelled {id,
+        // sessionID}`, `session.permissions {sessionID, permissions}`.
+        "permission.replied" | "form.replied" | "form.cancelled" | "session.permissions" => {
+            vec![json!({ "type": kind, "properties": data })]
+        }
         _ => return None,
     };
     Some(frames)
+}
+
+/// `form.created {form}` → `{type, properties: {sessionID: <owner>, form}}`
+/// (the owner may be the `"global"` sentinel for MCP elicitation).
+fn v2_form_created(data: &Value) -> Vec<Value> {
+    let Some(form) = data.get("form").filter(|form| {
+        form.get("id").and_then(Value::as_str).is_some()
+            && form
+                .get("sessionID")
+                .and_then(Value::as_str)
+                .is_some_and(|owner| !owner.is_empty())
+    }) else {
+        return Vec::new();
+    };
+    vec![json!({
+        "type": "form.created",
+        "properties": { "sessionID": form["sessionID"], "form": form }
+    })]
 }
 
 /// Everything else: usage totals.

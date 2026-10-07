@@ -359,6 +359,7 @@ fn compact_posts_an_object_body_on_the_v2_route() {
 fn permission_modes_compile_to_session_scoped_rules() {
     let ask = opencode_permission_rules(luna_proto::PermissionMode::Ask);
     let rules = ask.as_array().unwrap();
+    let move_deny = json!({ "action": "opencode_session_move", "resource": "*", "effect": "deny" });
     // v2 rule shape only: {action, resource, effect}.
     assert!(rules.iter().all(|rule| {
         let rule = rule.as_object().unwrap();
@@ -380,17 +381,19 @@ fn permission_modes_compile_to_session_scoped_rules() {
         json!({ "action": "*", "resource": "*", "effect": "ask" })
     );
     assert_eq!(
-        &rules[rules.len() - 3..],
+        &rules[rules.len() - 4..],
         &[
             json!({ "action": "read", "resource": "*.env", "effect": "ask" }),
             json!({ "action": "read", "resource": "*.env.*", "effect": "ask" }),
             json!({ "action": "read", "resource": "*.env.example", "effect": "allow" }),
+            // Contained (PD-14): the chat's directory stays LUNA-owned.
+            move_deny.clone(),
         ]
     );
     let full = opencode_permission_rules(luna_proto::PermissionMode::Full);
     assert_eq!(
         full,
-        json!([{ "action": "*", "resource": "*", "effect": "allow" }])
+        json!([{ "action": "*", "resource": "*", "effect": "allow" }, move_deny])
     );
 }
 
@@ -402,12 +405,17 @@ fn task_allowance_is_never_offered_and_replies_use_decision() {
         opencode_permission_reply_body(Some("Allow once")),
         json!({"decision":"once"})
     );
-    for answer in [Some("Allow for task"), Some("Deny"), Some("Cancel"), None] {
-        assert_eq!(
-            opencode_permission_reply_body(answer),
-            json!({"decision":"reject"})
-        );
+    // Deny (and anything unrecognized or unanswered) rejects WITH feedback
+    // so the model continues; Cancel turn rejects without it and stops.
+    for answer in [Some("Allow for task"), Some("Deny"), None] {
+        let body = opencode_permission_reply_body(answer);
+        assert_eq!(body["decision"], "reject");
+        assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()));
     }
+    assert_eq!(
+        opencode_permission_reply_body(Some("Cancel turn")),
+        json!({"decision":"reject"})
+    );
 }
 
 /// Real HTTP/SSE transport with explicitly ordered turn events. No provider or
@@ -484,9 +492,23 @@ impl TurnWire {
                         }
                         return;
                     }
+                    let session_record;
                     let body = match path.as_str() {
                         "/api/info" => r#"{"version":"2.0.22","pid":1,"urls":[],"paths":{"tmp":"/tmp"}}"#,
                         "/api/session" => r#"{"data":{"id":"fixture"}}"#,
+                        // Rules readback: the session holds what it was created with.
+                        "/api/session/fixture" if !is_post => {
+                            let permissions = recorded
+                                .lock()
+                                .unwrap()
+                                .iter()
+                                .rev()
+                                .find(|(p, _)| p == "/api/session")
+                                .map(|(_, body)| body["permissions"].clone())
+                                .unwrap_or(Value::Null);
+                            session_record = json!({"data": {"id": "fixture", "permissions": permissions}}).to_string();
+                            session_record.as_str()
+                        }
                         "/api/command" => r#"{"data":[]}"#,
                         // Non-empty: the catalog-sync retry loop must not stall tests.
                         "/api/model" => r#"{"data":[{"providerID":"opencode","id":"muse","name":"Muse","limit":{"context":1000},"variants":[{"id":"low"}],"enabled":true}]}"#,
@@ -1580,7 +1602,8 @@ async fn task_allowance_never_persists_through_v2() {
     })
     .await
     .unwrap();
-    assert_eq!(body, json!({"decision":"reject"}));
+    // A forged or stale task allowance fails closed: never `once`/`always`.
+    assert_eq!(body["decision"], "reject");
 }
 
 #[test]

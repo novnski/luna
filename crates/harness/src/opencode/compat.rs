@@ -95,6 +95,22 @@ const REQUIREMENTS: &[Requirement] = &[
         &[],
     ),
     op(
+        "session.form.cancel",
+        "delete",
+        "/api/session/{sessionID}/form/{formID}",
+        None,
+        &["message"],
+    ),
+    // Reconnect resync of pending asks and forms (OC-04/OC-05, OC-08).
+    op(
+        "permission.request.list",
+        "get",
+        "/api/permission/request",
+        None,
+        &[],
+    ),
+    op("form.list", "get", "/api/form", None, &[]),
+    op(
         "session.command",
         "post",
         "/api/session/{sessionID}/command",
@@ -161,16 +177,9 @@ const REQUIREMENTS: &[Requirement] = &[
         None,
         &[],
     ),
-    // OC-08 reconnect resync of pending asks. (The experimental durable
-    // log is optional and probed at runtime.)
-    op(
-        "permission.request.list",
-        "get",
-        "/api/permission/request",
-        None,
-        &[],
-    ),
-    op("form.list", "get", "/api/form", None, &[]),
+    // OC-08 reconnect resync of pending asks reuses the OC-04/OC-05
+    // permission.request.list and form.list entries above. (The
+    // experimental durable log is optional and probed at runtime.)
 ];
 
 /// The v2 permission rule shape LUNA sends in `permissions`.

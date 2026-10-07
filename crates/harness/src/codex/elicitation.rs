@@ -266,7 +266,9 @@ pub(crate) fn questions(
     }
 }
 
-fn sensitive_field(name: &str, schema: &Value) -> bool {
+/// Obvious credential or payment-secret fields (name, title or description);
+/// shared with the OpenCode form bridge.
+pub(crate) fn sensitive_field(name: &str, schema: &Value) -> bool {
     let description = format!(
         "{} {} {}",
         name,

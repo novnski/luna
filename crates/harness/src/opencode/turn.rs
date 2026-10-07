@@ -299,40 +299,49 @@ pub(super) async fn run_session(session: Session) {
     let permission_policy = request.permission_policy.clone().unwrap_or_default();
     let directory = (!request.cwd.is_empty()).then(|| request.cwd.clone());
     let dir = directory.as_deref();
-    let permission_rules = opencode_permission_rules(
-        request
-            .permission_policy
-            .as_ref()
-            .map(|policy| policy.effective_mode)
-            .unwrap_or(luna_proto::PermissionMode::Ask),
-    );
+    let permission_mode = request
+        .permission_policy
+        .as_ref()
+        .map(|policy| policy.effective_mode)
+        .unwrap_or(luna_proto::PermissionMode::Ask);
 
     // ---- session create/resume -------------------------------------------
     let setup = async {
-        let session_id = match &request.resume {
+        // The LUNA mode compiles against the session agent's own rules, so
+        // the user's configured denies stay final (`permissions`).
+        let rule_set = SessionRuleSet::load(&server, dir, permission_mode).await;
+        let (session_id, permission_rules) = match &request.resume {
             Some(resume) => {
                 // Sessions are durable server-side: resume = reuse the id.
                 // A failed lookup (including a transient server failure) is
                 // not authorization to discard this conversation's history.
                 let info = server.session_info(resume, dir).await?;
-                info.get("id")
+                let session_id = info
+                    .get("id")
                     .and_then(Value::as_str)
                     .unwrap_or(resume)
-                    .to_owned()
+                    .to_owned();
+                let rules =
+                    rule_set.rules_for(info.get("agent").and_then(Value::as_str), RuleScope::Root);
+                // `session.update` (204): the resumed session takes this
+                // run's LUNA permission mode as its v2 ruleset.
+                server
+                    .patch_json(
+                        &format!("/api/session/{session_id}"),
+                        dir,
+                        &json!({ "permissions": rules }),
+                    )
+                    .await?;
+                (session_id, rules)
             }
-            None => create_session(&server, dir, &permission_rules).await?,
+            None => {
+                let rules = rule_set.rules_for(None, RuleScope::Root);
+                (create_session(&server, dir, &rules).await?, rules)
+            }
         };
-        if request.resume.is_some() {
-            // `session.update` (204): the resumed session takes this run's
-            // LUNA permission mode as its v2 ruleset.
-            server
-                .patch_json(
-                    &format!("/api/session/{session_id}"),
-                    dir,
-                    &json!({ "permissions": permission_rules }),
-                )
-                .await?;
-        }
+        // Readback before the first prompt: rules OpenCode dropped or
+        // changed fail the run instead of running unprotected (OCF-153).
+        verify_session_rules(&server, &session_id, dir, &permission_rules).await?;
 
         // Provider catalog: resolves the model's advertised reasoning
         // variants so the requested effort only rides models that have it.
@@ -351,9 +360,9 @@ pub(super) async fn run_session(session: Session) {
                 .set_model(&session_id, &provider, &model_id, variant.as_deref(), dir)
                 .await?;
         }
-        Ok::<(String, ProviderCatalog), HarnessError>((session_id, providers))
+        Ok::<_, HarnessError>((session_id, providers, rule_set, permission_rules))
     };
-    let (session_id, providers) = tokio::select! {
+    let (session_id, providers, rule_set, permission_rules) = tokio::select! {
         res = setup => match res {
             Ok(v) => v,
             Err(e) => {
@@ -397,6 +406,15 @@ pub(super) async fn run_session(session: Session) {
         })
         .collect();
     drop(providers);
+
+    // Asks and forms of this run (and its subagent sessions). Their prompts
+    // close on Stop (child token) and when the run loop ends (drop).
+    let mut requests = UserRequests::new(
+        session_id.clone(),
+        interrupt.child_token(),
+        rule_set,
+        permission_rules,
+    );
 
     let mut assistant_message_id = new_message_id();
     if !send(
@@ -715,7 +733,23 @@ pub(super) async fn run_session(session: Session) {
         ($label:lifetime, $msg:expr) => {{
             let msg: BusMsg = $msg;
             match msg {
-                BusMsg::Connected => {}
+                BusMsg::Connected => {
+                    // Asks and forms raised before the bus attached never
+                    // reached it: show them, close ones settled meanwhile.
+                    resync_pending_requests(Resync {
+                        server: &server,
+                        dir,
+                        event_tx: &event_tx,
+                        request_input: &request_input,
+                        auto_approve: request.auto_approve,
+                        permission_policy: &permission_policy,
+                        requests: &requests,
+                        children: &children,
+                        unbound_children: &unbound_children,
+                        turn_active: turn.active,
+                    })
+                    .await;
+                }
                 BusMsg::Reconnected { generation, gap } => {
                     if !send(&event_tx, receipt_evidence(
                         "bus.reconnected",
@@ -724,6 +758,23 @@ pub(super) async fn run_session(session: Session) {
                     )).await {
                         break $label;
                     }
+                    // Asks and forms raised during the gap never reached
+                    // the bus: show them, close ones settled meanwhile
+                    // (OC-04/OC-05). The frame re-injection below is then
+                    // deduplicated by request id (`UserRequests::known`).
+                    resync_pending_requests(Resync {
+                        server: &server,
+                        dir,
+                        event_tx: &event_tx,
+                        request_input: &request_input,
+                        auto_approve: request.auto_approve,
+                        permission_policy: &permission_policy,
+                        requests: &requests,
+                        children: &children,
+                        unbound_children: &unbound_children,
+                        turn_active: turn.active,
+                    })
+                    .await;
                     if gap.needs_readback() && turn.active {
                         let anchor = turn.inbox_id.clone();
                         match readback_frames(&server, &session_id, dir, anchor.as_deref(), &known_messages.ids).await {
@@ -1083,6 +1134,7 @@ pub(super) async fn run_session(session: Session) {
                         turn: &mut turn,
                         pending_usage: &mut pending_usage,
                         context_windows: &context_windows,
+                        requests: &mut requests,
                     }).await;
                     match outcome {
                         BusOutcome::Continue => {}
@@ -1469,6 +1521,8 @@ pub(super) async fn run_session(session: Session) {
         // Consumer went away (stream dropped): nothing to report to.
         tracing::debug!(target: "luna_harness::opencode", "run loop ended without settling");
     }
+    // Close every prompt still open; nothing is answered after the turn.
+    drop(requests);
     bus_handle.abort();
     server.shutdown(kill_grace).await;
 }

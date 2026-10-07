@@ -50,18 +50,27 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
         },
         HarnessId::Opencode => ProviderPermissionCapabilities {
             supported_modes: vec![Ask, Full],
+            // Rule-based workspace confinement (external paths ask in Ask),
+            // like Claude's restricted workspace: LUNA writes the session's
+            // OpenCode 2 rules and reads them back before the first prompt,
+            // and a run whose rules didn't apply never starts.
             supports_workspace_sandbox: true,
             supports_automatic_reviewer: false,
             supports_live_mode_change: false,
-            // Runtime-gated: verified 1.x is process scoped, while 2.x
-            // persists `always` project-wide and must not advertise it.
+            // OpenCode 2 persists `always` grants project-wide; LUNA never
+            // sends one.
             supports_task_allowance: false,
             approval_kinds: vec![Command, FileChange, Network, ExternalPath, Tool],
-            network_control: "session-scoped OpenCode permission rules".into(),
-            known_limitations: vec![
-                "OpenCode --auto blanket-approves requests that are not denied; it is not an automatic reviewer, so Approve for me is unavailable."
+            network_control:
+                "OpenCode session permission rules (web fetch and search ask in Ask), read back before each run"
                     .into(),
-                "Allow for task is exposed only on verified 1.x process-scoped permission replies; 2.x disables it."
+            known_limitations: vec![
+                "OpenCode has no automatic reviewer, so Approve for me is unavailable.".into(),
+                "OpenCode has no OS sandbox: Ask confines tools with OpenCode's own permission rules, and an approved shell command runs unconfined."
+                    .into(),
+                "Allow for session is not offered: OpenCode 2 saves such grants as project-wide rules."
+                    .into(),
+                "Native sub-agents are capped at the chat's mode when OpenCode creates them; their own agent restrictions and your configured OpenCode denies stay in force."
                     .into(),
             ],
         },
@@ -198,10 +207,11 @@ fn mapping(harness: HarnessId, mode: PermissionMode) -> String {
             "bypassPermissions + dangerously-skip-permissions".into()
         }
         (HarnessId::Opencode, PermissionMode::Ask) => {
-            "session rules: workspace read/edit allow; sensitive actions ask".into()
+            "session rules: reads allow; shell, edits, web and external paths ask; configured denies stay"
+                .into()
         }
         (HarnessId::Opencode, PermissionMode::Full) => {
-            "session rule: allow all; stray requests allow once".into()
+            "session rules: allow all except configured denies; stray requests allow once".into()
         }
         (HarnessId::Mock, mode) => format!("mock {mode:?}"),
         _ => "unavailable: provider enforcement is unverified".into(),
