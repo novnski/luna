@@ -43,8 +43,11 @@
 //! - `transport`: the SSE bus reader; `wire_v2`: the 2.x frame normalizer.
 //! - `bus`: routing one normalized payload; `parts`: part streaming state.
 //! - `subagents`: spawn chips and child binding; `tools`: tool vocabulary.
-//! - `permissions`: rules, approval options, permission replies.
-//! - `forms`: v2 forms (questions); `prompt`: session create, turn submit.
+//! - `permissions`: mode compilation, rule readback, child ceilings, the
+//!   approval card and permission replies.
+//! - `forms`: v2 forms (questions, MCP elicitation, provider pickers) onto
+//!   the shared question panel and MCP form contract, and the reconnect
+//!   resync of pending asks and forms; `prompt`: session create, turn submit.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -91,6 +94,7 @@ mod wire_v2;
 use bus::*;
 use catalog::*;
 use compat::*;
+use forms::*;
 use parts::*;
 use permissions::*;
 use prompt::*;

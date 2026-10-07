@@ -42,6 +42,9 @@ struct FakeOpencode {
     first_prompt_had_subscriber: Arc<Mutex<Option<bool>>>,
     /// `POST /api/session` answers 500 while this is non-zero.
     fail_session_creates: Arc<Mutex<u32>>,
+    /// Session id -> the `permissions` it was created or updated with (read
+    /// back by `GET /api/session/{id}`).
+    session_rules: Arc<Mutex<std::collections::HashMap<String, Value>>>,
 }
 
 impl FakeOpencode {
@@ -57,6 +60,7 @@ impl FakeOpencode {
             models: Arc::new(Mutex::new(json!([]))),
             first_prompt_had_subscriber: Arc::new(Mutex::new(None)),
             fail_session_creates: Arc::new(Mutex::new(0)),
+            session_rules: Arc::new(Mutex::new(std::collections::HashMap::new())),
         };
         let accept = fake.clone();
         tokio::spawn(async move {
@@ -179,9 +183,9 @@ impl FakeOpencode {
                         *first = Some(self.events.receiver_count() > 0);
                     }
                 }
-                self.posts.lock().unwrap().push((path.clone(), body));
+                self.posts.lock().unwrap().push((path.clone(), body.clone()));
             }
-            let (status, payload) = self.route(&method, &path);
+            let (status, payload) = self.route(&method, &path, &body);
             let body = match payload {
                 Some(payload) => payload.to_string(),
                 None => String::new(),
@@ -197,7 +201,8 @@ impl FakeOpencode {
         }
     }
 
-    fn route(&self, method: &str, path: &str) -> (&'static str, Option<Value>) {
+    fn route(&self, method: &str, path: &str, body: &Value) -> (&'static str, Option<Value>) {
+        let rules = |session: &str| self.session_rules.lock().unwrap().get(session).cloned();
         match (method, path) {
             ("GET", "/api/info") => (
                 "200 OK",
@@ -224,14 +229,29 @@ impl FakeOpencode {
                         ),
                     )
                 } else {
+                    self.session_rules
+                        .lock()
+                        .unwrap()
+                        .insert("ses_test".into(), body["permissions"].clone());
                     ("200 OK", Some(json!({ "data": { "id": "ses_test" } })))
                 }
             }
             ("GET", "/api/session/active") => ("200 OK", Some(json!({ "data": {} }))),
-            ("GET", "/api/session/ses_resume") => {
-                ("200 OK", Some(json!({ "data": { "id": "ses_resume" } })))
+            ("GET", "/api/session/ses_test") => (
+                "200 OK",
+                Some(json!({ "data": { "id": "ses_test", "permissions": rules("ses_test") } })),
+            ),
+            ("GET", "/api/session/ses_resume") => (
+                "200 OK",
+                Some(json!({ "data": { "id": "ses_resume", "permissions": rules("ses_resume") } })),
+            ),
+            ("PATCH", "/api/session/ses_resume") => {
+                self.session_rules
+                    .lock()
+                    .unwrap()
+                    .insert("ses_resume".into(), body["permissions"].clone());
+                ("204 No Content", None)
             }
-            ("PATCH", "/api/session/ses_resume") => ("204 No Content", None),
             ("GET", "/api/session/ses_unavailable") => (
                 "503 Service Unavailable",
                 Some(

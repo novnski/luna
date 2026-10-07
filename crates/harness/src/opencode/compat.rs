@@ -95,6 +95,22 @@ const REQUIREMENTS: &[Requirement] = &[
         &[],
     ),
     op(
+        "session.form.cancel",
+        "delete",
+        "/api/session/{sessionID}/form/{formID}",
+        None,
+        &["message"],
+    ),
+    // Reconnect resync of pending asks and forms (OC-04/OC-05).
+    op(
+        "permission.request.list",
+        "get",
+        "/api/permission/request",
+        None,
+        &[],
+    ),
+    op("form.list", "get", "/api/form", None, &[]),
+    op(
         "session.command",
         "post",
         "/api/session/{sessionID}/command",

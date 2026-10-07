@@ -1,5 +1,5 @@
 //! Bus event routing: one normalized payload at a time into the run's
-//! feeds, children, permissions and questions.
+//! feeds, children, permissions and forms.
 
 use super::*;
 
@@ -38,6 +38,8 @@ pub(super) struct BusCtx<'a> {
     pub(super) turn: &'a mut TurnState,
     pub(super) pending_usage: &'a mut Option<AgentEvent>,
     pub(super) context_windows: &'a HashMap<String, u64>,
+    /// Owned sessions, applied rules, and pending asks and forms.
+    pub(super) requests: &'a mut UserRequests,
 }
 
 /// Wrap an event as subagent-attributed traffic.
@@ -91,12 +93,20 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         turn,
         pending_usage,
         context_windows,
+        requests,
     } = ctx;
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
     if kind.is_empty() {
         return BusOutcome::Continue;
     }
     let props = event.get("properties").unwrap_or(&Value::Null);
+    // Any descendant session is capped at the run's permission mode as soon
+    // as it exists (child binding below is separate).
+    if kind == "session.created"
+        && let Some(info) = props.get("info")
+    {
+        requests.observe_session_created(info, server, dir, event_tx);
+    }
     let event_session = props
         .get("sessionID")
         .and_then(Value::as_str)
@@ -388,10 +398,13 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             BusOutcome::Continue
         }
         "permission.asked" => {
+            // A request waiting on the user is not a stall.
+            if event_session.is_some_and(|session| requests.owns(session)) {
+                turn.note_activity();
+            }
             handle_permission_asked(PermissionAsk {
                 props,
                 event_session,
-                session_id,
                 children,
                 unbound_children,
                 server,
@@ -400,9 +413,31 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 request_input,
                 auto_approve,
                 permission_policy,
+                requests,
             })
-            .await
         }
+        "permission.replied" => handle_permission_replied(props, requests),
+        "session.permissions" => {
+            requests.observe_session_permissions(props, server, dir, event_tx);
+            BusOutcome::Continue
+        }
+        "form.created" => {
+            if event_session
+                .is_some_and(|owner| owner == GLOBAL_FORM_OWNER || requests.owns(owner))
+            {
+                turn.note_activity();
+            }
+            handle_form_created(FormAsk {
+                props,
+                server,
+                dir,
+                event_tx,
+                request_input,
+                requests,
+                turn_active: turn.active,
+            })
+        }
+        "form.replied" | "form.cancelled" => handle_form_settled(props, requests),
         _ => BusOutcome::Continue,
     }
 }
