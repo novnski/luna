@@ -114,6 +114,32 @@ wrapper="$profile/bin/opencode"
   fi
   [[ "$offline" == 0 ]] || printf 'export OPENCODE_DISABLE_MODELS_FETCH=1\n'
   [[ "$no_project" == 0 ]] || printf 'export OPENCODE_DISABLE_PROJECT_CONFIG=1\n'
+  # QF-25: without --standalone these CLI commands attach to OpenCode's shared
+  # background service ($XDG_STATE_HOME/opencode/service.json, spawned as a
+  # bare `opencode serve --service`), which runs outside this profile and
+  # opens the user's real database. Give them a private server instead and
+  # refuse the commands that only manage that shared service or the real
+  # installation. `serve` and `acp` (what LUNA and the T2 rig run) and the
+  # local-only `debug`, `mcp` and `plugin` commands pass through unchanged.
+  # No export or exec happens inside these blocks, so LUNA's storage replay
+  # (crates/harness/src/opencode/storage.rs) still evaluates the wrapper.
+  cat <<'WRAPPER'
+case "${1-}" in
+  service|pair|uninstall|upgrade|update) echo "luna-qa-opencode: refusing 'opencode $1' from a QA profile: it manages the shared background service or the real installation" >&2; exit 64 ;;
+esac
+luna_qa_private=1
+for luna_qa_arg in "$@"; do
+  case "$luna_qa_arg" in --standalone|--server|--server=*) luna_qa_private=0 ;; esac
+done
+if [ "$luna_qa_private" = 1 ]; then
+  case "${1-}" in
+    models|stats|run|api|reload|mini) luna_qa_cmd=$1; shift; set -- "$luna_qa_cmd" --standalone "$@" ;;
+    auth|session) case "${2-}" in list|login|logout|export|import|switch|delete) luna_qa_cmd=$1; luna_qa_sub=$2; shift 2; set -- "$luna_qa_cmd" "$luna_qa_sub" --standalone "$@" ;; esac ;;
+    -c|--continue|-s|--session|--prompt|--auto|/*|./*|../*|.|..) set -- --standalone "$@" ;;
+    "") set -- --standalone ;;
+  esac
+fi
+WRAPPER
   printf "exec '%s' \"\$@\"\n" "$target"
 } >"$wrapper.tmp"
 chmod 755 "$wrapper.tmp"
