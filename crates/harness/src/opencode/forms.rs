@@ -899,6 +899,13 @@ impl FormResponder {
         }
     }
 
+    /// The form is settled for LUNA: no prompt, and a resync must not show
+    /// it again.
+    fn settle(&self) {
+        self.forget();
+        mark_settled(&self.settled, &self.form_id);
+    }
+
     async fn chip(&self, message: String) {
         let _ = self.failures.send(Ok(AgentEvent::Error { message })).await;
     }
@@ -910,96 +917,112 @@ impl FormResponder {
         }
         match self
             .server
-            .exchange(
-                reqwest::Method::DELETE,
-                &path,
-                self.dir.as_deref(),
-                None,
-                Some(CALL_TIMEOUT),
-            )
+            .deliver(reqwest::Method::DELETE, &path, self.dir.as_deref(), None)
             .await
         {
-            Ok((status, _))
-                if status.is_success()
-                    || status == reqwest::StatusCode::NOT_FOUND
-                    || status == reqwest::StatusCode::CONFLICT =>
+            Ok(sent)
+                if sent.status.is_success()
+                    || sent.status == reqwest::StatusCode::NOT_FOUND
+                    || sent.status == reqwest::StatusCode::CONFLICT =>
             {
                 None
             }
-            Ok((status, text)) => Some(http_error_message("DELETE", &path, status, &text)),
+            Ok(sent) => Some(http_error_message("DELETE", &path, sent.status, &sent.body)),
             Err(error) => Some(error.to_string()),
         }
     }
 
-    async fn send(self, token: &CancellationToken, reply: FormReply) {
-        self.forget();
-        mark_settled(&self.settled, &self.form_id);
+    /// Deliver LUNA's reply. `Err` = OpenCode never took it: the form still
+    /// waits upstream, so it stays pending here (a resync shows no
+    /// duplicate, a settle elsewhere still closes it) and the caller asks
+    /// again or reports it. Stop and the end of the turn send nothing.
+    async fn send(&self, token: &CancellationToken, reply: FormReply) -> Result<(), String> {
         if token.is_cancelled() {
-            return;
+            self.settle();
+            return Ok(());
         }
-        match reply {
+        let undelivered = match reply {
             FormReply::Answer(answer) => {
                 let path = format!("/api/session/{}/form/{}/reply", self.owner, self.form_id);
                 let body = json!({ "answer": answer });
                 match self
                     .server
-                    .post_json_raw(&path, self.dir.as_deref(), &body)
+                    .deliver(
+                        reqwest::Method::POST,
+                        &path,
+                        self.dir.as_deref(),
+                        Some(&body),
+                    )
                     .await
                 {
-                    Ok((status, _)) if status.is_success() => {}
-                    // Answered or cancelled elsewhere first (OCF-57).
-                    Ok((status, _))
-                        if status == reqwest::StatusCode::CONFLICT
-                            || status == reqwest::StatusCode::NOT_FOUND =>
+                    Ok(sent) if sent.status.is_success() => None,
+                    // Answered or cancelled elsewhere first (OCF-57), or an
+                    // earlier attempt of this same reply landed.
+                    Ok(sent)
+                        if sent.status == reqwest::StatusCode::CONFLICT
+                            || sent.status == reqwest::StatusCode::NOT_FOUND =>
                     {
                         tracing::debug!(target: "luna_harness::opencode", form = %self.form_id, "form already settled");
+                        None
                     }
                     // The answer failed OpenCode's validation: tell the asker
                     // so it continues instead of waiting forever.
-                    Ok((status, text)) if status == reqwest::StatusCode::BAD_REQUEST => {
-                        let detail =
-                            describe_error_envelope(&text).unwrap_or_else(|| truncate_body(&text));
-                        let failed = self
+                    Ok(sent) if sent.status == reqwest::StatusCode::BAD_REQUEST => {
+                        let detail = describe_error_envelope(&sent.body)
+                            .unwrap_or_else(|| truncate_body(&sent.body));
+                        match self
                             .cancel(Some(&format!(
                                 "OpenCode rejected the answer LUNA collected: {detail}"
                             )))
-                            .await;
-                        self.chip(format!(
-                            "OpenCode rejected the answer to \"{}\" ({detail}); the request was \
-                             cancelled{}",
-                            self.title,
-                            failed
-                                .map(|f| format!(" (cancel failed: {f})"))
-                                .unwrap_or_default()
-                        ))
-                        .await;
+                            .await
+                        {
+                            None => {
+                                self.chip(format!(
+                                    "OpenCode rejected the answer to \"{}\" ({detail}); the \
+                                     request was cancelled",
+                                    self.title
+                                ))
+                                .await;
+                                None
+                            }
+                            Some(failed) => Some(format!(
+                                "OpenCode rejected the answer ({detail}) and LUNA could not \
+                                 cancel the request ({failed})"
+                            )),
+                        }
                     }
-                    Ok((status, text)) => {
-                        self.chip(format!(
-                            "OpenCode did not accept the answer to \"{}\": {}",
-                            self.title,
-                            post_error_message(&path, status, &text)
-                        ))
-                        .await;
-                    }
-                    Err(error) => {
-                        self.chip(format!(
-                            "OpenCode did not accept the answer to \"{}\": {error}",
-                            self.title
-                        ))
-                        .await;
-                    }
+                    Ok(sent) => Some(post_error_message(&path, sent.status, &sent.body)),
+                    Err(error) => Some(error.to_string()),
                 }
             }
-            FormReply::Cancel(message) => {
-                if let Some(failure) = self.cancel(message.as_deref()).await {
-                    self.chip(format!(
-                        "OpenCode did not accept LUNA's cancellation of \"{}\": {failure}",
-                        self.title
-                    ))
-                    .await;
-                }
+            FormReply::Cancel(message) => self.cancel(message.as_deref()).await,
+        };
+        match undelivered {
+            // Stop, or a settle elsewhere, overtook a failed reply.
+            Some(detail) if !token.is_cancelled() => Err(detail),
+            _ => {
+                self.settle();
+                Ok(())
             }
+        }
+    }
+
+    /// Deliver a reply no one can be asked again about (LUNA's own
+    /// cancellations); a failure is reported on the chat.
+    async fn send_or_report(&self, token: &CancellationToken, reply: FormReply) {
+        let cancelling = matches!(reply, FormReply::Cancel(_));
+        if let Err(detail) = self.send(token, reply).await {
+            self.settle();
+            let action = if cancelling {
+                "LUNA's cancellation of"
+            } else {
+                "the answer to"
+            };
+            self.chip(format!(
+                "OpenCode did not accept {action} \"{}\": {detail}",
+                self.title
+            ))
+            .await;
         }
     }
 }
@@ -1063,7 +1086,7 @@ pub(super) fn handle_form_created(ask: FormAsk<'_>) -> BusOutcome {
     if global && !turn_active {
         tokio::spawn(async move {
             responder
-                .send(
+                .send_or_report(
                     &token,
                     FormReply::Cancel(Some("No LUNA turn is active to show this request.".into())),
                 )
@@ -1092,7 +1115,7 @@ pub(super) fn handle_form_created(ask: FormAsk<'_>) -> BusOutcome {
                     ))
                     .await;
                 responder
-                    .send(
+                    .send_or_report(
                         &token,
                         FormReply::Cancel(Some(format!("LUNA can't show this form: {reason}."))),
                     )
@@ -1103,22 +1126,51 @@ pub(super) fn handle_form_created(ask: FormAsk<'_>) -> BusOutcome {
     };
     if plan.questions.is_empty() {
         let reply = plan.reply(&[]);
-        tokio::spawn(async move { responder.send(&token, reply).await });
+        tokio::spawn(async move { responder.send_or_report(&token, reply).await });
         return BusOutcome::Continue;
     }
-    let receiver = (request_input)(plan.questions.clone());
+    let request_input = Arc::clone(request_input);
+    let mut receiver = (request_input)(plan.questions.clone());
     tokio::spawn(async move {
-        let answers = tokio::select! {
-            biased;
-            // Stop, the end of the turn, or the form settled elsewhere.
-            _ = token.cancelled() => {
-                responder.forget();
+        loop {
+            let answers = tokio::select! {
+                biased;
+                // Stop, the end of the turn, or the form settled elsewhere.
+                _ = token.cancelled() => {
+                    responder.forget();
+                    return;
+                }
+                answers = &mut receiver => answers,
+            };
+            // `Err`: the engine closed the prompt without an answer, so
+            // there is no one to ask again.
+            let answered = answers.is_ok();
+            let reply = plan.reply(&answers.unwrap_or_default());
+            let Err(detail) = responder.send(&token, reply).await else {
+                return;
+            };
+            if !answered {
+                responder.settle();
+                responder
+                    .chip(format!(
+                        "OpenCode did not accept LUNA's cancellation of \"{}\": {detail}",
+                        responder.title
+                    ))
+                    .await;
                 return;
             }
-            answers = receiver => answers.unwrap_or_default(),
-        };
-        let reply = plan.reply(&answers);
-        responder.send(&token, reply).await;
+            // OpenCode never got the answer and the question still waits
+            // upstream: show it again so the turn never hangs on a prompt
+            // the user can no longer see.
+            responder
+                .chip(format!(
+                    "LUNA could not deliver your answer to \"{}\" to OpenCode ({detail}). The \
+                     question is shown again.",
+                    responder.title
+                ))
+                .await;
+            receiver = (request_input)(plan.questions.clone());
+        }
     });
     BusOutcome::Continue
 }
