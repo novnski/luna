@@ -1284,6 +1284,195 @@ fn goal_achieved_row(label: SharedString, theme: &Theme) -> AnyElement {
         .into_any_element()
 }
 
+/// Version bit for a row whose hover lane the timeline took away: the lane's
+/// height leaves the row, so the diff must remeasure it.
+const LANE_HIDDEN_VERSION_BIT: u64 = 1 << 60;
+
+/// Engine-written notices about child threads. They are compact timeline
+/// events with their own actions (Open chat, the result's link), so they
+/// stack tightly and never reserve a hover lane.
+fn is_child_notice(row: &Row) -> bool {
+    row.role == MessageRole::System
+        && [
+            "child-created:",
+            "child-outcome:",
+            "child-continuation-skipped:",
+        ]
+        .iter()
+        .any(|prefix| row.entry_id.starts_with(prefix))
+}
+
+/// Cross-entry presentation, applied once per sync after every entry's rows
+/// are built. `conversation` lists each user and assistant entry in order,
+/// hidden ones included, because they still bound turns.
+///
+/// Failure cases this must avoid (written before the implementation):
+/// 1. A reply split by notices shows a hover lane (time, copy, fork) under
+///    every segment, though only the turn's end can be forked.
+/// 2. Copy at the turn's end loses the text of its earlier segments.
+/// 3. The last segment of a still-running turn flashes a lane while the next
+///    segment is on its way.
+/// 4. Fork, edit or rewind is offered on a row whose boundary the host cannot
+///    resolve (a steered or split turn without a checkpoint).
+/// 5. A failed create-thread call, or one whose card has not landed, is
+///    hidden; or a card claims a chip from an earlier turn.
+/// 6. Dropping an emptied tool group leaves its entry without its turn gap or
+///    its lane.
+///
+/// Returns the entries whose history actions resolve, or `None` when the host
+/// has not reported checkpoints (an older host): nothing is gated then.
+fn present_timeline(
+    conversation: &[(&str, MessageRole)],
+    rows: &mut Vec<Row>,
+    checkpointed: Option<&HashSet<String>>,
+    run_live: bool,
+) -> Option<HashSet<SharedString>> {
+    hide_created_thread_chips(rows);
+
+    // A turn ends at its last assistant entry before the next user entry, or
+    // at the transcript's end once the run has settled.
+    let tails: HashSet<&str> = conversation
+        .iter()
+        .enumerate()
+        .filter(|(ix, (_, role))| {
+            *role == MessageRole::Assistant
+                && match conversation.get(ix + 1) {
+                    Some((_, next)) => *next == MessageRole::User,
+                    None => !run_live,
+                }
+        })
+        .map(|(_, (id, _))| *id)
+        .collect();
+    let mut turn_copy: Vec<SharedString> = Vec::new();
+    for row in rows.iter_mut() {
+        if row.role == MessageRole::User {
+            turn_copy.clear();
+        }
+        if row.timestamp.is_none() && row.copy_text.is_none() {
+            continue;
+        }
+        let tail = tails.contains(row.entry_id.as_ref());
+        if is_child_notice(row) || (row.role == MessageRole::Assistant && !tail) {
+            if let Some(text) = row.copy_text.take()
+                && row.role == MessageRole::Assistant
+            {
+                turn_copy.push(text);
+            }
+            row.timestamp = None;
+            row.version ^= LANE_HIDDEN_VERSION_BIT;
+        } else if row.role == MessageRole::Assistant && !turn_copy.is_empty() {
+            turn_copy.extend(row.copy_text.take());
+            let joined = turn_copy.join("\n\n");
+            turn_copy.clear();
+            row.version ^= fnv1a(joined.as_bytes()) >> 4;
+            row.copy_text = Some(joined.into());
+        }
+    }
+
+    let checkpointed = checkpointed?;
+    let mut eligible = HashSet::new();
+    for (ix, (id, role)) in conversation.iter().enumerate() {
+        let resolves = match role {
+            MessageRole::Assistant => checkpointed.contains(*id),
+            // The host's before-user boundary: the previous turn ended with a
+            // checkpoint (or there is none), and so did the turn this opens.
+            MessageRole::User => {
+                let before = conversation[..ix].last().is_none_or(|(previous, role)| {
+                    *role == MessageRole::Assistant && checkpointed.contains(*previous)
+                });
+                let turn_end = conversation[ix + 1..]
+                    .iter()
+                    .take_while(|(_, role)| *role != MessageRole::User)
+                    .filter(|(_, role)| *role == MessageRole::Assistant)
+                    .last();
+                before && turn_end.is_some_and(|(end, _)| checkpointed.contains(*end))
+            }
+            MessageRole::System => false,
+        };
+        if resolves {
+            eligible.insert(SharedString::from((*id).to_owned()));
+        }
+    }
+    Some(eligible)
+}
+
+/// The "New thread" card that lands after a create-thread call is that call's
+/// record, so the chip above it only repeats it. Each card claims the earliest
+/// unclaimed create chip of its turn that did not fail; a group left empty
+/// drops out, handing its turn gap and lane to its entry's neighbours.
+fn hide_created_thread_chips(rows: &mut Vec<Row>) {
+    use luna_proto::view::ThreadTool;
+    let mut unclaimed: std::collections::VecDeque<(usize, &str)> = Default::default();
+    let mut claimed: HashMap<usize, HashSet<String>> = HashMap::new();
+    for (ix, row) in rows.iter().enumerate() {
+        match &row.kind {
+            RowKind::User { .. } => unclaimed.clear(),
+            RowKind::ToolGroup { tools, .. } => unclaimed.extend(
+                tools
+                    .iter()
+                    .filter(|tool| {
+                        !tool.is_error && ThreadTool::of(&tool.call) == Some(ThreadTool::Create)
+                    })
+                    .map(|tool| (ix, tool.part_id.as_str())),
+            ),
+            _ if row.turn_start
+                && row.role == MessageRole::System
+                && row.entry_id.starts_with("child-created:") =>
+            {
+                if let Some((group, part)) = unclaimed.pop_front() {
+                    claimed.entry(group).or_default().insert(part.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
+    if claimed.is_empty() {
+        return;
+    }
+    let mut kept: Vec<Option<Row>> = std::mem::take(rows).into_iter().map(Some).collect();
+    let mut groups: Vec<(usize, HashSet<String>)> = claimed.into_iter().collect();
+    groups.sort_unstable_by_key(|(ix, _)| *ix);
+    for (ix, parts) in &groups {
+        let ix = *ix;
+        let Some(row) = kept[ix].as_mut() else {
+            continue;
+        };
+        let RowKind::ToolGroup { tools, auto_open } = &row.kind else {
+            continue;
+        };
+        let auto_open = *auto_open;
+        let remaining: Vec<ToolItem> = tools
+            .iter()
+            .filter(|tool| !parts.contains(&tool.part_id))
+            .cloned()
+            .collect();
+        if !remaining.is_empty() {
+            row.version = tool_fingerprint(&remaining, auto_open) ^ (row.version & (1 << 62));
+            row.kind = RowKind::ToolGroup {
+                tools: Arc::new(remaining),
+                auto_open,
+            };
+            continue;
+        }
+        let dropped = kept[ix].take().expect("checked above");
+        if dropped.turn_start
+            && let Some(next) = kept[ix + 1..].iter_mut().flatten().next()
+            && next.entry_id == dropped.entry_id
+        {
+            next.turn_start = true;
+        }
+        if (dropped.timestamp.is_some() || dropped.copy_text.is_some())
+            && let Some(previous) = kept[..ix].iter_mut().rev().flatten().next()
+            && previous.entry_id == dropped.entry_id
+        {
+            previous.timestamp = dropped.timestamp;
+            previous.copy_text = dropped.copy_text;
+            previous.version ^= 1 << 62;
+        }
+    }
+    *rows = kept.into_iter().flatten().collect();
+}
+
 fn generated_image_devices(owner: &str, fallback: &[String]) -> Vec<String> {
     let mut devices = Vec::new();
     for device in std::iter::once(owner).chain(fallback.iter().map(String::as_str)) {
@@ -2006,6 +2195,10 @@ fn part_prefix(id: &str) -> &str {
 /// live→split handoff cannot shift a pixel. Tool groups get one larger global
 /// step on either boundary so their dense chip stack has room to breathe.
 pub fn top_gap_for(prev: Option<&Row>, row: &Row) -> f32 {
+    // Consecutive child notices (cards, results) read as one stack.
+    if row.turn_start && is_child_notice(row) && prev.is_some_and(is_child_notice) {
+        return Theme::SPACE_SM;
+    }
     if row.turn_start {
         return Theme::SPACE_LG;
     }
@@ -3449,15 +3642,31 @@ impl SavedViewportCache {
     }
 }
 
+/// What a sync's rows derive from: chat, replay state, doc revision, goal
+/// marks, child-notice catalog, checkpoint set identity and run liveness.
+type SyncSource = (
+    Option<String>,
+    TranscriptReplayState,
+    u64,
+    u64,
+    u64,
+    Option<usize>,
+    bool,
+);
+
 pub struct Transcript {
     agent_cards: HashMap<String, Entity<agent_cards::AgentCard>>,
     state: Entity<AppState>,
     list: ListState,
     rows: Vec<Row>,
-    last_source: Option<(Option<String>, TranscriptReplayState, u64, u64, u64)>,
+    last_source: Option<SyncSource>,
     child_notice_catalog: Option<(u64, Option<String>, u64)>,
     /// The selected chat's goal transcript marks (`contextControl.goalMarks`).
     goal_marks: luna_proto::GoalMarks,
+    /// Entries whose fork, edit and rewind boundaries the host can resolve
+    /// ([`present_timeline`]); `None` while the host has not reported
+    /// checkpoints, which leaves those actions ungated.
+    history_actions: Option<HashSet<SharedString>>,
     chat_id: Option<String>,
     /// The shell may retain this already-laid-out view briefly for its exit.
     /// Cleared as soon as the exit is invisible; never used for another chat.
@@ -3846,6 +4055,7 @@ impl Transcript {
             last_source: None,
             child_notice_catalog: None,
             goal_marks: Default::default(),
+            history_actions: None,
             // Pre-set so `sync` never sees an attach edge — an override
             // instance must not reset (or re-pin) on selection changes.
             chat_id: doc_override.clone(),
@@ -5080,12 +5290,18 @@ impl Transcript {
                 .as_ref()
                 .map_or(0, |(_, _, hash)| *hash)
         };
+        // Turn boundaries depend on whether the run is still live, and history
+        // actions on which entries carry a provider checkpoint.
+        let checkpointed = self.checkpointed(cx);
+        let run_live = self.chat_run_live(cx);
         let source = (
             selected.clone(),
             replay,
             revision,
             goal_marks_fingerprint(&goal_marks),
             child_notice_source,
+            checkpointed.as_ref().map(|ids| Arc::as_ptr(ids) as usize),
+            run_live,
         );
         if self.last_source.as_ref() == Some(&source) {
             if let Some(perf) = &perf {
@@ -5226,9 +5442,9 @@ impl Transcript {
 
         let mut new_rows: Vec<Row> = Vec::new();
         // A fetched snapshot of a still-running tool is stale on the next
-        // update. Once the run ends, an unresolved tool is frozen (interrupted
-        // or errored run), so a fetched full output may stay cached.
-        let run_live = self.chat_run_live(cx);
+        // update (`run_live`, above). Once the run ends, an unresolved tool is
+        // frozen (interrupted or errored run), so a fetched full output may
+        // stay cached.
         // Borrow the transcript only while deriving rows. Cloning the entity
         // handle lets rows_for mutate our caches without copying every text
         // and tool payload on each app-state notification.
@@ -5277,6 +5493,18 @@ impl Transcript {
                 let rows = self.rows_for(echo, true, None, state);
                 new_rows.extend(apply_goal_marks(echo, &self.goal_marks, rows));
             }
+            let conversation: Vec<(&str, MessageRole)> = entries
+                .iter()
+                .chain(echoes.iter())
+                .filter(|entry| entry.role != MessageRole::System)
+                .map(|entry| (entry.id.as_str(), entry.role))
+                .collect();
+            self.history_actions = present_timeline(
+                &conversation,
+                &mut new_rows,
+                checkpointed.as_deref(),
+                run_live,
+            );
             // Bounded caches: rows and parsed trees of entries that left this
             // transcript (rewind, compaction, removal) are dropped.
             // Never before the opening replay: a just-restored cache waits
@@ -5686,6 +5914,21 @@ impl Transcript {
                 "main:{}",
                 self.state.read(cx).selected_chat.as_deref().unwrap_or("-")
             ),
+        }
+    }
+
+    /// This view's entries that carry a provider checkpoint, when its host
+    /// reports them. A subagent pane never offers history actions.
+    fn checkpointed(&self, cx: &gpui::App) -> Option<Arc<HashSet<String>>> {
+        let state = self.state.read(cx);
+        match &self.doc_override {
+            Some(doc_id) if self.pane_chat => {
+                crate::chat_binding::ChatBinding::Chat(doc_id.clone())
+                    .checkpointed(state)
+                    .cloned()
+            }
+            Some(_) => None,
+            None => state.checkpointed.clone(),
         }
     }
 
@@ -7619,6 +7862,12 @@ impl Transcript {
                 .map(|config| config.harness)
         });
         let history_role = row.role;
+        // Only where the host can resolve the boundary (a turn's checkpoint).
+        let history_target = history_task_id.clone().filter(|_| {
+            self.history_actions
+                .as_ref()
+                .is_none_or(|ids| ids.contains(&row.entry_id))
+        });
         let strip = row.timestamp.map(|ms| {
             let timestamp = div()
                 .text_size(crate::typography::ui_rems(12.0))
@@ -7706,7 +7955,7 @@ impl Transcript {
             });
             let same_chat_rewind = history_provider
                 .is_some_and(luna_engine::history_operations::same_chat_rewind_supported);
-            let fork = history_task_id.clone().and_then(|task_id| {
+            let fork = history_target.clone().and_then(|task_id| {
                 let eligible = checkpoint_history
                     && matches!(history_role, MessageRole::User | MessageRole::Assistant);
                 eligible.then(|| {
@@ -7731,7 +7980,7 @@ impl Transcript {
                     }))
                 })
             });
-            let edit = history_task_id.clone().and_then(|task_id| {
+            let edit = history_target.clone().and_then(|task_id| {
                 (checkpoint_history && history_role == MessageRole::User).then(|| {
                     let message_id = copy_entry_id.to_string();
                     let text = copy_text.clone().unwrap_or_default().to_string();
@@ -7750,7 +7999,7 @@ impl Transcript {
                     }))
                 })
             });
-            let rewind = history_task_id.clone().and_then(|task_id| {
+            let rewind = history_target.clone().and_then(|task_id| {
                 (same_chat_rewind && history_role == MessageRole::User).then(|| {
                     let message_id = copy_entry_id.to_string();
                     let text = copy_text.clone().unwrap_or_default().to_string();
@@ -11020,6 +11269,7 @@ mod tests {
                     state
                         .receive_transcript_update(
                             luna_doc::TranscriptUpdate {
+                                checkpointed: None,
                                 transcript_token: None,
                                 frame,
                                 replay_baseline,
@@ -11132,6 +11382,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            checkpointed: None,
                             transcript_token: None,
                             frame,
                             context_usage: None,
@@ -11146,6 +11397,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            checkpointed: None,
                             transcript_token: None,
                             frame: luna_doc::diff_transcript(&history, &live),
                             context_usage: None,
@@ -11184,6 +11436,7 @@ mod tests {
                     state
                         .receive_transcript_update(
                             luna_doc::TranscriptUpdate {
+                                checkpointed: None,
                                 transcript_token: None,
                                 frame,
                                 replay_baseline: baseline,
@@ -11244,6 +11497,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            checkpointed: None,
                             transcript_token: None,
                             frame: luna_doc::TranscriptFrame::reset(&[]),
                             context_usage: None,
@@ -11265,6 +11519,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            checkpointed: None,
                             transcript_token: None,
                             frame: luna_doc::diff_transcript(&[], &live),
                             context_usage: None,
@@ -11302,6 +11557,7 @@ mod tests {
                 state
                     .receive_transcript_update(
                         luna_doc::TranscriptUpdate {
+                            checkpointed: None,
                             transcript_token: None,
                             frame,
                             context_usage: None,
@@ -13017,6 +13273,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    checkpointed: None,
                                     transcript_token: None,
                                     frame: luna_doc::TranscriptFrame::reset(&history),
                                     context_usage: None,
@@ -13048,6 +13305,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    checkpointed: None,
                                     transcript_token: None,
                                     frame: luna_doc::diff_transcript(&history, &next),
                                     context_usage: None,
@@ -13106,6 +13364,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    checkpointed: None,
                                     transcript_token: None,
                                     frame: luna_doc::TranscriptFrame::reset(&history),
                                     context_usage: None,
@@ -13121,6 +13380,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    checkpointed: None,
                                     transcript_token: None,
                                     frame: luna_doc::diff_transcript(&history, &live),
                                     context_usage: None,
@@ -13174,6 +13434,7 @@ mod tests {
                         state
                             .receive_transcript_update(
                                 luna_doc::TranscriptUpdate {
+                                    checkpointed: None,
                                     transcript_token: None,
                                     frame: luna_doc::diff_transcript(&live, &next),
                                     context_usage: None,
@@ -13217,6 +13478,7 @@ mod tests {
                             state
                                 .receive_transcript_update(
                                     luna_doc::TranscriptUpdate {
+                                        checkpointed: None,
                                         transcript_token: None,
                                         frame,
                                         context_usage: None,
@@ -15326,11 +15588,12 @@ impl Transcript {
     /// The current row PROJECTION (not paint): every row this view holds,
     /// with the same text extraction as the rendered-row readback. Use it
     /// for rows outside the viewport; visible rows are read from paint.
-    pub fn fixture_rows(&self) -> serde_json::Value {
+    pub fn fixture_rows(&self, cx: &gpui::App) -> serde_json::Value {
         serde_json::Value::Array(
             self.rows
                 .iter()
-                .map(|row| {
+                .enumerate()
+                .map(|(ix, row)| {
                     let (kind, text) = perf_row_text(row);
                     let mut readback = serde_json::json!({
                         "id": row.id.as_ref(),
@@ -15338,11 +15601,28 @@ impl Transcript {
                         "version": row.version,
                         "kind": kind,
                         "text": text,
+                        "turnStart": row.turn_start,
+                        "lane": row.timestamp.is_some(),
+                        "copyText": row.copy_text.as_deref(),
+                        "topGap": top_gap_for(ix.checked_sub(1).map(|i| &self.rows[i]), row),
+                        "historyActions": self
+                            .history_actions
+                            .as_ref()
+                            .map(|ids| ids.contains(&row.entry_id)),
                     });
                     if let RowKind::ToolGroup { tools, .. } = &row.kind {
                         readback["groupGlyph"] = tool_group_glyph(tools).into();
                         readback["glyphs"] =
                             tools.iter().map(activity_glyph).collect::<Vec<_>>().into();
+                        readback["tools"] = tools
+                            .iter()
+                            .map(|tool| tool.part_id.clone())
+                            .collect::<Vec<_>>()
+                            .into();
+                        readback["summary"] = tool_group_summary(tools).into();
+                    }
+                    if let Some(child) = row.entry_id.strip_prefix("child-created:") {
+                        readback["cardPreview"] = self.fixture_card_preview(child, cx).into();
                     }
                     readback
                 })

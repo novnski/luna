@@ -181,12 +181,15 @@ pub fn plan_history(
                         .into(),
                 ));
             }
+            // A notice landing mid-turn splits the reply into several
+            // assistant entries; the turn's checkpoint rides the last one.
             let assistant = entries[index + 1..]
                 .iter()
-                .find(|entry| matches!(entry.role, MessageRole::User | MessageRole::Assistant))
+                .take_while(|entry| entry.role != MessageRole::User)
+                .filter(|entry| entry.role == MessageRole::Assistant)
+                .last()
                 .filter(|entry| {
-                    entry.role == MessageRole::Assistant
-                        && (entry.status == Some(MessageStatus::Complete) || verified_abort(entry))
+                    entry.status == Some(MessageStatus::Complete) || verified_abort(entry)
                 })
                 .ok_or_else(|| EngineError::Other("selected user turn never completed".into()))?;
             let checkpoint = doc.provider_checkpoint(&assistant.id).ok_or_else(|| {
@@ -483,6 +486,63 @@ mod tests {
                 checkpoint_id: "turn-1".into()
             }
         );
+    }
+
+    /// A child notice landing mid-turn splits one reply into several
+    /// assistant entries; only the last carries the turn's checkpoint. Failure
+    /// cases: the boundary reads the first segment and rejects the turn as
+    /// never completed, or it treats a later turn's checkpoint as this one's.
+    #[test]
+    fn before_user_reads_the_checkpoint_of_a_split_turns_last_entry() {
+        let doc = SessionDoc::init("split-turn").unwrap();
+        doc.push_message(&entry("u1", MessageRole::User, "first"))
+            .unwrap();
+        doc.push_message(&entry("a1", MessageRole::Assistant, "creating"))
+            .unwrap();
+        doc.push_message(&entry("child-created:c", MessageRole::System, "card"))
+            .unwrap();
+        doc.push_message(&entry("a1b", MessageRole::Assistant, "answer one"))
+            .unwrap();
+        doc.set_provider_checkpoint("a1b", "turn-1").unwrap();
+        doc.push_message(&entry("u2", MessageRole::User, "second"))
+            .unwrap();
+        doc.push_message(&entry("a2", MessageRole::Assistant, "started"))
+            .unwrap();
+        doc.push_message(&entry(
+            "child-outcome:c:t:turn-completed",
+            MessageRole::System,
+            "result",
+        ))
+        .unwrap();
+        doc.push_message(&entry("a2b", MessageRole::Assistant, "answer two"))
+            .unwrap();
+        doc.set_provider_checkpoint("a2b", "turn-2").unwrap();
+
+        for (message, turn, kept) in [
+            ("u1", "turn-1", vec![]),
+            ("u2", "turn-2", vec!["u1", "a1", "a1b"]),
+        ] {
+            let plan = plan_history(
+                &doc,
+                HarnessId::Codex,
+                ConversationForkBoundaryKind::BeforeUserMessage,
+                Some(message),
+            )
+            .unwrap();
+            assert_eq!(
+                plan.provider_boundary,
+                ProviderForkBoundary::BeforeCheckpoint {
+                    checkpoint_id: turn.into()
+                }
+            );
+            assert_eq!(
+                plan.entries
+                    .iter()
+                    .map(|entry| entry.id.as_str())
+                    .collect::<Vec<_>>(),
+                kept
+            );
+        }
     }
 
     #[test]

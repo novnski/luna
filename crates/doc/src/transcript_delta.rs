@@ -38,6 +38,12 @@ pub struct TranscriptUpdate {
     /// Only opt-in readers receive it; older readers and hosts use full resets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_token: Option<String>,
+    /// Entry ids carrying a provider checkpoint
+    /// ([`crate::SessionDoc::checkpointed_entries`]). Sent on a stream's first
+    /// frame and whenever the set changes; absent means unchanged, and a
+    /// reader that never receives it (an older host) cannot rule out a fork.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkpointed: Option<Vec<String>>,
 }
 
 impl TranscriptUpdate {
@@ -62,6 +68,7 @@ impl TranscriptUpdate {
         let context_control = take(&mut fields, "contextControl")?;
         let replay_baseline = take(&mut fields, "replayBaseline")?;
         let transcript_token = take(&mut fields, "transcriptToken")?;
+        let checkpointed = take(&mut fields, "checkpointed")?;
         // Match the untagged enum's Reset-first precedence, including its
         // unusual but existing fallback from a malformed reset to a delta.
         let reset = fields
@@ -95,6 +102,7 @@ impl TranscriptUpdate {
             context_control,
             replay_baseline,
             transcript_token,
+            checkpointed,
         })
     }
 }
@@ -583,6 +591,7 @@ mod context_update_tests {
         );
         assert!(update.replay_baseline.is_none());
         let value = serde_json::to_value(TranscriptUpdate {
+            checkpointed: None,
             frame: TranscriptFrame::reset(&[]),
             replay_baseline: Some(TranscriptBaseline::default()),
             context_usage: Some(luna_proto::ContextUsage {

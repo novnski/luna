@@ -930,6 +930,9 @@ pub(crate) struct PaneChatProjection {
     pub context_usage: Option<luna_proto::ContextUsage>,
     pub context_control: luna_proto::ContextControlState,
     pub provider_notice: Option<luna_proto::ProviderNotice>,
+    /// Entries a fork/edit/rewind boundary can resolve; see
+    /// [`AppState::checkpointed`].
+    pub checkpointed: Option<Arc<HashSet<String>>>,
     pub native_tasks: luna_proto::NativeTaskLedger,
     /// The opening `WatchDocMessages` frame has landed.
     pub replayed: bool,
@@ -1041,6 +1044,10 @@ pub struct AppState {
     pub context_control: luna_proto::ContextControlState,
     /// The selected chat's transient provider status (retry/warning).
     pub provider_notice: Option<luna_proto::ProviderNotice>,
+    /// The selected chat's entries that carry a provider checkpoint — the
+    /// rows a fork, edit or rewind boundary can resolve. `None` until the
+    /// host reports it (an older host never does).
+    pub checkpointed: Option<Arc<HashSet<String>>>,
     /// Provider-native workflows/teammates of the selected chat, as last
     /// observed by its host (read-only; never transcript content).
     pub native_tasks: luna_proto::NativeTaskLedger,
@@ -1437,6 +1444,7 @@ impl AppState {
             context_usage: None,
             context_control: Default::default(),
             provider_notice: None,
+            checkpointed: None,
             transcript_replayed: false,
             transcript_baselines: HashMap::new(),
             transcript_revision: 0,
@@ -1638,6 +1646,7 @@ impl AppState {
             self.context_usage = None;
             self.context_control = Default::default();
             self.provider_notice = None;
+            self.checkpointed = None;
             self.native_tasks = Default::default();
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
@@ -2057,6 +2066,13 @@ impl AppState {
         if self.provider_notice != update.provider_notice {
             self.provider_notice = update.provider_notice;
             cx.notify();
+        }
+        if let Some(ids) = update.checkpointed {
+            let ids: HashSet<String> = ids.into_iter().collect();
+            if self.checkpointed.as_deref() != Some(&ids) {
+                self.checkpointed = Some(Arc::new(ids));
+                cx.notify();
+            }
         }
         Ok(())
     }
@@ -2834,6 +2850,7 @@ impl AppState {
         self.context_usage = None;
         self.context_control = Default::default();
         self.provider_notice = None;
+        self.checkpointed = None;
         self.native_tasks = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
@@ -3265,6 +3282,7 @@ impl AppState {
         self.context_usage = None;
         self.context_control = Default::default();
         self.provider_notice = None;
+        self.checkpointed = None;
         self.native_tasks = Default::default();
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
@@ -4183,14 +4201,22 @@ fn spawn_subagent_watch(
                         // per-frame controls (usage, goal, provider notice).
                         let mut pane_changed = false;
                         if !desync && let Some(pane) = state.pane_chats.get_mut(&doc_id) {
+                            let checkpointed = update
+                                .checkpointed
+                                .map(|ids| ids.into_iter().collect::<HashSet<String>>())
+                                .filter(|ids| pane.checkpointed.as_deref() != Some(ids));
                             pane_changed = !pane.replayed
                                 || pane.context_usage != update.context_usage
                                 || pane.context_control != update.context_control
-                                || pane.provider_notice != update.provider_notice;
+                                || pane.provider_notice != update.provider_notice
+                                || checkpointed.is_some();
                             pane.replayed = true;
                             pane.context_usage = update.context_usage;
                             pane.context_control = update.context_control;
                             pane.provider_notice = update.provider_notice;
+                            if let Some(ids) = checkpointed {
+                                pane.checkpointed = Some(Arc::new(ids));
+                            }
                             state.reconcile_pane_echoes(&doc_id);
                         }
                         if text_only && !desync && !pane_changed {

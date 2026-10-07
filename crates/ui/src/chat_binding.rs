@@ -179,6 +179,19 @@ impl ChatBinding {
         }
     }
 
+    pub fn checkpointed<'a>(
+        &self,
+        state: &'a AppState,
+    ) -> Option<&'a std::sync::Arc<std::collections::HashSet<String>>> {
+        match self {
+            _ if self.reads_selected(state) => state.checkpointed.as_ref(),
+            Self::Chat(id) => state
+                .pane_chat(id)
+                .and_then(|pane| pane.checkpointed.as_ref()),
+            Self::Selected => None,
+        }
+    }
+
     pub fn provider_notice<'a>(&self, state: &'a AppState) -> Option<&'a ProviderNotice> {
         match self {
             _ if self.reads_selected(state) => state.provider_notice.as_ref(),

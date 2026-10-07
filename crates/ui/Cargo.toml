@@ -158,6 +158,10 @@ name = "chat-chrome-fixture"
 required-features = ["appshots-fixture"]
 
 [[example]]
+name = "timeline-fixture"
+required-features = ["appshots-fixture"]
+
+[[example]]
 name = "tool-icons-fixture"
 required-features = ["appshots-fixture"]
 
