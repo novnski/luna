@@ -25,7 +25,7 @@ use super::*;
 const VERIFIED: &[(&str, &str)] = &[("2.0.22", PINNED_2_0_22)];
 
 /// [`check_contract`]'s fingerprint of the live 2.0.22 document.
-const PINNED_2_0_22: &str = "73d57e9a6b342cd7f81eb0a07f71907a44000e1ab5d371e3943d89a9536f387c";
+const PINNED_2_0_22: &str = "7397b270504b42af9a5a2c69ce023a3d5322466b7650612785eb14aee7519759";
 
 /// One operation LUNA depends on: operation id, method and path, the
 /// request-body fields LUNA sends (`None` = no body), and the query
@@ -139,6 +139,38 @@ const REQUIREMENTS: &[Requirement] = &[
     ),
     op("model.list", "get", "/api/model", None, &[]),
     op("command.list", "get", "/api/command", None, &[]),
+    // OC-07 delivery readback and Stop's withdrawal of undelivered steers.
+    op(
+        "session.inbox.list",
+        "get",
+        "/api/session/{sessionID}/inbox",
+        None,
+        &[],
+    ),
+    op(
+        "session.inbox.cancel",
+        "delete",
+        "/api/session/{sessionID}/inbox/{inboxID}",
+        None,
+        &[],
+    ),
+    op(
+        "session.message.get",
+        "get",
+        "/api/session/{sessionID}/message/{messageID}",
+        None,
+        &[],
+    ),
+    // OC-08 reconnect resync of pending asks. (The experimental durable
+    // log is optional and probed at runtime.)
+    op(
+        "permission.request.list",
+        "get",
+        "/api/permission/request",
+        None,
+        &[],
+    ),
+    op("form.list", "get", "/api/form", None, &[]),
 ];
 
 /// The v2 permission rule shape LUNA sends in `permissions`.

@@ -1451,7 +1451,14 @@ fn v2_model_list_folds_into_provider_catalog() {
 
 #[test]
 fn prompt_body_v2_carries_text_and_files_only() {
-    let body = prompt_body_v2("hello", &["/tmp/shot.png".to_owned()]);
+    let body = prompt_body_v2(
+        "hello",
+        &["/tmp/shot.png".to_owned()],
+        "msg_luna_1",
+        PromptDelivery::Steer,
+    );
+    assert_eq!(body["id"], "msg_luna_1");
+    assert_eq!(body["delivery"], "steer");
     assert_eq!(body["text"], "hello");
     assert_eq!(body["files"][0]["uri"], "file:///tmp/shot.png");
     assert_eq!(body["files"][0]["name"], "shot.png");
@@ -1717,13 +1724,19 @@ async fn v2_model_selection_and_prompt_use_the_documented_bodies() {
             .1,
         json!({"model":{"providerID":"opencode","id":"muse","variant":"low"}})
     );
-    assert_eq!(
-        posts
-            .iter()
-            .find(|(p, _)| p == "/api/session/fixture/prompt")
-            .unwrap()
-            .1,
-        json!({"text":"first","files":[]})
+    let prompt = &posts
+        .iter()
+        .find(|(p, _)| p == "/api/session/fixture/prompt")
+        .unwrap()
+        .1;
+    assert_eq!(prompt["text"], "first");
+    assert_eq!(prompt["files"], json!([]));
+    assert_eq!(prompt["delivery"], "queue");
+    assert!(
+        prompt["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("msg_luna_")),
+        "{prompt:?}"
     );
 }
 

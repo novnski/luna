@@ -339,14 +339,38 @@ fn idle(fake: &FakeOpencode, session: &str) {
     );
 }
 
+/// The next transcript-relevant event. Host-only receipt evidence
+/// (`ProviderEvidence`, journal-only) is skipped.
 async fn next_event(
     stream: &mut (impl futures::Stream<Item = Result<AgentEvent, HarnessError>> + Unpin),
 ) -> AgentEvent {
-    tokio::time::timeout(Duration::from_secs(10), stream.next())
-        .await
-        .expect("event within budget")
-        .expect("stream open")
-        .expect("ok event")
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .expect("event within budget")
+            .expect("stream open")
+            .expect("ok event");
+        if !matches!(event, AgentEvent::ProviderEvidence { .. }) {
+            return event;
+        }
+    }
+}
+
+/// `Err` (elapsed) when nothing but host-only receipt evidence arrives
+/// within `ms`.
+async fn quiet_for(
+    stream: &mut (impl futures::Stream<Item = Result<AgentEvent, HarnessError>> + Unpin),
+    ms: u64,
+) -> Result<Option<Result<AgentEvent, HarnessError>>, tokio::time::error::Elapsed> {
+    tokio::time::timeout(Duration::from_millis(ms), async {
+        loop {
+            match stream.next().await {
+                Some(Ok(AgentEvent::ProviderEvidence { .. })) => continue,
+                other => return other,
+            }
+        }
+    })
+    .await
 }
 
 /// Poll until `path` has received `n` POSTs; returns their bodies.
@@ -431,7 +455,7 @@ async fn thinking_streams_and_the_turn_settles_only_on_idle() {
     text(&fake, "ses_test", "msg_1", 0, "Hello");
     let delta = next_event(&mut stream).await;
     assert!(matches!(&delta, AgentEvent::TextDelta { text } if text == "Hello"));
-    let quiet = tokio::time::timeout(Duration::from_millis(600), stream.next()).await;
+    let quiet = quiet_for(&mut stream, 600).await;
     assert!(quiet.is_err(), "nothing may settle a quiet-but-live turn");
 
     idle(&fake, "ses_test");
@@ -465,7 +489,7 @@ async fn foreign_session_idle_never_settles_our_turn() {
 
     assistant_message(&fake, "ses_test", "msg_1");
     idle(&fake, "ses_OTHER");
-    let quiet = tokio::time::timeout(Duration::from_millis(600), stream.next()).await;
+    let quiet = quiet_for(&mut stream, 600).await;
     assert!(quiet.is_err(), "a foreign session's idle settled our turn");
 
     idle(&fake, "ses_test");
@@ -504,7 +528,18 @@ async fn model_and_advertised_variant_ride_the_session() {
         json!({ "model": { "providerID": "anthropic", "id": "opus", "variant": "high" } })
     );
     let prompts = wait_posts(&fake, "/api/session/ses_test/prompt", 1).await;
-    assert_eq!(prompts[0], json!({ "text": "hi", "files": [] }));
+    // A caller id (`msg_…`, the inbox id) and an explicit turn-boundary
+    // delivery ride every prompt (OC-07).
+    assert_eq!(prompts[0]["text"], "hi");
+    assert_eq!(prompts[0]["files"], json!([]));
+    assert_eq!(prompts[0]["delivery"], "queue");
+    assert!(
+        prompts[0]["id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("msg_")),
+        "{:?}",
+        prompts[0]
+    );
 
     assistant_message(&fake, "ses_test", "msg_1");
     idle(&fake, "ses_test");

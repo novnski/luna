@@ -4734,9 +4734,11 @@ impl SessionsEngine {
         if request.goal.is_some() {
             self.mark_goal_sent(chat_id, &user_id);
         }
-        if harness_id == HarnessId::Codex && !attach_existing_goal {
+        if matches!(harness_id, HarnessId::Codex | HarnessId::Opencode) && !attach_existing_goal {
             // The first turn/start carries the same correlation id as every
             // steer, so native readback can prove this message's delivery.
+            // OpenCode posts it as the prompt's caller id (`msg_…`), which is
+            // also its inbox id and makes a resend reconcile, not duplicate.
             request.model_options.insert(
                 luna_harness::codex::LUNA_CLIENT_USER_MESSAGE_ID_OPTION.into(),
                 user_id.clone().into(),
@@ -5166,10 +5168,13 @@ impl SessionsEngine {
         {
             // Serialize mailbox acceptance with confirmation and Done-time
             // inspection: a fast consumer must never outrun its ledger entry.
-            // Codex confirms exact client IDs and can accept multiple pending
-            // inputs. Legacy identity-free adapters remain single-flight.
+            // Codex and OpenCode confirm exact client IDs (OpenCode: the
+            // steer's caller id is its inbox id) and can accept multiple
+            // pending inputs. Legacy identity-free adapters remain
+            // single-flight.
             let mut pending = lock(&ledger);
-            if harness_id != HarnessId::Codex && !pending.is_empty() {
+            if !matches!(harness_id, HarnessId::Codex | HarnessId::Opencode) && !pending.is_empty()
+            {
                 return Ok(SteerOutcome::Busy);
             }
             if steer_tx.try_send(message).is_err() {

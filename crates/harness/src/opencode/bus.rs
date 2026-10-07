@@ -3,15 +3,15 @@
 
 use super::*;
 
-/// Provider-retry surfacing: report at 3 (a chip; the turn keeps trying),
-/// abort at 8 (opencode itself would retry forever — #169's silent loop).
-pub(super) const RETRY_REPORT_ATTEMPT: u64 = 3;
-pub(super) const RETRY_ABORT_ATTEMPT: u64 = 8;
-
 pub(super) enum BusOutcome {
     Continue,
-    /// Our session's turn reached idle.
+    /// Our session's execution succeeded (idle).
     TurnIdle,
+    /// Our session's execution failed: the turn settles Errored even after
+    /// content (the error chip was already emitted).
+    TurnFailed,
+    /// Our session's execution was interrupted (`turn.interrupt_reason`
+    /// holds a non-user reason).
     TurnInterrupted,
     ConsumerGone,
 }
@@ -115,21 +115,34 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
 
     let is_ours = event_session == Some(session_id);
     if is_ours && kind == "session.interrupted" {
+        turn.interrupt_reason = props
+            .get("reason")
+            .and_then(Value::as_str)
+            .filter(|reason| *reason != "user")
+            .map(str::to_owned);
         return BusOutcome::TurnInterrupted;
     }
     let status = props
         .get("status")
         .and_then(|s| s.get("type"))
         .and_then(Value::as_str);
-    if is_ours && (kind == "session.idle" || (kind == "session.status" && status == Some("idle"))) {
-        // OpenCode can emit both idle encodings for one completion. The first
-        // may submit a queued prompt before we consume the second. Until that
-        // prompt starts (or fails/gets aborted), the second is stale. It must
-        // neither complete the prompt nor disarm its startup watchdog.
-        return if turn.idle_ready || turn.error.is_some() {
-            BusOutcome::TurnIdle
+    if is_ours
+        && (kind == "session.idle"
+            || kind == "session.failed"
+            || (kind == "session.status" && status == Some("idle")))
+    {
+        // A terminal from the previous busy period can trail a just-posted
+        // prompt. Until that prompt's execution starts (or fails/gets
+        // aborted), it is stale: it must neither complete the prompt nor
+        // disarm its startup watchdog.
+        if !(turn.idle_ready || turn.error.is_some()) {
+            return BusOutcome::Continue;
+        }
+        return if kind == "session.failed" {
+            turn.failed = true;
+            BusOutcome::TurnFailed
         } else {
-            BusOutcome::Continue
+            BusOutcome::TurnIdle
         };
     }
     if is_ours && turn.active {
@@ -137,41 +150,12 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
     }
 
     match kind {
+        // v2 has no retry status (retries arrive as `session.retry`, a
+        // transient notice handled by the turn loop): busy is all that
+        // remains of the 1.x status vocabulary.
         "session.status" if is_ours => {
-            let status = props.get("status").unwrap_or(&Value::Null);
-            match status.get("type").and_then(Value::as_str) {
-                Some("busy") => turn.idle_ready = true,
-                Some("retry") => {
-                    turn.idle_ready = true;
-                    let attempt = status.get("attempt").and_then(Value::as_u64).unwrap_or(0);
-                    let message = status
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("provider error");
-                    if attempt >= RETRY_ABORT_ATTEMPT && !turn.aborted_for_retry {
-                        turn.aborted_for_retry = true;
-                        turn.error = Some(format!(
-                            "the provider kept failing after {attempt} attempts: {message}"
-                        ));
-                        let msg = format!(
-                            "Giving up after {attempt} provider retries: {message}. {STALL_HINT}"
-                        );
-                        if !send(event_tx, AgentEvent::Error { message: msg }).await {
-                            return BusOutcome::ConsumerGone;
-                        }
-                        let _ = server.interrupt_session(session_id, dir).await;
-                    } else if attempt >= RETRY_REPORT_ATTEMPT && !turn.retry_reported {
-                        turn.retry_reported = true;
-                        let msg = format!(
-                            "The provider is failing and opencode is retrying (attempt \
-                             {attempt}): {message}"
-                        );
-                        if !send(event_tx, AgentEvent::Error { message: msg }).await {
-                            return BusOutcome::ConsumerGone;
-                        }
-                    }
-                }
-                _ => {}
+            if status == Some("busy") {
+                turn.idle_ready = true;
             }
             BusOutcome::Continue
         }
