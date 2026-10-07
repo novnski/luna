@@ -264,7 +264,12 @@ export class TranscriptMirror extends EventEmitter {
     this.entries = result.entries;
     this.updates += 1;
     if (Array.isArray(frame.reset)) this.resets += 1;
-    for (const key of ['contextUsage', 'providerNotice', 'contextControl', 'checkpointed']) if (item && Object.hasOwn(item, key) && item[key] !== undefined) this.latest[key] = item[key];
+    for (const key of ['contextUsage', 'contextControl', 'checkpointed']) if (item && Object.hasOwn(item, key) && item[key] !== undefined) this.latest[key] = item[key];
+    // TranscriptUpdate skips a None provider_notice and every frame carries
+    // the doc's current notice, so an absent key means the notice cleared
+    // (the UI state does the same); keeping the old value showed a stale
+    // "retrying" notice after the turn completed.
+    if (item) this.latest.providerNotice = item.providerNotice ?? null;
     this.record({at: now(), chat: this.label, kind: Array.isArray(frame.reset) ? 'reset' : 'delta',
       entries: this.entries.length, upsert: frame.upsert?.length ?? 0, append: frame.append?.length ?? 0, remove: frame.remove?.length ?? 0,
       providerNotice: item?.providerNotice ?? null, contextUsage: item?.contextUsage ?? null, contextControl: item?.contextControl ?? null});
