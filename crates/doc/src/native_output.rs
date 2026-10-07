@@ -3,7 +3,8 @@
 //! `search_result`, `unsupported`), complete arguments (`input`), the native
 //! result object (`result`), MCP `structuredContent`/`meta`/`resourceLinks`,
 //! non-execution evidence and dedupe/omission notes. Produced by the Claude
-//! adapter; retained only in the owning host's journal.
+//! and OpenCode adapters (OpenCode adds `error`, `partial`, `metadata` and a
+//! shell's `liveOutput`); retained only in the owning host's journal.
 //!
 //! Synced documents and live previews receive [`native_summary`] (type/count
 //! metadata) or, for typed built-in tools, a bounded summary of the text
@@ -15,13 +16,28 @@ use serde_json::Value;
 
 const ENVELOPE_PREFIX: &str = "{\"lunaToolOutput\":";
 
+/// The host journal's full-output retrieval appends live stdout/stdin after
+/// the authoritative result under this marker (`run_journal`). The compact
+/// envelope JSON never contains a raw newline, so the first marker is
+/// always outside it.
+const LIVE_ACTIVITY_MARKER: &str = "\n\n[Live activity received]\n";
+
+/// The envelope part of a retrieved output and any live activity after it.
+fn split_live_activity(text: &str) -> (&str, Option<&str>) {
+    match text.find(LIVE_ACTIVITY_MARKER) {
+        Some(at) => (&text[..at], Some(&text[at + LIVE_ACTIVITY_MARKER.len()..])),
+        None => (text, None),
+    }
+}
+
 /// The `native` payload of a journaled tool output, if it is one.
 pub fn native_payload(text: &str) -> Option<Value> {
     // Cheap guard: plain command output is never parsed as JSON here.
     if !text.starts_with(ENVELOPE_PREFIX) {
         return None;
     }
-    let mut value: Value = serde_json::from_str(text).ok()?;
+    let (envelope, _) = split_live_activity(text);
+    let mut value: Value = serde_json::from_str(envelope).ok()?;
     let payload = value.get_mut("lunaToolOutput").map(Value::take)?;
     (payload.get("kind").and_then(Value::as_str) == Some("native")).then_some(payload)
 }
@@ -139,6 +155,16 @@ pub fn native_display(text: &str) -> Option<String> {
         .then(|| payload["savedOutput"]["text"].as_str())
         .flatten()
         .filter(|text| payload["savedOutput"]["byteLength"].as_u64() == Some(text.len() as u64));
+    // Live activity the journal appended. An OpenCode shell's `liveOutput`
+    // says when it is the complete combined output; it then replaces the
+    // native tail preview block it names, like Claude's saved Bash output.
+    let (_, activity) = split_live_activity(text);
+    let activity = activity.filter(|a| !a.is_empty());
+    let live = activity.filter(|a| {
+        payload["liveOutput"]["complete"] == true
+            && payload["liveOutput"]["byteLength"].as_u64() == Some(a.len() as u64)
+    });
+    let replaced = live.and(payload["liveOutput"]["replacesBlock"].as_u64());
     let content = blocks(&payload);
     let is_error = payload.get("isError").and_then(Value::as_bool) == Some(true);
     let only_text = content.iter().all(|b| block_type(b) == "text");
@@ -174,7 +200,14 @@ pub fn native_display(text: &str) -> Option<String> {
             saved
         ));
     }
-    for block in content {
+    if let Some(live) = live {
+        sections.push(format!(
+            "Full shell output ({} bytes)\n{}",
+            live.len(),
+            live
+        ));
+    }
+    for (index, block) in content.iter().enumerate() {
         let media = |block: &Value| {
             if block.get("dataOmitted").is_some() {
                 "media not retained".to_owned()
@@ -188,6 +221,7 @@ pub fn native_display(text: &str) -> Option<String> {
         };
         match block_type(block) {
             "text" if saved.is_some() => {}
+            "text" if replaced == Some(index as u64) => {}
             "text" => sections.push(field(block, "text").to_owned()),
             "image" => sections.push(format!(
                 "Image ({}) · {}",
@@ -219,6 +253,15 @@ pub fn native_display(text: &str) -> Option<String> {
             )),
             other => sections.push(format!("Content block `{other}` · retained in full result")),
         }
+    }
+    if live.is_none()
+        && let Some(activity) = activity
+    {
+        sections.push(format!(
+            "Live output received ({} bytes)\n{}",
+            activity.len(),
+            activity
+        ));
     }
     if let Some(links) = payload.get("resourceLinks").and_then(Value::as_array) {
         for link in links {
