@@ -564,5 +564,10 @@ async fn main() {
     );
     eprintln!("=== {} ({} ms)", if ok { "PASS" } else { "FAIL" }, ms());
     core.shutdown().await;
+    // `exit` skips destructors: remove the disposable engine data and run
+    // workspace first.
+    drop(core);
+    drop(workspace);
+    drop(data);
     std::process::exit(if ok { 0 } else { 1 });
 }
