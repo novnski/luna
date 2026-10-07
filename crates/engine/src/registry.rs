@@ -742,17 +742,19 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| luna_harness::CodexHarness::new().installed()),
         Box::new(|| Ok(Arc::new(luna_harness::CodexHarness::new()) as Arc<dyn Harness>)),
     );
-    // opencode over its NATIVE HTTP/SSE protocol (the one the opencode
-    // desktop app speaks — `opencode serve` + the /global/event bus), same
-    // lazy pattern: the static descriptor mirrors OpencodeHarness exactly.
-    // Turn-boundary steering; the effort ladder rides model VARIANTS (the
-    // run sends the first advertised variant id for the picked level).
+    // OpenCode 2 over its NATIVE HTTP/SSE protocol (the one the OpenCode
+    // desktop app speaks — `opencode serve --stdio` + the /api/event bus),
+    // same lazy pattern: the static descriptor mirrors OpencodeHarness
+    // exactly. StepBoundary steering like Codex and Claude (a native
+    // `delivery: "steer"` prompt, confirmed by its inbox delivery); the
+    // effort ladder rides model VARIANTS (the run sends the first advertised
+    // variant id for the picked level).
     registry.register_lazy(
         HarnessDescriptor {
             id: HarnessId::Opencode,
             name: "OpenCode".into(),
             supports_steering: true,
-            steering_mode: SteeringMode::TurnBoundary,
+            steering_mode: SteeringMode::StepBoundary,
             reasoning_levels: vec![
                 ReasoningLevel::Low,
                 ReasoningLevel::Medium,

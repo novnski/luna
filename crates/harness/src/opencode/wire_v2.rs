@@ -20,6 +20,9 @@ use super::*;
 ///   `.input.ended` (args as text), `.called` (args as object),
 ///   `.success` (content array) / `.error`.
 /// - usage: `session.usage.updated` with the cumulative token totals.
+/// - delivery: `session.inbox.enqueued/.delivered/.cancelled/.delivery.changed`
+///   (the inbox id is the caller's `msg_…` prompt id), plus
+///   `session.retry.scheduled` and `session.step.ended` finish reasons.
 ///
 /// `tool_names` tracks pending calls by session, message, and provider call id.
 pub(super) type V2ToolKey = (String, String, String);
@@ -51,6 +54,7 @@ pub(super) fn normalize_v2_frame(
     // One helper per event family, so each family evolves on its own. A
     // helper answers `None` for kinds outside its family.
     v2_session_frames(kind, &data)
+        .or_else(|| v2_inbox_frames(kind, &data))
         .or_else(|| v2_stream_frames(kind, &data))
         .or_else(|| v2_tool_frames(kind, &data, tool_names))
         .or_else(|| v2_request_frames(kind, &data))
@@ -86,26 +90,35 @@ fn v2_tool_key(data: &Value) -> V2ToolKey {
     )
 }
 
-/// Session and execution lifecycle: busy, terminals, steps, child sessions.
+/// Session and execution lifecycle: busy, terminals, steps, child sessions,
+/// retries and finish reasons.
 fn v2_session_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
     let frames = match kind {
         "session.execution.started" => vec![json!({
             "type": "session.status",
             "properties": { "sessionID": v2_session(data), "status": { "type": "busy" } }
         })],
-        "session.execution.interrupted" => vec![json!({
-            "type": "session.interrupted",
-            "properties": { "sessionID": v2_session(data) }
-        })],
+        "session.execution.interrupted" => {
+            // The reason (user, shutdown, superseded, inactivity) rides
+            // along: only a user interrupt is a plain Stop.
+            let mut properties = json!({ "sessionID": v2_session(data) });
+            if let Some(reason) = data.get("reason").filter(|reason| !reason.is_null()) {
+                properties["reason"] = reason.clone();
+            }
+            vec![json!({ "type": "session.interrupted", "properties": properties })]
+        }
         "session.execution.succeeded" => vec![json!({
             "type": "session.idle",
             "properties": { "sessionID": v2_session(data) }
         })],
         "session.execution.failed" => {
+            // The error chip, then a terminal that always settles Errored:
+            // an execution failure after streamed content is still a
+            // failed turn.
             vec![
                 v2_error_payload(data),
                 json!({
-                    "type": "session.idle",
+                    "type": "session.failed",
                     "properties": { "sessionID": v2_session(data) }
                 }),
             ]
@@ -126,6 +139,30 @@ fn v2_session_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
             "type": "message.updated",
             "properties": {
                 "info": { "sessionID": v2_session(data), "id": v2_message(data), "role": "assistant" }
+            }
+        })],
+        // Only the finish reasons a user must see: the reply hit the output
+        // limit or a content filter (OC-07 step 6).
+        "session.step.ended" => match data.get("finish").and_then(Value::as_str) {
+            Some(finish @ ("length" | "content-filter")) => vec![json!({
+                "type": "session.finish",
+                "properties": {
+                    "sessionID": v2_session(data),
+                    "messageID": v2_message(data),
+                    "finish": finish,
+                }
+            })],
+            _ => Vec::new(),
+        },
+        // v2 caps provider retries itself; each scheduled retry is a
+        // transient notice, never an error (OC-07 step 5).
+        "session.retry.scheduled" => vec![json!({
+            "type": "session.retry",
+            "properties": {
+                "sessionID": v2_session(data),
+                "attempt": data.get("attempt").cloned().unwrap_or(Value::Null),
+                "at": data.get("at").cloned().unwrap_or(Value::Null),
+                "message": v2_error_message(data.get("error").unwrap_or(&Value::Null)),
             }
         })],
         "session.created" => {
@@ -150,6 +187,46 @@ fn v2_session_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
         _ => return None,
     };
     Some(frames)
+}
+
+/// The prompt inbox: receipt evidence for LUNA's own queue (OC-07). The
+/// inbox id equals the `msg_…` id the prompt was posted with. A synthetic
+/// input (a background-subagent completion, another client's text) is an
+/// inbox item LUNA never posts itself.
+fn v2_inbox_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
+    let internal = match kind {
+        "session.inbox.enqueued" => "inbox.enqueued",
+        "session.inbox.delivered" => "inbox.delivered",
+        "session.inbox.cancelled" => "inbox.cancelled",
+        "session.inbox.delivery.changed" => "inbox.delivery",
+        "session.synthetic" => {
+            return Some(vec![json!({
+                "type": "session.synthetic",
+                "properties": {
+                    "sessionID": v2_session(data),
+                    "description": data.get("description").cloned().unwrap_or(Value::Null),
+                }
+            })]);
+        }
+        _ => return None,
+    };
+    let Some(inbox_id) = data.get("inboxID").and_then(Value::as_str) else {
+        return Some(Vec::new());
+    };
+    let item = data.get("item").unwrap_or(&Value::Null);
+    Some(vec![json!({
+        "type": internal,
+        "properties": {
+            "sessionID": v2_session(data),
+            "inboxID": inbox_id,
+            "delivery": data
+                .get("delivery")
+                .or_else(|| item.get("delivery"))
+                .cloned()
+                .unwrap_or(Value::Null),
+            "itemType": item.get("type").cloned().unwrap_or(Value::Null),
+        }
+    })])
 }
 
 /// Streamed assistant items: text and reasoning snapshots and deltas.
@@ -305,27 +382,54 @@ fn v2_other_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
     Some(frames)
 }
 
-/// The 2.x error shape (`{type, message}`) folded into the 1.x
-/// `session.error` properties (`{name, data: {message}}`). 2.x provider
-/// failures can carry an EMPTY message (observed live: `provider.auth`
-/// with `message: ""`) — fall back to the type so the chip isn't blank.
+/// The 2.x error shape (`{type, message, status?, response?: {body}}`)
+/// folded into the 1.x `session.error` properties (`{name, data:
+/// {message}}`).
 pub(super) fn v2_error_payload(data: &Value) -> Value {
     let error = data.get("error").cloned().unwrap_or(Value::Null);
     let name = error.get("type").and_then(Value::as_str).unwrap_or("");
-    let message = match error.get("message").and_then(Value::as_str) {
-        Some(message) if !message.is_empty() => message,
-        _ => name,
-    };
     json!({
         "type": "session.error",
         "properties": {
             "sessionID": data.get("sessionID").cloned().unwrap_or(Value::Null),
             "error": {
                 "name": name,
-                "data": { "message": message },
+                "data": { "message": v2_error_message(&error) },
             },
         }
     })
+}
+
+/// The human text of a v2 `SessionStructuredError`. 2.x provider failures
+/// can carry an EMPTY message (observed live: `provider.auth` with
+/// `message: ""`): fall back to the type so the chip isn't blank. The type,
+/// the HTTP status and a bounded response body are kept when present.
+pub(super) fn v2_error_message(error: &Value) -> String {
+    let name = error.get("type").and_then(Value::as_str).unwrap_or("");
+    let mut message = match error.get("message").and_then(Value::as_str) {
+        Some(message) if !message.is_empty() => message.to_owned(),
+        _ => name.to_owned(),
+    };
+    let status = error.get("status").and_then(Value::as_u64);
+    let mut detail: Vec<String> = Vec::new();
+    if !name.is_empty() && name != message {
+        detail.push(name.to_owned());
+    }
+    if let Some(status) = status {
+        detail.push(format!("HTTP {status}"));
+    }
+    if !detail.is_empty() {
+        message.push_str(&format!(" ({})", detail.join(", ")));
+    }
+    if let Some(body) = error
+        .pointer("/response/body")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|body| !body.is_empty())
+    {
+        message.push_str(&format!(": {}", truncate_body(body)));
+    }
+    message
 }
 
 /// Synthetic part id for a streamed 2.x text/reasoning item: message id +

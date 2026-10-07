@@ -19,14 +19,19 @@
 //!   child (subagent) sessions included, token-level. Frames are rewritten
 //!   into internal 1.x-shaped payloads ([`normalize_v2_frame`]) so the turn
 //!   engine stays as it was; unknown event types are logged once.
-//! - a turn is `POST /api/session/{id}/prompt` (model set once on the
-//!   session); the END of the turn is the terminal execution frame for
-//!   THAT session (`session.execution.succeeded/.failed/.interrupted`).
+//! - a turn is `POST /api/session/{id}/prompt` with a caller id (`msg_…`,
+//!   derived from the LUNA message id) and an explicit delivery (model set
+//!   once on the session); it STARTS on `session.inbox.delivered` for that
+//!   id and ENDS on the next terminal execution frame for THAT session
+//!   (`session.execution.succeeded/.failed/.interrupted`). A steer is a
+//!   prompt with `delivery: "steer"` (`turn`, `delivery`).
 //! - reasoning streams as reasoning items → [`AgentEvent::ReasoningDelta`].
 //!
 //! A prompt that produces NO session-scoped event within the stall bound
 //! (`LUNA_OPENCODE_STALL_MS`, 0 disables) errors out instead of spinning
-//! "Working" forever. `LUNA_OPENCODE_WIRE_LOG=<dir>` appends a redacted
+//! "Working" forever; so does a turn that goes silent mid-way while nothing
+//! awaits the user and no tool runs (`LUNA_OPENCODE_ACTIVITY_STALL_MS`,
+//! default 10 min, 0 disables). `LUNA_OPENCODE_WIRE_LOG=<dir>` appends a redacted
 //! JSONL wire log for QA (`wire_log`).
 //!
 //! Module map (each submodule does `use super::*`, and this module
@@ -39,14 +44,19 @@
 //! - `catalog`: models, variants, slash commands, session model switch.
 //! - `usage`: token/context usage and compaction.
 //! - `history`: message listing, fork planning and readback.
-//! - `turn`: the run loop (setup, first prompt, steering, settlement).
-//! - `transport`: the SSE bus reader; `wire_v2`: the 2.x frame normalizer.
+//! - `turn`: the run loop (setup, first prompt, turn correlation, native
+//!   steering, stalls, reconnect resync, settlement).
+//! - `delivery`: receipt evidence, delivery readback, inbox cancel, retry
+//!   and finish-reason notices; `recovery`: reconnect readback (messages,
+//!   pending requests, session record).
+//! - `transport`: the SSE bus reader (durable-seq tracking, reconnect gap
+//!   detection, read-idle); `wire_v2`: the 2.x frame normalizer.
 //! - `bus`: routing one normalized payload; `parts`: part streaming state.
 //! - `subagents`: spawn chips and child binding; `tools`: tool vocabulary.
 //! - `permissions`: rules, approval options, permission replies.
 //! - `forms`: v2 forms (questions); `prompt`: session create, turn submit.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -73,11 +83,13 @@ use crate::{
 mod bus;
 mod catalog;
 mod compat;
+mod delivery;
 mod forms;
 mod history;
 mod parts;
 mod permissions;
 mod prompt;
+mod recovery;
 mod resolve;
 mod server;
 mod subagents;
@@ -91,9 +103,11 @@ mod wire_v2;
 use bus::*;
 use catalog::*;
 use compat::*;
+use delivery::*;
 use parts::*;
 use permissions::*;
 use prompt::*;
+use recovery::*;
 use resolve::*;
 use server::*;
 use subagents::*;
@@ -276,10 +290,12 @@ impl Harness for OpencodeHarness {
     fn supports_steering(&self) -> bool {
         true
     }
-    /// Steers queue and deliver as the next prompt when the live turn goes
-    /// idle (native mid-turn steering is not advertised yet, PD-2).
+    /// Native mid-turn steering, like Codex and Claude (PD-2): an explicit
+    /// steer is a prompt with `delivery: "steer"`, incorporated at the next
+    /// step boundary of the running execution and confirmed by its own
+    /// `session.inbox.delivered` (OC-07).
     fn steering_mode(&self) -> SteeringMode {
-        SteeringMode::TurnBoundary
+        SteeringMode::StepBoundary
     }
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
         REASONING_LEVELS
