@@ -243,7 +243,10 @@ async fn run(
             Ok(AgentEvent::ReasoningDelta { .. }) => {}
             Ok(AgentEvent::ToolCall { id, call, .. }) => {
                 eprintln!("TOOLCALL {id} {call:?}");
-                if format!("{call:?}").contains("\"luna_") {
+                // With OC-06's MCP split the chip is `Mcp { server: "luna" }`;
+                // an unsplit name still reads `luna_<tool>`.
+                let shown = format!("{call:?}");
+                if shown.contains("\"luna_") || shown.contains("server: \"luna\"") {
                     outcome.luna_chips.push(id);
                 }
             }
