@@ -36,6 +36,7 @@ const SECRET_KEYS: &[&str] = &[
     "refreshtoken",
     "apikey",
     "api_key",
+    "authtoken",
     "secret",
     "cookie",
     "credential",
@@ -161,17 +162,27 @@ impl WireLog {
             return json!({ "bytes": 0 });
         }
         let mut out = json!({ "sha256": sha256_hex(raw), "bytes": raw.len() });
+        let clip = |text: &str| {
+            let mut end = text.len().min(BODY_LIMIT);
+            while end > 0 && !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            text[..end].to_owned()
+        };
         match serde_json::from_slice::<Value>(raw) {
             Ok(value) if raw.len() <= BODY_LIMIT => out["body"] = self.redact(&value),
-            _ => {
-                let mut end = raw.len().min(BODY_LIMIT);
+            // A large JSON body (the model list carries provider
+            // `settings.apiKey`) is redacted by key BEFORE it is clipped.
+            Ok(value) => {
+                let redacted = serde_json::to_string(&self.redact(&value)).unwrap_or_default();
+                out["text"] = json!(clip(&redacted));
+                out["truncated"] = json!(true);
+            }
+            Err(_) => {
+                let end = raw.len().min(BODY_LIMIT);
                 let text = String::from_utf8_lossy(&raw[..end]).into_owned();
                 // from_utf8_lossy may lengthen; re-clip on a char boundary.
-                end = text.len().min(BODY_LIMIT);
-                while end > 0 && !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                out["text"] = json!(self.scrub_text(&text[..end]));
+                out["text"] = json!(self.scrub_text(&clip(&text)));
                 out["truncated"] = json!(raw.len() > BODY_LIMIT);
             }
         }

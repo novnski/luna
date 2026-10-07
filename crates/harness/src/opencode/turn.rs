@@ -747,7 +747,18 @@ pub(super) async fn run_session(session: Session) {
             next_turn.started_ms = posted_ms;
             next_turn.provider_checkpoint_id = turn.provider_checkpoint_id.clone();
             next_turn.luna_message_id = next.message_id.clone();
-            match admit(outcome, &mut next_turn, &id, posted_ms, &server, &session_id, dir, &event_tx).await {
+            match admit(
+                outcome,
+                &mut next_turn,
+                &id,
+                posted_ms,
+                &server,
+                &session_id,
+                dir,
+                &event_tx,
+            )
+            .await
+            {
                 Ok(()) => {
                     turn = next_turn;
                     parked = false;
@@ -759,11 +770,16 @@ pub(super) async fn run_session(session: Session) {
                         // No inbox evidence to wait for: the boundary
                         // is the post itself (execution correlation).
                         let (prev, next_id) = rotate(&mut assistant_message_id);
-                        if !send(&event_tx, AgentEvent::Steered {
-                            user_message_id: next.message_id.clone(),
-                            assistant_message_id: Some(prev),
-                            next_assistant_message_id: Some(next_id),
-                        }).await {
+                        if !send(
+                            &event_tx,
+                            AgentEvent::Steered {
+                                user_message_id: next.message_id.clone(),
+                                assistant_message_id: Some(prev),
+                                next_assistant_message_id: Some(next_id),
+                            },
+                        )
+                        .await
+                        {
                             break $label;
                         }
                     } else {

@@ -25,7 +25,7 @@ use super::*;
 const VERIFIED: &[(&str, &str)] = &[("2.0.22", PINNED_2_0_22)];
 
 /// [`check_contract`]'s fingerprint of the live 2.0.22 document.
-const PINNED_2_0_22: &str = "7397b270504b42af9a5a2c69ce023a3d5322466b7650612785eb14aee7519759";
+const PINNED_2_0_22: &str = "ee0c6b891a34f43af7accc456eea49b5b4a9a57fda4c8640ebe52908b7fb685f";
 
 /// One operation LUNA depends on: operation id, method and path, the
 /// request-body fields LUNA sends (`None` = no body), and the query
