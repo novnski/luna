@@ -1394,8 +1394,12 @@ const SCENARIOS = {
       const latestReply = () => textOf(s.entries('root').filter(e => e.role === 'assistant').at(-1) ?? {});
       const waitReply = async (marker, label, timeoutMs = 240000) => {
         const mirror = s.d.chatByRole('root').mirror;
-        await mirror.waitFor(entries => !s.d.busy(chatId) && entries.filter(e => e.role === 'assistant').some(e => textOf(e).toLowerCase().includes(marker.toLowerCase())),
-          {timeoutMs, label}).catch(() => null);
+        // The reply must be complete, not still streaming: the session can
+        // read idle a moment before the final text lands.
+        await mirror.waitFor(entries => !s.d.busy(chatId) && entries.filter(e => e.role === 'assistant')
+          .some(e => e.status === 'complete' && textOf(e).toLowerCase().includes(marker.toLowerCase())),
+        {timeoutMs, label}).catch(() => null);
+        await sleep(2000);
         await s.d.waitIdle(chatId, {timeoutMs: 120000}).catch(() => null);
       };
       let card = null;
