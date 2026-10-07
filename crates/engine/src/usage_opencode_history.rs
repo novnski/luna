@@ -78,7 +78,7 @@ use super::{CachedFile, CodexState, MAX_FILES, Record, ScanCache, fingerprint, h
 const PROVIDER: UsageProvider = UsageProvider::OpenCodeGo;
 /// T3's comma-separated override for OpenCode data directories.
 pub(super) const DATA_DIR_VARIABLE: &str = "OPENCODE_DATA_DIR";
-const BUSY_TIMEOUT: Duration = Duration::from_millis(100);
+pub(super) const BUSY_TIMEOUT: Duration = Duration::from_millis(100);
 /// Pre-migration message files hold message metadata, not part text.
 const MAX_LEGACY_FILE_BYTES: u64 = 4 * 1024 * 1024;
 const DATABASE_GUARD: &str = "opencode-database";
@@ -287,7 +287,7 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
 /// `-wal`/`-shm` files when they are absent, which would write into the
 /// provider's directory. OpenCode keeps them while it has the store open, so
 /// without any writer side file the store is closed and is read as immutable.
-fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
+pub(super) fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     if ["-wal", "-shm", "-journal"]
         .iter()

@@ -4,6 +4,20 @@
 //! the OpenCode server LUNA would spawn sees
 //! (`luna_harness::opencode::OpencodeStorage`): a QA app whose executable is
 //! a profile wrapper reads the profile's store, never the user's.
+//!
+//! Failure cases this reader covers:
+//! - OCG-01 An OpenCode 2 sign-in reads as "No selected OpenCode Go
+//!   credential". OpenCode 2 saves `auth login` keys in the database's
+//!   `credential` table (integration `opencode-go`, value `{type: "key",
+//!   key}`), not in `auth.json`. The integration's newest row is the server's
+//!   active connection and precedes `OPENCODE_API_KEY`
+//!   (`Integration.connection.active`), so it is read first.
+//! - OCG-02 The read writes into OpenCode's directory. The database opens
+//!   through the history reader's opener: read-only, immutable while
+//!   OpenCode has it closed, with a short busy timeout.
+//! - OCG-03 A saved Go credential LUNA cannot use (not a key, malformed)
+//!   silently falls back to another key the server would not use. It is
+//!   reported as a failed credential read instead.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -12,9 +26,12 @@ use chrono::DateTime;
 use luna_harness::opencode::OpencodeStorage;
 use luna_proto::{LimitAvailability, UsageLimitSnapshot, UsageLimitWindow, UsageProvider};
 use reqwest::redirect::Policy;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+
+/// The Go usage route for an API key (saved, `OPENCODE_API_KEY` or legacy).
+const GO_KEY_ENDPOINT: &str = "https://opencode.ai/zen/go/v1/usage";
 
 struct Credential {
     token: String,
@@ -88,12 +105,54 @@ fn store() -> Result<Store, &'static str> {
     })
 }
 
-fn active_v2_credential(path: &std::path::Path) -> Result<Option<Credential>, ()> {
-    type ActiveAccountRow = (String, String, String, Option<i64>, Option<String>);
-    if !path.is_file() {
+/// OpenCode 2's saved Go key: the newest `credential` row of the
+/// `opencode-go` integration. OpenCode lists an integration's rows oldest
+/// first and selects the last one, ahead of its credential variables.
+fn saved_go_key(db: &Connection) -> Result<Option<Credential>, ()> {
+    let columns: i64 = db
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('credential') \
+             WHERE name IN ('integration_id', 'value', 'time_created')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| ())?;
+    if columns != 3 {
         return Ok(None);
     }
-    let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|_| ())?;
+    let value: Option<String> = db
+        .query_row(
+            "SELECT value FROM credential WHERE integration_id = 'opencode-go' \
+             ORDER BY time_created DESC, rowid DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| ())?;
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value: Value = serde_json::from_str(&value).map_err(|_| ())?;
+    if value.get("type").and_then(Value::as_str) != Some("key") {
+        return Err(());
+    }
+    let token = value
+        .get("key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or(())?;
+    Ok(Some(Credential {
+        token: token.into(),
+        organization: None,
+        verified_account_id: None,
+        endpoint: GO_KEY_ENDPOINT,
+    }))
+}
+
+/// The active OpenCode console account (`account` and `account_state`).
+fn active_account_credential(db: &Connection) -> Result<Option<Credential>, ()> {
+    type ActiveAccountRow = (String, String, String, Option<i64>, Option<String>);
     let tables: i64 = db
         .query_row(
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('account', 'account_state')",
@@ -152,7 +211,7 @@ fn api_credential(store: &Store) -> Result<Option<Credential>, ()> {
             token: token.trim().into(),
             organization: None,
             verified_account_id: None,
-            endpoint: "https://opencode.ai/zen/go/v1/usage",
+            endpoint: GO_KEY_ENDPOINT,
         }));
     }
     let content = store
@@ -185,7 +244,7 @@ fn api_credential(store: &Store) -> Result<Option<Credential>, ()> {
                 token: token.trim().into(),
                 organization: None,
                 verified_account_id: None,
-                endpoint: "https://opencode.ai/zen/go/v1/usage",
+                endpoint: GO_KEY_ENDPOINT,
             }));
         }
     }
@@ -195,13 +254,25 @@ fn api_credential(store: &Store) -> Result<Option<Credential>, ()> {
 fn credential() -> Result<Option<Credential>, &'static str> {
     const FAILED: &str = "OpenCode Go credential read failed";
     let store = store()?;
-    // Explicit API key wins. The active v2 account otherwise supersedes the
-    // legacy auth file; neither store is changed or refreshed here.
+    let database = match store.database.as_deref() {
+        Some(path) if path.is_file() => {
+            Some(crate::usage::open_opencode_database(path).map_err(|_| FAILED)?)
+        }
+        _ => None,
+    };
+    // OpenCode 2's saved Go key is what the server uses (OCG-01).
+    if let Some(db) = database.as_ref()
+        && let Some(saved) = saved_go_key(db).map_err(|_| FAILED)?
+    {
+        return Ok(Some(saved));
+    }
+    // An explicit API key wins next. The active console account otherwise
+    // supersedes the legacy auth file; no store is changed or refreshed here.
     if store.api_key.is_some() {
         return api_credential(&store).map_err(|_| FAILED);
     }
-    let account = match store.database.as_deref() {
-        Some(database) => active_v2_credential(database).map_err(|_| FAILED)?,
+    let account = match database.as_ref() {
+        Some(db) => active_account_credential(db).map_err(|_| FAILED)?,
         None => None,
     };
     match account {
