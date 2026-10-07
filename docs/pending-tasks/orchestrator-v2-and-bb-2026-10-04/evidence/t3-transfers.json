@@ -1,0 +1,4 @@
+[{"type":"merge_back","status":"consumed","source_thread_id":"18fa694d-dcd2-46f2-865f-ff02ac99b309","target_thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","execution":null,"strategy":null},
+{"type":"provider_handoff","status":"consumed","source_thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","target_thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","execution":null,"strategy":null},
+{"type":"provider_handoff","status":"consumed","source_thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","target_thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","execution":null,"strategy":null},
+{"type":"fork","status":"consumed","source_thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","target_thread_id":"18fa694d-dcd2-46f2-865f-ff02ac99b309","execution":null,"strategy":null}]

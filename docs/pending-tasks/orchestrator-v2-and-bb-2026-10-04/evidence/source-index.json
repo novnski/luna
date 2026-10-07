@@ -1,0 +1,466 @@
+[
+  {
+    "repo": "t3code",
+    "path": "packages/contracts/src/orchestrationV2.ts",
+    "line": 534,
+    "needle": "export const OrchestrationV2Run =",
+    "found": true,
+    "sha256": "abab8468101499ecaed77a525f6e1a713081e309fb226c7fe72f16e42189949b"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/Orchestrator.ts",
+    "line": 1848,
+    "needle": "const dispatch",
+    "found": true,
+    "sha256": "ab807e4417ed17ca2b79dcbdc8c8ff845e23eb05a9d948d096f18496c362036a"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/EventSink.ts",
+    "line": 518,
+    "needle": "const commitCommandEffect",
+    "found": true,
+    "sha256": "96c09ce7c8a8d04e5a64666eebac4751556acfee13f8b05f167a959df6b7df9d"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/EffectOutbox.ts",
+    "line": 199,
+    "needle": "claimNext:",
+    "found": true,
+    "sha256": "9e27d6b69796d326bd8af8a4b968e465164ab171e3e9bbc5a114b96edc678e3b"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/EffectWorker.ts",
+    "line": 619,
+    "needle": "const claimed =",
+    "found": true,
+    "sha256": "82db87b4e3e883bbf04fdcf6f564561f0244bd415fc00eb8fcbafd81ea9724b1"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/ProviderEventIngestor.ts",
+    "line": 223,
+    "needle": "activeAttempt",
+    "found": true,
+    "sha256": "b76b210330ae785717aef02c45ba22fbdde2e4429a95543a43938d7c348a314e"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/ProviderRuntimeRecoveryService.ts",
+    "line": 437,
+    "needle": "const recover",
+    "found": true,
+    "sha256": "c5ba1000fbdc2e8043ce286160a415d2f5e1f24069c0ec477b6df0a601140ff6"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/RuntimePolicy.ts",
+    "line": 24,
+    "needle": "export",
+    "found": true,
+    "sha256": "a5427fa3b81c5478a4399b9c48327b1ea7467f59d952ccd0251a49bfe415b71d"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/ProviderSessionTransitionPolicy.ts",
+    "line": 34,
+    "needle": "export function",
+    "found": true,
+    "sha256": "5c345711e057a309e052eccf1ff0131363c5a2b23c27aff16eecab213315d860"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/ContextHandoffBudget.ts",
+    "line": 111,
+    "needle": "export function handoffBudget",
+    "found": true,
+    "sha256": "86cdcf28d98a7f0d77fc0c9ef1bd11e15da10ebe60bbdf7080e201c77cc08e1a"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/ContextHandoffService.ts",
+    "line": 1,
+    "needle": "makeProviderSwitchHandoff",
+    "found": false,
+    "sha256": "48b37127e9ab16e6027af2b15f565ce04ae5a45683f8f0a06934c36abc26e964"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/ContextHandoffDelivery.ts",
+    "line": 11,
+    "needle": "export",
+    "found": true,
+    "sha256": "1c3fbcbebada8d3343bc7340eb9db2b8f66cd7b718e22f807919d1145f99d09d"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/ThreadForkService.ts",
+    "line": 40,
+    "needle": "export function isForkable",
+    "found": true,
+    "sha256": "63078d11a162ecf1d348875386a31c5b3680bf57e451220b06d42ace48e991db"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/CheckpointRestoreSafety.ts",
+    "line": 14,
+    "needle": "export const isCheckpointRestoreIsolated",
+    "found": true,
+    "sha256": "376fe16a54d812ed09593cc89446d2375d1284b77803889fd5a4dc9ffd690936"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/UsageLimitRecoveryWorker.ts",
+    "line": 11,
+    "needle": "export function",
+    "found": true,
+    "sha256": "a2e7297ce433aff1f957e51f203b2516cdc82c0b05d16c243d5c5ac078d1e9f5"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/orchestration-v2/pullRequestWatch.ts",
+    "line": 44,
+    "needle": "export function",
+    "found": true,
+    "sha256": "59d94eeb32d647257a14d8f723515a1abb5deb889405baf7ad117c76c8433fcc"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/scheduledTasks/ScheduledTaskService.ts",
+    "line": 458,
+    "needle": "const runTask",
+    "found": true,
+    "sha256": "33116a72b2059d8d046d11a8da0e81a56ba6351cc428f148507867767c982fc6"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/mcp/OrchestratorMcpService.ts",
+    "line": 96,
+    "needle": "delegateTask:",
+    "found": true,
+    "sha256": "6ef8bedeb8d132caeea0cbda75462666f4e07c4371232080bbc21055a1b1aca0"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/mcp/toolkits/orchestrator/tools.ts",
+    "line": 58,
+    "needle": "DelegateTaskTool",
+    "found": true,
+    "sha256": "9425e2de610a9b20163308249b74213fb162ac60e52c0d97441a72df607a0d5e"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/server/src/mcp/toolkits/thread/tools.ts",
+    "line": 205,
+    "needle": "ThreadMergeBackTool",
+    "found": true,
+    "sha256": "86528cdb55f73adb93183849bdb62e67abc8873c43f8d80a3f379add0088ccba"
+  },
+  {
+    "repo": "t3code",
+    "path": "apps/web/src/components/chat/QueuedRunsControl.tsx",
+    "line": 30,
+    "needle": "export",
+    "found": true,
+    "sha256": "b5fb4ad48fe801e83c75caa4f4c16d0590fdb3791b3e1e5698929644bdc55a8b"
+  },
+  {
+    "repo": "t3code",
+    "path": "docs/internals/providers.md",
+    "line": 1,
+    "needle": "Non-blocking",
+    "found": false,
+    "sha256": "0532474fd1282402e498fcaab0ada8b06c239868f46ac2e8ce988d2aca615ca4"
+  },
+  {
+    "repo": "t3code",
+    "path": "docs/user/portable-handoffs.md",
+    "line": 1,
+    "needle": "#",
+    "found": true,
+    "sha256": "a9f24285017bb368ffbe3239d228575652580efc35beee36fcf4dddf55a04170"
+  },
+  {
+    "repo": "t3code",
+    "path": "docs/user/thread-migration.md",
+    "line": 1,
+    "needle": "#",
+    "found": true,
+    "sha256": "9d17d4c5cf8bee234e1ac657b1186f3a6acb59761ba37b49af91d75a0942f478"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/app/src/hooks/useForkThreadFromMessage.ts",
+    "line": 23,
+    "needle": "export function",
+    "found": true,
+    "sha256": "96f88e2b0381b0036095e0170d87db3a977c2a73e5bab6abfdc5fd47942db285"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/server/src/services/threads/thread-create.ts",
+    "line": 693,
+    "needle": "const forkTitle",
+    "found": true,
+    "sha256": "8dc2686c9771858983b0b8f3aad79a899c3e33a00775786c89f63b8c6a7045ac"
+  },
+  {
+    "repo": "bb",
+    "path": "plugins/provider-codex/src/bridge/bridge.ts",
+    "line": 1855,
+    "needle": "const previousPermissions",
+    "found": true,
+    "sha256": "0e8b96a93c2829cd6e06e6cd0c739eec44f6044e700a0e4ad3ae26231eee2558"
+  },
+  {
+    "repo": "bb",
+    "path": "plugins/provider-codex/src/interactive-requests.ts",
+    "line": 99,
+    "needle": "function buildCodexUserQuestionPayload",
+    "found": true,
+    "sha256": "176d6b5c66242f5ac7f668dda11ca8989346a0c841431a34e0972eb052176220"
+  },
+  {
+    "repo": "bb",
+    "path": "plugins/provider-codex/src/session-params.ts",
+    "line": 595,
+    "needle": "export function buildCodexConfig",
+    "found": true,
+    "sha256": "a8775ef0ef7375e57aabadb477dc698ab4dd983ef23aa0cb7c4312b45e62f7ab"
+  },
+  {
+    "repo": "bb",
+    "path": "plugins/provider-codex/server.ts",
+    "line": 43,
+    "needle": "supportsNativeUserQuestion",
+    "found": true,
+    "sha256": "97aa7cc570dfbedc4d58162511cc792420d8dde7a4652017f60daaf022d05c1f"
+  },
+  {
+    "repo": "bb",
+    "path": "plugins/provider-claude-code/src/bridge/bridge.ts",
+    "line": 488,
+    "needle": "function applyPermissionSettings",
+    "found": true,
+    "sha256": "8d99b25eb2b9fff7e916f3caceb912c6a6d8b57a7ae3e3a4723724e9b0477a85"
+  },
+  {
+    "repo": "bb",
+    "path": "packages/domain/src/service-tier.ts",
+    "line": 28,
+    "needle": "export function resolveServiceTierOptions",
+    "found": true,
+    "sha256": "39a69b8a9f9dc543b192ef004fd87354d5a5a3f764d2651e8958ea4c75c54399"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/server/src/services/threads/conversation-outline-cache.ts",
+    "line": 51,
+    "needle": "const MAX_ENTRIES",
+    "found": true,
+    "sha256": "b2aa45abc780f938b52b1e135a2a7ee0503d3e3579305539b4ad82c9cfbddedf"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/server/src/services/threads/timeline.ts",
+    "line": 163,
+    "needle": "THREAD_TIMELINE_DEFAULT_SEGMENT_LIMIT",
+    "found": true,
+    "sha256": "044592fc46be9043ca884fcc1be7a8105c0116480bfa24303604d0b85674f651"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/server/src/services/prompt-history.ts",
+    "line": 179,
+    "needle": "export",
+    "found": true,
+    "sha256": "71536b3af49a2a0b8af5e737a5af02f6cac1e5fd704bd2d54d04babcdd827cd4"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/cli/src/commands/prompt-history.ts",
+    "line": 48,
+    "needle": "export function",
+    "found": true,
+    "sha256": "367317d0e98c77e83a8ec1a025eeecc1f0b6e5ca235d51587bd0816ec33f7c5f"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/server/src/services/providers/provider-registry.ts",
+    "line": 61,
+    "needle": "disabledProviderIds()",
+    "found": true,
+    "sha256": "37bccc2158a6dc0200b3341faae534bc2d3bfdace602ea6e07f07dcfd454639a"
+  },
+  {
+    "repo": "bb",
+    "path": "plugins/account-pool/src/quota.ts",
+    "line": 26,
+    "needle": "export",
+    "found": true,
+    "sha256": "1daf23e1281c0d06474776c466b6b5f5b57eae543e3ed26641983188af923475"
+  },
+  {
+    "repo": "bb",
+    "path": "apps/app/src/components/plugin/PluginComposerCommands.tsx",
+    "line": 16,
+    "needle": "export",
+    "found": true,
+    "sha256": "5673b8fc58ec4c78c6766d9f44d5e1a79a2f37a0c1d5e6c66af7a9427934f630"
+  },
+  {
+    "repo": "bb",
+    "path": "packages/plugin-sdk/src/app-contract.ts",
+    "line": 1,
+    "needle": "experimental_composer",
+    "found": false,
+    "sha256": "68f0a0682a3aafef49a403a7575a2bfc6d050bb35824476788d6dbe5858c7417"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/harness/src/lib.rs",
+    "line": 223,
+    "needle": "pub trait Harness",
+    "found": true,
+    "sha256": "2adebac346f0dfd2b66e5cbc18b626a42745f571a2fb2c2d4190f507287d8c06"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/proto/src/task_command.rs",
+    "line": 70,
+    "needle": "pub struct CommandReceipt",
+    "found": true,
+    "sha256": "762fa3c7868168a920e47c693904f12530fe7a90184458162e8da64adfdae800"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/doc_host.rs",
+    "line": 1343,
+    "needle": "commit_context",
+    "found": true,
+    "sha256": "1cce32afa98f06be152992d393b3bfcc94cabd0809ee9e5a96f39dcb181cf8f5"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/rpc.rs",
+    "line": 4807,
+    "needle": "fn visible_handoff",
+    "found": true,
+    "sha256": "2c2cb4691869ade22e64706e3eea2865be8af46a228c1cae75429beeb3adab38"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/child_threads.rs",
+    "line": 1181,
+    "needle": "async fn sweep_child_thread(",
+    "found": true,
+    "sha256": "e04bad0f1424cbc835194fbfefbf34960500def9e1c9ab5e7bfd7b423f2e8daf"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/sessions.rs",
+    "line": 5035,
+    "needle": "pub async fn interrupt_for_stop",
+    "found": true,
+    "sha256": "921f1947990c22e2f9308c2a7385a5686bc69a4946e36413f3237e77c73bd5a0"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/native_tasks.rs",
+    "line": 20,
+    "needle": "pub(crate) fn persist",
+    "found": true,
+    "sha256": "0764310f4251f2c101bc72c745d3ecddfa1044909840dbacafdaeec1ad701fcf"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/recovery.rs",
+    "line": 68,
+    "needle": "pub fn recovery_decision",
+    "found": true,
+    "sha256": "62af45c92ff0c322847e0e0462ef43220d6ec79b825d46ee239ffc6d19722282"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/proto/src/context_control.rs",
+    "line": 12,
+    "needle": "MAX_CONTEXT_HANDOFF_BYTES",
+    "found": true,
+    "sha256": "a46b4f80c002b1959b45791b955c98965f2f6bd5bb0ed862b779a927489a1a73"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/harness/src/codex/mod.rs",
+    "line": 416,
+    "needle": "fn model_service_tier",
+    "found": true,
+    "sha256": "7a1a0e5d8dca31d1df95a579ea95693997747ecdc058e26d918ab18ffa3977e6"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/harness/src/claude/controls.rs",
+    "line": 668,
+    "needle": "fn session_grants",
+    "found": true,
+    "sha256": "f0dfcab0b5f39033a891f75e6ff761d3a8e5ce64e4e1e912e335fd3865905182"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/cross_task_tools.rs",
+    "line": 34,
+    "needle": "pub struct",
+    "found": true,
+    "sha256": "8b58f81a22590e58dba88427abfdd215e133c4690327a4bfa4a82c07a9d46543"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/proto/src/cross_task_tools.rs",
+    "line": 12,
+    "needle": "pub struct",
+    "found": true,
+    "sha256": "3d233275934fd37278f7cc120314f2ba88a4bc6c7abe5e3b5a89eb606a9ea718"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/runtime_contract.rs",
+    "line": 26,
+    "needle": "pub",
+    "found": true,
+    "sha256": "47866b0871443aee5056533068b5d2f75337107008aaa8cf0faf3c46fd35db8e"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/git_checkpoints.rs",
+    "line": 25,
+    "needle": "pub struct",
+    "found": true,
+    "sha256": "6087f1c894e3ea3fe87d50b47bc6f93462072a66a74a4469296f46971572e8e8"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/attention.rs",
+    "line": 18,
+    "needle": "pub",
+    "found": true,
+    "sha256": "c1b30cbebd9e64f18976d4f00cbc84bb4a60310a4f4d32012652db42046706b7"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/ui/src/transcript.rs",
+    "line": 2956,
+    "needle": "pub struct Transcript",
+    "found": true,
+    "sha256": "eaec89eec93462037953a9994e1bc12f0fdeff9a19681bacd09e1b78eca65e93"
+  },
+  {
+    "repo": "luna",
+    "path": "crates/engine/src/rpc/prompt_stash.rs",
+    "line": 45,
+    "needle": "pub(super) fn list",
+    "found": true,
+    "sha256": "3e6eaed3723638ba803b36d4b8d46667ca17fbde1503f2f642a7d6ff4d97200c"
+  }
+]

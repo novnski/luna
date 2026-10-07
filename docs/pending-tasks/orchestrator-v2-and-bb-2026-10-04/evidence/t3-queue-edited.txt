@@ -1,0 +1,204 @@
+Window: "T3 Code (Nightly)", App: T3 Code (Nightly).
+0 standard window T3 Code (Nightly), Secondary Actions: Raise
+	1 container T3 Code (Nightly)
+		2 container
+			3 HTML content T3 Code (Nightly), URL: t3code://app/#/aec26b09-8c9c-4898-9d9d-e3be39a9f1c3/ecce5cc4-8416-4a84-aaf3-9e241fb13d91
+				4 container
+					5 container Threads
+						6 link Description: Go to threads, Value: t3code://app/#/
+						7 container
+							8 combo box (settable) Description: Search threads, Placeholder: Search
+							9 combo box (settable) Filter threads by project
+							10 button Add project
+							11 button New thread
+						12 container
+							13 button Recall Markers and Add New Marker, No project
+								14 text Recall Markers and Add New Marker
+								15 container
+									16 text No project 3m
+									17 pop up button Snooze thread
+									18 button Settle thread
+							19 button LUNA Harness Research Probe, Working, No project
+								20 text LUNA Harness Research Probe
+								21 container
+									22 text No project Working
+									23 button Settle thread
+							24 button Start a Conversation, workspace
+								25 text Start a Conversation
+								26 container
+									27 text workspace 14m
+									28 pop up button Snooze thread
+									29 button Settle thread
+							30 button Calculate the Full Amount, workspace
+								31 text Calculate the Full Amount
+								32 container
+									33 text workspace 2d
+									34 pop up button Snooze thread
+									35 button Settle thread
+							36 button Settled (25)
+						37 content list
+							38 button Settings
+							39 button Pull Requests
+							40 button Usage
+							41 button Check for updates
+						42 button Resize Sidebar
+					43 container
+						44 container
+							45 toggle button Description: Toggle thread details panel, Value: 1
+							46 toggle button Description: Toggle terminal drawer, Value: 0
+							47 toggle button Description: Toggle right panel, Value: 0
+						48 container Thread breadcrumb
+							49 content list
+								50 button New thread in No project
+								51 pop up button Thread actions for LUNA Harness Research Probe
+									52 heading LUNA Harness Research Probe, Value: 2
+										53 text LUNA Harness Research Probe
+						54 container
+							55 container
+								56 container
+									57 container
+										58 heading You, Value: 3
+											59 text You
+										60 text LUNA harness research probe 2026-10-04. Do not use tools, delegate, or modify files. Remember the marker ORBIT-CEDAR-641 for later turns. Reply exactly: BASELINE_OK ORBIT-CEDAR-641
+									61 text 18:37
+									62 button Copy message
+									63 container
+										64 heading T3 Code, Value: 3
+											65 text T3 Code
+										66 text BASELINE_OK ORBIT-CEDAR-641
+										67 button Fork from this response
+										68 button Copy message
+										69 text 18:37
+									70 text Context handoff
+									71 text GPT-6.1-Sol
+									72 text Claude Opus 5.5
+									73 container
+										74 heading You, Value: 3
+											75 text You
+										76 text Do not use tools, delegate, or modify files. What marker did I ask you to remember in the previous turn? Reply with only that marker.
+									77 text 18:38
+									78 button Copy message
+									79 container
+										80 heading T3 Code, Value: 3
+											81 text T3 Code
+										82 text ORBIT-CEDAR-641
+										83 button Fork from this response
+										84 button Copy message
+										85 text 18:38
+									86 container
+										87 heading You, Value: 3
+											88 text You
+										89 text Do not use tools or modify files. Also remember the second marker MAPLE-208. Reply exactly: SECOND_OK
+									90 text 18:40
+									91 button Copy message
+									92 container
+										93 heading T3 Code, Value: 3
+											94 text T3 Code
+										95 text SECOND_OK
+										96 button Fork from this response
+										97 button Copy message
+										98 text 18:40
+									99 text Context handoff
+									100 text Claude Opus 5.5
+									101 text GPT-6.1-Sol
+									102 container
+										103 heading You, Value: 3
+											104 text You
+										105 text Without tools, delegation, or file changes, reply with both markers I asked you to remember, separated by a space, and nothing else.
+									106 text 18:41
+									107 button Copy message
+									108 container
+										109 heading T3 Code, Value: 3
+											110 text T3 Code
+										111 text ORBIT-CEDAR-641 MAPLE-208
+										112 button Fork from this response
+										113 button Copy message
+										114 text 18:41
+									115 text Context handoff
+									116 text GPT-6.1-Sol
+									117 text GPT-6.1-Sol
+									118 container
+										119 heading You, Value: 3
+											120 text You
+										121 text Without tools, delegation, or file changes, what new marker was added in the fork that was just merged back? Reply only with that new marker.
+									122 text 18:46
+									123 button Copy message
+									124 container
+										125 heading T3 Code, Value: 3
+											126 text T3 Code
+										127 text FORK-MERGE-517
+										128 button Fork from this response
+										129 button Copy message
+										130 text 18:46
+									131 container
+										132 heading You, Value: 3
+											133 text You
+										134 text Controlled queue UI test. Use exactly one shell tool call running /bin/sleep 30, then reply WAIT_DONE. Do not inspect or modify files, browse, or delegate.
+									135 text 18:47
+									136 button Copy message
+									137 text Working for  29s
+									138 button Running sleep
+										139 text Running sleep
+								140 container
+									141 button Previous turn
+									142 button Jump to message: User message
+									143 button Next turn
+							144 container
+								145 container
+									146 container 1 queued message
+										147 button Collapse queued messages
+											148 text Queued
+											149 text 1
+										150 content list
+											151 container
+												152 button Reorder queued message (drag, or press the arrow keys)
+												153 text No tools. When this queued follow-up runs, reply exactly QUEUE_EDITED_OK.
+												154 button Edit queued message
+												155 button Steer
+												156 button Remove queued message
+									157 container
+										158 container
+											159 text entry area (settable) Description: Message, Placeholder: Ask anything, @tag files/folders, $use skills, or / for commands, Value: 
+
+											160 text Ask anything, @tag files/folders, $use skills, or / for commands
+										161 pop up button GPT-6.1-Sol
+											162 text GPT-6.1-Sol
+										163 pop up button Low
+										164 combo box (settable) Description: Runtime mode, Value: Full access
+											165 text Full access
+										166 button Attach files
+										167 button Stop generation
+							168 container Thread details
+								169 container
+									170 container Workspace
+										171 container
+											172 text 2026-10-04-luna-harness-research-probe-2026-1fb13d91 Worktree
+										173 container Open in editor
+											174 button Open in VS Code
+											175 pop up button Choose editor
+										176 button Add project script
+									177 container Version Control
+										178 button Initialize Git
+									179 container Lineage
+										180 heading Lineage, Value: 3
+											181 text Lineage
+										182 pop up button More thread actions
+										183 content list Related threads
+											184 button Recall Markers and Add New Marker Done
+												185 text Recall Markers and Add New Marker
+												186 text Done
+					187 toggle button Description: Toggle main sidebar, Value: 1
+					188 container Notifications
+					189 container Notifications
+	190 close button
+	191 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	192 minimize button
+193 menu bar
+	194 T3 Code (Nightly)
+	195 File
+	196 Edit
+	197 View
+	198 Window
+	199 Help
+
+The focused UI element is 159 text entry area (settable) Description: Message, Placeholder: Ask anything, @tag files/folders, $use skills, or / for commands, Value: 

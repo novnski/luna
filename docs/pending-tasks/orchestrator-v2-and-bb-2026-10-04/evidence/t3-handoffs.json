@@ -1,0 +1,3 @@
+[{"strategy":"full_thread_summary","status":"ready","deliveryStatus":"inline","transferredMessages":3,"omittedItems":0},
+{"strategy":"delta_since_target_last_seen","status":"ready","deliveryStatus":"injected","transferredMessages":4,"omittedItems":0},
+{"strategy":"fork_delta_summary","status":"ready","deliveryStatus":"injected","transferredMessages":2,"omittedItems":0}]

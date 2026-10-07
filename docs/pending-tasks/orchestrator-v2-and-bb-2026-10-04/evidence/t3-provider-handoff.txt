@@ -1,0 +1,123 @@
+Window: "T3 Code (Nightly)", App: T3 Code (Nightly).
+0 standard window T3 Code (Nightly), Secondary Actions: Raise
+	1 container T3 Code (Nightly)
+		2 container
+			3 HTML content T3 Code (Nightly), URL: t3code://app/#/aec26b09-8c9c-4898-9d9d-e3be39a9f1c3/ecce5cc4-8416-4a84-aaf3-9e241fb13d91
+				4 container
+					5 container Threads
+						6 link Description: Go to threads, Value: t3code://app/#/
+						7 container
+							8 combo box (settable) Description: Search threads, Placeholder: Search
+							9 combo box (settable) Filter threads by project
+							10 button Add project
+							11 button New thread
+						12 container
+							13 button LUNA Harness Research Probe, No project
+								14 text LUNA Harness Research Probe
+								15 container
+									16 text No project 1m
+									17 pop up button Snooze thread
+									18 button Settle thread
+							19 button Start a Conversation, workspace
+								20 text Start a Conversation
+								21 container
+									22 text workspace 7m
+									23 pop up button Snooze thread
+									24 button Settle thread
+							25 button Calculate the Full Amount, workspace
+								26 text Calculate the Full Amount
+								27 container
+									28 text workspace 2d
+									29 pop up button Snooze thread
+									30 button Settle thread
+							31 button Settled (25)
+						32 content list
+							33 button Settings
+							34 button Pull Requests
+							35 button Usage
+							36 button Check for updates
+						37 button Resize Sidebar
+					38 container
+						39 container
+							40 toggle button Description: Toggle thread details panel, Value: 1
+							41 toggle button Description: Toggle terminal drawer, Value: 0
+							42 toggle button Description: Toggle right panel, Value: 0
+						43 container Thread breadcrumb
+							44 content list
+								45 button New thread in No project
+								46 pop up button Thread actions for LUNA Harness Research Probe
+									47 heading LUNA Harness Research Probe, Value: 2
+										48 text LUNA Harness Research Probe
+						49 container
+							50 container
+								51 container
+									52 heading You, Value: 3
+										53 text You
+									54 text LUNA harness research probe 2026-10-04. Do not use tools, delegate, or modify files. Remember the marker ORBIT-CEDAR-641 for later turns. Reply exactly: BASELINE_OK ORBIT-CEDAR-641
+									55 text 18:37
+									56 button Copy message
+								57 container
+									58 heading T3 Code, Value: 3
+										59 text T3 Code
+									60 text BASELINE_OK ORBIT-CEDAR-641
+									61 button Fork from this response
+									62 button Copy message
+									63 text 18:37
+								64 container
+									65 text Context handoff GPT-6.1-Sol Claude Opus 5.5
+								66 container
+									67 heading You, Value: 3
+										68 text You
+									69 text Do not use tools, delegate, or modify files. What marker did I ask you to remember in the previous turn? Reply with only that marker.
+									70 text 18:38
+									71 button Copy message
+								72 container
+									73 heading T3 Code, Value: 3
+										74 text T3 Code
+									75 text ORBIT-CEDAR-641
+									76 button Fork from this response
+									77 button Copy message
+									78 text 18:38
+								79 container
+									80 button (disabled) Previous turn
+									81 button Jump to message: User message
+									82 button Next turn
+							83 container
+								84 container
+									85 container
+										86 text entry area (settable) Description: Message, Placeholder: Ask anything, @tag files/folders, $use skills, or / for commands, Value: 
+
+										87 text Ask anything, @tag files/folders, $use skills, or / for commands
+									88 pop up button Claude Opus 5.5
+										89 text Claude Opus 5.5
+									90 pop up button Medium · 1M
+									91 combo box (settable) Description: Runtime mode, Value: Full access
+										92 text Full access
+									93 button Attach files
+									94 button (disabled) Submit message
+							95 container Thread details
+								96 container
+									97 container Workspace
+										98 container
+											99 text 2026-10-04-luna-harness-research-probe-2026-1fb13d91 Worktree
+										100 container Open in editor
+											101 button Open in VS Code
+											102 pop up button Choose editor
+										103 button Add project script
+									104 container Version Control
+										105 button Initialize Git
+					106 toggle button Description: Toggle main sidebar, Value: 1
+					107 container Notifications
+					108 container Notifications
+	109 close button
+	110 full screen button Help: this button also has an action to zoom the window, Secondary Actions: zoom the window
+	111 minimize button
+112 menu bar
+	113 T3 Code (Nightly)
+	114 File
+	115 Edit
+	116 View
+	117 Window
+	118 Help
+
+The focused UI element is 86 text entry area (settable) Description: Message, Placeholder: Ask anything, @tag files/folders, $use skills, or / for commands, Value: 

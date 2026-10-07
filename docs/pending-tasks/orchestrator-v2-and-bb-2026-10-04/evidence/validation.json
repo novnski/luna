@@ -1,0 +1,19 @@
+{
+  "ok": true,
+  "checkedAt": "2026-10-04T16:11:57.609Z",
+  "checkedLinks": 85,
+  "checkedSourcePermalinks": 39,
+  "sourceFingerprints": 58,
+  "lunaCurrentSourceDrift": [
+    "crates/engine/src/rpc.rs"
+  ],
+  "imageArtifacts": 5,
+  "recordedT3Runs": 8,
+  "freshProviderCallsMadeByVerifier": 0,
+  "upstreamTestSuitesRun": false,
+  "lunaBuildOrRuntimeTestRun": false,
+  "warnings": [
+    "Luna source changed since audit: crates/engine/src/rpc.rs"
+  ],
+  "errors": []
+}
