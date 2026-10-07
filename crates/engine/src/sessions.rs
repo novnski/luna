@@ -677,20 +677,25 @@ pub enum LunaApprovalOutcome {
 type PendingInputs = Arc<Mutex<HashMap<String, PendingInput>>>;
 
 // Adapter cancellation closes the receiver. Remove the corresponding UI
-// prompt promptly, including when the provider finishes a turn or disconnects.
-fn schedule_mcp_input_cleanup(
+// prompt promptly, including when the provider finishes a turn, disconnects
+// or settles the request elsewhere (Codex `serverRequest/resolved`, an
+// OpenCode `form.replied`/`form.cancelled`). Covers MCP forms (which also
+// expire) and plain provider questions (which never expire); approvals are
+// retired by `schedule_approval_expiry`.
+fn schedule_provider_input_cleanup(
     pending: PendingInputs,
     engine_tx: mpsc::UnboundedSender<AgentEvent>,
     request_id: String,
     questions: &[UserInputQuestion],
 ) {
-    let Some(expires_at_ms) = questions
+    if questions.is_empty() || questions.iter().any(|q| q.approval.is_some()) {
+        return;
+    }
+    let expires_at_ms = questions
         .iter()
         .filter_map(|q| q.mcp.as_ref().map(|m| m.expires_at_ms))
         .min()
-    else {
-        return;
-    };
+        .unwrap_or(luna_proto::APPROVAL_NO_EXPIRY);
     let pending = Arc::downgrade(&pending);
     tokio::spawn(async move {
         loop {
@@ -4855,7 +4860,7 @@ impl SessionsEngine {
                     request_id: request_id.clone(),
                     questions: visible_questions,
                 });
-                schedule_mcp_input_cleanup(
+                schedule_provider_input_cleanup(
                     pending.clone(),
                     engine_tx.clone(),
                     request_id.clone(),

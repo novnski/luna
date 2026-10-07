@@ -12,8 +12,16 @@ pub const MCP_MAX_CONTENT: usize = 16 * 1024;
 #[serde(rename_all = "camelCase")]
 pub struct McpInput {
     pub server_name: String,
+    /// The provider's opaque request id: a Codex/Claude elicitation id, or an
+    /// OpenCode form id (`frm_…`).
     pub provider_request_id: String,
+    /// The native conversation the request is bound to: the Codex thread,
+    /// the Claude session, or the OpenCode session that owns the form (the
+    /// run's own session for OpenCode's unattributed `"global"` owner).
     pub thread_id: String,
+    /// The native turn: Codex's turn id, Claude's control request id, or the
+    /// OpenCode form id (OpenCode forms carry no turn; the adapter closes
+    /// them when the run's turn ends).
     pub turn_id: String,
     pub expires_at_ms: i64,
     pub kind: McpInputKind,
@@ -166,7 +174,7 @@ impl McpFieldSchema {
         {
             return Err("Unsupported string format");
         }
-        let mut schema = Self {
+        Self {
             value_type: value_type.into(),
             required,
             choices,
@@ -178,7 +186,55 @@ impl McpFieldSchema {
             min_items: count("minItems")?,
             max_items: count("maxItems")?,
             format,
-        };
+        }
+        .validated()
+    }
+
+    /// Check a schema assembled from a provider's own field description (an
+    /// OpenCode `Form.Field`) with the limits [`McpFieldSchema::parse`]
+    /// applies to MCP JSON schemas: a supported type and format, bounded and
+    /// distinct choices, satisfiable limits, and a default that validates
+    /// (integers canonicalized).
+    pub fn validated(mut self) -> Result<Self, &'static str> {
+        if !["string", "number", "integer", "boolean", "array"].contains(&self.value_type.as_str())
+        {
+            return Err("Unsupported MCP field type");
+        }
+        if self.value_type == "array" && self.choices.is_empty() {
+            return Err("Array choices are missing");
+        }
+        if !self.choices.is_empty() {
+            if !matches!(self.value_type.as_str(), "string" | "array") {
+                return Err("Unsupported MCP field type");
+            }
+            let mut values = std::collections::HashSet::new();
+            let mut labels = std::collections::HashSet::new();
+            if self.choices.len() > MCP_MAX_OPTIONS
+                || self.choices.iter().any(|c| {
+                    c.value.len() > 256
+                        || c.label.len() > 512
+                        || !values.insert(c.value.as_str())
+                        || !labels.insert(c.label.as_str())
+                })
+            {
+                return Err("Invalid or excessive enum choices");
+            }
+        }
+        if self
+            .format
+            .as_deref()
+            .is_some_and(|f| !["email", "uri", "date", "date-time"].contains(&f))
+        {
+            return Err("Unsupported string format");
+        }
+        if [self.minimum, self.maximum]
+            .into_iter()
+            .flatten()
+            .any(|n| !n.is_finite())
+        {
+            return Err("Invalid numeric limit");
+        }
+        let schema = &mut self;
         if schema
             .min_length
             .zip(schema.max_length)
@@ -206,7 +262,7 @@ impl McpFieldSchema {
         if let Some(default) = &schema.default {
             schema.validate_value(default)?;
         }
-        Ok(schema)
+        Ok(self)
     }
 
     pub fn value_for_labels(&self, labels: &[String]) -> Result<Option<Value>, &'static str> {
