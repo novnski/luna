@@ -12346,7 +12346,7 @@ impl Composer {
                                 .text_size(crate::typography::ui_rems(12.0))
                                 .text_color(theme.readable_muted(0.7))
                                 .child(SharedString::from(format!(
-                                    "No reply in {seconds}s and LUNA picks {}",
+                                    "LUNA picks {} in {seconds}s unless you answer",
                                     labels.join(", ")
                                 ))),
                         )
