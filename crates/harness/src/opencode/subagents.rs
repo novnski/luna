@@ -385,6 +385,12 @@ impl ChildTree {
                 let previous = std::mem::replace(&mut run.parent_tool_use_id, chip.to_owned());
                 run.confirmed |= confirmed;
                 run.done = false;
+                // The new chip's card starts its own observation (the
+                // session's cumulative token total stays OpenCode's own).
+                run.active = false;
+                run.model = None;
+                run.tool_uses = 0;
+                run.last_tool = None;
                 if let Some(old) = self.spawns.get_mut(&previous)
                     && old.child.as_deref() == Some(child)
                 {
@@ -934,6 +940,38 @@ pub(super) fn v2_observe_frame(
                 picked["text"] = json!(text);
             }
             (picked, None, None)
+        }
+        // 2.0.22 delivers a background completion as a synthetic INBOX item
+        // (`session.inbox.enqueued{item: {type: "synthetic", payload}}`),
+        // observed live; read it exactly like `session.synthetic`.
+        "session.inbox.enqueued" => {
+            let Some(payload) = data
+                .get("item")
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("synthetic"))
+                .and_then(|item| item.get("payload"))
+            else {
+                return Vec::new();
+            };
+            let mut picked = pick(&["sessionID"]);
+            if let Some(metadata) = payload.get("metadata") {
+                picked["metadata"] = metadata.clone();
+            }
+            if let Some(text) = payload
+                .get("text")
+                .and_then(Value::as_str)
+                .and_then(|t| bounded(t, MAX_SYNTHETIC_CHARS))
+            {
+                picked["text"] = json!(text);
+            }
+            return vec![json!({
+                "type": OBSERVE,
+                "properties": {
+                    "kind": "session.synthetic",
+                    "chip": Value::Null,
+                    "tool": Value::Null,
+                    "data": picked,
+                }
+            })];
         }
         "shell.created" | "shell.exited" | "shell.deleted" => (data.clone(), None, None),
         _ => return Vec::new(),
