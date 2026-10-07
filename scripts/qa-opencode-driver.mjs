@@ -188,7 +188,10 @@ export class Driver {
 
   // Idle chats get session.run, busy chats queueMessage with holdForTurnEnd
   // (crates/ui/src/composer.rs); the command id is the message id.
-  async send(chatId, text, {attachments = [], label = 'message', queue = null, inputItems = []} = {}) {
+  async send(chatId, composerText, {attachments = [], label = 'message', queue = null, inputItems = []} = {}) {
+    // Composer::skill_wire_text: for Claude a leading `$skill` is sent as
+    // `/skill`; the prompt hash keeps the composer text (QF-18).
+    const text = this.provider === 'claude-code' ? composerText.replace(/^\$(?=[A-Za-z0-9][\w.-]*(\s|$))/, '/') : composerText;
     const chat = this.chats.get(chatId);
     const mark = this.sessions.mark(chatId);
     const messageId = crypto.randomUUID();
@@ -203,7 +206,7 @@ export class Driver {
         environmentPermissionCeiling: null, permissionPolicy: null, resume: null, attachments}}};
     const path = useQueue ? 'queueMessage' : 'run';
     const {receipt} = await this.execute(chatId, intent, {label, sendKind: 'message', commandId: messageId, awaitTerminal: false,
-      extra: {chatRole: chat.role, messageId, path, prompt: text, promptSha256: sha256(maskNonce(text, this.nonce)), attachments, inputItems}});
+      extra: {chatRole: chat.role, messageId, path, prompt: text, promptSha256: sha256(maskNonce(composerText, this.nonce)), attachments, inputItems}});
     if (!['applied', 'pending'].includes(receipt?.status)) throw new Error(`send on ${chat.role} ${receipt?.status}: ${receipt?.reason?.message ?? ''}`);
     return {messageId, mark, receipt, path};
   }

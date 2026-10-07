@@ -780,7 +780,7 @@ const SCENARIOS = {
         const t = await s.turn('root', P.image, {mock: 'image', attachments: [staged.path]});
         s.settled(t.wait);
         const user = s.entries('root').find(e => e.id === t.messageId);
-        s.check('image-part', 'the user row shows the image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
+        s.info('image-part', 'image parts on the user row (LUNA keeps staged images out of the mirrored parts for every provider; the wire files[] check is decisive)', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
         s.modelCheck('image-consumed', 'the model names the image colour (red)', t.reply.slice(0, 80), /\bred\b/i.test(t.reply));
         s.ids.images = [{step: 'image-initial', ...staged}];
       });
@@ -790,7 +790,7 @@ const SCENARIOS = {
         s.settled(t.wait);
         s.check('follow-up-path', 'an idle follow-up with an image is sent as a run', t.path, t.path === 'run');
         const user = s.entries('root').find(e => e.id === t.messageId);
-        s.check('follow-up-image-part', 'the follow-up user row shows the image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
+        s.info('follow-up-image-part', 'the follow-up user row shows the image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
         s.modelCheck('follow-up-image-consumed', 'the model names the follow-up image colour (yellow)', t.reply.slice(0, 80), /\byellow\b/i.test(t.reply));
         s.ids.images.push({step: 'image-follow-up', ...staged});
       });
@@ -815,14 +815,18 @@ const SCENARIOS = {
         const steer = await s.d.steerQueued(s.chatId('root'), queued.messageId);
         s.check('steer-receipt', 'steerQueuedNow is applied or truthfully refused', {status: steer.receipt?.status, reason: steer.receipt?.reason?.code ?? null}, ['applied', 'rejected', 'conflict'].includes(steer.receipt?.status));
         await s.d.waitTurn(s.chatId('root'), {mark: busy.mark, messageId: busy.messageId, timeoutMs: s.turnTimeout, answer: allowAll});
-        await s.d.chatByRole('root').mirror.waitFor(() => s.d.replySettled(s.entries('root'), queued.messageId) || s.entries('root').some(e => e.id === queued.messageId), {timeoutMs: s.turnTimeout, label: 'steer delivered'}).catch(() => null);
+        // Wait for the steered row's own reply (steered into the live turn or
+        // delivered as the next turn), not merely for the row to appear.
+        await s.d.chatByRole('root').mirror.waitFor(() => s.d.replySettled(s.entries('root'), queued.messageId), {timeoutMs: s.turnTimeout, label: 'steer delivered'}).catch(() => null);
+        await s.d.waitIdle(s.chatId('root'), {timeoutMs: s.turnTimeout}).catch(() => null);
         const count = s.entries('root').filter(e => e.id === queued.messageId).length;
         s.check('steer-once', 'the steered image message appears exactly once (OCF-32/33)', count, count === 1);
-        const reply = s.entries('root').filter(e => e.role === 'assistant').slice(-2).map(textOf).join('\n');
+        const reply = s.replyAfter('root', queued.messageId) || s.entries('root').filter(e => e.role === 'assistant').slice(-2).map(textOf).join('\n');
         s.modelCheck('steer-image-consumed', 'the model names the steered image colour (green)', reply.slice(-120), /\bgreen\b/i.test(reply));
         s.ids.images.push({step: 'image-steer', ...staged});
       });
       await s.step('compaction', async () => {
+        await s.d.waitIdle(s.chatId('root'), {timeoutMs: s.turnTimeout}).catch(() => null);
         const mirror = s.d.chatByRole('root').mirror;
         const before = JSON.stringify(mirror.latest.contextControl ?? null);
         const compact = await s.d.compact(s.chatId('root'));
@@ -848,12 +852,22 @@ const SCENARIOS = {
         s.info('title-generated', 'the chat has a generated title (run_title)', record?.title ?? null, Boolean(record?.title));
       });
       await s.step('skill-pick', async () => {
-        const catalog = await s.d.rpc.call('ListComposerCatalog', {chatId: s.chatId('root'), refresh: true}, {timeoutMs: 90000}).catch(error => ({error: String(error.message ?? error)}));
-        s.evidence.save('composer-catalog-skills.json', catalog);
-        const entry = (catalog?.entries ?? []).find(e => e.kind === 'skill' && /qa-skill/.test(e.name));
-        s.check('skill-listed', 'the project skill qa-skill is in the composer catalog for this chat', entry ? {kind: entry.kind, name: entry.name, path: path.basename(entry.path)} : (catalog?.entries ?? []).filter(e => e.kind === 'skill').map(e => e.name), Boolean(entry));
+        // ListComposerCatalog is the Codex native-integrations catalog and
+        // refuses other harnesses; Claude and OpenCode list skills through
+        // ListCommands (kind skill), which the composer offers under `$`.
+        const commands = await s.d.rpc.call('ListCommands', {harness: s.provider, chatId: s.chatId('root')}, {timeoutMs: 90000}).catch(error => ({error: String(error.message ?? error)}));
+        s.evidence.save('commands-skills.json', commands);
+        const list = Array.isArray(commands) ? commands : commands?.commands ?? [];
+        const entry = list.find(e => e.kind === 'skill' && /qa-skill/.test(e.name));
+        s.check('skill-listed', 'the project skill qa-skill is listed as a skill for this chat (ListCommands kind skill)', entry ? {kind: entry.kind, name: entry.name} : list.filter(e => e.kind === 'skill').map(e => e.name), Boolean(entry));
         if (!entry) return;
-        const t = await s.turn('root', P.skill, {mock: `text:SKILL-OK-${s.nonce}`, inputItems: [{type: 'skill', name: entry.name, path: entry.path}], answer: allowAll});
+        // (a) The composer path: accept_slash writes `$qa-skill` as text (Claude's
+        // wire text becomes `/qa-skill`); no typed input item is attached.
+        const a = await s.turn('root', `$${entry.name} ${P.skill}`, {mock: `text:SKILL-OK-${s.nonce}`, answer: allowAll});
+        s.settled(a.wait, 'skill-text-settled');
+        s.modelCheck('skill-text-used', `a $${entry.name} pick sent as composer text reached the skill (SKILL-OK-${s.nonce})`, a.reply.slice(0, 120), a.reply.includes(`SKILL-OK-${s.nonce}`));
+        // (b) The typed selection the adapters accept (ComposerInput::Skill).
+        const t = await s.turn('root', P.skill, {mock: `text:SKILL-OK-${s.nonce}`, inputItems: [{type: 'skill', name: entry.name, path: entry.path ?? ''}], answer: allowAll});
         s.settled(t.wait);
         const user = s.entries('root').find(e => e.id === t.messageId);
         s.info('skill-row', 'the user row records the typed skill selection', (user?.parts ?? []).map(p => p.kind), true);
@@ -864,7 +878,7 @@ const SCENARIOS = {
         const t = await s.turn('root', P.commandImage, {mock: 'image', attachments: [staged.path], answer: allowAll});
         s.settled(t.wait);
         const user = s.entries('root').find(e => e.id === t.messageId);
-        s.check('command-image-part', 'the slash-command row keeps its image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
+        s.info('command-image-part', 'the slash-command row keeps its image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
         s.modelCheck('command-ran-with-image', `the command ran (CMD-IMG-${s.nonce}) and saw the image (purple/violet)`, t.reply.slice(0, 120), t.reply.includes(`CMD-IMG-${s.nonce}`) && /purple|violet|magenta/i.test(t.reply));
         s.ids.images.push({step: 'command-with-attachment', ...staged});
       });

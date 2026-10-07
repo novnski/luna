@@ -480,6 +480,13 @@ def cmd_write_config(args) -> int:
             "models": {args.model_id: model},
         }},
     }
+    if args.small_model:
+        # S8X: a small context window so one large tool result overflows it
+        # and OpenCode compacts automatically (same mock, same replies).
+        small = json.loads(json.dumps(model))
+        small["name"] = "LUNA Mock Small Context"
+        small["limit"] = {"context": 12000, "output": 1000}
+        config["providers"][PROVIDER_ID]["models"]["mock-small"] = small
     if args.exclusive:
         config["permissions"] = [
             {"action": "provider.use", "resource": "*", "effect": "deny"},
@@ -508,6 +515,7 @@ def main() -> int:
     config.add_argument("--base-url", required=True)
     config.add_argument("--model-id", default="mock-model")
     config.add_argument("--exclusive", action="store_true")
+    config.add_argument("--small-model", action="store_true", help="also write mock-small (12k context, 1k output) for S8X")
     config.add_argument("--force", action="store_true")
     sub.add_parser("scenarios")
     args = parser.parse_args()
