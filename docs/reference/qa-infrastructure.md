@@ -423,6 +423,18 @@ or form replies. `LUNA_KA_LOG` receives the request lines and faults, never
 headers. With `opencode_input_probe`'s `PROBE_ANSWER_DELAY_MS=7000`, this
 reproduces the S1 lost answer (round 2) at the harness level.
 
+In the signed QA app, `OPENCODE_EXECUTABLE` is fixed to the profile wrapper,
+so the fault goes into the wrapper itself for one run: replace its final
+`exec '<opencode>' "$@"` line with `exec /usr/bin/env
+LUNA_KA_REAL_OPENCODE='<opencode>' LUNA_KA_RESET_REPLIES=3 LUNA_KA_LOG=<file>
+<python3> <repo>/scripts/qa-opencode-keepalive-proxy.py "$@"`. The QA app
+starts a new `opencode serve` for each turn, so the next turn goes through
+the proxy without a refresh. The proxy resets the first three replies per
+server, so LUNA's three delivery attempts fail and the card or question is
+shown again; the second answer is delivered. Restore the wrapper with `scripts/qa-opencode-env.sh <profile>`
+and check that its SHA-256 matches the value from before the edit (round-3
+S1 evidence: `e2e-paid-r3/s1/reshow`).
+
 ### Live app driver
 
 `scripts/qa-opencode-live.mjs` follows `scripts/qa-task-work-live.mjs`:

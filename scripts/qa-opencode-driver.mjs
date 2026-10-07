@@ -167,7 +167,10 @@ export class Driver {
 
   async createProject(dir) {
     const spaceId = crypto.randomUUID();
-    await this.rpc.call('Mutate', {op: 'createSpace', spaceId, deviceId: this.engine.deviceId, path: dir, name: `OpenCode QA ${this.nonce}`, gitDetected: true});
+    // The live driver has no nonce; name its project after the scenario
+    // instead of "OpenCode QA null".
+    const label = this.nonce ?? this.evidence.manifest?.scenario ?? 'live';
+    await this.rpc.call('Mutate', {op: 'createSpace', spaceId, deviceId: this.engine.deviceId, path: dir, name: `OpenCode QA ${label}`, gitDetected: true});
     this.evidence.manifest.projectId = spaceId;
     this.evidence.writeManifest();
     return spaceId;
