@@ -19,6 +19,8 @@ No row was certified by running a model turn. Agents had no isolated login, and 
 
 ## CC-13 — workflows, teams, channels, external sessions
 
+**Decision (2026-10-08):** Claude's native workflow lanes are not pursued further. Their live QA, a workflow Stop and post-turn workflow approvals are dropped; LUNA will build its own workflow feature later. The decoding and display described below stay as they are. Two-writer protection on resume is the only open live check in this section.
+
 | Lane | Status | LUNA behaviour | Evidence |
 | --- | --- | --- | --- |
 | Dynamic workflow runs (`task_type: local_workflow`) | Supported · live QA pending | The harness decodes `task_started`, `task_progress` (`workflow_progress` phases/agents), `task_updated` and `task_notification`. Each observation becomes `AgentEvent::NativeTaskChanged`, which the engine stores in the chat document (`meta.nativeTasks`) before the parked-session gate. The Agents pane shows each run. A run is never a subagent, and it never writes transcript text. | SDK schema and emitter excerpts in `cli/sdk-schema-and-emitters.txt`; harness `claude_coordination::native_workflow_graph_survives_the_parked_wake_shape`; engine `claude_native_tasks::*`; fixture PNG 01/04 |
