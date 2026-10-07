@@ -1,6 +1,13 @@
 //! Device-local CLI maintenance. Checks are bounded and cached; updates run
 //! only after an explicit UI action and are verified against the same binary
 //! path used to launch tasks.
+//!
+//! OpenCode is generation-aware (OC-17): the binary is the OpenCode 2 the
+//! harness resolver selects (1.x is never resolved, PD-15); `~/.opencode/bin`
+//! upgrades with `opencode upgrade`, Homebrew installs with their own Cellar
+//! formula (`anomalyco/tap/opencode-v2`, `opencode-beta`, or the receipt's
+//! tap), npm/bun/pnpm installs with `@opencode/cli`; a "latest" from another
+//! major version is never offered.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,12 +42,51 @@ fn path_for(harness: HarnessId) -> Option<PathBuf> {
     }
 }
 
+/// The npm package of the generation LUNA runs. OpenCode 2 ships as
+/// `@opencode/cli` (npm `latest` and the update API's `latest/cli/npm`
+/// agree); `opencode-ai@latest` is still OpenCode 1.x and is never offered
+/// (OC-17, PD-15).
 fn package_for(harness: HarnessId) -> Option<&'static str> {
     match harness {
         HarnessId::Codex => Some("@openai/codex"),
         HarnessId::ClaudeCode => Some("@anthropic-ai/claude-code"),
-        HarnessId::Opencode => Some("opencode-ai"),
+        HarnessId::Opencode => Some("@opencode/cli"),
         _ => None,
+    }
+}
+
+/// Homebrew formulas that install OpenCode. `opencode-v2` and
+/// `opencode-beta` are OpenCode 2 channels of the `anomalyco/tap`; plain
+/// `opencode` is whatever its tap ships (the tap's is 1.x, which the
+/// OpenCode resolver never selects).
+const OPENCODE_FORMULAS: [&str; 3] = ["opencode-v2", "opencode-beta", "opencode"];
+
+/// The fully qualified formula of a Cellar install, from its install
+/// receipt's tap (`homebrew/core` needs no qualification). Without a
+/// readable receipt, OpenCode's own channels fall back to `anomalyco/tap`.
+fn brew_formula(cellar: &Path, name: &str, real: &Path) -> String {
+    let receipt_tap = real
+        .strip_prefix(cellar.join(name))
+        .ok()
+        .and_then(|rest| rest.components().next())
+        .map(|version| {
+            cellar
+                .join(name)
+                .join(version.as_os_str())
+                .join("INSTALL_RECEIPT.json")
+        })
+        .and_then(|receipt| std::fs::read(receipt).ok())
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|receipt| {
+            receipt
+                .pointer("/source/tap")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        });
+    match receipt_tap.as_deref() {
+        Some("homebrew/core") => name.to_owned(),
+        Some(tap) if !tap.is_empty() => format!("{tap}/{name}"),
+        _ => format!("anomalyco/tap/{name}"),
     }
 }
 
@@ -175,13 +221,22 @@ fn update_command(harness: HarnessId, path: &Path) -> Option<(&'static str, Vec<
                 vec!["upgrade".into(), "--cask".into(), brew_name.into()],
             ));
         }
-        if real.starts_with(prefix.join("Cellar").join(brew_name)) {
-            let formula = if harness == HarnessId::Opencode {
-                "anomalyco/tap/opencode"
-            } else {
-                brew_name
-            };
-            return Some(("brew", vec!["upgrade".into(), formula.into()]));
+        let cellar = prefix.join("Cellar");
+        if harness == HarnessId::Opencode {
+            // The Cellar name decides the channel: `opencode-v2` and
+            // `opencode-beta` are OpenCode 2 (`Cellar/opencode-v2` does not
+            // start with `Cellar/opencode/`, so each name is matched whole).
+            if let Some(name) = OPENCODE_FORMULAS
+                .iter()
+                .find(|name| real.starts_with(cellar.join(name)))
+            {
+                let formula = brew_formula(&cellar, name, &real);
+                return Some(("brew", vec!["upgrade".into(), formula]));
+            }
+            continue;
+        }
+        if real.starts_with(cellar.join(brew_name)) {
+            return Some(("brew", vec!["upgrade".into(), brew_name.into()]));
         }
     }
     let real_normalized = real.to_string_lossy().replace('\\', "/");
@@ -232,6 +287,21 @@ fn update_command(harness: HarnessId, path: &Path) -> Option<(&'static str, Vec<
     None
 }
 
+/// The OC-02 compatibility class of an OpenCode version this process has
+/// booted (known-good, untested, or incompatible with the reason).
+fn opencode_compat_detail(version: &str) -> Option<String> {
+    use luna_harness::opencode::CompatStatus;
+    match luna_harness::opencode::opencode_compat_report(version)? {
+        Ok(report) if report.status == CompatStatus::KnownGood => {
+            Some(format!("OpenCode {version}: API contract verified by LUNA"))
+        }
+        Ok(_) => Some(format!(
+            "OpenCode {version}: untested by LUNA; its API contract checks passed"
+        )),
+        Err(reason) => Some(reason),
+    }
+}
+
 pub(crate) async fn check(force: bool) -> Vec<ProviderUpdateStatus> {
     join_all(PROVIDERS.into_iter().map(|harness| async move {
         if !force {
@@ -268,19 +338,29 @@ pub(crate) async fn check(force: bool) -> Vec<ProviderUpdateStatus> {
             .as_deref()
             .and_then(version_triple)
             .zip(latest.as_deref().and_then(version_triple))
-            .is_some_and(|(installed, latest)| latest > installed);
+            .is_some_and(|(installed, latest)| {
+                // OpenCode: never offer another generation than the one LUNA
+                // runs (a 1.x "latest" for a 2.x binary, OC-17).
+                latest > installed && (harness != HarnessId::Opencode || latest.0 == installed.0)
+            });
         let status = ProviderUpdateStatus {
             harness,
-            installed_version: installed,
+            installed_version: installed.clone(),
             latest_version: latest,
             update_available: available,
             update_command: action
                 .as_ref()
                 .map(|(exe, args)| format!("{exe} {}", args.join(" "))),
             detail: if path.is_none() {
-                Some("CLI not installed".into())
+                Some(if harness == HarnessId::Opencode {
+                    "OpenCode 2 not installed (OpenCode 1.x is not supported)".into()
+                } else {
+                    "CLI not installed".into()
+                })
             } else if action.is_none() {
                 Some("Update this CLI using its original installer".into())
+            } else if harness == HarnessId::Opencode {
+                installed.as_deref().and_then(opencode_compat_detail)
             } else {
                 None
             },
