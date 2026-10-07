@@ -99,7 +99,13 @@ pub async fn run_queue_image_steer_e2e(
             QueuePrimaryAction::SteerNow,
         ),
         (HarnessId::Codex, "codex", QueuePrimaryAction::SteerNow),
-        (HarnessId::Opencode, "opencode", QueuePrimaryAction::SendNow),
+        // OC-09: OpenCode steers carry images as native `files[]`, so a
+        // step-boundary OpenCode row with an image steers like the others.
+        (
+            HarnessId::Opencode,
+            "opencode",
+            QueuePrimaryAction::SteerNow,
+        ),
     ] {
         let item = row(
             &format!("{slug}-image-row"),

@@ -343,11 +343,13 @@ pub(crate) struct QueuePreview {
 }
 
 /// Providers whose in-turn steer carries staged images and typed selections
-/// (mirrors the engine's admission gate).
+/// (mirrors the engine's admission gate; OpenCode sends them as `files[]`).
 fn steers_native_inputs(harness: luna_proto::HarnessId) -> bool {
     matches!(
         harness,
-        luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode
+        luna_proto::HarnessId::Codex
+            | luna_proto::HarnessId::ClaudeCode
+            | luna_proto::HarnessId::Opencode
     )
 }
 

@@ -966,13 +966,14 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        // Codex's warm mailbox carries typed inputs and attachments. Other
-        // harnesses' typed inputs take a fresh (resumed) dispatch, whose
-        // rejection is recoverable; the warm fallback is at-least-once.
-        // Native review targets require a fresh adapter dispatch (resuming
-        // the same binding) at a safe boundary.
+        // Codex's and OpenCode's warm mailboxes carry typed inputs and
+        // attachments (OpenCode posts them as native `files[]`/`skills[]`
+        // at the boundary). Other harnesses' typed inputs take a fresh
+        // (resumed) dispatch, whose rejection is recoverable; the warm
+        // fallback is at-least-once. Native review targets require a fresh
+        // adapter dispatch (resuming the same binding) at a safe boundary.
         request.review.is_none()
-            && (harness_id == HarnessId::Codex
+            && (matches!(harness_id, HarnessId::Codex | HarnessId::Opencode)
                 || (request.attachments.is_empty() && request.input_items.is_empty()))
             && self == &Self::from_request(harness_id, request)
     }
@@ -4243,7 +4244,12 @@ impl SessionsEngine {
         request
             .model_options
             .remove(luna_harness::codex::LUNA_ATTACH_EXISTING_GOAL_OPTION);
-        crate::provider_inputs::admit(harness_id, &request.attachments, &request.input_items)?;
+        crate::provider_inputs::admit(
+            harness_id,
+            request.model.as_deref(),
+            &request.attachments,
+            &request.input_items,
+        )?;
         if let Some(attempt) = recovery.as_ref() {
             let record = self.inner.recovery.latest(chat_id)?;
             if record.as_ref().is_none_or(|record| {
@@ -5118,9 +5124,10 @@ impl SessionsEngine {
                     h.run_id.clone(),
                     h.steer_tx.clone(),
                     h.routed_steers.clone(),
+                    h.runtime_config.model.clone(),
                 )
             });
-        let Some((harness_id, run_id, steer_tx, ledger)) = target else {
+        let Some((harness_id, run_id, steer_tx, ledger, run_model)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
         if (!attachments.is_empty() || !input_items.is_empty())
@@ -5128,7 +5135,7 @@ impl SessionsEngine {
         {
             return Ok(SteerOutcome::Rejected);
         }
-        crate::provider_inputs::admit(harness_id, attachments, input_items)?;
+        crate::provider_inputs::admit(harness_id, run_model.as_deref(), attachments, input_items)?;
         let user_id = message_id.unwrap_or_else(new_id);
         self.inner
             .recovery
@@ -7753,6 +7760,13 @@ fn reduce_provider_context_compaction(
     if bound_thread_id != event_thread_id || operation_id.is_empty() {
         return None;
     }
+    // The adapter that minted the operation id (`codex-auto:…` or
+    // `opencode-auto:…`) names the provider in the user-facing detail.
+    let provider = if operation_id.starts_with("opencode-") {
+        "OpenCode"
+    } else {
+        "Codex"
+    };
     let now = now_ms();
     let mut next = current.clone();
     match status {
@@ -7768,15 +7782,16 @@ fn reduce_provider_context_compaction(
                 binding_generation: Some(binding_generation),
                 started_at_ms: Some(now),
                 finished_at_ms: None,
-                detail: Some(
-                    "Codex reported provider-owned context compaction in progress. The provider may compact traditionally or start a new context window without exposing a summary."
-                        .into(),
-                ),
+                detail: Some(format!(
+                    "{provider} reported provider-owned context compaction in progress. The provider may compact traditionally or start a new context window without exposing a summary."
+                )),
             };
             next.notice = None;
             Some((next, false))
         }
-        ContextOperationStatus::Completed | ContextOperationStatus::Unknown => {
+        ContextOperationStatus::Completed
+        | ContextOperationStatus::Unknown
+        | ContextOperationStatus::Failed => {
             if current.compact.status != ContextOperationStatus::Running
                 || current.compact.operation_id.as_deref() != Some(operation_id)
                 || current.compact.binding_generation != Some(binding_generation)
@@ -7785,16 +7800,22 @@ fn reduce_provider_context_compaction(
             }
             next.compact.status = status;
             next.compact.finished_at_ms = Some(now);
-            next.compact.detail = Some(if status == ContextOperationStatus::Completed {
-                "Codex reported that provider-owned context compaction completed. No readable summary was exposed to LUNA."
-                    .into()
-            } else {
-                "Codex context compaction ended without a correlated completion. LUNA will not replay it."
-                    .into()
+            next.compact.detail = Some(match status {
+                ContextOperationStatus::Completed => format!(
+                    "{provider} reported that provider-owned context compaction completed. No readable summary was exposed to LUNA."
+                ),
+                // A definite provider failure: history is unchanged, so the
+                // next turn is not blocked (unlike an unknown outcome).
+                ContextOperationStatus::Failed => format!(
+                    "{provider} reported that context compaction failed; the conversation continues uncompacted."
+                ),
+                _ => format!(
+                    "{provider} context compaction ended without a correlated completion. LUNA will not replay it."
+                ),
             });
             Some((next, status == ContextOperationStatus::Completed))
         }
-        ContextOperationStatus::Idle | ContextOperationStatus::Failed => None,
+        ContextOperationStatus::Idle => None,
     }
 }
 
@@ -7804,7 +7825,9 @@ fn reduce_provider_context_terminal(
     binding_generation: u32,
 ) -> Option<ContextControlState> {
     let operation_id = current.compact.operation_id.as_deref()?;
-    if !operation_id.starts_with(&format!("codex-auto:{bound_thread_id}:")) {
+    if !operation_id.starts_with(&format!("codex-auto:{bound_thread_id}:"))
+        && !operation_id.starts_with(&format!("opencode-auto:{bound_thread_id}:"))
+    {
         return None;
     }
     reduce_provider_context_compaction(
@@ -9003,7 +9026,9 @@ async fn drive_run(
             turn_id,
         } = &event
         {
-            if harness_id != HarnessId::Codex {
+            // Codex and OpenCode report provider-owned (automatic)
+            // compaction as lifecycle, bound to the current provider session.
+            if !matches!(harness_id, HarnessId::Codex | HarnessId::Opencode) {
                 tracing::warn!(chat = %chat_id, harness = ?harness_id, "ignoring context compaction from unsupported harness");
                 continue;
             }
@@ -9013,11 +9038,11 @@ async fn drive_run(
                 .and_then(|identity| identity.view(&chat_id))
                 .and_then(|view| view.current_binding);
             let Some(binding) = binding.filter(|binding| {
-                binding.provider_id == HarnessId::Codex
+                binding.provider_id == harness_id
                     && !binding.provider_task_id.is_empty()
                     && binding.provider_task_id == *thread_id
             }) else {
-                tracing::warn!(chat = %chat_id, %thread_id, %turn_id, "ignoring stale Codex context compaction binding");
+                tracing::warn!(chat = %chat_id, %thread_id, %turn_id, "ignoring stale provider context compaction binding");
                 continue;
             };
             let Some(host) = inner.doc_host() else {
@@ -9051,13 +9076,15 @@ async fn drive_run(
             }
             continue;
         }
-        if harness_id == HarnessId::Codex && matches!(&event, AgentEvent::Done { .. }) {
+        if matches!(harness_id, HarnessId::Codex | HarnessId::Opencode)
+            && matches!(&event, AgentEvent::Done { .. })
+        {
             let binding = inner
                 .task_identity
                 .get()
                 .and_then(|identity| identity.view(&chat_id))
                 .and_then(|view| view.current_binding)
-                .filter(|binding| binding.provider_id == HarnessId::Codex);
+                .filter(|binding| binding.provider_id == harness_id);
             if let (Some(binding), Some(host)) = (binding, inner.doc_host())
                 && let Ok(current) = host.context_control(&chat_id)
                 && let Some(next) = reduce_provider_context_terminal(

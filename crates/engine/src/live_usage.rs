@@ -4,6 +4,10 @@
 //! session. Claude's `total_cost_usd`/`modelUsage` are running totals, so each
 //! row holds the LATEST report (never a sum); a resumed native session keeps
 //! its row because the first resumed result already carries the saved totals.
+//! OpenCode (`UsageProvider::OpenCodeGo`, OC-10) follows the same contract:
+//! its turn-end result carries `session.usage.updated`'s running session cost
+//! and tokens, the turn's own tokens summed from `session.step.ended`, and its
+//! `Runtime` readback compares the requested model/variant with the session's.
 //! Rows are shown beside transcript history and are never added to its
 //! buckets (the history scan reads the same native transcripts).
 //!

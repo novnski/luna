@@ -7716,6 +7716,7 @@ impl DocHost {
                 // exists; the receipt rejection keeps the draft recoverable.
                 crate::provider_inputs::admit(
                     self.harness_for_request(chat_id, &request),
+                    request.model.as_deref(),
                     &request.attachments,
                     &request.input_items,
                 )?;
@@ -8130,7 +8131,9 @@ impl DocHost {
         let mut prompt = self.resolve_prompt_attachments(prompt);
         let mut attachments = attachments.to_vec();
         self.resolve_input_attachments(&mut prompt, &mut attachments);
-        crate::provider_inputs::admit(self.harness_for(chat_id), &attachments, input_items)?;
+        // The live run's model is checked again by the adapter right before
+        // it posts the turn (OpenCode image capability).
+        crate::provider_inputs::admit(self.harness_for(chat_id), None, &attachments, input_items)?;
         if self.held_until_turn_end(
             sessions,
             chat_id,
