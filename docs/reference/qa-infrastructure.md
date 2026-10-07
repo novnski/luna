@@ -515,7 +515,14 @@ with an excerpt) and `SendSideChat`, Review through `nativeReview`, plus
 | S7 | OCE-08, OCE-14, OCE-20 | full | image on the first turn, on a queued row and on a steered row (staged SHA-256 compared with `files[]` in the wire log); manual compaction then a `luna` call; project command discovery, `/qa-echo` and the generated title |
 | S8 | OCE-23 | full | Review of uncommitted changes, a commit and a base branch; goals readback |
 
-Live-only extras (never rehearsed) add S2X, S4X, S4S, S8X and S9U. S4S also
+Live-only extras (never rehearsed) add S2X, S4X, S4S, S8X, S9U and S9Q.
+S9Q (T3, run for both providers and diff) covers nonblocking questions
+through LUNA's `ask_user` tool: the turn ends without anyone answering, the
+card stays open, a late answer is delivered as a new turn tagged
+`[luna-question:<card id>]`, a different later answer is delivered as an
+amendment, repeating the latest answer is idempotent, and an answer sent
+while the agent works is steered into the running turn before its final
+reply (whether the model then mentions it is recorded as model behaviour). S4S also
 checks the engine's provider-neutral Stalled notice: start the mock with a
 `--slow-ms` above 120000 so one streamed word is followed by a quiet stretch
 longer than the 120 s window; the notice must appear while the turn is still
