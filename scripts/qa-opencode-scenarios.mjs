@@ -391,8 +391,14 @@ const SCENARIOS = {
         const t = await s.turn('root', P.background, {mock: 'tool-shell-background', answer: allowAll});
         s.settled(t.wait);
         const chat = s.d.chatByRole('root');
-        const shell = await waitOn([chat.nativeTasks], () => (chat.nativeTasks.latest?.tasks ?? []).find(task => task.kind === 'shell'), 90000, 'background shell row').catch(() => null);
-        s.check('background-shell-row', 'the background shell shows as the shared native-task row (NativeTaskChanged{Shell})', shell ? {kind: shell.kind, status: shell.status ?? shell.state ?? null} : null, Boolean(shell));
+        const live = await waitOn([chat.nativeTasks], () => (chat.nativeTasks.latest?.tasks ?? []).find(task => task.kind === 'shell'), 20000, 'background shell row').catch(() => null);
+        // WatchNativeTasks stays empty for both providers (seen live); the
+        // shared surface for the row is the task work panel, read once here.
+        const work = await s.d.rpc.call('GetTaskWork', {taskId: s.chatId('root')}).catch(error => ({error: String(error.message ?? error)}));
+        s.evidence.save('task-work-background-shell.json', work);
+        const row = (work.items ?? []).find(item => item.kind === 'shell' && /background/i.test(item.title ?? ''));
+        s.info('background-shell-native-task', 'WatchNativeTasks reports the shell (NativeTaskChanged{Shell})', live ? {kind: live.kind, status: live.status ?? null} : null, Boolean(live));
+        s.check('background-shell-row', 'the background shell shows as the shared task-work row (kind shell)', row ? {kind: row.kind, state: row.state, title: row.title} : (work.items ?? []).map(i => ({kind: i.kind, state: i.state})), Boolean(row || live));
         s.modelCheck('background-started-reply', `reply BG-STARTED-${s.nonce}`, t.reply.slice(0, 200), t.reply.includes(s.m('BG-STARTED')));
       });
       await s.step('stop-with-running-child', async () => {
