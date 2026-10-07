@@ -229,8 +229,12 @@ impl HarnessesPage {
             let generation = page.state.read(cx).engine_generation();
             if task_id != page.runtime_task_id || generation != page.runtime_generation {
                 page.load_runtime_contract(cx);
-                // Claude MCP attachment is per selected chat session.
-                if page.integration_provider == HarnessId::ClaudeCode {
+                // Claude and OpenCode MCP attachment is per selected chat
+                // session.
+                if matches!(
+                    page.integration_provider,
+                    HarnessId::ClaudeCode | HarnessId::Opencode
+                ) {
                     page.load_inventory(false, cx);
                 }
                 cx.notify();
@@ -1469,8 +1473,8 @@ impl HarnessesPage {
             "Skills and MCP",
             Some(
                 "Browse provider-owned skills by global or project scope. Check provider reads \
-                 Codex's native catalog or Claude's own MCP server readback; file presence and \
-                 selected-session attachment are separate checks."
+                 Codex's native catalog, or Claude's or OpenCode's own MCP server readback; file \
+                 presence and selected-session attachment are separate checks."
                     .into(),
             ),
             vec![check.into_any_element()],

@@ -16,6 +16,13 @@
 //!   OpenCode substitutes, so the config text carries no credential. Agent
 //!   tool processes inherit the server environment: the evidence fence, not
 //!   secrecy, refuses direct calls (Claude's posture off Unix).
+//! - **Names.** OpenCode names an MCP tool `<server>_<tool>`
+//!   (`oc2:core/src/tool/mcp.ts`), so the endpoint lists an engine tool that
+//!   already starts with `luna_` without that prefix (`luna_status` is listed
+//!   as `status`): the model sees `luna_status`, `luna_get_workspace`, never
+//!   `luna_luna_status`. The listed name maps back to the engine's canonical
+//!   name for the evidence fence, the executor and the tool chips, so every
+//!   surface shows the same names as Codex and Claude.
 //! - **Allowlist.** The root session's rules (merged after the agent's, last
 //!   match wins) allow exactly the attached `luna_<tool>` tools, and the
 //!   inline layer denies `luna_*` for every agent otherwise. OpenCode 2.0.22
@@ -41,16 +48,28 @@
 //!   a side chat's frozen seed) ride the session's `luna` instruction entry
 //!   (`PUT /api/experimental/session/{id}/instructions/entries/luna`), never a
 //!   user-message prefix. OpenCode renders it as `<context key="luna">` from
-//!   the next step and copies it on fork.
-//! - **Verification (PD-10).** [`RuntimeDelivery::OpenCodeMcpTools`] is
-//!   reported only for an OpenCode version whose live API contract has the
-//!   delivery routes and on which no recent run failed its readback. Every
-//!   run reads the attachment back before its first prompt (`GET /api/mcp`
-//!   shows `luna` connected, the endpoint answered `tools/list`, the
-//!   instruction entry reads back); a failure warns (`ProviderNotice`) and
-//!   withdraws delivery for that version for ten minutes, so contracts
-//!   compile as `Unsupported` meanwhile (and side chats fall back to their
-//!   quoted seed); the next run after that re-verifies.
+//!   the next step and copies it on fork. Entries persist on the session, so
+//!   a resumed (or forked) session whose run delivers no contract has its
+//!   inherited `luna` entry removed: it would still tell the model that LUNA
+//!   tools are attached. A delivering run replaces it and reads back exactly
+//!   one current entry.
+//! - **Verification (PD-10).** Like Claude's `ClaudeMcpTools`, a contract
+//!   compiles optimistically: [`RuntimeDelivery::OpenCodeMcpTools`] is
+//!   reported until this process learns otherwise, so the very first turn
+//!   after LUNA starts carries the tools and the contract without waiting for
+//!   an earlier boot. Nothing reaches the model before the run verifies it:
+//!   the boot contract must have the delivery routes, and the attachment must
+//!   read back (`GET /api/mcp` shows `luna` connected and the endpoint
+//!   answered `tools/list`) BEFORE the session rules allow a single
+//!   `luna_<tool>`; until then the inline deny hides them all. The first
+//!   prompt then waits out OpenCode's debounced tool registration
+//!   ([`TOOL_REGISTRATION_SETTLE`]), or the model's first step would see no
+//!   LUNA tool at all. A version
+//!   without the routes is final (`Unsupported`); a failed readback or
+//!   instruction delivery warns (`ProviderNotice`) and withdraws delivery for
+//!   that version for ten minutes, so contracts compile as `Unsupported`
+//!   meanwhile (and side chats fall back to their quoted seed); the next run
+//!   after that re-verifies.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -58,7 +77,9 @@ use std::sync::Mutex;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use luna_proto::{LunaAgentRuntimeContract, RuntimeDelivery};
+use luna_proto::{
+    LunaAgentRuntimeContract, RuntimeDelivery, RuntimeInstructionSource, RuntimeToolDefinition,
+};
 
 use super::*;
 use crate::LunaToolExecutor;
@@ -67,8 +88,11 @@ use crate::codex::luna_mcp::{
     self, LunaMcpCall, LunaMcpEndpoint, LunaToolReply, LunaToolRequest, LunaToolScope,
 };
 
-/// OpenCode's MCP tool naming: `<server>_<tool>` (`oc2:core/src/tool/mcp.ts`).
+/// OpenCode's MCP tool naming: `<server>_<tool>` (`oc2:core/src/tool/mcp.ts`),
+/// for the `luna` server.
 const TOOL_PREFIX: &str = "luna_";
+/// Bound on the process-wide listed → canonical tool-name map.
+const MAX_TOOL_ALIASES: usize = 256;
 /// `_meta` key OpenCode 2 sets on every MCP `tools/call` it makes for a
 /// session (`oc2:core/src/mcp/client.ts`).
 const SESSION_META: &str = "ai.opencode/sessionID";
@@ -84,6 +108,13 @@ const MAX_OBSERVED_PER_TURN: usize = 4_096;
 /// well under a second; the location boots first).
 const READBACK_BUDGET: Duration = Duration::from_secs(10);
 const READBACK_POLL: Duration = Duration::from_millis(200);
+/// How long after `luna` reads back connected the first prompt waits.
+/// OpenCode registers a server's tools for the model only when its debounced
+/// (100 ms) `ToolsChanged` reconcile runs (`oc2:core/src/tool/mcp.ts`), with
+/// nothing observable over HTTP; a step that starts sooner has none of the
+/// LUNA tools ("No tool named luna_get_workspace", verified live on 2.0.22
+/// with a prompt 70 ms after the connect).
+pub(super) const TOOL_REGISTRATION_SETTLE: Duration = Duration::from_millis(400);
 /// How long a failed readback withdraws delivery before it is re-verified.
 const DELIVERY_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 const NOT_ATTACHED: &str = "LUNA tool is not attached to this task or turn";
@@ -99,6 +130,11 @@ const DELIVERY_ROUTES: &[(&str, &str)] = &[
     (
         "get",
         "/api/experimental/session/{sessionID}/instructions/entries",
+    ),
+    // Retires a resumed session's stale entry when a run delivers nothing.
+    (
+        "delete",
+        "/api/experimental/session/{sessionID}/instructions/entries/{key}",
     ),
     ("get", "/api/mcp"),
 ];
@@ -188,24 +224,117 @@ pub(super) fn record_delivery_failure(version: Option<&str>, reason: &str) {
     }
 }
 
-/// The delivery a contract for this OpenCode version may promise.
-pub(super) fn delivery_for_version(version: Option<&str>) -> RuntimeDelivery {
-    let ready = version.is_some_and(|version| {
-        match verdicts()
+/// Why delivery is withdrawn for this OpenCode version, or `None` while a
+/// contract may promise it. An unchecked version (nothing booted yet in this
+/// process, or no version known) is NOT withdrawn: contracts compile
+/// optimistically, like Claude's, and the run verifies before the model sees
+/// a tool.
+pub(super) fn delivery_withdrawal(version: Option<&str>) -> Option<String> {
+    let verdict = version.and_then(|version| {
+        verdicts()
             .lock()
             .ok()
             .and_then(|verdicts| verdicts.get(&version_key(version)).cloned())
-        {
-            Some(DeliveryVerdict::Ready) => true,
-            Some(DeliveryVerdict::Failed { retry_at, .. }) => Instant::now() >= retry_at,
-            Some(DeliveryVerdict::Unavailable(_)) | None => false,
-        }
     });
-    if ready {
+    match verdict {
+        None | Some(DeliveryVerdict::Ready) => None,
+        Some(DeliveryVerdict::Failed { reason, retry_at }) => {
+            (Instant::now() < retry_at).then_some(reason)
+        }
+        Some(DeliveryVerdict::Unavailable(reason)) => Some(reason),
+    }
+}
+
+/// The delivery a contract for this OpenCode version may promise.
+pub(super) fn delivery_for_version(version: Option<&str>) -> RuntimeDelivery {
+    if delivery_withdrawal(version).is_none() {
         RuntimeDelivery::OpenCodeMcpTools
     } else {
         RuntimeDelivery::Unsupported
     }
+}
+
+// ---------------------------------------------------------------------------
+// Tool names: what OpenCode sees vs the engine's canonical names
+// ---------------------------------------------------------------------------
+
+/// The name the `luna` endpoint lists for `tool` to OpenCode, which prefixes
+/// `luna_` itself: a redundant `luna_` prefix is dropped (`luna_status` →
+/// `status`, exposed as `luna_status`) unless the shorter name is itself an
+/// attached tool, so listed names stay unique.
+fn listed_name(tool: &str, attached: &[String]) -> String {
+    match tool.strip_prefix(TOOL_PREFIX) {
+        Some(short) if !short.is_empty() && !attached.iter().any(|other| other == short) => {
+            short.to_owned()
+        }
+        _ => tool.to_owned(),
+    }
+}
+
+/// OpenCode's MCP tool and permission action name for a listed tool name
+/// (`oc2:core/src/tool/mcp.ts` `name`).
+fn action_name(listed: &str) -> String {
+    let listed: String = listed
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{TOOL_PREFIX}{listed}")
+}
+
+/// Listed → canonical names this process attached (only the ones that
+/// differ). Tool chips are typed without the run's contract at hand; the
+/// engine's tool names are stable, so one map serves every run.
+fn tool_aliases() -> &'static Mutex<HashMap<String, String>> {
+    static ALIASES: std::sync::OnceLock<Mutex<HashMap<String, String>>> =
+        std::sync::OnceLock::new();
+    ALIASES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_tool_aliases(tools: &[AttachedTool]) {
+    let Ok(mut aliases) = tool_aliases().lock() else {
+        return;
+    };
+    for tool in tools.iter().filter(|tool| tool.listed != tool.canonical) {
+        if aliases.len() < MAX_TOOL_ALIASES || aliases.contains_key(&tool.listed) {
+            aliases.insert(tool.listed.clone(), tool.canonical.clone());
+        }
+    }
+}
+
+/// The engine's name for a `luna` server tool as OpenCode reported it (the
+/// part after `luna_`), so chips read `luna_status` like Codex's and
+/// Claude's. Unknown names pass through.
+pub(super) fn canonical_luna_tool(listed: &str) -> String {
+    tool_aliases()
+        .lock()
+        .ok()
+        .and_then(|aliases| aliases.get(listed).cloned())
+        .unwrap_or_else(|| listed.to_owned())
+}
+
+/// One attached LUNA tool: the engine's canonical name and the name the
+/// endpoint lists to OpenCode.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AttachedTool {
+    canonical: String,
+    listed: String,
+}
+
+fn attached_tools(tools: &[RuntimeToolDefinition]) -> Vec<AttachedTool> {
+    let names: Vec<String> = tools.iter().map(|tool| tool.name.clone()).collect();
+    names
+        .iter()
+        .map(|name| AttachedTool {
+            canonical: name.clone(),
+            listed: listed_name(name, &names),
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -307,10 +436,11 @@ pub(super) async fn prepare_luna_run(
             "OpenCode LUNA runtime contract advertises unsupported tools".into(),
         ));
     }
-    let instructions = render_instructions(&contract);
+    let instructions = render_instructions(&contract, true);
     if contract.tools.is_empty() && instructions.is_empty() {
         return Ok(None);
     }
+    let tools = attached_tools(&contract.tools);
     let mut env: Vec<(String, String)> = contract
         .environment
         .iter()
@@ -324,7 +454,24 @@ pub(super) async fn prepare_luna_run(
         .collect();
     let endpoint = match (contract.tools.is_empty(), executor) {
         (false, Some(_)) => {
-            let endpoint = LunaMcpEndpoint::bind(&contract.tools).await?;
+            // The catalog OpenCode reads carries the listed names; calls
+            // arrive under them and are mapped back in the bridge.
+            let listed: Vec<RuntimeToolDefinition> = contract
+                .tools
+                .iter()
+                .zip(&tools)
+                .map(|(definition, tool)| RuntimeToolDefinition {
+                    name: tool.listed.clone(),
+                    ..definition.clone()
+                })
+                .collect();
+            let endpoint = LunaMcpEndpoint::bind(&listed).await?;
+            tracing::debug!(
+                target: "luna_harness::opencode",
+                tools = ?tools.iter().map(|tool| action_name(&tool.listed)).collect::<Vec<_>>(),
+                "LUNA tools attached to OpenCode"
+            );
+            register_tool_aliases(&tools);
             register_secret(endpoint.token());
             env.push((luna_mcp::TOKEN_ENV.into(), endpoint.token().to_owned()));
             env.push((
@@ -340,16 +487,11 @@ pub(super) async fn prepare_luna_run(
     };
     Ok(Some(LunaRun {
         bridge: OpencodeLunaBridge {
-            tools: endpoint
-                .as_ref()
-                .map(|_| {
-                    contract
-                        .tools
-                        .iter()
-                        .map(|tool| tool.name.clone())
-                        .collect()
-                })
-                .unwrap_or_default(),
+            tools: if endpoint.is_some() {
+                tools
+            } else {
+                Vec::new()
+            },
             contract,
             executor: executor.cloned(),
             interrupt: interrupt.clone(),
@@ -367,11 +509,14 @@ pub(super) async fn prepare_luna_run(
 }
 
 /// The contract's instruction sections as one entry value (the same
-/// rendering the Codex and Claude adapters use).
-fn render_instructions(contract: &LunaAgentRuntimeContract) -> String {
+/// rendering the Codex and Claude adapters use). Without `tool_sections` the
+/// tool guidance is left out (a run whose tools were withdrawn keeps its
+/// identity, context and side-chat seed, but promises no tool).
+fn render_instructions(contract: &LunaAgentRuntimeContract, tool_sections: bool) -> String {
     contract
         .instructions
         .iter()
+        .filter(|section| tool_sections || section.source != RuntimeInstructionSource::Tool)
         .map(|section| {
             format!(
                 "[LUNA {:?}: {} | {}]\n{}",
@@ -380,21 +525,6 @@ fn render_instructions(contract: &LunaAgentRuntimeContract) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n\n")
-}
-
-/// OpenCode's MCP tool / permission action name for one LUNA tool.
-fn action_name(tool: &str) -> String {
-    let tool: String = tool
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("{TOOL_PREFIX}{tool}")
 }
 
 /// The inline config layer: LUNA's `luna` server, and `luna_*` denied for
@@ -467,12 +597,13 @@ pub(super) struct OpencodeLunaBridge {
     executor: Option<LunaToolExecutor>,
     interrupt: CancellationToken,
     instructions: String,
-    /// Attached tool names (empty when no endpoint is bound).
-    tools: Vec<String>,
+    /// Attached tools (empty when no endpoint is bound, or after the run
+    /// withdrew them because delivery could not be verified).
+    tools: Vec<AttachedTool>,
     session_id: Option<String>,
     turn: Option<Turn>,
     /// Root `luna_*` tool calls whose input has not been called yet
-    /// (`(message, call id)` → tool name without the prefix).
+    /// (`(message, call id)` → canonical tool name).
     started: HashMap<(String, String), String>,
     call_ids: LunaCallIds,
     parked: Vec<Parked>,
@@ -489,18 +620,52 @@ impl Drop for OpencodeLunaBridge {
 }
 
 impl OpencodeLunaBridge {
-    fn attaches_tools(&self) -> bool {
+    pub(super) fn attaches_tools(&self) -> bool {
         !self.tools.is_empty()
     }
 
-    /// Append `luna_<tool>: allow` for exactly the attached tools to the
-    /// root session's ruleset (after LUNA's mode rules: last match wins).
+    /// Delivery could not be verified for this run: no `luna_<tool>` is
+    /// allowed (the inline deny hides them all), no turn ids are minted,
+    /// every endpoint call is refused, and the instruction entry keeps the
+    /// identity, context and side-chat seed but drops the tool guidance.
+    pub(super) fn withdraw_tools(&mut self) {
+        if self.tools.is_empty() {
+            return;
+        }
+        self.tools.clear();
+        self.end_turn();
+        self.instructions = render_instructions(&self.contract, false);
+    }
+
+    /// The attached tool an endpoint call names (`<listed>`), by its
+    /// canonical name.
+    fn canonical(&self, listed: &str) -> Option<&str> {
+        self.tools
+            .iter()
+            .find(|tool| tool.listed == listed)
+            .map(|tool| tool.canonical.as_str())
+    }
+
+    /// The attached tool a bus frame names (OpenCode's `luna_<listed>`
+    /// action name), by its canonical name.
+    fn canonical_for_action(&self, name: &str) -> Option<&str> {
+        self.tools
+            .iter()
+            .find(|tool| action_name(&tool.listed) == name)
+            .map(|tool| tool.canonical.as_str())
+    }
+
+    /// Append `luna_<tool>: allow` for exactly the attached tools, under the
+    /// names OpenCode exposes, to the root session's ruleset (after LUNA's
+    /// mode rules: last match wins).
     pub(super) fn extend_rules(&self, rules: &mut Value) {
         let Some(rules) = rules.as_array_mut() else {
             return;
         };
         for tool in &self.tools {
-            rules.push(json!({ "action": action_name(tool), "resource": "*", "effect": "allow" }));
+            rules.push(
+                json!({ "action": action_name(&tool.listed), "resource": "*", "effect": "allow" }),
+            );
         }
     }
 
@@ -512,26 +677,25 @@ impl OpencodeLunaBridge {
         }
     }
 
-    /// Before the first prompt: read the MCP attachment back, then deliver
-    /// the instructions through the session's `luna` entry and read it back.
-    /// `Err` names what failed; the run continues without the guarantee.
-    pub(super) async fn deliver(
+    /// Before the first prompt (after the attachment was verified): deliver
+    /// the instructions through the session's `luna` entry and read back
+    /// exactly one current entry; with nothing to deliver, retire an entry
+    /// an earlier run left. `Err` names what failed; the run continues
+    /// without the guarantee.
+    pub(super) async fn deliver_instructions(
         &self,
         server: &Server,
         dir: Option<&str>,
-        endpoint: Option<&LunaMcpEndpoint>,
     ) -> Result<(), String> {
         let session_id = self
             .session_id
             .as_deref()
             .ok_or_else(|| "no OpenCode session".to_owned())?;
-        if let Some(endpoint) = endpoint {
-            await_mcp_attachment(server, dir, endpoint).await?;
+        if self.instructions.is_empty() {
+            retire_instructions(server, session_id, dir).await;
+            return Ok(());
         }
-        if !self.instructions.is_empty() {
-            put_instructions(server, session_id, dir, &self.instructions).await?;
-        }
-        Ok(())
+        put_instructions(server, session_id, dir, &self.instructions).await
     }
 
     /// A prompt is about to be posted: mint its turn id. The announcement
@@ -572,9 +736,10 @@ impl OpencodeLunaBridge {
                 name,
             } if session == root => {
                 if self.started.len() < MAX_OBSERVED_PER_TURN
-                    && let Some(tool) = name.strip_prefix(TOOL_PREFIX)
+                    && let Some(tool) = self.canonical_for_action(&name)
                 {
-                    self.started.insert((message, id), tool.to_owned());
+                    let tool = tool.to_owned();
+                    self.started.insert((message, id), tool);
                 }
             }
             WireSignal::ToolCalled {
@@ -604,8 +769,14 @@ impl OpencodeLunaBridge {
         }
     }
 
-    /// One `tools/call` from the endpoint.
-    pub(super) fn on_call(&mut self, call: LunaMcpCall) {
+    /// One `tools/call` from the endpoint, under its listed name: matched and
+    /// dispatched by the engine's canonical name.
+    pub(super) fn on_call(&mut self, mut call: LunaMcpCall) {
+        let Some(canonical) = self.canonical(&call.name).map(str::to_owned) else {
+            reject(call, NOT_ATTACHED);
+            return;
+        };
+        call.name = canonical;
         match self.verdict(&call) {
             CallVerdict::Dispatch(observed) => self.dispatch(call, observed),
             CallVerdict::Reject(message) => reject(call, message),
@@ -713,12 +884,14 @@ fn reject(call: LunaMcpCall, message: &str) {
 }
 
 /// `GET /api/mcp` until `luna` is connected AND the endpoint answered a
-/// `tools/list` (the catalog reached OpenCode), bounded.
-async fn await_mcp_attachment(
+/// `tools/list` (the catalog reached OpenCode), bounded. Runs before the
+/// session rules allow any LUNA tool. `Ok` is the earliest time the first
+/// prompt may be posted ([`TOOL_REGISTRATION_SETTLE`] after the readback).
+pub(super) async fn await_mcp_attachment(
     server: &Server,
     dir: Option<&str>,
     endpoint: &LunaMcpEndpoint,
-) -> Result<(), String> {
+) -> Result<Instant, String> {
     let deadline = Instant::now() + READBACK_BUDGET;
     loop {
         let last = match server.get_json("/api/mcp", dir).await {
@@ -734,7 +907,9 @@ async fn await_mcp_attachment(
                     .and_then(Value::as_str)
                     .unwrap_or("not listed");
                 match status {
-                    "connected" if endpoint.catalog_reads() > 0 => return Ok(()),
+                    "connected" if endpoint.catalog_reads() > 0 => {
+                        return Ok(Instant::now() + TOOL_REGISTRATION_SETTLE);
+                    }
                     "failed" | "needs_auth" | "disabled" => {
                         return Err(format!("OpenCode reports the luna MCP server as {status}"));
                     }
@@ -754,15 +929,47 @@ async fn await_mcp_attachment(
     }
 }
 
-/// `PUT …/instructions/entries/luna {value}` (204), then read it back.
+fn entries_path(session_id: &str) -> String {
+    format!("/api/experimental/session/{session_id}/instructions/entries")
+}
+
+/// The session's `luna` entry values (normally zero or one).
+async fn luna_entries(
+    server: &Server,
+    session_id: &str,
+    dir: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let listed = server
+        .get_json(&entries_path(session_id), dir)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(unwrap_data(listed)
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry.get("key").and_then(Value::as_str) == Some(INSTRUCTION_KEY))
+                .map(|entry| {
+                    entry
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                })
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// `PUT …/instructions/entries/luna {value}` (204; replaces an earlier run's
+/// entry), then read back exactly one `luna` entry with this value.
 async fn put_instructions(
     server: &Server,
     session_id: &str,
     dir: Option<&str>,
     text: &str,
 ) -> Result<(), String> {
-    let entries = format!("/api/experimental/session/{session_id}/instructions/entries");
-    let path = format!("{entries}/{INSTRUCTION_KEY}");
+    let path = format!("{}/{INSTRUCTION_KEY}", entries_path(session_id));
     let (status, body) = server
         .exchange(
             reqwest::Method::PUT,
@@ -776,20 +983,57 @@ async fn put_instructions(
     if !status.is_success() {
         return Err(http_error_message("PUT", &path, status, &body));
     }
-    let listed = server
-        .get_json(&entries, dir)
-        .await
-        .map_err(|error| error.to_string())?;
-    let present = unwrap_data(listed).as_array().is_some_and(|entries| {
-        entries.iter().any(|entry| {
-            entry.get("key").and_then(Value::as_str) == Some(INSTRUCTION_KEY)
-                && entry.get("value").and_then(Value::as_str) == Some(text)
-        })
-    });
-    if present {
-        Ok(())
-    } else {
-        Err("the luna instruction entry did not read back".into())
+    let entries = luna_entries(server, session_id, dir).await?;
+    match entries.as_slice() {
+        [value] if value == text => Ok(()),
+        [] => Err("the luna instruction entry did not read back".into()),
+        [_] => Err("the luna instruction entry read back with a different value".into()),
+        _ => Err(format!(
+            "the session reads back {} luna instruction entries instead of one",
+            entries.len()
+        )),
+    }
+}
+
+/// Remove the session's `luna` entry when an earlier run left one: a resumed
+/// or forked session whose run delivers no contract must not keep telling
+/// the model that LUNA tools are attached. Best effort (a server without the
+/// routes, or a failed call, is logged, never a turn failure).
+pub(super) async fn retire_instructions(server: &Server, session_id: &str, dir: Option<&str>) {
+    let found = match luna_entries(server, session_id, dir).await {
+        Ok(entries) => entries.len(),
+        Err(error) => {
+            tracing::debug!(target: "luna_harness::opencode", "luna instruction entries unreadable: {error}");
+            return;
+        }
+    };
+    if found == 0 {
+        return;
+    }
+    let path = format!("{}/{INSTRUCTION_KEY}", entries_path(session_id));
+    let outcome = server
+        .exchange(
+            reqwest::Method::DELETE,
+            &path,
+            dir,
+            None,
+            Some(CALL_TIMEOUT),
+        )
+        .await;
+    match outcome {
+        Ok((status, _)) if status.is_success() => tracing::info!(
+            target: "luna_harness::opencode",
+            "removed a stale luna instruction entry from a session that runs without LUNA's contract"
+        ),
+        Ok((status, body)) => tracing::warn!(
+            target: "luna_harness::opencode",
+            "could not remove a stale luna instruction entry: {}",
+            http_error_message("DELETE", &path, status, &body)
+        ),
+        Err(error) => tracing::warn!(
+            target: "luna_harness::opencode",
+            "could not remove a stale luna instruction entry: {error}"
+        ),
     }
 }
 

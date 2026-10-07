@@ -1341,21 +1341,22 @@ impl Drop for EngineRpc {
 impl EngineRpc {
     /// The selected task's current native Claude session id, only when that
     /// task belongs to the selected project (never mix project evidence).
-    fn claude_session_for_inventory(
+    /// The selected chat's own provider session id, when that chat runs on
+    /// `provider` in the selected project (the inventory's session evidence).
+    fn provider_session_for_inventory(
         &self,
+        provider: HarnessId,
         task_id: Option<&str>,
         project_id: Option<&str>,
     ) -> Option<String> {
         let chat = self.workspace.chat(task_id?).ok().flatten()?;
-        if chat.space_id.as_deref() != project_id
-            || chat.config.as_ref()?.harness != HarnessId::ClaudeCode
-        {
+        if chat.space_id.as_deref() != project_id || chat.config.as_ref()?.harness != provider {
             return None;
         }
         self.task_identity
             .view(&chat.id)
             .and_then(|view| view.current_binding)
-            .filter(|binding| binding.provider_id == HarnessId::ClaudeCode)
+            .filter(|binding| binding.provider_id == provider)
             .map(|binding| binding.provider_task_id)
             .or(chat.harness_session_id)
             .filter(|id| !id.is_empty())
@@ -9991,9 +9992,38 @@ impl RpcService for EngineRpc {
                         .resolve(HarnessId::ClaudeCode)
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
                     let session = self
-                        .claude_session_for_inventory(p.task_id.as_deref(), p.project_id.as_deref())
+                        .provider_session_for_inventory(
+                            HarnessId::ClaudeCode,
+                            p.task_id.as_deref(),
+                            p.project_id.as_deref(),
+                        )
                         .and_then(|id| harness.session_mcp_observation(&id));
                     crate::claude_mcp::augment_inventory(
+                        &mut view,
+                        harness.as_ref(),
+                        project_root,
+                        session,
+                        p.probe_provider,
+                    )
+                    .await;
+                    view
+                } else if p.provider == HarnessId::Opencode {
+                    // Read-only MCP rows through the same hooks as Claude's:
+                    // the selected chat's session readback, plus OpenCode's
+                    // own project readback on Check provider.
+                    let mut view = crate::integration_settings::skill_inventory(p.provider, &roots);
+                    let harness = self
+                        .registry
+                        .resolve(HarnessId::Opencode)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    let session = self
+                        .provider_session_for_inventory(
+                            HarnessId::Opencode,
+                            p.task_id.as_deref(),
+                            p.project_id.as_deref(),
+                        )
+                        .and_then(|id| harness.session_mcp_observation(&id));
+                    crate::opencode_mcp::augment_inventory(
                         &mut view,
                         harness.as_ref(),
                         project_root,

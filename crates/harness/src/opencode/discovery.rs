@@ -8,10 +8,12 @@
 //!   nothing to the session, which is removed afterwards), never an ordinary
 //!   coding prompt; native OpenCode titles are ignored;
 //! - read-only `native_extensions` (commands and skills a launch in that
-//!   location loads, with the configuration sources) and
+//!   location loads, with the configuration sources),
 //!   `session_mcp_observation` (the run's own `GET /api/mcp` readback,
-//!   server names and status words only). Nothing here writes OpenCode
-//!   state (PD-3).
+//!   server names and status words only) and `mcp_control` status (the same
+//!   readback from a short-lived server in the selected project, for the
+//!   shared integration inventory's Check provider; enable/disable and MCP
+//!   Apps reads stay unsupported). Nothing here writes OpenCode state (PD-3).
 
 use std::sync::{Mutex, OnceLock};
 
@@ -22,7 +24,9 @@ use luna_proto::{
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::mcp_control::{SessionMcpObservation, SessionMcpServer};
+use crate::mcp_control::{
+    McpLaunchReadback, ProviderMcpServer, SessionMcpObservation, SessionMcpServer,
+};
 
 /// Session MCP observations kept in memory (newest wins; bounded).
 const MAX_SESSION_OBSERVATIONS: usize = 64;
@@ -179,6 +183,65 @@ impl Server {
             .unwrap_or_default())
     }
 
+    /// `GET /api/mcp` as provider readback rows for the shared integration
+    /// inventory: names, status words and bounded, URL/path-redacted error
+    /// text only. A freshly booted location answers empty lists until its
+    /// configuration loads (2.0.22), so the read waits for the location's
+    /// built-in commands first; its servers then start `pending` and are
+    /// polled briefly, and still-pending rows stay pending (`settled` false)
+    /// rather than being guessed.
+    pub(super) async fn mcp_readback(
+        &self,
+        directory: Option<&str>,
+    ) -> Result<(Vec<ProviderMcpServer>, bool), HarnessError> {
+        let deadline = tokio::time::Instant::now() + LOCATION_LOAD_BUDGET;
+        while !self
+            .commands_wire(directory)
+            .await?
+            .as_array()
+            .is_some_and(|list| !list.is_empty())
+            && tokio::time::Instant::now() < deadline
+        {
+            tokio::time::sleep(LOCATION_LOAD_POLL).await;
+        }
+        loop {
+            let rows = unwrap_data(self.get_json("/api/mcp", directory).await?);
+            let servers: Vec<ProviderMcpServer> = rows
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| {
+                            let name = row.get("name")?.as_str()?.to_owned();
+                            let status = mcp_status(
+                                row.pointer("/status/status")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default(),
+                            );
+                            let error = row
+                                .pointer("/status/error")
+                                .and_then(Value::as_str)
+                                .filter(|text| !text.trim().is_empty())
+                                .map(|text| crate::claude::redact_provider_text(text, 240));
+                            Some(ProviderMcpServer {
+                                name,
+                                status,
+                                error,
+                                ..ProviderMcpServer::default()
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let settled = !servers
+                .iter()
+                .any(|server| server.status == ProviderMcpStatus::Pending);
+            if settled || tokio::time::Instant::now() >= deadline {
+                return Ok((servers, settled));
+            }
+            tokio::time::sleep(LOCATION_LOAD_POLL).await;
+        }
+    }
+
     /// One tool-less title generation through a throwaway session: created
     /// with OpenCode's hidden `title` agent and a deny-everything ruleset (no
     /// tool reaches the model), asked once with `POST …/generate` (text from
@@ -250,6 +313,24 @@ impl Server {
 
 /// OpenCode's hidden built-in title agent: primary, every permission denied.
 const TITLE_AGENT: &str = "title";
+
+/// One readback answers every requested LUNA mode: OpenCode loads the same
+/// configuration (and so the same MCP servers) in each of them; LUNA's mode
+/// only compiles permission rules. LUNA's own `luna` server is attached per
+/// run, so a probe server never lists it (the session readback does).
+pub(super) fn mcp_launch_readback(
+    modes: Vec<luna_proto::PermissionMode>,
+    servers: Vec<ProviderMcpServer>,
+    settled: bool,
+) -> McpLaunchReadback {
+    McpLaunchReadback {
+        modes,
+        restricted: false,
+        settled,
+        servers,
+        app_read_supported: None,
+    }
+}
 
 fn mcp_status(word: &str) -> ProviderMcpStatus {
     match word {

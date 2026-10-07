@@ -302,8 +302,9 @@ async fn main() {
     let workspace = tempfile::tempdir().expect("isolated probe workspace");
     let cwd = workspace.path().to_str().expect("UTF-8 path").to_owned();
     let harness = OpencodeHarness::new();
-    // The delivery verdict is per OpenCode version and needs that version's
-    // live API contract: one discovery boot records it, like the picker's.
+    // Delivery compiles optimistically before any boot (the engine-level
+    // `opencode_luna_tools_probe` proves the first turn); this discovery boot
+    // records the version's verdict, like the picker's.
     let models = harness.models().await.map(|models| models.len());
     eprintln!("MODELS {models:?}");
     let delivery = harness.luna_runtime_delivery();

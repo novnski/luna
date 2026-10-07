@@ -168,8 +168,14 @@ pub(super) fn oc_tool_call(name: &str, input: &Value, mcp_servers: &[String]) ->
         _ if name.starts_with(OPENCODE_NAMESPACE) => generic(),
         _ => match mcp_split(name, mcp_servers) {
             Some((server, tool)) => ToolCall::Mcp {
+                // LUNA's own tools carry the engine's names, as on Codex and
+                // Claude (`luna_status`, not the listed `status`; OC-13).
+                tool: if server == crate::codex::luna_mcp::SERVER_NAME {
+                    canonical_luna_tool(&tool)
+                } else {
+                    tool
+                },
                 server,
-                tool,
                 input: (!input.is_null()).then(|| input.clone()),
             },
             None => {

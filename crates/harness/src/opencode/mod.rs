@@ -349,6 +349,18 @@ impl OpencodeHarness {
         server.shutdown(self.kill_grace).await;
         readback.map_err(|error| error.to_string())
     }
+
+    /// MCP servers as OpenCode reports them in `location` (read-only).
+    async fn probe_mcp_status(
+        &self,
+        location: &str,
+    ) -> Result<(Vec<crate::mcp_control::ProviderMcpServer>, bool), HarnessError> {
+        let _guard = self.probe_lock.lock().await;
+        let mut server = self.server(Some(location)).await?;
+        let readback = server.mcp_readback(Some(location)).await;
+        server.shutdown(self.kill_grace).await;
+        readback
+    }
 }
 
 #[async_trait]
@@ -356,9 +368,11 @@ impl Harness for OpencodeHarness {
     fn id(&self) -> HarnessId {
         HarnessId::Opencode
     }
-    /// LUNA tools and the runtime contract (OC-13), only for the OpenCode
-    /// version this process resolved when that version's delivery routes
-    /// were verified and no run reported a readback failure (PD-10).
+    /// LUNA tools and the runtime contract (OC-13), promised optimistically
+    /// like Claude's (the very first turn after LUNA starts included) unless
+    /// this process learned that the resolved version lacks the delivery
+    /// routes or a recent run failed its readback. Each run verifies the
+    /// attachment before the model sees a tool (PD-10).
     fn luna_runtime_delivery(&self) -> luna_proto::RuntimeDelivery {
         if self.base_url.is_some() {
             // The attached test seam gets no spawn environment.
@@ -544,6 +558,30 @@ impl Harness for OpencodeHarness {
             }
         };
         Ok(extensions_view(&location, mode, readback))
+    }
+
+    /// Read-only MCP control: a status readback from a short-lived server in
+    /// the selected project (the shared inventory's Check provider). OpenCode
+    /// owns enable/disable and authentication; LUNA does not change them.
+    async fn mcp_control(
+        &self,
+        request: crate::mcp_control::McpControlRequest,
+    ) -> Result<crate::mcp_control::McpControlReply, HarnessError> {
+        match request.op {
+            crate::mcp_control::McpControlOp::Status { modes } => {
+                let location = request.cwd.to_string_lossy().into_owned();
+                let (servers, settled) = self.probe_mcp_status(&location).await?;
+                Ok(crate::mcp_control::McpControlReply::Status(vec![
+                    mcp_launch_readback(modes, servers, settled),
+                ]))
+            }
+            crate::mcp_control::McpControlOp::SetEnabled { .. }
+            | crate::mcp_control::McpControlOp::ReadAppResource { .. } => {
+                Err(HarnessError::Protocol(
+                    "OpenCode MCP servers are read-only in LUNA; manage them in OpenCode".into(),
+                ))
+            }
+        }
     }
 
     /// The run's own `GET /api/mcp` readback at its start (names and status

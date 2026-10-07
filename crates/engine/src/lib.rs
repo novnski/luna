@@ -148,6 +148,7 @@ pub mod live_usage;
 pub mod local_import;
 mod model_cache;
 mod native_tasks;
+mod opencode_mcp;
 pub mod permissions;
 pub mod profile;
 pub mod project_commands;

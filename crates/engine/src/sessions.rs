@@ -3279,9 +3279,11 @@ impl SessionsEngine {
     }
 
     /// Whether a run of `harness` carries LUNA's runtime-contract instruction
-    /// section: Codex and Claude always, OpenCode while its delivery is
-    /// verified. Side chats send their frozen seed through that section and
-    /// fall back to a quoted first-prompt prefix only without one.
+    /// section: Codex and Claude always, OpenCode unless its delivery was
+    /// withdrawn (it compiles optimistically before the first boot, like
+    /// Claude, and the run verifies before the model sees a tool). Side chats
+    /// send their frozen seed through that section and fall back to a quoted
+    /// first-prompt prefix only without one.
     pub(crate) fn provider_has_instruction_channel(&self, harness: HarnessId) -> bool {
         match harness {
             HarnessId::Codex | HarnessId::ClaudeCode => true,
@@ -4530,9 +4532,11 @@ impl SessionsEngine {
             .registry
             .resolve(harness_id)?
             .luna_runtime_delivery();
-        // OpenCode compiles a contract only while its delivery is verified
-        // (OC-13); otherwise it keeps the no-contract path and its side
-        // chats keep the quoted seed (`provider_has_instruction_channel`).
+        // OpenCode compiles a contract unless its delivery was withdrawn
+        // (OC-13: optimistic before the first boot, verified by the run);
+        // otherwise it keeps the no-contract path, its run retires a stale
+        // `luna` instruction entry, and its side chats keep the quoted seed
+        // (`provider_has_instruction_channel`).
         if (matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode)
             || (harness_id == HarnessId::Opencode
                 && provider_delivery != luna_proto::RuntimeDelivery::Unsupported))

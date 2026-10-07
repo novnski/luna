@@ -233,7 +233,12 @@ fn assemble(
                 name: "luna_status guidance".into(),
                 source: RuntimeInstructionSource::Tool,
                 provenance: "engine tool registry luna_status@1".into(),
-                text: if delivery.serves_luna_mcp() {
+                text: if delivery == RuntimeDelivery::OpenCodeMcpTools {
+                    // OpenCode lists MCP tools as `<server>_<tool>` and steers
+                    // models toward Code Mode's `execute`, where these direct
+                    // tools are not listed (verified live on 2.0.22).
+                    "LUNA tools are served by the `luna` MCP server attached to this session as direct tools named luna_<tool> (for example luna_get_workspace and luna_status). Call them directly by name; they are not in the execute (Code Mode) catalog. Use luna_status when you need this task's current LUNA identity or granted scopes."
+                } else if delivery.serves_luna_mcp() {
                     "LUNA tools are served by the `luna` MCP server attached to this session. Use its luna_status tool when you need this task's current LUNA identity or granted scopes."
                 } else {
                     "Use luna_status when you need this task's current LUNA identity or granted scopes."
