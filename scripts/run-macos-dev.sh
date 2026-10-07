@@ -113,6 +113,44 @@ PY
 )" || exit 2
 fi
 
+# OpenCode QA (docs/reference/qa-infrastructure.md): an isolated profile
+# wrapper and the adapter wire log. QA-only, both inside the QA data directory.
+OPENCODE_QA_EXECUTABLE=''
+OPENCODE_QA_WIRE_LOG=''
+if [[ -n "${LUNA_DEV_OPENCODE_EXECUTABLE+x}${LUNA_DEV_OPENCODE_WIRE_LOG+x}" ]]; then
+  if [[ -z "$WORKTREES_DIR" ]]; then
+    echo 'Invalid dev app configuration: LUNA_DEV_OPENCODE_* overrides are QA-only' >&2
+    exit 2
+  fi
+  opencode_qa="$(python3 - "$DATA_DIR" "${LUNA_DEV_OPENCODE_EXECUTABLE-}" "${LUNA_DEV_OPENCODE_WIRE_LOG-}" <<'PY'
+import os, pathlib, sys
+data = pathlib.Path(sys.argv[1])
+def reject(message):
+    sys.exit('Invalid dev app configuration: ' + message)
+def inside(raw, label):
+    if any(char in raw for char in '\n\r') or not os.path.isabs(raw):
+        reject(f'{label} must be an absolute single-line path')
+    path = pathlib.Path(raw)
+    if path != path.resolve() or data not in path.parents:
+        reject(f'{label} must be inside the QA data directory without symlinks')
+    return path
+exe, wire = sys.argv[2], sys.argv[3]
+if exe:
+    path = inside(exe, 'LUNA_DEV_OPENCODE_EXECUTABLE')
+    if not path.is_file() or not os.access(path, os.X_OK):
+        reject('LUNA_DEV_OPENCODE_EXECUTABLE must be an executable file')
+    if '# luna-qa-opencode-profile' not in path.read_text(errors='replace'):
+        reject('LUNA_DEV_OPENCODE_EXECUTABLE must be a scripts/qa-opencode-env.sh profile wrapper')
+if wire:
+    inside(wire, 'LUNA_DEV_OPENCODE_WIRE_LOG').mkdir(parents=True, exist_ok=True)
+print(exe)
+print(wire)
+PY
+)" || exit 2
+  OPENCODE_QA_EXECUTABLE="$(sed -n 1p <<<"$opencode_qa")"
+  OPENCODE_QA_WIRE_LOG="$(sed -n 2p <<<"$opencode_qa")"
+fi
+
 # Linked worktrees share one app-operation slot. Neither this lock nor the
 # checkout-local refresh lock is auto-recovered: inspect a stale owner's PID.
 git_common_dir="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
@@ -213,6 +251,8 @@ if [[ -n "$WORKTREES_DIR" ]]; then
   # QA provider processes keep LUNA's own per-session MCP endpoint but do not
   # inherit the user's unrelated MCP connections during native acceptance.
   plutil -replace LSEnvironment.LUNA_QA_MCP_ISOLATION -string 1 "$staged_contents/Info.plist"
+  [[ -z "$OPENCODE_QA_EXECUTABLE" ]] || plutil -replace LSEnvironment.OPENCODE_EXECUTABLE -string "$OPENCODE_QA_EXECUTABLE" "$staged_contents/Info.plist"
+  [[ -z "$OPENCODE_QA_WIRE_LOG" ]] || plutil -replace LSEnvironment.LUNA_OPENCODE_WIRE_LOG -string "$OPENCODE_QA_WIRE_LOG" "$staged_contents/Info.plist"
 else
   # An inherited shell value must never turn isolation on for primary LUNA Dev.
   plutil -replace LSEnvironment.LUNA_QA_MCP_ISOLATION -string 0 "$staged_contents/Info.plist"
@@ -300,6 +340,8 @@ OPEN_ENV=(
 if [[ -n "$WORKTREES_DIR" ]]; then
   OPEN_ENV+=(--env "LUNA_WORKTREES_DIR=$WORKTREES_DIR")
 fi
+[[ -z "$OPENCODE_QA_EXECUTABLE" ]] || OPEN_ENV+=(--env "OPENCODE_EXECUTABLE=$OPENCODE_QA_EXECUTABLE")
+[[ -z "$OPENCODE_QA_WIRE_LOG" ]] || OPEN_ENV+=(--env "LUNA_OPENCODE_WIRE_LOG=$OPENCODE_QA_WIRE_LOG")
 if [[ -n "${LUNA_OPEN_ROUTE:-}" ]]; then
   OPEN_ENV+=(--env "LUNA_OPEN_ROUTE=$LUNA_OPEN_ROUTE")
 fi
