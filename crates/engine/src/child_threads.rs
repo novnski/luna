@@ -710,7 +710,10 @@ impl EngineRpc {
             .as_ref()
             .ok_or_else(|| RpcError::Failed("Created child lineage is unavailable".into()))?;
         Ok(ChildThreadReceipt {
-            placement: Some(self.place_child_in_background(&parent_id, &child_id)),
+            // The desktop opens its own `+`/split child where the user asked,
+            // against the layout revision it holds. Placing it here too would
+            // move that revision first and make the window's open conflict.
+            placement: None,
             task_id: child_id.clone(),
             parent_task_id: parent_id,
             command: receipt,

@@ -189,6 +189,78 @@ async fn optimistic_main_becomes_available_after_creation_without_recreating_del
     stop(core, client).await;
 }
 
+/// A group's split control and `+` create the child, then open it where the
+/// user asked (a new group to the right, or this group) against the layout
+/// the window already holds. Creating the child must not move that layout
+/// under the window, or the open conflicts and the split never appears.
+#[tokio::test]
+async fn new_thread_opens_where_asked_without_a_layout_conflict() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = assemble(dir.path(), "new-thread-split");
+    let client = luna_rpc::memory_client(core.rpc_service());
+    let chats = ids(1);
+    let main = &chats[0];
+    seed(&core, &client, &dir.path().join("project"), &chats).await;
+    let profile_id = profile(&client).await;
+    let mut held = get(&client, main).await;
+    let before = held.revision;
+
+    // New thread in a split.
+    let split = client
+        .call(
+            "CreateChildTab",
+            json!({"parentTaskId":main,"idempotencyKey":"split-child"}),
+        )
+        .await
+        .unwrap();
+    let split_child = split["taskId"].as_str().unwrap().to_owned();
+    assert_eq!(get(&client, main).await.revision, before, "{split}");
+    mutate(
+        &client,
+        &mut held,
+        &profile_id,
+        "open-split-child",
+        json!({"op":"openTab","tab":{"chatId":split_child},
+            "destination":{"kind":"split","nodeId":"main-pane","edge":"right","newPaneId":"pane-right","splitId":"split-right"}}),
+    )
+    .await;
+    assert_eq!(held.pane_for_chat(main).unwrap().id(), "main-pane");
+    assert_eq!(held.pane_for_chat(&split_child).unwrap().id(), "pane-right");
+    assert_eq!(held.focused_pane_id, "pane-right");
+    assert!(matches!(
+        held.root,
+        luna_proto::ChatWorkbenchNode::Split { .. }
+    ));
+
+    // `+` in the main group: opened there, not as a stray background tab.
+    let plus = client
+        .call(
+            "CreateChildTab",
+            json!({"parentTaskId":main,"idempotencyKey":"plus-child"}),
+        )
+        .await
+        .unwrap();
+    let plus_child = plus["taskId"].as_str().unwrap().to_owned();
+    assert_eq!(get(&client, main).await.revision, held.revision, "{plus}");
+    mutate(
+        &client,
+        &mut held,
+        &profile_id,
+        "open-plus-child",
+        json!({"op":"openTab","tab":{"chatId":plus_child},
+            "destination":{"kind":"pane","paneId":"main-pane"}}),
+    )
+    .await;
+    assert_eq!(held.pane_for_chat(&plus_child).unwrap().id(), "main-pane");
+    assert_eq!(held.focused_pane_id, "main-pane");
+    assert_eq!(held.root.tabs().len(), 3);
+    evidence(
+        "new-thread-placement.json",
+        json!({"revisionBeforeCreate":before,"splitReceipt":split,"plusReceipt":plus,"final":held}),
+    );
+    stop(core, client).await;
+}
+
 #[tokio::test]
 async fn non_main_source_creates_fresh_and_context_threads_in_the_host_layout() {
     let dir = tempfile::tempdir().unwrap();
