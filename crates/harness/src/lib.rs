@@ -429,6 +429,13 @@ pub trait Harness: Send + Sync {
             "context compaction is not supported by this harness".into(),
         ))
     }
+    /// Whether [`Self::stop_native_child`] can address a live native child of
+    /// this adapter's runs. The engine offers per-child Stop in the work
+    /// panel only when this is true, so an adapter that implements the stop
+    /// must also opt in here. Default false.
+    fn supports_native_child_stop(&self) -> bool {
+        false
+    }
     /// Ask the provider to stop one native child (the spawn call
     /// `spawn_tool_use_id`) of the live run bound to `native_session_id`.
     /// Adapters must opt in; the default is honest unsupported behavior.

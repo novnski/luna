@@ -437,8 +437,8 @@ impl WorkProjection {
                                 && kind == Kind::NativeChild
                                 && !state.terminal()
                                 && state != State::Unknown
-                                && r.provider == HarnessId::ClaudeCode
                                 && r.native_session_id.is_some()
+                                && self.sessions.native_child_stop_supported(r.provider)
                                 && (origin.owner_task_id == chat.id
                                     || r.message_id == origin.launch_turn_id)
                         })

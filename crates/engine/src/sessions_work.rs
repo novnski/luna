@@ -62,6 +62,15 @@ impl SessionsEngine {
         // otherwise the delegated request could recover after being stopped.
         self.interrupt(chat).await
     }
+    /// Whether this provider's adapter can stop one native child of a live
+    /// run (its own capability, not a provider list), which decides whether
+    /// the work panel offers per-child Stop.
+    pub(crate) fn native_child_stop_supported(&self, provider: HarnessId) -> bool {
+        self.inner
+            .registry
+            .resolve(provider)
+            .is_ok_and(|harness| harness.supports_native_child_stop())
+    }
     pub(crate) async fn stop_work_native(
         &self,
         chat: &str,
