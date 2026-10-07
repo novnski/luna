@@ -118,6 +118,7 @@ impl Server {
         startup: Duration,
     ) -> Result<Self, HarnessError> {
         let password = uuid::Uuid::new_v4().to_string();
+        register_secret(&password);
         let mut cmd = Command::new(exe);
         cmd.arg("serve")
             .arg("--stdio")
@@ -271,13 +272,22 @@ impl Server {
     /// `{version, pid, urls, paths}` even before its app graph is ready: the
     /// STATUS is the readiness (200 ready, 503 booting, 500 failed) and the
     /// version is the generation. Anything without a JSON version — the 1.x
-    /// web UI, an empty 404 — is not an OpenCode 2 server.
+    /// web UI, an empty 404 — is not an OpenCode 2 server. The boot window
+    /// may accept a connection and park the request, so a probe abandons
+    /// after 2 s and re-polls.
     pub(super) async fn probe_info(&self) -> InfoProbe {
-        let Ok(resp) = self.get_raw("/api/info").await else {
+        let Ok((status, body)) = self
+            .exchange(
+                reqwest::Method::GET,
+                "/api/info",
+                None,
+                None,
+                Some(Duration::from_secs(2)),
+            )
+            .await
+        else {
             return InfoProbe::Booting;
         };
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
         let version = serde_json::from_str::<Value>(&body)
             .ok()
             .and_then(|v| v.get("version").and_then(Value::as_str).map(str::to_owned));
@@ -321,13 +331,47 @@ impl Server {
         req
     }
 
-    /// Bounded readiness probe: the boot window may accept a connection and
-    /// park the request, so a probe abandons after 2 s and re-polls.
-    pub(super) async fn get_raw(&self, path: &str) -> Result<reqwest::Response, reqwest::Error> {
-        self.request(reqwest::Method::GET, path)
-            .timeout(Duration::from_secs(2))
-            .send()
-            .await
+    /// Send one request (location-scoped, optional JSON body, optional
+    /// timeout) and read the whole response body. Only transport failures
+    /// error; HTTP status handling is the caller's. Every exchange lands in
+    /// the QA wire log when it is enabled.
+    pub(super) async fn exchange(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        directory: Option<&str>,
+        body: Option<&Value>,
+        timeout: Option<Duration>,
+    ) -> Result<(reqwest::StatusCode, String), HarnessError> {
+        let started = Instant::now();
+        let mut req = self.request(method.clone(), path);
+        if let Some(timeout) = timeout {
+            req = req.timeout(timeout);
+        }
+        if let Some(body) = body {
+            req = req.json(body);
+        }
+        let req = self.scoped(req, directory);
+        let outcome = async {
+            let resp = req.send().await?;
+            let status = resp.status();
+            let text = resp.text().await?;
+            Ok::<_, reqwest::Error>((status, text))
+        }
+        .await;
+        let response = match &outcome {
+            Ok((status, text)) => Ok((status.as_u16(), Some(text.as_str()))),
+            Err(error) => Err(error.to_string()),
+        };
+        log_http(HttpRecord {
+            server: &self.base,
+            method: method.as_str(),
+            path,
+            request: body,
+            response,
+            started,
+        });
+        outcome.map_err(|e| HarnessError::Protocol(format!("opencode {method} {path}: {e}")))
     }
 
     /// GET with the session's directory scope (the server's per-request
@@ -337,13 +381,26 @@ impl Server {
         path: &str,
         directory: Option<&str>,
     ) -> Result<Value, HarnessError> {
-        self.get_response(path, directory)
-            .await?
-            .json()
-            .await
+        let (status, text) = self
+            .exchange(
+                reqwest::Method::GET,
+                path,
+                directory,
+                None,
+                Some(CALL_TIMEOUT),
+            )
+            .await?;
+        if !status.is_success() {
+            return Err(HarnessError::Protocol(http_error_message(
+                "GET", path, status, &text,
+            )));
+        }
+        serde_json::from_str(&text)
             .map_err(|e| HarnessError::Protocol(format!("opencode GET {path}: {e}")))
     }
 
+    /// GET decoded straight off the wire (large catalogs; the wire log
+    /// records the status only).
     pub(super) async fn get<T: serde::de::DeserializeOwned + Send + 'static>(
         &self,
         path: &str,
@@ -360,21 +417,36 @@ impl Server {
         path: &str,
         directory: Option<&str>,
     ) -> Result<reqwest::Response, HarnessError> {
+        let started = Instant::now();
         let req = self
             .request(reqwest::Method::GET, path)
             .timeout(CALL_TIMEOUT);
-        let resp = self
-            .scoped(req, directory)
-            .send()
-            .await
-            .map_err(|e| HarnessError::Protocol(format!("opencode GET {path}: {e}")))?;
+        let record = |response| HttpRecord {
+            server: &self.base,
+            method: "GET",
+            path,
+            request: None,
+            response,
+            started,
+        };
+        let resp = match self.scoped(req, directory).send().await {
+            Ok(resp) => resp,
+            Err(error) => {
+                log_http(record(Err(error.to_string())));
+                return Err(HarnessError::Protocol(format!(
+                    "opencode GET {path}: {error}"
+                )));
+            }
+        };
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
+            log_http(record(Ok((status.as_u16(), Some(&body)))));
             return Err(HarnessError::Protocol(http_error_message(
                 "GET", path, status, &body,
             )));
         }
+        log_http(record(Ok((status.as_u16(), None))));
         Ok(resp)
     }
 
@@ -399,16 +471,15 @@ impl Server {
         path: &str,
         directory: Option<&str>,
     ) -> Result<Value, HarnessError> {
-        let req = self
-            .request(reqwest::Method::POST, path)
-            .timeout(CALL_TIMEOUT);
-        let resp = self
-            .scoped(req, directory)
-            .send()
-            .await
-            .map_err(|e| HarnessError::Protocol(format!("opencode POST {path}: {e}")))?;
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
+        let (status, text) = self
+            .exchange(
+                reqwest::Method::POST,
+                path,
+                directory,
+                None,
+                Some(CALL_TIMEOUT),
+            )
+            .await?;
         if !status.is_success() {
             return Err(HarnessError::Protocol(post_error_message(
                 path, status, &text,
@@ -423,16 +494,15 @@ impl Server {
         directory: Option<&str>,
         body: &Value,
     ) -> Result<Value, HarnessError> {
-        let req = self
-            .request(reqwest::Method::PATCH, path)
-            .timeout(CALL_TIMEOUT)
-            .json(body);
-        let response =
-            self.scoped(req, directory).send().await.map_err(|error| {
-                HarnessError::Protocol(format!("opencode PATCH {path}: {error}"))
-            })?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
+        let (status, text) = self
+            .exchange(
+                reqwest::Method::PATCH,
+                path,
+                directory,
+                Some(body),
+                Some(CALL_TIMEOUT),
+            )
+            .await?;
         if !status.is_success() {
             return Err(HarnessError::Protocol(http_error_message(
                 "PATCH", path, status, &text,
@@ -449,18 +519,14 @@ impl Server {
         directory: Option<&str>,
         body: &Value,
     ) -> Result<(reqwest::StatusCode, String), HarnessError> {
-        let req = self
-            .request(reqwest::Method::POST, path)
-            .timeout(CALL_TIMEOUT)
-            .json(body);
-        let resp = self
-            .scoped(req, directory)
-            .send()
-            .await
-            .map_err(|e| HarnessError::Protocol(format!("opencode POST {path}: {e}")))?;
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        Ok((status, text))
+        self.exchange(
+            reqwest::Method::POST,
+            path,
+            directory,
+            Some(body),
+            Some(CALL_TIMEOUT),
+        )
+        .await
     }
 
     /// Location scope: the server's per-request location selector. The 2.x

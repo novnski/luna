@@ -37,6 +37,8 @@ pub(super) async fn bus_task(base: String, auth: Option<String>, tx: mpsc::Sende
     let client = http_client();
     let url = format!("{base}/api/event");
     let mut failures: u32 = 0;
+    // Connection generation: one per accepted subscription (wire log).
+    let mut generation: u64 = 0;
     loop {
         if tx.is_closed() {
             return;
@@ -50,12 +52,15 @@ pub(super) async fn bus_task(base: String, auth: Option<String>, tx: mpsc::Sende
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 failures = 0;
-                stream_bus(&tx, resp).await;
+                generation += 1;
+                log_sse_connect(&base, generation, Ok(resp.status().as_u16()));
+                stream_bus(&tx, resp, &base, generation).await;
                 if tx.is_closed() {
                     return;
                 }
             }
-            _ => {}
+            Ok(resp) => log_sse_connect(&base, generation + 1, Ok(resp.status().as_u16())),
+            Err(error) => log_sse_connect(&base, generation + 1, Err(error.to_string())),
         }
         // (stream_bus sends Connected itself once the first frame lands —
         // an accepted-but-parked boot-window connection must not count.)
@@ -68,7 +73,12 @@ pub(super) async fn bus_task(base: String, auth: Option<String>, tx: mpsc::Sende
     }
 }
 
-pub(super) async fn stream_bus(tx: &mpsc::Sender<BusMsg>, resp: reqwest::Response) {
+pub(super) async fn stream_bus(
+    tx: &mpsc::Sender<BusMsg>,
+    resp: reqwest::Response,
+    base: &str,
+    generation: u64,
+) {
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     let mut announced = false;
@@ -77,6 +87,7 @@ pub(super) async fn stream_bus(tx: &mpsc::Sender<BusMsg>, resp: reqwest::Respons
     let mut v2_tool_names: HashMap<V2ToolKey, String> = HashMap::new();
     while let Some(chunk) = stream.next().await {
         let Ok(bytes) = chunk else {
+            log_sse_end(base, generation, "transport error");
             return;
         };
         if !announced {
@@ -102,6 +113,7 @@ pub(super) async fn stream_bus(tx: &mpsc::Sender<BusMsg>, resp: reqwest::Respons
                 let Ok(event) = serde_json::from_str::<Value>(data) else {
                     continue;
                 };
+                log_sse_frame(base, generation, data, &event);
                 note_event_type(event.get("type").and_then(Value::as_str).unwrap_or(""));
                 let payloads = normalize_v2_frame(event, &mut v2_tool_names);
                 if v2_tool_names.len() > MAX_PENDING_V2_TOOLS {
@@ -116,4 +128,5 @@ pub(super) async fn stream_bus(tx: &mpsc::Sender<BusMsg>, resp: reqwest::Respons
             }
         }
     }
+    log_sse_end(base, generation, "closed");
 }

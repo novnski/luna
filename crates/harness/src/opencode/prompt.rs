@@ -100,15 +100,19 @@ pub(super) async fn post_prompt(
             tokio::spawn(async move {
                 // Deliberately no CALL_TIMEOUT: the response can take the
                 // whole turn; the bus carries the turn's events meanwhile.
-                let req = server.request(reqwest::Method::POST, &path).json(&body);
-                let failure = match server.scoped(req, dir_owned.as_deref()).send().await {
-                    Ok(resp) if resp.status().is_success() => None,
-                    Ok(resp) => {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        Some(http_error_message("POST", &path, status, &text))
-                    }
-                    Err(error) => Some(format!("opencode POST {path}: {error}")),
+                let failure = match server
+                    .exchange(
+                        reqwest::Method::POST,
+                        &path,
+                        dir_owned.as_deref(),
+                        Some(&body),
+                        None,
+                    )
+                    .await
+                {
+                    Ok((status, _)) if status.is_success() => None,
+                    Ok((status, text)) => Some(http_error_message("POST", &path, status, &text)),
+                    Err(error) => Some(error.to_string()),
                 };
                 if let Some(detail) = failure {
                     let _ = bus

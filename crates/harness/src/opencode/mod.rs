@@ -26,7 +26,8 @@
 //!
 //! A prompt that produces NO session-scoped event within the stall bound
 //! (`LUNA_OPENCODE_STALL_MS`, 0 disables) errors out instead of spinning
-//! "Working" forever.
+//! "Working" forever. `LUNA_OPENCODE_WIRE_LOG=<dir>` appends a redacted
+//! JSONL wire log for QA (`wire_log`).
 //!
 //! Module map (each submodule does `use super::*`, and this module
 //! glob-imports each submodule, so names resolve crate-locally):
@@ -34,6 +35,7 @@
 //! - `resolve`: executable resolution (2.x only, version-probed).
 //! - `server`: the `opencode serve` child, readiness, HTTP helpers.
 //! - `compat`: the boot-time OpenAPI contract and the pinned event set.
+//! - `wire_log`: the opt-in redacted QA wire log.
 //! - `catalog`: models, variants, slash commands, session model switch.
 //! - `usage`: token/context usage and compaction.
 //! - `history`: message listing, fork planning and readback.
@@ -83,6 +85,7 @@ mod tools;
 mod transport;
 mod turn;
 mod usage;
+mod wire_log;
 mod wire_v2;
 
 use bus::*;
@@ -98,6 +101,7 @@ use tools::*;
 use transport::*;
 use turn::*;
 use usage::*;
+use wire_log::*;
 use wire_v2::*;
 
 pub use compat::{CompatReport, CompatStatus, opencode_compat_report};
