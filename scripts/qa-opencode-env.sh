@@ -93,6 +93,31 @@ for dir in bin config/opencode data/opencode cache state home tmp; do
 done
 chmod 700 "$profile"
 
+# QF-25: `mcp` (and any command without a --standalone flag) still attaches
+# to OpenCode's shared background service and leaves a detached
+# `opencode serve --service` running. With `disabled: true` in the service
+# config (<config>/opencode/service.json) every CLI command uses a private
+# server instead. Merge the key in place: the file may already hold the
+# service password, which is kept and never printed.
+python3 - "$profile/config/opencode/service.json" <<'PY'
+import json, os, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    data = json.loads(path.read_text()) if path.exists() else {}
+except (OSError, json.JSONDecodeError) as error:
+    sys.exit(f'qa-opencode-env: {path} is not readable JSON ({type(error).__name__}); fix it by hand')
+if not isinstance(data, dict):
+    sys.exit(f'qa-opencode-env: {path} is not a JSON object; fix it by hand')
+if data.get('disabled') is not True:
+    data['disabled'] = True
+    tmp = path.with_name(path.name + '.tmp')
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, 'w') as handle:
+        json.dump(data, handle, indent=2)
+        handle.write('\n')
+    os.replace(tmp, path)
+PY
+
 wrapper="$profile/bin/opencode"
 {
   printf '#!/bin/sh\n'
@@ -120,7 +145,9 @@ wrapper="$profile/bin/opencode"
   # opens the user's real database. Give them a private server instead and
   # refuse the commands that only manage that shared service or the real
   # installation. `serve` and `acp` (what LUNA and the T2 rig run) and the
-  # local-only `debug`, `mcp` and `plugin` commands pass through unchanged.
+  # `debug`, `mcp` and `plugin` commands, which have no --standalone flag,
+  # pass through unchanged; the profile's service config (`disabled: true`,
+  # written above) keeps `mcp` off the shared service as well.
   # No export, exec or opaque builtin word (an unquoted `.` pattern reads as
   # `source`) sits inside these blocks, so LUNA's storage replay
   # (crates/harness/src/opencode/storage.rs) still evaluates the wrapper.

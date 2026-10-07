@@ -275,14 +275,21 @@ profile) to `auth`, `session`, `models`, `stats`, `run`, `api`, `reload`,
 `--standalone` or `--server`. It refuses `service`, `pair`, `uninstall` and
 `upgrade`/`update` with exit 64, because they manage the shared service or
 the real installation. `serve` and `acp` (what LUNA and the T2 rig spawn) and
-the local `debug`, `mcp` and `plugin` commands, which have no server flag,
+the `debug`, `mcp` and `plugin` commands, which have no `--standalone` flag,
 pass through unchanged. No `export` or `exec` sits inside these blocks, so
-LUNA's storage replay still evaluates the wrapper. Regenerate an existing
-profile's wrapper in place with `scripts/qa-opencode-env.sh <profile>`; its
-data, credentials and config are kept. Check it with `<profile>/bin/opencode
-auth list` (a signed-in profile lists its integration as `stored`) while no
-`opencode serve --service` process appears. Older wrappers need
-`--standalone` passed by hand.
+LUNA's storage replay still evaluates the wrapper. `mcp list` was observed
+(second paid round) to still attach to the shared service and leave a detached
+`opencode serve --service` behind, so the script also merges
+`"disabled": true` into the profile's service config,
+`<profile>/config/opencode/service.json`. With it, OpenCode 2.0.22 gives every
+CLI command a private server; any other key (the service password OpenCode
+generates there) is kept and never printed. Regenerate an existing profile's
+wrapper and service config in place with `scripts/qa-opencode-env.sh
+<profile>`; its data, credentials and other config are kept. Check it with
+`<profile>/bin/opencode auth list` (a signed-in profile lists its integration
+as `stored`) and `<profile>/bin/opencode mcp list` while no `opencode serve
+--service` process appears. Older profiles need `--standalone` passed by hand
+and must not run `mcp` until regenerated.
 
 `OPENCODE_CONFIG_DIR` plus `OPENCODE_DB` alone is **not** isolation. The data
 root (logs, the `auth.json` import), cache (provider npm installs) and state
