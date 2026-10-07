@@ -5029,7 +5029,13 @@ impl SessionsEngine {
         // the Done-time call below stays as the retry for a failed
         // generation).
         if !attach_existing_goal && let Some(titles) = self.inner.titles.get() {
-            titles.maybe_generate(chat_id, harness_id, &visible_prompt, &request.cwd);
+            titles.maybe_generate(
+                chat_id,
+                harness_id,
+                request.model.as_deref(),
+                &visible_prompt,
+                &request.cwd,
+            );
         }
 
         if attach_existing_goal {
@@ -10307,7 +10313,13 @@ async fn drive_run(
                 && !resume_state.control_only
                 && let Some(titles) = inner.titles.get()
             {
-                titles.maybe_generate(&chat_id, harness_id, &user_prompt, &run_cwd);
+                titles.maybe_generate(
+                    &chat_id,
+                    harness_id,
+                    recovery_request.model.as_deref(),
+                    &user_prompt,
+                    &run_cwd,
+                );
             }
             // Explicit native acceptance belongs to THIS provider turn. A
             // persistent warm stream may stay open after Done, so waiting for
