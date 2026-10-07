@@ -268,7 +268,10 @@ fn v2_stream_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
 }
 
 /// Tool calls: the name arrives on `input.started`; later frames carry the
-/// provider call id alone.
+/// provider call id alone. Terminal frames keep the whole native result
+/// (`content`, `metadata`, `resultState`, `executed`, the error's type) for
+/// the result projection (`tool_output`); input deltas and progress become
+/// internal side-channel payloads (`tool.input.delta`, `tool.progress`).
 fn v2_tool_frames(
     kind: &str,
     data: &Value,
@@ -286,6 +289,17 @@ fn v2_tool_frames(
                 &json!({ "status": "pending" }),
             )]
         }
+        // Arguments being generated: a liveness signal (the text itself is
+        // only diagnostic; `called` carries the parsed arguments).
+        "session.tool.input.delta" => vec![json!({
+            "type": "tool.input.delta",
+            "properties": {
+                "sessionID": v2_session(data),
+                "messageID": v2_message(data),
+                "callID": v2_scoped_call_id(data),
+                "bytes": data.get("delta").and_then(Value::as_str).map_or(0, str::len),
+            }
+        })],
         "session.tool.called" => {
             let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
             let name = tool_names
@@ -298,12 +312,22 @@ fn v2_tool_frames(
             });
             vec![v2_tool_part(data, id, name, &state)]
         }
+        "session.tool.progress" => vec![json!({
+            "type": "tool.progress",
+            "properties": {
+                "sessionID": v2_session(data),
+                "messageID": v2_message(data),
+                "callID": v2_scoped_call_id(data),
+                "tool": tool_names.get(&v2_tool_key(data)).cloned().unwrap_or_default(),
+                "metadata": data.get("metadata").cloned().unwrap_or(Value::Null),
+            }
+        })],
         "session.tool.success" => {
             let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
             let name = tool_names.remove(&v2_tool_key(data)).unwrap_or_default();
-            let output = data
-                .get("content")
-                .and_then(Value::as_array)
+            let content = data.get("content").cloned().unwrap_or(json!([]));
+            let output = content
+                .as_array()
                 .map(|parts| {
                     parts
                         .iter()
@@ -312,12 +336,9 @@ fn v2_tool_frames(
                         .join("\n")
                 })
                 .unwrap_or_default();
-            vec![v2_tool_part(
-                data,
-                id,
-                &name,
-                &json!({ "status": "completed", "output": output }),
-            )]
+            let mut state = json!({ "status": "completed", "output": output, "content": content });
+            v2_copy_result_fields(data, &mut state);
+            vec![v2_tool_part(data, id, &name, &state)]
         }
         "session.tool.failed" | "session.tool.error" => {
             let id = data.get("id").and_then(Value::as_str).unwrap_or_default();
@@ -329,16 +350,43 @@ fn v2_tool_frames(
                 .map(str::to_owned)
                 .or_else(|| error.as_str().map(str::to_owned))
                 .unwrap_or_default();
-            vec![v2_tool_part(
-                data,
-                id,
-                &name,
-                &json!({ "status": "error", "error": message }),
-            )]
+            let mut state = json!({ "status": "error", "error": message });
+            if let Some(error_type) = error.get("type").and_then(Value::as_str) {
+                state["errorType"] = json!(error_type);
+            }
+            if let Some(content) = data.get("content").filter(|c| c.is_array()) {
+                state["content"] = content.clone();
+            }
+            v2_copy_result_fields(data, &mut state);
+            vec![v2_tool_part(data, id, &name, &state)]
         }
         _ => return None,
     };
     Some(frames)
+}
+
+/// The optional native result fields a terminal tool frame carries.
+fn v2_copy_result_fields(data: &Value, state: &mut Value) {
+    for key in ["metadata", "resultState", "executed"] {
+        if let Some(value) = data.get(key).filter(|v| !v.is_null()) {
+            state[key] = value.clone();
+        }
+    }
+}
+
+/// The chip id of a 2.x tool call: provider call ids can repeat across
+/// assistant messages, so the id is scoped by session and message.
+pub(super) fn v2_scoped_call_id(data: &Value) -> String {
+    format!(
+        "{}:{}:{}",
+        data.get("sessionID")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        data.get("assistantMessageID")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        data.get("id").and_then(Value::as_str).unwrap_or_default()
+    )
 }
 
 /// Requests that wait on the user: permission asks and their settlement,

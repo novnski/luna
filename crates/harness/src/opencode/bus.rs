@@ -40,6 +40,9 @@ pub(super) struct BusCtx<'a> {
     pub(super) context_windows: &'a HashMap<String, u64>,
     /// Owned sessions, applied rules, and pending asks and forms.
     pub(super) requests: &'a mut UserRequests,
+    /// The run's own bus channel: live shell output pages re-enter the loop
+    /// through it, so their activity stays ordered before the result.
+    pub(super) bus_tx: &'a mpsc::Sender<BusMsg>,
 }
 
 /// Wrap an event as subagent-attributed traffic.
@@ -94,7 +97,13 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         pending_usage,
         context_windows,
         requests,
+        bus_tx,
     } = ctx;
+    let tool_ctx = ToolSideCtx {
+        server,
+        dir,
+        bus_tx,
+    };
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
     if kind.is_empty() {
         return BusOutcome::Continue;
@@ -295,12 +304,14 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 return BusOutcome::Continue;
             };
             if session == session_id {
-                let events = part_snapshot_events(
+                // A shell's final output drain precedes its result.
+                let mut events = prepare_tool_part(main_feed, part, &tool_ctx).await;
+                events.extend(part_snapshot_events(
                     main_feed,
                     part,
                     true,
                     Some((children, pending_spawns, unbound_children)),
-                );
+                ));
                 mark_content(turn, &events);
                 let mut settle: Vec<AgentEvent> = Vec::new();
                 // A completed `task` part settles its child chip.
@@ -347,7 +358,48 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 if child.done {
                     return BusOutcome::Continue;
                 }
-                let events = part_snapshot_events(&mut child.feed, part, false, None);
+                let mut events = prepare_tool_part(&mut child.feed, part, &tool_ctx).await;
+                events.extend(part_snapshot_events(&mut child.feed, part, false, None));
+                let parent = child.parent_tool_use_id.clone();
+                let tagged = events.into_iter().map(|ev| tag(&parent, ev)).collect();
+                return forward(event_tx, tagged).await;
+            }
+            BusOutcome::Continue
+        }
+        // Tool arguments being generated: a pure liveness heartbeat on our
+        // own session (an empty reasoning delta, as Claude's input deltas).
+        "tool.input.delta" => {
+            if is_ours {
+                return forward(
+                    event_tx,
+                    vec![AgentEvent::ReasoningDelta {
+                        text: String::new(),
+                    }],
+                )
+                .await;
+            }
+            BusOutcome::Continue
+        }
+        // Running-call progress and live shell output pages.
+        "tool.progress" | "tool.shell.output" => {
+            let Some(session) = event_session else {
+                return BusOutcome::Continue;
+            };
+            let side = |feed: &mut SessionFeed| {
+                if kind == "tool.progress" {
+                    tool_progress_events(feed, props, &tool_ctx)
+                } else {
+                    shell_output_events(feed, props)
+                }
+            };
+            if session == session_id {
+                return forward(event_tx, side(main_feed)).await;
+            }
+            if let Some(child) = children.get_mut(session) {
+                if child.done {
+                    return BusOutcome::Continue;
+                }
+                let events = side(&mut child.feed);
                 let parent = child.parent_tool_use_id.clone();
                 let tagged = events.into_iter().map(|ev| tag(&parent, ev)).collect();
                 return forward(event_tx, tagged).await;

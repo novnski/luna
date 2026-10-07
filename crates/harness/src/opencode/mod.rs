@@ -53,6 +53,8 @@
 //!   detection, read-idle); `wire_v2`: the 2.x frame normalizer.
 //! - `bus`: routing one normalized payload; `parts`: part streaming state.
 //! - `subagents`: spawn chips and child binding; `tools`: tool vocabulary.
+//! - `tool_output`: tool results as the shared `lunaToolOutput` envelope
+//!   and diffs; `shell_tail`: live and full shell output.
 //! - `permissions`: mode compilation, rule readback, child ceilings, the
 //!   approval card and permission replies.
 //! - `forms`: v2 forms (questions, MCP elicitation, provider pickers) onto
@@ -74,7 +76,7 @@ use tokio::sync::mpsc;
 use luna_proto::{
     AgentEvent, DoneStatus, HarnessId, Model, ProviderForkBoundary, ProviderForkCapability,
     ProviderForkRequest, ProviderForkResult, ReasoningLevel, RunRequest, SlashCommand,
-    SteeringMode, TodoItem, ToolCall, UserInputAnswer, UserInputQuestion,
+    SteeringMode, ToolCall, ToolDiff, UserInputAnswer, UserInputQuestion,
 };
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
@@ -95,7 +97,9 @@ mod prompt;
 mod recovery;
 mod resolve;
 mod server;
+mod shell_tail;
 mod subagents;
+mod tool_output;
 mod tools;
 mod transport;
 mod turn;
@@ -114,7 +118,9 @@ use prompt::*;
 use recovery::*;
 use resolve::*;
 use server::*;
+use shell_tail::*;
 use subagents::*;
+use tool_output::*;
 use tools::*;
 use transport::*;
 use turn::*;

@@ -180,6 +180,16 @@ const REQUIREMENTS: &[Requirement] = &[
     // OC-08 reconnect resync of pending asks reuses the OC-04/OC-05
     // permission.request.list and form.list entries above. (The
     // experimental durable log is optional and probed at runtime.)
+    // OC-06: live and full shell output by cursor; MCP server names for
+    // typing `<server>_<tool>` calls.
+    op(
+        "shell.output",
+        "get",
+        "/api/shell/{id}/output",
+        None,
+        &["cursor", "limit"],
+    ),
+    op("mcp.list", "get", "/api/mcp", None, &[]),
 ];
 
 /// The v2 permission rule shape LUNA sends in `permissions`.
@@ -436,8 +446,13 @@ pub(super) fn check_contract(version: &str, spec: &Value) -> Result<CompatReport
     check_rule_shape(spec, &operations, &mut missing);
 
     let fingerprint = {
+        // Keys sorted explicitly: the app builds serde_json with
+        // `preserve_order` (GPUI enables it) while harness-only builds sort,
+        // and the pin must not depend on which binary computed it.
         let mut hasher = Sha256::new();
-        hasher.update(serde_json::to_vec(&fingerprint_input).unwrap_or_default());
+        hasher.update(
+            serde_json::to_vec(&sorted_keys(&Value::Array(fingerprint_input))).unwrap_or_default(),
+        );
         format!("{:x}", hasher.finalize())
     };
     if !missing.is_empty() {
@@ -561,6 +576,23 @@ fn required_fields(schema: &Value) -> BTreeSet<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// A copy with every object's keys in sorted order, whatever map ordering
+/// serde_json was built with.
+fn sorted_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map
+                .iter()
+                .map(|(key, value)| (key.clone(), sorted_keys(value)))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().collect())
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted_keys).collect()),
+        other => other.clone(),
+    }
 }
 
 /// A schema with `$ref`s inlined (bounded depth) and documentation keys
