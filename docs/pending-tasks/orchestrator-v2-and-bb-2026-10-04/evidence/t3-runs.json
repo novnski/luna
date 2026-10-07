@@ -1,8 +1,0 @@
-[{"thread_id":"18fa694d-dcd2-46f2-865f-ff02ac99b309","run_id":"run:thread:18fa694d-dcd2-46f2-865f-ff02ac99b309:ordinal:1","status":"completed","ordinal":1,"provider":"codex"},
-{"thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","run_id":"run:thread:ecce5cc4-8416-4a84-aaf3-9e241fb13d91:ordinal:1","status":"completed","ordinal":1,"provider":"codex"},
-{"thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","run_id":"run:thread:ecce5cc4-8416-4a84-aaf3-9e241fb13d91:ordinal:2","status":"completed","ordinal":2,"provider":"claudeAgent"},
-{"thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","run_id":"run:thread:ecce5cc4-8416-4a84-aaf3-9e241fb13d91:ordinal:3","status":"completed","ordinal":3,"provider":"claudeAgent"},
-{"thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","run_id":"run:thread:ecce5cc4-8416-4a84-aaf3-9e241fb13d91:ordinal:4","status":"completed","ordinal":4,"provider":"codex"},
-{"thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","run_id":"run:thread:ecce5cc4-8416-4a84-aaf3-9e241fb13d91:ordinal:5","status":"completed","ordinal":5,"provider":"codex"},
-{"thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","run_id":"run:thread:ecce5cc4-8416-4a84-aaf3-9e241fb13d91:ordinal:6","status":"completed","ordinal":6,"provider":"codex"},
-{"thread_id":"ecce5cc4-8416-4a84-aaf3-9e241fb13d91","run_id":"run:thread:ecce5cc4-8416-4a84-aaf3-9e241fb13d91:ordinal:7","status":"completed","ordinal":7,"provider":"codex"}]
