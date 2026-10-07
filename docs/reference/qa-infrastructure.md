@@ -290,8 +290,11 @@ user's. A wrapper that changes storage in a way LUNA cannot evaluate (command
 substitution, `source`, a conditional export) makes those readers report the
 OpenCode store as unavailable instead of falling back to `$HOME`. Explicit
 `XDG_*`, `OPENCODE_CONFIG_DIR`, `OPENCODE_DB` and `OPENCODE_DATA_DIR` in the
-app environment are honored the same way. The profile has no OpenCode Go
-account, so the QA Usage page shows OpenCode history but no Go limits.
+app environment are honored the same way. A new profile has no OpenCode Go
+credential, so the QA Usage page shows OpenCode history but no Go limits.
+After `opencode auth login` for OpenCode Go through the profile wrapper,
+OpenCode 2 saves the key in the profile database's `credential` table and the
+limits reader uses that key, as the spawned server does.
 
 ### Real-model policy (PD-18)
 

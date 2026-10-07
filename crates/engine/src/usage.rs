@@ -1545,6 +1545,16 @@ pub(crate) fn opencode_storage_roots(
     opencode_history::storage_roots(storage)
 }
 
+/// Opens an OpenCode database exactly as the history reader does: read-only,
+/// immutable while OpenCode has it closed (no WAL side files are created in
+/// its directory) and with the same short busy timeout. The Go limits reader
+/// uses it for the same store.
+pub(crate) fn open_opencode_database(path: &Path) -> rusqlite::Result<rusqlite::Connection> {
+    let db = opencode_history::open_read_only(path)?;
+    db.busy_timeout(opencode_history::BUSY_TIMEOUT)?;
+    Ok(db)
+}
+
 /// `snapshot_live` with explicit OpenCode data directories, each holding
 /// `opencode*.db` and optional legacy `storage/message` history. They are
 /// opened read-only and only usage fields are read.
