@@ -32,7 +32,7 @@ peer = scratch / 'peer'
 git('worktree', 'add', '--detach', str(peer))
 for repo in (root, peer):
     (repo / 'scripts').mkdir()
-    for name in ('build-budget.py', 'run-macos-dev.sh'):
+    for name in ('build-budget.py', 'prune_incremental.py', 'run-macos-dev.sh'):
         shutil.copy2(source / 'scripts' / name, repo / 'scripts' / name)
     (repo / 'target').mkdir()
 (root / 'Cargo.toml').write_text('version = "0.0.1"\n')
