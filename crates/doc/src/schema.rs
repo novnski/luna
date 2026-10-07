@@ -605,6 +605,20 @@ impl SessionDoc {
         }
     }
 
+    /// Entries that end a provider turn with a recorded checkpoint — the only
+    /// rows a fork, edit or rewind boundary can resolve. Sorted for a stable
+    /// comparison; the checkpoint ids themselves stay host-side.
+    pub fn checkpointed_entries(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .doc
+            .get_map("providerCheckpoints")
+            .keys()
+            .map(|key| key.to_string())
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
     /// Replace conversation rows while preserving drafts, queues, context
     /// state, and every other doc-owned collection. Used only after a native
     /// rewind has been staged and all command fences have been revalidated.

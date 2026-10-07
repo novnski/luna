@@ -545,6 +545,7 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
     let mut images = 0usize;
     let mut todos = 0usize;
     let mut created_threads = 0usize;
+    let mut failed_threads = 0usize;
     let mut read_threads = 0usize;
     let mut messaged_threads = 0usize;
     let mut waited = false;
@@ -556,6 +557,13 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
             failed += 1;
         }
         match ThreadTool::of(call) {
+            // A failed create made no thread: name it once, not as both
+            // "created" and a generic failure.
+            Some(ThreadTool::Create) if *is_error => {
+                failed -= 1;
+                failed_threads += 1;
+                continue;
+            }
             Some(ThreadTool::Create) => {
                 created_threads += 1;
                 continue;
@@ -626,6 +634,12 @@ pub fn tool_group_summary(tools: &[(crate::ToolCall, bool)]) -> String {
         segments.push(format!(
             "created {}",
             plural(created_threads, "thread", "threads")
+        ));
+    }
+    if failed_threads > 0 {
+        segments.push(format!(
+            "{} failed",
+            plural(failed_threads, "thread", "threads")
         ));
     }
     if messaged_threads > 0 {

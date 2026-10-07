@@ -1,7 +1,8 @@
 //! Headless GPUI E2E for three pieces of chat chrome: the new-thread card a
 //! parent shows when it creates a child chat, the timeline's disclosure
-//! headers ("Thought process", "Called 2 tools"), the composer's focus
-//! treatment, and the composer's model picker.
+//! headers ("Thought process", "Called 1 tool" — the create call folds into
+//! its card), the composer's focus treatment, and the composer's model
+//! picker.
 //!
 //! Drives the production `Shell` in hidden windows against an in-process
 //! `EngineCore` with a Mock harness. The parent's transcript is seeded with
@@ -503,7 +504,7 @@ fn main() -> anyhow::Result<()> {
                         .and_then(|_| {
                             std::fs::write(
                                 output.join("chat-chrome.pass"),
-                                "PASS: headless production Shell; the new-thread card, the Thought process and Called 2 tools disclosures (closed and open) and the composer (unfocused, focused empty, focused with a draft) captured at 12/16/20 px, dark and light, 1200 and 900 px wide; no accent ring on the focused pill; the send arrow is accent only while focused and empty; a draft makes the disc solid\n",
+                                "PASS: headless production Shell; the new-thread card, the Thought process and Called 1 tool disclosures (closed and open) and the composer (unfocused, focused empty, focused with a draft) captured at 12/16/20 px, dark and light, 1200 and 900 px wide; no accent ring on the focused pill; the send arrow is accent only while focused and empty; a draft makes the disc solid\n",
                             )
                         });
                         if let Err(error) = written {

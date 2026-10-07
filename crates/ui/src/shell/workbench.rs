@@ -4018,12 +4018,12 @@ impl Shell {
     /// selected chat, else its workbench tab's view (slice 6 baseline).
     pub fn fixture_transcript_rows(&self, chat_id: &str, cx: &App) -> serde_json::Value {
         if self.state.read(cx).selected_chat.as_deref() == Some(chat_id) {
-            return self.transcript.read(cx).fixture_rows();
+            return self.transcript.read(cx).fixture_rows(cx);
         }
         self.workbench
             .views
             .get(chat_id)
-            .map(|tab| tab.view.read(cx).transcript().read(cx).fixture_rows())
+            .map(|tab| tab.view.read(cx).transcript().read(cx).fixture_rows(cx))
             .unwrap_or(serde_json::Value::Null)
     }
 

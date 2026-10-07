@@ -7980,6 +7980,7 @@ fn doc_messages_stream_with_resume(
             luna_doc::TranscriptBaseline::default(),
             None::<luna_proto::ProviderNotice>,
             known_token,
+            None::<Vec<String>>,
         ),
         move |(
             mut rx,
@@ -7990,6 +7991,7 @@ fn doc_messages_stream_with_resume(
             mut opening_baseline,
             mut previous_notice,
             mut known_token,
+            mut previous_checkpointed,
         )| async move {
             loop {
                 if prev.is_some() {
@@ -8064,18 +8066,27 @@ fn doc_messages_stream_with_resume(
                 let usage = doc.context_usage();
                 let context_control = doc.context_control();
                 let provider_notice = doc.provider_notice();
+                // The first frame and every change carry the set; a turn's
+                // checkpoint lands in its own commit just after the entry.
+                let checkpointed = doc.checkpointed_entries();
+                let checkpoints_changed = previous_checkpointed.as_ref() != Some(&checkpointed);
                 if frame.is_empty_delta()
                     && usage == previous_usage
                     && context_control == previous_context
                     && provider_notice == previous_notice
                     && replay_baseline.is_none()
                     && !token_changed
+                    && !checkpoints_changed
                 {
                     continue;
                 }
                 previous_usage = usage;
                 previous_context = context_control.clone();
                 previous_notice = provider_notice.clone();
+                let checkpointed = checkpoints_changed.then(|| {
+                    previous_checkpointed = Some(checkpointed.clone());
+                    checkpointed
+                });
                 let value = serde_json::to_value(luna_doc::TranscriptUpdate {
                     frame,
                     context_usage: usage,
@@ -8083,6 +8094,7 @@ fn doc_messages_stream_with_resume(
                     replay_baseline,
                     provider_notice,
                     transcript_token,
+                    checkpointed,
                 })
                 .ok()?;
                 return Some((
@@ -8096,6 +8108,7 @@ fn doc_messages_stream_with_resume(
                         opening_baseline,
                         previous_notice,
                         known_token,
+                        previous_checkpointed,
                     ),
                 ));
             }

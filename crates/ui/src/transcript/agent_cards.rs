@@ -22,10 +22,11 @@ struct Snapshot {
     /// behind a tooltip — this renders as visible text.
     model_label: Option<String>,
     reasoning_label: Option<&'static str>,
-    /// One-line preview: the initial prompt while the child is live, else
-    /// `last_message_preview` (outcome summaries are compacted to empty once
-    /// delivered — see `child_threads::compact_child_outcomes`), falling back
-    /// to the original prompt when no preview is recorded yet.
+    /// One-line preview: the initial prompt while the child is live or once
+    /// its latest result is posted in this chat, else `last_message_preview`
+    /// (outcome summaries are compacted to empty once delivered — see
+    /// `child_threads::compact_child_outcomes`), falling back to the original
+    /// prompt when no preview is recorded yet.
     preview: String,
     status: ChildChatStatus,
     /// The child's own live turn start, only meaningful while `status` is
@@ -142,7 +143,14 @@ fn snapshot(state: &AppState, parent: &str, child_id: &str) -> Option<Snapshot> 
                 .completed_at_ms
                 .map(|end| (end - outcome.created_at_ms).max(0))
         });
-    let preview_source = if settled {
+    // Once the result is posted in this chat (its own row below the card),
+    // the card keeps saying what was asked instead of repeating the answer.
+    let reported_here = child
+        .outcomes
+        .iter()
+        .max_by_key(|outcome| outcome.created_at_ms)
+        .is_some_and(|outcome| outcome.delivered);
+    let preview_source = if settled && !reported_here {
         chat.last_message_preview
             .as_deref()
             .map(str::trim)
@@ -475,6 +483,14 @@ impl Render for AgentCard {
 }
 
 impl Transcript {
+    /// Fixture readback: the preview line a mounted card currently shows.
+    pub(super) fn fixture_card_preview(&self, child_id: &str, cx: &gpui::App) -> Option<String> {
+        let card = self.agent_cards.get(child_id)?.read(cx);
+        card.snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.preview.clone())
+    }
+
     pub(super) fn agent_creation_card(
         &mut self,
         row: &Row,

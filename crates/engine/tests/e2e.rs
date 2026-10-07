@@ -972,12 +972,13 @@ async fn rpc_surface_over_in_memory_transport() {
         .await
         .unwrap()
         .unwrap();
-    // Delta protocol: the stream opens with a full reset frame.
+    // Delta protocol: the stream opens with a full reset frame, including
+    // the (empty) set of entries a fork/edit/rewind boundary can resolve.
     assert_eq!(
         initial,
         serde_json::json!({ "reset": [], "contextUsage": null,
             "contextControl": { "schemaVersion": 1, "compact": { "status": "idle" } },
-            "replayBaseline": { "entries": {} } })
+            "replayBaseline": { "entries": {} }, "checkpointed": [] })
     );
 
     // QueueCommand (as this device's composer would over IPC).
