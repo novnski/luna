@@ -90,7 +90,12 @@ pub(super) async fn post_prompt(
         let mut split = rest.splitn(2, char::is_whitespace);
         let name = split.next().unwrap_or_default();
         let arguments = split.next().unwrap_or_default().trim().to_owned();
-        if !name.is_empty() && commands.iter().any(|c| c.name == name) {
+        // Skills share the composer catalog but are not commands.
+        if !name.is_empty()
+            && commands
+                .iter()
+                .any(|c| c.name == name && c.kind.is_command())
+        {
             let path = format!("/api/session/{session_id}/command");
             let body = command_body(name, &arguments, attachments);
             let command = name.to_owned();

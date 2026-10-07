@@ -549,6 +549,7 @@ impl TurnWire {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_millis(50),
             known_commands: Some(vec![]),
+            luna: None,
         }));
         Self {
             bus,

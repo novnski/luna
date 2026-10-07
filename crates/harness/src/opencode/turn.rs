@@ -31,6 +31,8 @@ pub(super) struct Session {
     pub(super) interrupt_grace: Duration,
     pub(super) kill_grace: Duration,
     pub(super) known_commands: Option<Vec<SlashCommand>>,
+    /// LUNA's runtime contract and tools for this run (OC-13), if any.
+    pub(super) luna: Option<LunaRun>,
 }
 
 pub(super) fn new_message_id() -> String {
@@ -104,7 +106,12 @@ pub(super) async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         known_commands,
+        luna,
     } = session;
+    let (mut luna_endpoint, mut luna) = match luna {
+        Some(run) => (run.endpoint, Some(run.bridge)),
+        None => (None, None),
+    };
     let RunControls {
         request_input,
         mut steering,
@@ -115,13 +122,17 @@ pub(super) async fn run_session(session: Session) {
     let permission_policy = request.permission_policy.clone().unwrap_or_default();
     let directory = (!request.cwd.is_empty()).then(|| request.cwd.clone());
     let dir = directory.as_deref();
-    let permission_rules = opencode_permission_rules(
+    let mut permission_rules = opencode_permission_rules(
         request
             .permission_policy
             .as_ref()
             .map(|policy| policy.effective_mode)
             .unwrap_or(luna_proto::PermissionMode::Ask),
     );
+    // The attached LUNA tools, allowed for the root session only (OC-13).
+    if let Some(bridge) = &luna {
+        bridge.extend_rules(&mut permission_rules);
+    }
 
     // ---- session create/resume -------------------------------------------
     let setup = async {
@@ -232,14 +243,40 @@ pub(super) async fn run_session(session: Session) {
         return;
     }
 
-    // Advertise slash commands (composer popup); a warm cache skips the call.
-    let commands = match known_commands {
-        Some(commands) => commands,
-        None => server
-            .commands_wire(dir)
-            .await
-            .map(|v| commands_from_wire(&v))
-            .unwrap_or_default(),
+    // LUNA's contract (OC-13): read the MCP attachment back and deliver the
+    // instructions before the first prompt. A failure withdraws delivery for
+    // this OpenCode version and warns; the turn itself goes ahead.
+    if let Some(bridge) = luna.as_mut() {
+        bridge.bind_session(&session_id);
+        if let Err(reason) = bridge.deliver(&server, dir, luna_endpoint.as_ref()).await {
+            record_delivery_failure(server.version.as_deref(), &reason);
+            if !send(&event_tx, delivery_notice(&reason)).await {
+                server.shutdown(kill_grace).await;
+                return;
+            }
+        }
+    }
+    // The session's own MCP readback (inventory evidence, OC-14).
+    if let Ok(servers) = server.mcp_servers(dir).await
+        && !servers.is_empty()
+    {
+        record_session_mcp(&session_id, &request.cwd, servers);
+    }
+
+    // Advertise slash commands and skills (composer popup). The run's own
+    // server is up, so its live list is one loopback read: when it differs
+    // from the cached one, that location's cache is retired (OC-14: a
+    // change made between runs shows without an app restart). Only commands
+    // route through the command endpoint.
+    let mut commands = match (server.discovery_catalog(dir, false).await, known_commands) {
+        (Ok(fresh), Some(cached)) => {
+            if fresh != cached {
+                bump_catalog_epoch(&discovery_location(dir));
+            }
+            fresh
+        }
+        (Ok(fresh), None) => fresh,
+        (Err(_), cached) => cached.unwrap_or_default(),
     };
     if !commands.is_empty()
         && !send(
@@ -282,6 +319,13 @@ pub(super) async fn run_session(session: Session) {
         );
     }
     let stall = stall_bound();
+    if let Some(started) = luna.as_mut().and_then(OpencodeLunaBridge::begin_turn)
+        && !send(&event_tx, started).await
+    {
+        bus_handle.abort();
+        server.shutdown(kill_grace).await;
+        return;
+    }
     if let Err(e) = post_prompt(
         &server,
         &session_id,
@@ -370,6 +414,11 @@ pub(super) async fn run_session(session: Session) {
                 }).await {
                     break $label;
                 }
+                if let Some(started) = luna.as_mut().and_then(OpencodeLunaBridge::begin_turn)
+                    && !send(&event_tx, started).await
+                {
+                    break $label;
+                }
                 match post_prompt(
                     &server,
                     &session_id,
@@ -394,6 +443,9 @@ pub(super) async fn run_session(session: Session) {
                         // Fall through to Done below.
                     }
                 }
+            }
+            if let Some(bridge) = luna.as_mut() {
+                bridge.end_turn();
             }
             let (prev, _next) = rotate(&mut assistant_message_id);
             if !send(&event_tx, AgentEvent::AssistantMessageCompleted {
@@ -507,6 +559,11 @@ pub(super) async fn run_session(session: Session) {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
                             }).await;
+                            if let Some(started) =
+                                luna.as_mut().and_then(OpencodeLunaBridge::begin_turn)
+                            {
+                                let _ = send(&event_tx, started).await;
+                            }
                             if post_prompt(
                                 &server,
                                 &session_id,
@@ -526,6 +583,19 @@ pub(super) async fn run_session(session: Session) {
                         }
                     }
                     None => steering_open = false,
+                }
+            }
+
+            // LUNA tool calls (OC-13): the evidence fence decides each one.
+            call = next_call(&mut luna_endpoint), if luna.is_some() => {
+                if let (Some(call), Some(bridge)) = (call, luna.as_mut()) {
+                    bridge.on_call(call);
+                }
+            }
+
+            _ = parked_deadline(luna.as_ref().and_then(OpencodeLunaBridge::next_deadline)) => {
+                if let Some(bridge) = luna.as_mut() {
+                    bridge.expire();
                 }
             }
 
@@ -603,6 +673,28 @@ pub(super) async fn run_session(session: Session) {
                         }).await;
                         done_sent = true;
                         break 'main;
+                    }
+                    BusMsg::Signal(WireSignal::CatalogChanged) => {
+                        // OpenCode announced a command or skill change
+                        // (OC-14; also sent while a location boots). Only a
+                        // catalog that really differs retires this location's
+                        // cached copy and refreshes the composer's list.
+                        if let Ok(fresh) = server.discovery_catalog(dir, false).await
+                            && fresh != commands
+                        {
+                            bump_catalog_epoch(&discovery_location(dir));
+                            commands = fresh;
+                            if !send(&event_tx, AgentEvent::AvailableCommands {
+                                commands: commands.clone(),
+                            }).await {
+                                break 'main;
+                            }
+                        }
+                    }
+                    BusMsg::Signal(signal) => {
+                        if let Some(bridge) = luna.as_mut() {
+                            bridge.observe(signal);
+                        }
                     }
                     BusMsg::CommandFailed(message) => {
                         // A command that never started its execution would

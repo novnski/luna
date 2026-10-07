@@ -292,6 +292,11 @@ pub(super) async fn ensure_compatible(server: &Server) -> Result<CompatReport, H
             ))
         })?;
     let outcome = check_contract(&version, &spec);
+    if outcome.is_ok() {
+        // LUNA tool delivery rides experimental routes outside the boot
+        // contract: their absence degrades delivery, never the boot.
+        record_delivery_contract(&version, &spec);
+    }
     match &outcome {
         Ok(report) if report.status == CompatStatus::Untested => tracing::warn!(
             target: "luna_harness::opencode",

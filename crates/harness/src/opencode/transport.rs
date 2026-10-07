@@ -25,6 +25,10 @@ pub(super) enum BusMsg {
     /// 4xx/5xx or a transport error). Not a bus frame: the detached command
     /// task reports it here so the turn settles instead of stalling.
     CommandFailed(String),
+    /// A raw frame the loop needs besides the normalized payloads: LUNA tool
+    /// evidence or a catalog change ([`wire_signal`]). Sent before that
+    /// frame's normalized payloads.
+    Signal(WireSignal),
 }
 
 /// Tail the event bus (`GET /api/event`, which serves nothing unless
@@ -115,6 +119,11 @@ pub(super) async fn stream_bus(
                 };
                 log_sse_frame(base, generation, data, &event);
                 note_event_type(event.get("type").and_then(Value::as_str).unwrap_or(""));
+                if let Some(signal) = wire_signal(&event)
+                    && tx.send(BusMsg::Signal(signal)).await.is_err()
+                {
+                    return;
+                }
                 let payloads = normalize_v2_frame(event, &mut v2_tool_names);
                 if v2_tool_names.len() > MAX_PENDING_V2_TOOLS {
                     let _ = tx.send(BusMsg::Disconnected).await;
