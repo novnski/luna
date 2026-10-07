@@ -443,6 +443,8 @@ async fn main() {
             other => failures.push(format!("unknown scenario {other}")),
         }
     }
+    // A run whose readback failed withdraws delivery for this version.
+    eprintln!("DELIVERY_AFTER {:?}", harness.luna_runtime_delivery());
     eprintln!("=== invocations ({}):", calls.lock().unwrap().len());
     for line in calls.lock().unwrap().iter() {
         eprintln!("{line}");

@@ -44,12 +44,13 @@
 //!   the next step and copies it on fork.
 //! - **Verification (PD-10).** [`RuntimeDelivery::OpenCodeMcpTools`] is
 //!   reported only for an OpenCode version whose live API contract has the
-//!   delivery routes and on which no run recorded a delivery failure. Every
+//!   delivery routes and on which no recent run failed its readback. Every
 //!   run reads the attachment back before its first prompt (`GET /api/mcp`
 //!   shows `luna` connected, the endpoint answered `tools/list`, the
 //!   instruction entry reads back); a failure warns (`ProviderNotice`) and
-//!   withdraws delivery for that version, so later contracts compile as
-//!   `Unsupported` (and side chats fall back to their quoted seed).
+//!   withdraws delivery for that version for ten minutes, so contracts
+//!   compile as `Unsupported` meanwhile (and side chats fall back to their
+//!   quoted seed); the next run after that re-verifies.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -83,6 +84,8 @@ const MAX_OBSERVED_PER_TURN: usize = 4_096;
 /// well under a second; the location boots first).
 const READBACK_BUDGET: Duration = Duration::from_secs(10);
 const READBACK_POLL: Duration = Duration::from_millis(200);
+/// How long a failed readback withdraws delivery before it is re-verified.
+const DELIVERY_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 const NOT_ATTACHED: &str = "LUNA tool is not attached to this task or turn";
 const UNMATCHED: &str = "LUNA tool call does not match a tool call in this OpenCode turn";
 
@@ -108,7 +111,12 @@ const DELIVERY_ROUTES: &[(&str, &str)] = &[
 enum DeliveryVerdict {
     /// The live contract has the delivery routes; no run reported a failure.
     Ready,
-    Failed(String),
+    /// The version's contract lacks the delivery routes: final.
+    Unavailable(String),
+    /// A run's readback failed. Delivery stays withdrawn until `retry_at`,
+    /// when the next contract promises it again and that run re-verifies
+    /// (a slow machine's missed readback must not cost the whole session).
+    Failed { reason: String, retry_at: Instant },
 }
 
 fn verdicts() -> &'static Mutex<HashMap<String, DeliveryVerdict>> {
@@ -141,19 +149,19 @@ pub(super) fn record_delivery_contract(version: &str, spec: &Value) {
     let verdict = if missing.is_empty() {
         DeliveryVerdict::Ready
     } else {
-        DeliveryVerdict::Failed(format!(
+        DeliveryVerdict::Unavailable(format!(
             "OpenCode {version} lacks LUNA's tool delivery routes ({})",
             missing.join(", ")
         ))
     };
-    if let DeliveryVerdict::Failed(reason) = &verdict {
+    if let DeliveryVerdict::Unavailable(reason) = &verdict {
         tracing::warn!(target: "luna_harness::opencode", "{reason}; LUNA tools stay unavailable");
     }
     let Ok(mut verdicts) = verdicts().lock() else {
         return;
     };
     let key = version_key(version);
-    if !matches!(verdicts.get(&key), Some(DeliveryVerdict::Failed(_))) {
+    if !matches!(verdicts.get(&key), Some(DeliveryVerdict::Failed { .. })) {
         verdicts.insert(key, verdict);
     }
 }
@@ -168,20 +176,30 @@ pub(super) fn record_delivery_failure(version: Option<&str>, reason: &str) {
     let (Some(version), Ok(mut verdicts)) = (version, verdicts().lock()) else {
         return;
     };
-    verdicts.insert(
-        version_key(version),
-        DeliveryVerdict::Failed(reason.to_owned()),
-    );
+    let key = version_key(version);
+    if !matches!(verdicts.get(&key), Some(DeliveryVerdict::Unavailable(_))) {
+        verdicts.insert(
+            key,
+            DeliveryVerdict::Failed {
+                reason: reason.to_owned(),
+                retry_at: Instant::now() + DELIVERY_RETRY_AFTER,
+            },
+        );
+    }
 }
 
 /// The delivery a contract for this OpenCode version may promise.
 pub(super) fn delivery_for_version(version: Option<&str>) -> RuntimeDelivery {
     let ready = version.is_some_and(|version| {
-        verdicts()
+        match verdicts()
             .lock()
             .ok()
             .and_then(|verdicts| verdicts.get(&version_key(version)).cloned())
-            == Some(DeliveryVerdict::Ready)
+        {
+            Some(DeliveryVerdict::Ready) => true,
+            Some(DeliveryVerdict::Failed { retry_at, .. }) => Instant::now() >= retry_at,
+            Some(DeliveryVerdict::Unavailable(_)) | None => false,
+        }
     });
     if ready {
         RuntimeDelivery::OpenCodeMcpTools
