@@ -11451,7 +11451,10 @@ impl Shell {
                 .find(|chat| chat.id == chat_id)
                 .and_then(|chat| chat.config.as_ref())
                 .is_some_and(|config| {
-                    matches!(config.harness, HarnessId::Codex | HarnessId::ClaudeCode)
+                    matches!(
+                        config.harness,
+                        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+                    )
                 });
             let fork_task_id = chat_id.clone();
             let context_task_id = chat_id.clone();

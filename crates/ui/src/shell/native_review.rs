@@ -2,9 +2,11 @@
 //!
 //! Codex runs its native `review/start`. Claude Code runs its own
 //! `/code-review` (the engine maps the target; custom instructions are an
-//! ordinary message) and reports findings through `ReportFindings`. Claude's
-//! cloud ultrareview is a separate service lane, shown unavailable until its
-//! job, cost and result interface is verified.
+//! ordinary message) and reports findings through `ReportFindings`. OpenCode
+//! runs its built-in `/review` line the same way (OC-15), a text review with
+//! no structured findings. Claude's cloud ultrareview is a separate service
+//! lane, shown unavailable until its job, cost and result interface is
+//! verified.
 use super::*;
 use luna_proto::{Chat, NativeReviewRequest, ReviewTarget, RunRequest, TaskCommandRead};
 use luna_rpc::RpcError;
@@ -14,6 +16,8 @@ pub(super) struct NativeReviewDialog {
     source: Chat,
     /// Claude Code's `/code-review` lane rather than Codex's native review.
     claude: bool,
+    /// OpenCode's built-in `/review` lane (a text review).
+    opencode: bool,
     origin: HistoryEngineOrigin,
     snapshot: Option<TaskCommandSnapshot>,
     input: Entity<ComposerInput>,
@@ -47,12 +51,19 @@ impl Shell {
             .config
             .as_ref()
             .map(|config| config.harness)
-            .filter(|harness| matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode))
+            .filter(|harness| {
+                matches!(
+                    harness,
+                    HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+                )
+            })
         else {
-            self.sidebar_notice = Some("Code review needs a Codex or Claude Code chat.".into());
+            self.sidebar_notice =
+                Some("Code review needs a Codex, Claude Code or OpenCode chat.".into());
             return;
         };
         let claude = harness == HarnessId::ClaudeCode;
+        let opencode = harness == HarnessId::Opencode;
         let Some(engine) = state.engine().cloned() else {
             self.sidebar_notice = Some("Engine not connected.".into());
             return;
@@ -71,6 +82,7 @@ impl Shell {
         self.native_review_dialog = Some(NativeReviewDialog {
             source,
             claude,
+            opencode,
             origin,
             snapshot: None,
             input,
@@ -154,6 +166,7 @@ impl Shell {
             1 => "Base branch (for example main or origin/main)",
             2 => "Commit SHA or Git commit reference",
             _ if dialog.claude => "What Claude should review, and how",
+            _ if dialog.opencode => "What OpenCode should review, and how",
             _ => "Instructions for the native reviewer",
         };
         dialog.input.update(cx, |input, cx| {
@@ -365,6 +378,7 @@ impl Shell {
         let reference_error = dialog.reference_error.clone();
         let destination = dialog.created_task_id.clone();
         let claude = dialog.claude;
+        let opencode = dialog.opencode;
         let cwd = dialog.source.cwd.clone().unwrap_or_default();
         let branches = dialog.branches.clone();
         let theme = Theme::of(cx).for_popup();
@@ -374,21 +388,33 @@ impl Shell {
             "Commit",
             "Custom instructions",
         ];
-        let description = match (claude, kind) {
-            (false, 0) => "Review staged, unstaged, and untracked files in this checkout.",
-            (false, 1) => "Review changes between the current branch and the selected base branch.",
-            (false, 2) => "Review the changes introduced by one commit.",
-            (false, _) => "Run the native reviewer with your instructions.",
-            (true, 0) => {
+        let description = match (claude, opencode, kind) {
+            (true, _, 0) => {
                 "Claude's /code-review reads this branch's commits since its upstream plus uncommitted changes."
             }
-            (true, 1) => {
+            (true, _, 1) => {
                 "Claude's /code-review of <base>...HEAD: the changes since the selected base branch."
             }
-            (true, 2) => "Claude's /code-review of the changes introduced by one commit.",
-            (true, _) => {
+            (true, _, 2) => "Claude's /code-review of the changes introduced by one commit.",
+            (true, _, _) => {
                 "Sends your instructions as an ordinary message; Claude reviews in the chat."
             }
+            (false, true, 0) => {
+                "OpenCode's /review of the uncommitted changes: staged, unstaged, and untracked files."
+            }
+            (false, true, 1) => {
+                "OpenCode's /review of <base>...HEAD: the changes since the selected base branch."
+            }
+            (false, true, 2) => "OpenCode's /review of the changes introduced by one commit.",
+            (false, true, _) => {
+                "Sends your instructions as an ordinary message; OpenCode reviews in the chat."
+            }
+            (false, false, 0) => "Review staged, unstaged, and untracked files in this checkout.",
+            (false, false, 1) => {
+                "Review changes between the current branch and the selected base branch."
+            }
+            (false, false, 2) => "Review the changes introduced by one commit.",
+            (false, false, _) => "Run the native reviewer with your instructions.",
         };
         let card = popover::dialog_card(&theme)
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
@@ -401,6 +427,9 @@ impl Shell {
             .when(claude, |card| card.child(div().mt(crate::typography::ui_rems(4.0)).text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_muted)
                 .child("Claude Code /code-review. Findings appear in the chat with their source revision.")))
+            .when(opencode, |card| card.child(div().mt(crate::typography::ui_rems(4.0)).text_size(crate::typography::ui_rems(12.0))
+                .text_color(theme.text_muted)
+                .child("OpenCode /review. A text review: findings appear in the chat as OpenCode's reply.")))
             .child(div().mt(crate::typography::ui_rems(12.0)).flex().flex_wrap().gap(crate::typography::ui_rems(6.0)).children(
                 targets.into_iter().enumerate().map(|(index, label)| {
                     popover::btn_ghost(&theme, label, format!("native-review-target-{index}"))
@@ -525,6 +554,7 @@ impl Shell {
             Some(dialog) => json!({
                 "open": true,
                 "claude": dialog.claude,
+                "opencode": dialog.opencode,
                 "kind": dialog.target_kind,
                 "snapshotReady": dialog.snapshot.is_some(),
                 "sending": dialog.sending,

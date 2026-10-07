@@ -4278,9 +4278,10 @@ impl SessionsEngine {
             // The transcript message is exactly the objective Codex received.
             request.prompt = goal.objective.clone();
         }
-        // CC-15: Claude's review is its own `/code-review` line (or an
-        // ordinary message for custom instructions), never `review/start`.
-        if harness_id == HarnessId::ClaudeCode
+        // CC-15 / OC-15: Claude's review is its own `/code-review` line and
+        // OpenCode's its built-in `/review` line (or an ordinary message for
+        // custom instructions), never `review/start`. Both are text reviews.
+        if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Opencode)
             && let Some(review) = request.review.take()
         {
             if self.turn_in_flight(chat_id) {
@@ -4293,7 +4294,8 @@ impl SessionsEngine {
                     "A review uses the task's existing checkout without attachments".into(),
                 ));
             }
-            request.prompt = crate::claude_ongoing::review_prompt(&review.target)?;
+            request.prompt = crate::claude_ongoing::command_line_review(harness_id, &review.target)
+                .unwrap_or_else(|| Err(EngineError::Other("no command-line review".into())))?;
         }
         if let Some(review) = request.review.as_ref() {
             if harness_id != HarnessId::Codex {

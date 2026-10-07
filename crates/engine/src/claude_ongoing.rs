@@ -38,28 +38,33 @@ pub(crate) fn admit_goal_start(
     Ok(())
 }
 
+/// A plain ref name for a review command line: no options, ranges or
+/// spaces. `command` names the provider command in the refusal.
+fn plain_review_ref(value: &str, label: &str, command: &str) -> Result<String, EngineError> {
+    let value = value.trim();
+    let ok = !value.is_empty()
+        && value.len() <= 200
+        && !value.starts_with('-')
+        && !value.contains("..")
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._/~^@-+".contains(&b));
+    if ok {
+        Ok(value.to_owned())
+    } else {
+        Err(EngineError::Other(format!(
+            "{command} needs a plain git {label} name; {value:?} is not one."
+        )))
+    }
+}
+
 /// A review target as Claude's own `/code-review` argument. Custom
 /// instructions are an ordinary chat message (Claude's command takes a
 /// target, not free text). The cloud `ultra` lane is never reachable here.
 pub(crate) fn review_prompt(target: &ReviewTarget) -> Result<String, EngineError> {
     target.validate().map_err(EngineError::Other)?;
-    fn git_ref(value: &str, label: &str) -> Result<String, EngineError> {
-        let value = value.trim();
-        let ok = !value.is_empty()
-            && value.len() <= 200
-            && !value.starts_with('-')
-            && !value.contains("..")
-            && value
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b"._/~^@-+".contains(&b));
-        if ok {
-            Ok(value.to_owned())
-        } else {
-            Err(EngineError::Other(format!(
-                "Claude's /code-review needs a plain git {label} name; {value:?} is not one."
-            )))
-        }
-    }
+    let git_ref =
+        |value: &str, label: &str| plain_review_ref(value, label, "Claude's /code-review");
     Ok(match target {
         ReviewTarget::UncommittedChanges => "/code-review".into(),
         ReviewTarget::BaseBranch { branch } => {
@@ -71,6 +76,35 @@ pub(crate) fn review_prompt(target: &ReviewTarget) -> Result<String, EngineError
         }
         ReviewTarget::Custom { instructions } => instructions.trim().to_owned(),
     })
+}
+
+/// OC-15: OpenCode's built-in `/review [commit|branch]` line, the direct
+/// counterpart of Claude's `/code-review` (a text review: OpenCode reports
+/// no structured findings). Its template reads a commit as `git show <sha>`
+/// and a branch as `git diff <branch>...HEAD`; custom instructions are an
+/// ordinary message.
+pub(crate) fn opencode_review_prompt(target: &ReviewTarget) -> Result<String, EngineError> {
+    target.validate().map_err(EngineError::Other)?;
+    let git_ref = |value: &str, label: &str| plain_review_ref(value, label, "OpenCode's /review");
+    Ok(match target {
+        ReviewTarget::UncommittedChanges => "/review".into(),
+        ReviewTarget::BaseBranch { branch } => format!("/review {}", git_ref(branch, "branch")?),
+        ReviewTarget::Commit { sha, .. } => format!("/review {}", git_ref(sha, "commit")?),
+        ReviewTarget::Custom { instructions } => instructions.trim().to_owned(),
+    })
+}
+
+/// The review command line for a provider whose review is its own command
+/// (Claude Code, OpenCode); `None` for the others.
+pub(crate) fn command_line_review(
+    harness: HarnessId,
+    target: &ReviewTarget,
+) -> Option<Result<String, EngineError>> {
+    match harness {
+        HarnessId::ClaudeCode => Some(review_prompt(target)),
+        HarnessId::Opencode => Some(opencode_review_prompt(target)),
+        _ => None,
+    }
 }
 
 /// The chat's current Claude binding on this device for one native session.
