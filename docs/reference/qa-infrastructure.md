@@ -318,6 +318,20 @@ Go through the profile wrapper), OpenCode 2 saves the key in the profile
 database's `credential` table and the limits reader uses that key, as the
 spawned server does.
 
+**History against `opencode stats` (S6).** The two do not select the same
+rows, so compare them with `scripts/qa-opencode-usage-reconcile.py --db
+<profile>/data/opencode/opencode.db --luna <LUNA per-model totals> --stats
+<opencode stats --models --cost --days N --json>`. The LUNA input is the
+`qa-opencode-usage.mjs` extract or the `usage_opencode_readback` example
+output. OpenCode 2.0.22's stats counts only `assistant` rows per model and
+adds compaction usage only from persisted `session.usage.recorded` events,
+which a default server does not write; LUNA also counts the `compaction`
+rows (OCH-16), like Codex's compaction `token_count`. The script checks each
+reader against the database over its own window and splits the per-model
+difference into compaction rows and window skew. It exits 0 only when both
+readers match the database exactly. A plain sum of the `assistant` rows is a
+third, different total: it lacks the fork-copy exclusion both readers apply.
+
 ### Real-model policy (PD-18)
 
 - Real-AI (T3) runs are authorized for every OpenCode scenario. OpenCode runs

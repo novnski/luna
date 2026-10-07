@@ -59,6 +59,17 @@
 //!   makes the source unavailable instead of falling back to the home store.
 //! - OCH-15 Duplicate or aliased roots count twice. Roots are canonicalized
 //!   and deduplicated in order.
+//! - OCH-18 History is checked against `opencode stats --models --cost` and
+//!   the gap looks like a reader bug (S6). The two select different rows by
+//!   design: OpenCode 2.0.22's stats sums only `assistant` rows per model and
+//!   adds compaction usage to its totals only from persisted
+//!   `session.usage.recorded` events, which a default server never writes,
+//!   so it omits compaction requests entirely. This reader counts them
+//!   (OCH-16), as OpenCode's own session totals do and as LUNA counts Codex's
+//!   compaction `token_count`. Title-generation usage exists only in session
+//!   totals, without a per-request row, and neither reader counts it.
+//!   `scripts/qa-opencode-usage-reconcile.py` checks both readers against
+//!   the store and splits the difference into compaction rows and window skew.
 
 use std::collections::HashSet;
 use std::ffi::OsString;
