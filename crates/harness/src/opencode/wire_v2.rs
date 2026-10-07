@@ -19,10 +19,13 @@ use super::*;
 /// - tools: `session.tool.input.started` (carries the NAME),
 ///   `.input.ended` (args as text), `.called` (args as object),
 ///   `.success` (content array) / `.error`.
-/// - usage: `session.usage.updated` with the cumulative token totals.
 /// - delivery: `session.inbox.enqueued/.delivered/.cancelled/.delivery.changed`
 ///   (the inbox id is the caller's `msg_…` prompt id), plus
 ///   `session.retry.scheduled` and `session.step.ended` finish reasons.
+/// - usage, model and compaction (`usage` module): `luna.*` payloads from
+///   `session.step.started/.ended`, the execution terminals,
+///   `session.usage.updated` (running totals), `session.model.selected`
+///   and `session.compaction.*`; catalog updates arrive as global events.
 ///
 /// `tool_names` tracks pending calls by session, message, and provider call id.
 pub(super) type V2ToolKey = (String, String, String);
@@ -33,6 +36,10 @@ pub(super) fn normalize_v2_frame(
     tool_names: &mut HashMap<V2ToolKey, String>,
 ) -> Vec<Value> {
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+    // Global (session-less) catalog updates invalidate the run's catalog.
+    if let Some(frames) = v2_global_frames(kind) {
+        return frames;
+    }
     let data = event.get("data").cloned().unwrap_or(Value::Null);
     // Native subagent and background-job observations (OC-11) ride beside
     // the family payloads. Computed first: tool names are still pending, and
@@ -62,15 +69,21 @@ pub(super) fn normalize_v2_frame(
             Some(owner.as_str()) != data.get("sessionID").and_then(Value::as_str)
         });
     }
+    // Accounting rides AHEAD of the family frames for the kinds other
+    // families also claim (step and execution lifecycle), so a turn's
+    // usage is recorded before its idle frame settles the turn.
+    let mut frames = v2_accounting_frames(kind, &data);
     // One helper per event family, so each family evolves on its own. A
     // helper answers `None` for kinds outside its family.
-    let mut frames = v2_session_frames(kind, &data)
-        .or_else(|| v2_inbox_frames(kind, &data))
-        .or_else(|| v2_stream_frames(kind, &data))
-        .or_else(|| v2_tool_frames(kind, &data, tool_names))
-        .or_else(|| v2_request_frames(kind, &data))
-        .or_else(|| v2_other_frames(kind, &data))
-        .unwrap_or_default();
+    frames.extend(
+        v2_session_frames(kind, &data)
+            .or_else(|| v2_inbox_frames(kind, &data))
+            .or_else(|| v2_stream_frames(kind, &data))
+            .or_else(|| v2_tool_frames(kind, &data, tool_names))
+            .or_else(|| v2_request_frames(kind, &data))
+            .or_else(|| v2_other_frames(kind, &event, &data))
+            .unwrap_or_default(),
+    );
     frames.extend(observed);
     frames
 }
@@ -452,33 +465,11 @@ fn v2_form_created(data: &Value) -> Vec<Value> {
     })]
 }
 
-/// Everything else: usage totals.
-fn v2_other_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
-    let frames = match kind {
-        "session.usage.updated" => {
-            let tokens = data.get("tokens").cloned().unwrap_or(Value::Null);
-            if tokens.is_null() {
-                return Some(Vec::new());
-            }
-            // Cumulative totals keyed to a synthetic message: registers
-            // Usage + ContextUsage exactly like the 1.x assistant
-            // message.updated did. (No providerID/modelID on this frame —
-            // the context window is dropped.)
-            vec![json!({
-                "type": "message.updated",
-                "properties": {
-                    "info": {
-                        "sessionID": v2_session(data),
-                        "id": "usage",
-                        "role": "assistant",
-                        "tokens": tokens,
-                    }
-                }
-            })]
-        }
-        _ => return None,
-    };
-    Some(frames)
+/// Everything else: running usage totals, model selection and the
+/// compaction lifecycle (`usage` module). The totals are cumulative: cost
+/// and accounting only, never context occupancy or a synthetic message.
+fn v2_other_frames(kind: &str, event: &Value, data: &Value) -> Option<Vec<Value>> {
+    v2_usage_frames(kind, event, data)
 }
 
 /// The 2.x error shape (`{type, message, status?, response?: {body}}`)

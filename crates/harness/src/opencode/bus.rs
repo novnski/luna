@@ -39,12 +39,13 @@ pub(super) struct BusCtx<'a> {
     pub(super) children: &'a mut ChildTree,
     pub(super) turn: &'a mut TurnState,
     pub(super) pending_usage: &'a mut Option<AgentEvent>,
-    pub(super) context_windows: &'a HashMap<String, u64>,
     /// Owned sessions, applied rules, and pending asks and forms.
     pub(super) requests: &'a mut UserRequests,
     /// The run's own bus channel: live shell output pages re-enter the loop
     /// through it, so their activity stays ordered before the result.
     pub(super) bus_tx: &'a mpsc::Sender<BusMsg>,
+    /// Context windows, step model, turn accounting, compaction lifecycle.
+    pub(super) usage: &'a mut UsageState,
 }
 
 /// Route one normalized bus payload (`{type, properties}`, the internal
@@ -63,9 +64,9 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         children,
         turn,
         pending_usage,
-        context_windows,
         requests,
         bus_tx,
+        usage,
     } = ctx;
     let tool_ctx = ToolSideCtx {
         server,
@@ -83,6 +84,22 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         && let Some(info) = props.get("info")
     {
         requests.observe_session_created(info, server, dir, event_tx);
+    }
+    // Usage, cost, context, model readback and compaction lifecycle
+    // (`luna.*` payloads from the usage family).
+    if let Some(outcome) = handle_accounting(AccountingCtx {
+        kind,
+        props,
+        session_id,
+        server,
+        dir,
+        event_tx,
+        usage,
+        pending_usage,
+    })
+    .await
+    {
+        return outcome;
     }
     let event_session = props
         .get("sessionID")
@@ -229,27 +246,10 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                     .assistant_messages
                     .entry(message.to_owned())
                     .or_insert(role == "assistant");
+                // Always a real `msg_` id (step.started): usage no longer
+                // rides a synthetic message, so it is never a checkpoint.
                 if role == "assistant" {
                     turn.provider_checkpoint_id = Some(message.to_owned());
-                }
-                // Token usage rides the assistant message; the last one
-                // before idle wins, emitted right before Done.
-                if role == "assistant"
-                    && let Some(tokens) = info.get("tokens")
-                {
-                    if let Some(usage) = context_usage_event(info, context_windows)
-                        && !send(event_tx, usage).await
-                    {
-                        return BusOutcome::ConsumerGone;
-                    }
-                    let input = tokens.get("input").and_then(Value::as_u64).unwrap_or(0);
-                    let output = tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
-                    if input > 0 || output > 0 {
-                        *pending_usage = Some(AgentEvent::Usage {
-                            input_tokens: input,
-                            output_tokens: output,
-                        });
-                    }
                 }
                 let events = replay_pending(main_feed, message, true, turn);
                 return forward(event_tx, events).await;

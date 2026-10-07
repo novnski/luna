@@ -110,7 +110,12 @@ impl SessionsEngine {
         request: &mut luna_proto::RunRequest,
     ) -> Result<(), EngineError> {
         let mut prepare = || -> Result<(), EngineError> {
-            crate::provider_inputs::admit(harness_id, &request.attachments, &request.input_items)?;
+            crate::provider_inputs::admit(
+                harness_id,
+                request.model.as_deref(),
+                &request.attachments,
+                &request.input_items,
+            )?;
             self.inner.registry.resolve(harness_id)?;
             request.cwd = super::expand_home(&request.cwd);
             if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Codex)

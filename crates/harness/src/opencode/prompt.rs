@@ -32,13 +32,13 @@ pub(super) fn session_create_body(dir: Option<&str>, permission_rules: &Value) -
     }
 }
 
-/// Attachments as v2 `files` entries (`{uri, name}`).
+/// Attachments as v2 `files` entries (`{uri, name}`), one per distinct
+/// path: the server reads each `file:` URI itself when it admits the turn.
 pub(super) fn attachment_files(attachments: &[String]) -> Vec<Value> {
-    attachments
-        .iter()
+    unique(attachments)
         .map(|path| {
             json!({
-                "uri": format!("file://{path}"),
+                "uri": file_uri(path),
                 "name": std::path::Path::new(path)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -46,6 +46,21 @@ pub(super) fn attachment_files(attachments: &[String]) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+/// `file://` URL for an absolute host path. The server parses it with the
+/// WHATWG URL parser and `fileURLToPath`, so `#`, `?`, `%` and spaces in a
+/// path must be percent-encoded or the server reads another file.
+pub(super) fn file_uri(path: &str) -> String {
+    let mut uri = String::from("file://");
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            uri.push(byte as char);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
 }
 
 /// How OpenCode admits a prompt into its inbox: `queue` waits for the turn
@@ -88,37 +103,73 @@ pub(super) fn luna_prompt_id(session_id: &str, luna_id: Option<&str>) -> String 
     format!("msg_luna_{}_{safe}", &session[..10])
 }
 
-/// 2.x prompt body: the caller id, plain text, `{uri, name}` file
-/// attachments and an explicit delivery. Model and variant do NOT ride
-/// here — they were set on the session at run start
-/// (`POST /api/session/{id}/model`).
+/// 2.x prompt body: the caller id, text, `{uri, name}` file attachments, an
+/// explicit delivery and typed `skills[{id}]` (only when selected).
+/// Natively sent images leave LUNA's path trailer (OpenCode labels each
+/// file itself). Model and variant do NOT ride here — they are set on the
+/// session (`POST /api/session/{id}/model`).
 pub(super) fn prompt_body_v2(
     prompt: &str,
     attachments: &[String],
+    skills: &[Value],
     id: &str,
     delivery: PromptDelivery,
 ) -> Value {
-    json!({
+    let mut body = json!({
         "id": id,
-        "text": prompt,
+        "text": native_prompt_text(prompt, attachments),
         "files": attachment_files(attachments),
         "delivery": delivery.as_str(),
-    })
-}
-
-/// 2.x command body: `{name, text, files?}` (`session.command`).
-pub(super) fn command_body(name: &str, text: &str, attachments: &[String]) -> Value {
-    let mut body = json!({ "name": name, "text": text });
-    if !attachments.is_empty() {
-        body["files"] = Value::Array(attachment_files(attachments));
+    });
+    if !skills.is_empty() {
+        body["skills"] = Value::Array(skills.to_vec());
     }
     body
 }
 
+/// 2.x command body: `{name, text, files?, skills?}` (`session.command`).
+pub(super) fn command_body(
+    name: &str,
+    text: &str,
+    attachments: &[String],
+    skills: &[Value],
+) -> Value {
+    let mut body = json!({ "name": name, "text": native_prompt_text(text, attachments) });
+    if !attachments.is_empty() {
+        body["files"] = Value::Array(attachment_files(attachments));
+    }
+    if !skills.is_empty() {
+        body["skills"] = Value::Array(skills.to_vec());
+    }
+    body
+}
+
+/// Re-check every image right before the server is told to read it (the
+/// file may have changed since admission) and log what is sent: the same
+/// type, size and hash must reach the provider on every route.
+fn verify_files(attachments: &[String]) -> Result<(), HarnessError> {
+    for path in unique(attachments) {
+        let facts = check_image(path)?;
+        tracing::info!(
+            target: "luna_harness::opencode",
+            "files[] {path} {} {}B sha256:{}",
+            facts.media_type,
+            facts.bytes,
+            facts.sha256
+        );
+    }
+    Ok(())
+}
+
 /// What a posted turn carries besides its text (model and variant are set
-/// on the session, not the prompt).
+/// on the session, not the prompt): staged images, typed selections, the
+/// caller id and the delivery.
 pub(super) struct TurnSpec<'a> {
     pub(super) attachments: &'a [String],
+    pub(super) input_items: &'a [luna_proto::ComposerInput],
+    /// The session's model (`provider/model`) for the image-capability
+    /// check; `None` when the run did not choose one.
+    pub(super) model: Option<&'a str>,
     /// The caller id (`msg_…`, see [`luna_prompt_id`]).
     pub(super) id: &'a str,
     pub(super) delivery: PromptDelivery,
@@ -139,7 +190,8 @@ pub(super) enum PromptOutcome {
         /// OpenCode reconciled an earlier admission of the same id.
         created_ms: Option<i64>,
     },
-    /// Refused before admission (a 4xx tagged error): nothing was recorded.
+    /// Refused before admission (a 4xx tagged error, or LUNA's own input
+    /// admission): nothing was recorded.
     Rejected(String),
     /// The request may have reached OpenCode (transport failure, timeout,
     /// 5xx): never resent; readback decides.
@@ -151,6 +203,27 @@ pub(super) fn known_command<'a>(prompt: &'a str, commands: &[SlashCommand]) -> O
     let rest = prompt.strip_prefix('/')?;
     let name = rest.split(char::is_whitespace).next().unwrap_or_default();
     (!name.is_empty() && commands.iter().any(|c| c.name == name)).then_some(name)
+}
+
+/// LUNA's own admission of a turn's native inputs, before anything is
+/// posted: OpenCode would strip images for a text-only model without a
+/// word, an image may have changed since admission, and a typed skill must
+/// resolve. `Err` is a refusal (nothing reached OpenCode).
+async fn native_inputs(
+    server: &Server,
+    dir: Option<&str>,
+    attachments: &[String],
+    input_items: &[luna_proto::ComposerInput],
+    model: Option<&str>,
+) -> Result<Vec<Value>, HarnessError> {
+    if !attachments.is_empty()
+        && let Some(model) = model
+        && model_accepts_images(model) == Some(false)
+    {
+        return Err(text_only_model(model));
+    }
+    verify_files(attachments)?;
+    server.skill_refs(dir, input_items).await
 }
 
 /// Send a turn: a leading `/command` known to the agent routes through the
@@ -171,16 +244,23 @@ pub(super) async fn post_prompt(
 ) -> PromptOutcome {
     let TurnSpec {
         attachments,
+        input_items,
+        model,
         id,
         delivery,
     } = spec;
+    // Nothing is posted for a turn whose images or skills cannot be sent.
+    let skills = match native_inputs(server, dir, attachments, input_items, model).await {
+        Ok(skills) => skills,
+        Err(error) => return PromptOutcome::Rejected(error.to_string()),
+    };
     if let Some(rest) = prompt.strip_prefix('/') {
         let mut split = rest.splitn(2, char::is_whitespace);
         let name = split.next().unwrap_or_default();
         let arguments = split.next().unwrap_or_default().trim().to_owned();
         if known_command(prompt, commands).is_some() {
             let path = format!("/api/session/{session_id}/command");
-            let body = command_body(name, &arguments, attachments);
+            let body = command_body(name, &arguments, attachments, &skills);
             let command = name.to_owned();
             let server = server.detached();
             let dir_owned = dir.map(str::to_owned);
@@ -213,11 +293,34 @@ pub(super) async fn post_prompt(
             return PromptOutcome::Command;
         }
     }
-    // Prompts carry the caller id, text, `{uri, name}` files and the
-    // delivery; model/variant were set on the session at run start.
-    let body = prompt_body_v2(prompt, attachments, id, delivery);
+    // Prompts carry the caller id, text, `{uri, name}` files, typed skills
+    // and the delivery; model/variant were set on the session at run start.
+    let body = prompt_body_v2(prompt, attachments, &skills, id, delivery);
     let path = format!("/api/session/{session_id}/prompt");
     classify_prompt_response(&path, id, server.post_json_raw(&path, dir, &body).await)
+}
+
+/// Post a native steer (`delivery: "steer"`) with the same input admission
+/// as every other route: its own images and typed skills ride along.
+pub(super) async fn post_steer(
+    server: &Server,
+    session_id: &str,
+    dir: Option<&str>,
+    prompt: &str,
+    spec: TurnSpec<'_>,
+) -> PromptOutcome {
+    let skills =
+        match native_inputs(server, dir, spec.attachments, spec.input_items, spec.model).await {
+            Ok(skills) => skills,
+            Err(error) => return PromptOutcome::Rejected(error.to_string()),
+        };
+    let body = prompt_body_v2(prompt, spec.attachments, &skills, spec.id, spec.delivery);
+    let path = format!("/api/session/{session_id}/prompt");
+    classify_prompt_response(
+        &path,
+        spec.id,
+        server.post_json_raw(&path, dir, &body).await,
+    )
 }
 
 /// Map a prompt POST onto accepted / refused / unknown. A tagged 4xx is a

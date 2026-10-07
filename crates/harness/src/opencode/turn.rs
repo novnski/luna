@@ -72,6 +72,8 @@ pub(super) struct Session {
     pub(super) known_commands: Option<Vec<SlashCommand>>,
     /// Per-child Stop registry (`stop_native_child`).
     pub(super) live_runs: LiveRuns,
+    /// Where the run registers its server for out-of-turn controls.
+    pub(super) live: LiveServers,
 }
 
 pub(super) fn new_message_id() -> String {
@@ -303,6 +305,7 @@ pub(super) async fn run_session(session: Session) {
         kill_grace,
         known_commands,
         live_runs,
+        live,
     } = session;
     let RunControls {
         request_input,
@@ -325,12 +328,16 @@ pub(super) async fn run_session(session: Session) {
         // The LUNA mode compiles against the session agent's own rules, so
         // the user's configured denies stay final (`permissions`).
         let rule_set = SessionRuleSet::load(&server, dir, permission_mode).await;
+        // The model a resumed session last ran: a different request is a
+        // mid-chat switch, read back as such.
+        let mut previous_model = None;
         let (session_id, permission_rules) = match &request.resume {
             Some(resume) => {
                 // Sessions are durable server-side: resume = reuse the id.
                 // A failed lookup (including a transient server failure) is
                 // not authorization to discard this conversation's history.
                 let info = server.session_info(resume, dir).await?;
+                previous_model = info.get("model").and_then(model_key);
                 let session_id = info
                     .get("id")
                     .and_then(Value::as_str)
@@ -363,21 +370,41 @@ pub(super) async fn run_session(session: Session) {
         let providers = server.provider_catalog(dir).await.unwrap_or_default();
 
         // The requested model (+ variant) is set on the session once;
-        // prompts carry only text and files.
+        // prompts carry only text and files. A variant the model no longer
+        // offers is dropped, never sent (OCF-101).
+        let mut requested = None;
         if let Some((provider, model_id)) = request
             .model
             .as_deref()
             .and_then(|m| m.split_once('/'))
             .map(|(p, m)| (p.to_owned(), m.to_owned()))
         {
-            let variant = pick_variant(&providers, &provider, &model_id, request.reasoning);
+            let (variant, dropped) = select_variant(
+                &providers,
+                &provider,
+                &model_id,
+                request.reasoning,
+                &request.model_options,
+            );
             server
                 .set_model(&session_id, &provider, &model_id, variant.as_deref(), dir)
                 .await?;
+            requested = Some(RequestedRuntime {
+                model: format!("{provider}/{model_id}"),
+                variant,
+                dropped,
+            });
         }
-        Ok::<_, HarnessError>((session_id, providers, rule_set, permission_rules))
+        Ok::<_, HarnessError>((
+            session_id,
+            providers,
+            rule_set,
+            permission_rules,
+            previous_model,
+            requested,
+        ))
     };
-    let (session_id, providers, rule_set, permission_rules) = tokio::select! {
+    let (session_id, providers, rule_set, permission_rules, previous_model, requested) = tokio::select! {
         res = setup => match res {
             Ok(v) => v,
             Err(e) => {
@@ -403,24 +430,12 @@ pub(super) async fn run_session(session: Session) {
         }
     };
 
-    let context_windows: HashMap<String, u64> = providers
-        .all
-        .iter()
-        .flatten()
-        .flat_map(|provider| {
-            provider
-                .models
-                .iter()
-                .flat_map(|models| models.iter())
-                .filter_map(|(id, model)| {
-                    Some((
-                        format!("{}/{}", provider.id.as_deref()?, id),
-                        model.limit.context.filter(|n| *n > 0)?,
-                    ))
-                })
-        })
-        .collect();
+    // Context windows per model, the step model and the turn's accounting.
+    let mut usage = UsageState::new(&providers);
     drop(providers);
+    // Out-of-turn controls (compaction) for this session use this server
+    // while the run lives; unregistered on every exit path.
+    let live_server = live.register(&session_id, &server);
 
     // Asks and forms of this run (and its subagent sessions). Their prompts
     // close on Stop (child token) and when the run loop ends (drop).
@@ -474,6 +489,28 @@ pub(super) async fn run_session(session: Session) {
         server.shutdown(kill_grace).await;
         return;
     }
+
+    // Requested vs effective model and variant, read back from the session
+    // (OCF-104); the image capability check uses the effective model.
+    if let Some(requested) = &requested {
+        let readback = model_readback(
+            &server,
+            &session_id,
+            dir,
+            requested,
+            previous_model.as_deref(),
+            &mut usage,
+        )
+        .await;
+        if !send(&event_tx, readback).await {
+            server.shutdown(kill_grace).await;
+            return;
+        }
+    }
+    let image_model = usage
+        .effective_model
+        .clone()
+        .or_else(|| requested.as_ref().map(|requested| requested.model.clone()));
 
     // ---- SSE bus ----------------------------------------------------------
     let (bus_tx, mut bus_rx) = mpsc::channel::<BusMsg>(256);
@@ -529,6 +566,8 @@ pub(super) async fn run_session(session: Session) {
         &request.prompt,
         TurnSpec {
             attachments: &request.attachments,
+            input_items: &request.input_items,
+            model: image_model.as_deref(),
             id: &first_id,
             delivery: PromptDelivery::Queue,
         },
@@ -640,6 +679,8 @@ pub(super) async fn run_session(session: Session) {
                 &next.prompt,
                 TurnSpec {
                     attachments: &next.attachments,
+                    input_items: &next.input_items,
+                    model: image_model.as_deref(),
                     id: &id,
                     delivery: PromptDelivery::Queue,
                 },
@@ -1197,7 +1238,7 @@ pub(super) async fn run_session(session: Session) {
                         children: &mut children,
                         turn: &mut turn,
                         pending_usage: &mut pending_usage,
-                        context_windows: &context_windows,
+                        usage: &mut usage,
                         requests: &mut requests,
                         bus_tx: &command_tx,
                     }).await;
@@ -1406,19 +1447,24 @@ pub(super) async fn run_session(session: Session) {
                             let session = session_id.clone();
                             let dir_owned = directory.clone();
                             let posted = steer_posted_tx.clone();
+                            let steer_model = image_model.clone();
                             tokio::spawn(async move {
-                                let body = prompt_body_v2(
+                                // The steer's own images and typed skills
+                                // ride natively, admitted like every route.
+                                let outcome = post_steer(
+                                    &poster,
+                                    &session,
+                                    dir_owned.as_deref(),
                                     &steer.prompt,
-                                    &steer.attachments,
-                                    &inbox_id,
-                                    PromptDelivery::Steer,
-                                );
-                                let path = format!("/api/session/{session}/prompt");
-                                let outcome = classify_prompt_response(
-                                    &path,
-                                    &inbox_id,
-                                    poster.post_json_raw(&path, dir_owned.as_deref(), &body).await,
-                                );
+                                    TurnSpec {
+                                        attachments: &steer.attachments,
+                                        input_items: &steer.input_items,
+                                        model: steer_model.as_deref(),
+                                        id: &inbox_id,
+                                        delivery: PromptDelivery::Steer,
+                                    },
+                                )
+                                .await;
                                 if let Some(tx) = steer.acceptance {
                                     let _ = tx.send(match &outcome {
                                         PromptOutcome::Accepted { .. } => crate::SteerAcceptance::Accepted,
@@ -1689,6 +1735,8 @@ pub(super) async fn run_session(session: Session) {
     // Close every prompt still open; nothing is answered after the turn.
     drop(requests);
     bus_handle.abort();
+    // New out-of-turn controls boot their own server from here on.
+    drop(live_server);
     server.shutdown(kill_grace).await;
 }
 

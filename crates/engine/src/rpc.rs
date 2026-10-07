@@ -4842,6 +4842,19 @@ impl EngineRpc {
                     Err(error) => Err(error),
                 }
             }
+            // OpenCode reports completion only on `compaction.ended` and
+            // bounds its own wait after admission; a cold server boot must
+            // not count against that bound (OCF-113).
+            HarnessId::Opencode => {
+                self.sessions
+                    .compact_context(
+                        HarnessId::Opencode,
+                        binding.provider_task_id,
+                        cwd,
+                        config.model,
+                    )
+                    .await
+            }
             harness => tokio::time::timeout(
                 Duration::from_secs(30),
                 self.sessions
@@ -4852,6 +4865,34 @@ impl EngineRpc {
             .and_then(|result| result),
         };
         let now = crate::now_ms();
+        // The provider authoritatively did not apply it (refused before
+        // admission, or reported a failure): history is unchanged, so the
+        // next turn is not blocked behind an unknown outcome.
+        if let Err(crate::EngineError::Harness(
+            luna_harness::HarnessError::RejectedBeforeAcceptance(reason),
+        )) = &result
+        {
+            context.compact.status = ContextOperationStatus::Failed;
+            context.compact.finished_at_ms = Some(now);
+            context.compact.detail = Some(format!("Compaction did not run: {reason}"));
+            let receipt = self
+                .doc_host
+                .complete_context_operation(
+                    task_id,
+                    command_id,
+                    CommandReceiptStatus::Failed,
+                    false,
+                    Some(CommandReceiptReason {
+                        code: CommandReasonCode::OperationFailed,
+                        message: context.compact.detail.clone().unwrap_or_default(),
+                    }),
+                    Some("The conversation is unchanged; continue, or try compacting again."),
+                    &context,
+                    false,
+                )
+                .map_err(TaskProjectionError::Commit)?;
+            return Ok(Some(receipt));
+        }
         match result {
             Ok(()) => {
                 context.compact.status = ContextOperationStatus::Completed;
