@@ -20,12 +20,31 @@ const HISTORY_RECOVERY_SCHEMA_VERSION: u32 = 1;
 
 pub fn capability_for(provider: HarnessId) -> ProviderForkCapability {
     match provider {
-        HarnessId::Codex | HarnessId::Opencode => ProviderForkCapability::Checkpoint,
+        HarnessId::Codex => ProviderForkCapability::Checkpoint,
         // CC-10: native prompt uuids are checkpoints; forks follow the Agent
         // SDK `forkSession` contract and are loaded by the CLI before binding.
         HarnessId::ClaudeCode => ProviderForkCapability::Checkpoint,
+        // OC-12: a turn's first user message id is its checkpoint; forks use
+        // OpenCode 2's exclusive `before` boundary at whole turns.
+        HarnessId::Opencode => ProviderForkCapability::Checkpoint,
         _ => ProviderForkCapability::None,
     }
+}
+
+/// Same-chat rewind on the provider's own session (the Rewind action):
+/// Codex through its native thread revert, Claude Code and OpenCode through
+/// the shared `rewind_native_conversation` hook.
+pub fn same_chat_rewind_supported(provider: HarnessId) -> bool {
+    matches!(
+        provider,
+        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+    )
+}
+
+/// Providers whose same-chat rewind runs through the provider-neutral
+/// `native_history_turns` / `rewind_native_conversation` hooks.
+pub fn rewinds_through_native_hooks(provider: HarnessId) -> bool {
+    matches!(provider, HarnessId::ClaudeCode | HarnessId::Opencode)
 }
 
 pub fn unavailable_reason(provider: HarnessId) -> Option<&'static str> {
@@ -159,12 +178,6 @@ pub fn plan_history(
             {
                 return Err(EngineError::Other(
                     "selected user message is inside a provider turn and has no exact native before-turn boundary"
-                        .into(),
-                ));
-            }
-            if provider == HarnessId::Opencode {
-                return Err(EngineError::Other(
-                    "OpenCode's current adapter cannot map a LUNA user row to its exclusive native message boundary; fork after a completed turn or at the tip"
                         .into(),
                 ));
             }
@@ -473,18 +486,27 @@ mod tests {
     }
 
     #[test]
-    fn opencode_before_user_is_truthfully_unavailable() {
-        let error = plan_history(
+    fn opencode_before_user_uses_the_turn_checkpoint_like_codex() {
+        let before = plan_history(
             &conversation(),
             HarnessId::Opencode,
             ConversationForkBoundaryKind::BeforeUserMessage,
             Some("u2"),
         )
-        .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("exclusive native message boundary")
+        .unwrap();
+        assert_eq!(
+            before
+                .entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["u1", "a1"]
+        );
+        assert_eq!(
+            before.provider_boundary,
+            ProviderForkBoundary::BeforeCheckpoint {
+                checkpoint_id: "turn-2".into()
+            }
         );
     }
 

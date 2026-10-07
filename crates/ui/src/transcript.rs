@@ -7694,17 +7694,18 @@ impl Transcript {
                     .on_key_down(crate::swallow_activation_key),
                 )
             });
+            // History actions key on the provider's native capabilities, not
+            // on a provider list: a checkpoint fork serves Fork (user and
+            // assistant rows) and Edit; Rewind needs same-session rewind.
+            let checkpoint_history = history_provider.is_some_and(|provider| {
+                luna_engine::history_operations::capability_for(provider)
+                    == luna_proto::ProviderForkCapability::Checkpoint
+            });
+            let same_chat_rewind = history_provider
+                .is_some_and(luna_engine::history_operations::same_chat_rewind_supported);
             let fork = history_task_id.clone().and_then(|task_id| {
-                let eligible = matches!(
-                    (history_provider, history_role),
-                    (
-                        Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode),
-                        MessageRole::User | MessageRole::Assistant
-                    ) | (
-                        Some(luna_proto::HarnessId::Opencode),
-                        MessageRole::Assistant
-                    )
-                );
+                let eligible = checkpoint_history
+                    && matches!(history_role, MessageRole::User | MessageRole::Assistant);
                 eligible.then(|| {
                     let message_id = copy_entry_id.to_string();
                     let boundary = if history_role == MessageRole::User {
@@ -7728,58 +7729,50 @@ impl Transcript {
                 })
             });
             let edit = history_task_id.clone().and_then(|task_id| {
-                (matches!(
-                    history_provider,
-                    Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode)
-                ) && history_role == MessageRole::User)
-                    .then(|| {
-                        let message_id = copy_entry_id.to_string();
-                        let text = copy_text.clone().unwrap_or_default().to_string();
-                        meta_action(
-                            SharedString::from(format!("edit-message-{message_id}")),
-                            crate::icons::PEN,
-                            "Edit message",
-                            &theme,
-                        )
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(TranscriptEvent::EditEarlierMessage {
-                                task_id: task_id.clone(),
-                                message_id: message_id.clone(),
-                                text: text.clone(),
-                            });
-                        }))
-                    })
+                (checkpoint_history && history_role == MessageRole::User).then(|| {
+                    let message_id = copy_entry_id.to_string();
+                    let text = copy_text.clone().unwrap_or_default().to_string();
+                    meta_action(
+                        SharedString::from(format!("edit-message-{message_id}")),
+                        crate::icons::PEN,
+                        "Edit message",
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(TranscriptEvent::EditEarlierMessage {
+                            task_id: task_id.clone(),
+                            message_id: message_id.clone(),
+                            text: text.clone(),
+                        });
+                    }))
+                })
             });
             let rewind = history_task_id.clone().and_then(|task_id| {
-                (matches!(
-                    history_provider,
-                    Some(luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode)
-                ) && history_role == MessageRole::User)
-                    .then(|| {
-                        let message_id = copy_entry_id.to_string();
-                        let text = copy_text.clone().unwrap_or_default().to_string();
-                        let pending = self.state.read(cx).context_control.pending_rewind.is_some();
-                        let label = if pending {
-                            "Reconcile rewind"
-                        } else {
-                            "Rewind"
-                        };
-                        let emit = move |cx: &mut Context<Self>| {
-                            cx.emit(TranscriptEvent::RewindConversation {
-                                task_id: task_id.clone(),
-                                message_id: message_id.clone(),
-                                text: text.clone(),
-                            })
-                        };
-                        meta_action(
-                            SharedString::from(format!("rewind-message-{copy_entry_id}")),
-                            crate::icons::RESTART,
-                            label,
-                            &theme,
-                        )
-                        .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
-                        .on_key_down(crate::swallow_activation_key)
-                    })
+                (same_chat_rewind && history_role == MessageRole::User).then(|| {
+                    let message_id = copy_entry_id.to_string();
+                    let text = copy_text.clone().unwrap_or_default().to_string();
+                    let pending = self.state.read(cx).context_control.pending_rewind.is_some();
+                    let label = if pending {
+                        "Reconcile rewind"
+                    } else {
+                        "Rewind"
+                    };
+                    let emit = move |cx: &mut Context<Self>| {
+                        cx.emit(TranscriptEvent::RewindConversation {
+                            task_id: task_id.clone(),
+                            message_id: message_id.clone(),
+                            text: text.clone(),
+                        })
+                    };
+                    meta_action(
+                        SharedString::from(format!("rewind-message-{copy_entry_id}")),
+                        crate::icons::RESTART,
+                        label,
+                        &theme,
+                    )
+                    .on_click(cx.listener(move |_, _, _, cx| emit(cx)))
+                    .on_key_down(crate::swallow_activation_key)
+                })
             });
             let metadata = div()
                 .flex()

@@ -5928,16 +5928,16 @@ impl EngineRpc {
                 let (chat, binding) = self
                     .ensure_history_operation_ready(task_id)
                     .map_err(TaskProjectionError::Mutation)?;
-                if binding.provider_id == HarnessId::ClaudeCode {
+                if crate::history_operations::rewinds_through_native_hooks(binding.provider_id) {
                     return self
-                        .rewind_claude_conversation(
+                        .rewind_native_same_chat(
                             command_id, task_id, message_id, review, chat, binding,
                         )
                         .await;
                 }
                 if binding.provider_id != HarnessId::Codex {
                     return Err(TaskProjectionError::Mutation(crate::EngineError::Other(
-                        "Same-chat native rewind is supported only for Codex and Claude Code."
+                        "Same-chat native rewind is supported only for Codex, Claude Code and OpenCode."
                             .into(),
                     )));
                 }
@@ -6166,7 +6166,7 @@ impl EngineRpc {
             }
             TaskCommandIntent::ReconcileConversationRewind { rewind_command_id } => {
                 if let Some(receipt) = self
-                    .reconcile_claude_rewind(command_id, task_id, &rewind_command_id)
+                    .reconcile_native_rewind(command_id, task_id, &rewind_command_id)
                     .await?
                 {
                     return Ok(Some(receipt));
