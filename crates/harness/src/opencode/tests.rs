@@ -5,32 +5,55 @@ fn ignore_fork_progress(_: ProviderForkProgress) -> Result<(), HarnessError> {
     Ok(())
 }
 
+/// Two settled v2 turns: model switch, user, assistant, idle; user,
+/// assistant, idle.
+fn two_turns() -> Value {
+    json!([
+        {"id":"msg_m0","type":"model-switched","time":{"created":1},"model":{"id":"muse","providerID":"opencode"}},
+        {"id":"msg_u1","type":"user","time":{"created":2},"text":"one"},
+        {"id":"msg_a1","type":"assistant","time":{"created":3,"completed":4},"agent":"build","content":[{"type":"text","text":"answer"}]},
+        {"id":"msg_i1","type":"idle","time":{"created":5},"outcome":"succeeded"},
+        {"id":"msg_u2","type":"user","time":{"created":6},"text":"later"},
+        {"id":"msg_a2","type":"assistant","time":{"created":7,"completed":8},"agent":"build","content":[{"type":"text","text":"second"}]},
+        {"id":"msg_i2","type":"idle","time":{"created":9},"outcome":"succeeded"}
+    ])
+}
+
+/// `items` with every id replaced the way a fork regenerates them.
+fn forked_copy(items: &[Value]) -> Value {
+    Value::Array(
+        items
+            .iter()
+            .map(|item| {
+                let mut item = item.clone();
+                let id = item["id"].as_str().unwrap().replace("msg_", "msg_fork_");
+                item["id"] = json!(id);
+                item
+            })
+            .collect(),
+    )
+}
+
 async fn fork_wire(
     fork_messages: Value,
 ) -> (
     String,
-    Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    Arc<std::sync::Mutex<Vec<(String, String, Value)>>>,
     tokio::task::JoinHandle<()>,
 ) {
-    fork_wire_with(
-        json!([
-            {"info":{"id":"user-1","role":"user"},"parts":[{"id":"p1","type":"text","text":"one"}]},
-            {"info":{"id":"assistant-1","role":"assistant"},"parts":[{"id":"p2","type":"text","text":"answer"}]},
-            {"info":{"id":"user-2","role":"user"},"parts":[{"id":"p3","type":"text","text":"later"}]}
-        ]),
-        fork_messages,
-        false,
-    )
-    .await
+    fork_wire_with(two_turns(), fork_messages, false).await
 }
 
+/// A 2.x HTTP fake for the fork path. Records `(method, path, body)`;
+/// message pages are served whole (no cursor), and the fork answer echoes
+/// the boundary it was asked for.
 async fn fork_wire_with(
     source_messages: Value,
     fork_messages: Value,
     delay_fork_readback: bool,
 ) -> (
     String,
-    Arc<std::sync::Mutex<Vec<(String, Value)>>>,
+    Arc<std::sync::Mutex<Vec<(String, String, Value)>>>,
     tokio::task::JoinHandle<()>,
 ) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -58,14 +81,10 @@ async fn fork_wire_with(
                     }
                 };
                 let header = String::from_utf8_lossy(&request[..header_end]);
-                let path = header
-                    .lines()
-                    .next()
-                    .unwrap()
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap()
-                    .to_owned();
+                let mut request_line = header.lines().next().unwrap().split_whitespace();
+                let method = request_line.next().unwrap().to_owned();
+                let target = request_line.next().unwrap().to_owned();
+                let path = target.split('?').next().unwrap().to_owned();
                 let length = header
                     .lines()
                     .find_map(|line| {
@@ -83,15 +102,29 @@ async fn fork_wire_with(
                 }
                 let body = serde_json::from_slice(&request[header_end..header_end + length])
                     .unwrap_or(Value::Null);
-                recorded.lock().unwrap().push((path.clone(), body));
-                if delay_fork_readback && path == "/api/session/forked" {
+                recorded
+                    .lock()
+                    .unwrap()
+                    .push((method.clone(), path.clone(), body.clone()));
+                if delay_fork_readback && path == "/api/session/forked" && method == "GET" {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
                 let response = match path.as_str() {
-                    "/api/session/source/message" => json!({"data": source_messages}),
-                    "/api/session/source/fork" => json!({"data":{"id":"forked"}}),
+                    "/api/session/source" => json!({"data":{"id":"source"}}),
+                    "/api/session/source/message" => {
+                        json!({"data": source_messages, "cursor": {"next": null}})
+                    }
+                    "/api/session/source/fork" => {
+                        let boundary = match body.get("before") {
+                            Some(before) => json!({"type":"before","messageID":before}),
+                            None => json!({"type":"through","messageID":"msg_last"}),
+                        };
+                        json!({"data":{"id":"forked","fork":{"sessionID":"source","boundary":boundary}}})
+                    }
                     "/api/session/forked" => json!({"data":{"id":"forked"}}),
-                    "/api/session/forked/message" => json!({"data": fork_messages}),
+                    "/api/session/forked/message" => {
+                        json!({"data": fork_messages, "cursor": {"next": null}})
+                    }
                     _ => json!({}),
                 };
                 let encoded = response.to_string();
@@ -113,17 +146,16 @@ async fn fork_wire_with(
 
 #[tokio::test]
 async fn native_fork_adapter_remaps_regenerated_ids_and_rejects_leakage() {
-    let good = json!([
-        {"info":{"id":"fork-user-1","role":"user"},"parts":[{"id":"fp1","type":"text","text":"one"}]},
-        {"info":{"id":"fork-assistant-1","role":"assistant"},"parts":[{"id":"fp2","type":"text","text":"answer"}]}
-    ]);
+    let source = two_turns();
+    let first_turn = &source.as_array().unwrap()[..4];
+    let good = forked_copy(first_turn);
     let (base, requests, server_task) = fork_wire(good).await;
     let result = Server::attached(base)
         .fork_session_staged(
             "source",
             None,
             &ProviderForkBoundary::ThroughCheckpoint {
-                checkpoint_id: "assistant-1".into(),
+                checkpoint_id: "msg_u1".into(),
             },
             &ignore_fork_progress,
         )
@@ -131,42 +163,48 @@ async fn native_fork_adapter_remaps_regenerated_ids_and_rejects_leakage() {
         .unwrap();
     assert_eq!(result.provider_session_id, "forked");
     assert_eq!(
-        result.checkpoint_map.get("assistant-1").map(String::as_str),
-        Some("fork-assistant-1")
+        result.checkpoint_map.get("msg_u1").map(String::as_str),
+        Some("msg_fork_u1")
     );
-    assert!(requests.lock().unwrap().iter().any(|(path, body)| {
-        path == "/api/session/source/fork" && body == &json!({"messageID":"user-2"})
+    assert!(requests.lock().unwrap().iter().any(|(method, path, body)| {
+        method == "POST"
+            && path == "/api/session/source/fork"
+            && body == &json!({"before":"msg_u2"})
     }));
     server_task.abort();
 
-    let leaked = json!([
-        {"info":{"id":"fork-user-1","role":"user"},"parts":[{"id":"fp1","type":"text","text":"one"}]},
-        {"info":{"id":"fork-assistant-1","role":"assistant"},"parts":[{"id":"fp2","type":"text","text":"answer"}]},
-        {"info":{"id":"fork-user-2","role":"user"},"parts":[{"id":"fp3","type":"text","text":"later"}]}
-    ]);
-    let (base, _, server_task) = fork_wire(leaked).await;
+    // A fork holding more than the kept prefix fails, and the unverified
+    // fork is deleted rather than left orphaned.
+    let leaked = forked_copy(&source.as_array().unwrap()[..5]);
+    let (base, requests, server_task) = fork_wire(leaked).await;
     let error = Server::attached(base)
         .fork_session_staged(
             "source",
             None,
             &ProviderForkBoundary::ThroughCheckpoint {
-                checkpoint_id: "assistant-1".into(),
+                checkpoint_id: "msg_u1".into(),
             },
             &ignore_fork_progress,
         )
         .await
         .unwrap_err();
     assert!(error.to_string().contains("history length mismatch"));
+    assert!(error.to_string().contains("was deleted"));
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, path, _)| method == "DELETE" && path == "/api/session/forked")
+    );
     server_task.abort();
 }
 
 #[tokio::test]
 async fn native_fork_progress_distinguishes_preflight_acknowledgement_and_readback_timeout() {
-    let mismatched = json!([
-        {"info":{"id":"fork-user-1","role":"user"},"parts":[{"id":"fp1","type":"text","text":"changed"}]},
-        {"info":{"id":"fork-assistant-1","role":"assistant"},"parts":[{"id":"fp2","type":"text","text":"answer"}]}
-    ]);
-    let (base, _, server_task) = fork_wire(mismatched).await;
+    let mut mismatched = forked_copy(&two_turns().as_array().unwrap()[..4]);
+    mismatched[1]["text"] = json!("changed");
+    let (base, requests, server_task) = fork_wire(mismatched).await;
     let progress = Arc::new(std::sync::Mutex::new(Vec::new()));
     let observed = progress.clone();
     let report = move |event| {
@@ -178,7 +216,7 @@ async fn native_fork_progress_distinguishes_preflight_acknowledgement_and_readba
             "source",
             None,
             &ProviderForkBoundary::ThroughCheckpoint {
-                checkpoint_id: "assistant-1".into(),
+                checkpoint_id: "msg_u1".into(),
             },
             &report,
         )
@@ -194,11 +232,18 @@ async fn native_fork_progress_distinguishes_preflight_acknowledgement_and_readba
             }
         ]
     );
+    assert!(
+        requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(method, path, _)| method == "DELETE" && path == "/api/session/forked")
+    );
     server_task.abort();
 
     let (base, _, server_task) = fork_wire_with(
         json!([
-            {"info":{"id":"user-1","role":"user"},"parts":[{"id":"p1","type":"text","text":"one"}]}
+            {"id":"msg_u1","type":"user","time":{"created":1},"text":"one"}
         ]),
         json!([]),
         true,
@@ -248,102 +293,108 @@ async fn native_fork_progress_distinguishes_preflight_acknowledgement_and_readba
             .lock()
             .unwrap()
             .iter()
-            .all(|(path, _)| path != "/api/session/source/fork")
+            .all(|(_, path, _)| path != "/api/session/source/fork")
     );
     server_task.abort();
 }
 
 #[test]
 fn fork_cutoff_includes_checkpoint_by_excluding_the_next_message() {
-    let messages = vec![
-        json!({"info":{"id":"user-1","role":"user"},"parts":[{"type":"text","text":"one"}]}),
-        json!({"info":{"id":"assistant-1","role":"assistant"},"parts":[{"type":"text","text":"answer"}]}),
-        json!({"info":{"id":"user-2","role":"user"},"parts":[{"type":"text","text":"two"}]}),
-    ];
+    let messages = two_turns().as_array().unwrap().clone();
+    // Through a turn: everything up to its closing idle, cut before the
+    // next turn's first item.
     let (prefix, cutoff) = opencode_fork_plan(
         &messages,
+        None,
         &ProviderForkBoundary::ThroughCheckpoint {
-            checkpoint_id: "assistant-1".into(),
+            checkpoint_id: "msg_u1".into(),
         },
     )
     .unwrap();
-    assert_eq!(prefix.len(), 2);
-    assert_eq!(cutoff.as_deref(), Some("user-2"));
+    assert_eq!(prefix.len(), 4);
+    assert_eq!(cutoff.as_deref(), Some("msg_u2"));
+    // Through the last turn: the whole history, no `before`.
     assert_eq!(
         opencode_fork_plan(
             &messages,
+            None,
             &ProviderForkBoundary::ThroughCheckpoint {
-                checkpoint_id: "user-2".into()
+                checkpoint_id: "msg_u2".into()
             }
         )
         .unwrap()
         .1,
         None
     );
-    assert!(
-        opencode_fork_plan(
-            &messages,
-            &ProviderForkBoundary::ThroughCheckpoint {
-                checkpoint_id: "missing".into()
-            }
-        )
-        .is_err()
-    );
-
-    let fork = vec![
-        json!({"info":{"id":"fork-user","role":"user"},"parts":[{"id":"part-a","type":"text","text":"one"}]}),
-        json!({"info":{"id":"fork-assistant","role":"assistant"},"parts":[{"id":"part-b","type":"text","text":"answer"}]}),
-    ];
-    let map = map_opencode_fork_history(&prefix, &fork).unwrap();
+    // Before a turn: exclusive, at the turn region's first item.
+    let (before_prefix, before) = opencode_fork_plan(
+        &messages,
+        None,
+        &ProviderForkBoundary::BeforeCheckpoint {
+            checkpoint_id: "msg_u2".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(before_prefix, prefix);
+    assert_eq!(before.as_deref(), Some("msg_u2"));
+    // Nothing precedes the first turn's region; assistant ids and unknown
+    // ids are not turn checkpoints.
+    for checkpoint in ["msg_u1", "msg_a1", "missing"] {
+        assert!(
+            opencode_fork_plan(
+                &messages,
+                None,
+                &ProviderForkBoundary::BeforeCheckpoint {
+                    checkpoint_id: checkpoint.into()
+                }
+            )
+            .is_err()
+        );
+    }
+    // A staged revert ends the active history: a tip fork stops there.
     assert_eq!(
-        map.get("assistant-1").map(String::as_str),
-        Some("fork-assistant")
+        opencode_fork_plan(&prefix, Some("msg_u2"), &ProviderForkBoundary::Tip)
+            .unwrap()
+            .1
+            .as_deref(),
+        Some("msg_u2")
     );
+    // An unsettled assistant step is not copied by OpenCode, so it is not
+    // expected either.
+    let mut running = messages.clone();
+    running[5]["time"] = json!({"created": 7});
+    let (expected, _) = opencode_fork_plan(&running, None, &ProviderForkBoundary::Tip).unwrap();
+    assert_eq!(expected.len(), messages.len() - 1);
+
+    let fork = forked_copy(&prefix);
+    let map = map_opencode_fork_history(&prefix, fork.as_array().unwrap()).unwrap();
+    assert_eq!(map.get("msg_a1").map(String::as_str), Some("msg_fork_a1"));
     assert!(map_opencode_fork_history(&prefix, &messages).is_err());
 
-    let malformed = vec![messages[0].clone(), json!({"info":{"role":"assistant"}})];
-    assert!(opencode_fork_plan(&malformed, &ProviderForkBoundary::Tip,).is_err());
+    let malformed = vec![messages[1].clone(), json!({"type":"assistant"})];
+    assert!(opencode_fork_plan(&malformed, None, &ProviderForkBoundary::Tip).is_err());
 }
 
 #[test]
-fn fork_readback_remaps_compaction_references_but_preserves_semantic_nested_fields() {
+fn fork_readback_ignores_regenerated_ids_but_preserves_semantic_nested_fields() {
     let source = vec![
+        json!({"id":"msg_u1","type":"user","time":{"created":1},"text":"one"}),
         json!({
-            "info":{"id":"u1","sessionID":"source","role":"user","time":{"created":1}},
-            "parts":[{"id":"p1","sessionID":"source","messageID":"u1","type":"text","text":"one"}]
+            "id":"msg_a1","type":"assistant","time":{"created":2,"completed":3},
+            "content":[{"type":"tool","id":"call_1","name":"read","state":{"status":"completed","input":{"id":"semantic-id","time":17},"content":[{"type":"text","text":"x"}]}}]
         }),
-        json!({
-            "info":{"id":"a1","sessionID":"source","parentID":"u1","role":"assistant","time":{"created":2}},
-            "parts":[{"id":"p2","sessionID":"source","messageID":"a1","type":"tool","state":{"input":{"id":"semantic-id","time":17}}}]
-        }),
-        json!({
-            "info":{"id":"c1","sessionID":"source","role":"user","time":{"created":3}},
-            "parts":[{"id":"p3","sessionID":"source","messageID":"c1","type":"compaction","tail_start_id":"u1"}]
-        }),
+        json!({"id":"msg_c1","type":"compaction","status":"completed","reason":"manual","summary":"s","recent":"r","time":{"created":4}}),
     ];
-    let fork = vec![
-        json!({
-            "info":{"id":"fu1","sessionID":"fork","role":"user","time":{"created":1}},
-            "parts":[{"id":"fp1","sessionID":"fork","messageID":"fu1","type":"text","text":"one"}]
-        }),
-        json!({
-            "info":{"id":"fa1","sessionID":"fork","parentID":"fu1","role":"assistant","time":{"created":2}},
-            "parts":[{"id":"fp2","sessionID":"fork","messageID":"fa1","type":"tool","state":{"input":{"id":"semantic-id","time":17}}}]
-        }),
-        json!({
-            "info":{"id":"fc1","sessionID":"fork","role":"user","time":{"created":3}},
-            "parts":[{"id":"fp3","sessionID":"fork","messageID":"fc1","type":"compaction","tail_start_id":"fu1"}]
-        }),
-    ];
+    let fork = forked_copy(&source).as_array().unwrap().clone();
     let map = map_opencode_fork_history(&source, &fork).unwrap();
-    assert_eq!(map.get("c1").map(String::as_str), Some("fc1"));
+    assert_eq!(map.get("msg_c1").map(String::as_str), Some("msg_fork_c1"));
 
     let mut semantic_mismatch = fork;
-    semantic_mismatch[1]["parts"][0]["state"]["input"]["id"] = "changed".into();
+    semantic_mismatch[1]["content"][0]["state"]["input"]["id"] = "changed".into();
     assert!(map_opencode_fork_history(&source, &semantic_mismatch).is_err());
     let mut time_mismatch = semantic_mismatch;
-    time_mismatch[1]["parts"][0]["state"]["input"]["id"] = "semantic-id".into();
-    time_mismatch[1]["parts"][0]["state"]["input"]["time"] = 18.into();
+    time_mismatch[1]["content"][0]["state"]["input"]["id"] = "semantic-id".into();
+    time_mismatch[1]["content"][0]["state"]["input"]["time"] = 18.into();
     assert!(map_opencode_fork_history(&source, &time_mismatch).is_err());
 }
 

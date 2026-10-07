@@ -66,8 +66,9 @@ use luna_proto::{
 
 use crate::process::{Child, ChildStdin, Command, Stdio};
 use crate::{
-    CommandScope, ContextCompactRequest, Harness, HarnessError, ProviderForkProgress,
-    ProviderForkProgressReporter, RunControls, shutdown_child,
+    CommandScope, ContextCompactRequest, Harness, HarnessError, NativeHistoryScope,
+    NativeHistoryTurns, NativeRewindOutcome, NativeRewindProgressReporter, NativeRewindRequest,
+    ProviderForkProgress, ProviderForkProgressReporter, RunControls, shutdown_child,
 };
 
 mod bus;
@@ -321,6 +322,33 @@ impl Harness for OpencodeHarness {
                 progress,
             )
             .await;
+        server.shutdown(self.kill_grace).await;
+        result
+    }
+
+    /// OC-12: the turn-start identities of the session's active history
+    /// (`history`), the same ids the run persists as checkpoints.
+    async fn native_history_turns(
+        &self,
+        scope: NativeHistoryScope,
+    ) -> Result<NativeHistoryTurns, HarnessError> {
+        let mut server = self.server(Some(&scope.cwd)).await?;
+        let result = server
+            .native_turns(&scope.session_id, Some(&scope.cwd))
+            .await;
+        server.shutdown(self.kill_grace).await;
+        result
+    }
+
+    /// OC-12: same-session rewind through OpenCode's own revert
+    /// (`revert.stage{files: false}` then `revert.commit`); files are kept.
+    async fn rewind_native_conversation(
+        &self,
+        request: NativeRewindRequest,
+        progress: &NativeRewindProgressReporter,
+    ) -> Result<NativeRewindOutcome, HarnessError> {
+        let mut server = self.server(Some(&request.scope.cwd)).await?;
+        let result = server.rewind_conversation(&request, progress).await;
         server.shutdown(self.kill_grace).await;
         result
     }

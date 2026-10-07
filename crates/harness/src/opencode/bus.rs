@@ -252,7 +252,9 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                     .assistant_messages
                     .entry(message.to_owned())
                     .or_insert(role == "assistant");
-                if role == "assistant" {
+                // Only a real v2 message id anchors the turn-end checkpoint
+                // readback (never the synthetic usage carrier).
+                if role == "assistant" && message.starts_with("msg_") {
                     turn.provider_checkpoint_id = Some(message.to_owned());
                 }
                 // Token usage rides the assistant message; the last one

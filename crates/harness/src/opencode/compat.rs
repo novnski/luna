@@ -25,7 +25,7 @@ use super::*;
 const VERIFIED: &[(&str, &str)] = &[("2.0.22", PINNED_2_0_22)];
 
 /// [`check_contract`]'s fingerprint of the live 2.0.22 document.
-const PINNED_2_0_22: &str = "73d57e9a6b342cd7f81eb0a07f71907a44000e1ab5d371e3943d89a9536f387c";
+const PINNED_2_0_22: &str = "659cdb1ba5bf7e5538100a0e5a893aa99d61c1beb9634abae8753712c37888f4";
 
 /// One operation LUNA depends on: operation id, method and path, the
 /// request-body fields LUNA sends (`None` = no body), and the query
@@ -135,7 +135,36 @@ const REQUIREMENTS: &[Requirement] = &[
         "get",
         "/api/session/{sessionID}/message",
         None,
-        &["cursor", "order"],
+        &["cursor", "order", "limit"],
+    ),
+    // OC-12 history: orphan-fork cleanup and same-session rewind.
+    op(
+        "session.remove",
+        "delete",
+        "/api/session/{sessionID}",
+        None,
+        &[],
+    ),
+    op(
+        "session.revert.stage",
+        "post",
+        "/api/session/{sessionID}/revert/stage",
+        Some(&["messageID", "files"]),
+        &[],
+    ),
+    op(
+        "session.revert.commit",
+        "post",
+        "/api/session/{sessionID}/revert/commit",
+        None,
+        &[],
+    ),
+    op(
+        "session.revert.clear",
+        "delete",
+        "/api/session/{sessionID}/revert",
+        None,
+        &[],
     ),
     op("model.list", "get", "/api/model", None, &[]),
     op("command.list", "get", "/api/command", None, &[]),
