@@ -37,3 +37,21 @@ LUNA_CC05_EVIDENCE=/absolute/evidence/dir scripts/cargo.sh test --locked -p luna
 ```
 
 The ignored `live_capture_replay_projects_every_received_result` test replays frames captured from the real CLI (`CC05_REPLAY_FRAMES=/abs/frames.jsonl`).
+
+## OpenCode results (`kind: "native"`, `provider: "opencode"`)
+
+The OpenCode adapter projects every terminal tool frame of the 2.x wire (`session.tool.success` / `session.tool.failed`) once into the same envelope (`crates/harness/src/opencode/tool_output.rs`); nothing is capped in the adapter. It keeps the ordered native content (`text`; a `file` item becomes `image`/`document` with `mimeType`, base64 `data` and decoded `bytes`, or a `resource_link` for a non-`data:` URI; unknown items become `unsupported` with their type and field names), the native `metadata` (exit code, signal, timeout, `truncated`, the managed `outputPath`, Code Mode `toolCalls`; oversized fields keep only a byte count), the complete call arguments under `input`, a bounded `resultState` and `providerExecuted`. A failed call's error message is its first text block, with `error: {type, message}` beside it; partial content or live output after a failure is kept and the envelope says `partial`. A received result whose text is empty is `empty: true`; a call with no terminal frame has no result at all. Diffs come only from native evidence: `edit`/`patch` `metadata.files` patches (reduced to their hunks) and a `write` whose receipt says it created the file (its content is the new text); an overwrite has no before-image and no diff.
+
+Tool names map onto the shared chips: `shell` → `Exec`, `read`/`write`/`edit`/`glob`/`grep`/`webfetch`/`websearch` → their typed calls (`grep`'s `include` filter stays in the arguments), `patch` → one chip per file operation (`<call>`, `<call>#1`, … in patch order, typed like Codex's file changes), `subagent` → the `Agent: <description>` spawn name, `opencode_read_mcp_resource` → `Mcp`, MCP `<server>_<tool>` → `Mcp{server, tool}` split against `GET /api/mcp` server names (longest match), and `skill`/`question`/`execute`/other `opencode_*`/plugin tools → generic cards with their input preserved. An unknown tool name gets one bounded diagnostic (name and argument field names only).
+
+OpenCode 2.0.22's `shell` streams nothing over the bus and returns only the last 50 KiB / 2,000 lines. On its first `session.tool.progress {shellID}` the adapter polls `GET /api/shell/{id}/output?cursor=` and feeds new bytes back through the run's own event loop as `ToolActivity{Stdout}` (the live tail, sharing the call's chip id). At the terminal frame the loop stops the poller and drains the rest before emitting the result, so the host journal holds the complete combined output and no activity follows its result or `Done`. The envelope's `liveOutput` records `byteLength`, `sha256`, `complete` (or the `reason`: shell removed after Stop, the 16 MiB cap, a cursor gap) and the native preview block it replaces; the detail view shows "Full shell output" from the journal's live activity in place of that preview, or "Live output received" when the capture is incomplete. Other tool progress becomes a bounded `ToolActivity{Progress}` status line (web search provider, Code Mode nested calls); streamed tool arguments (`session.tool.input.delta`) are empty-reasoning liveness heartbeats, as Claude's input deltas are.
+
+Real-binary validation (OpenCode 2.0.22, isolated HOME/XDG) drives the actual driver, host `RunJournal` and doc fold:
+
+```sh
+scripts/cargo.sh build --locked -p luna-engine --example opencode_tool_output_probe
+PROBE_WORKSPACE=/abs/ws PROBE_MARKERS=HEAD,TAIL \
+  target/debug/examples/opencode_tool_output_probe ~/.opencode/bin/opencode opencode/big-pickle /abs/out "<prompt>"
+```
+
+It writes `events.jsonl`, the journal, `doc-parts.json`, each tool's journal retrieval and rendered detail, and `summary.json`.
