@@ -25,7 +25,7 @@ use super::*;
 const VERIFIED: &[(&str, &str)] = &[("2.0.22", PINNED_2_0_22)];
 
 /// [`check_contract`]'s fingerprint of the live 2.0.22 document.
-const PINNED_2_0_22: &str = "73d57e9a6b342cd7f81eb0a07f71907a44000e1ab5d371e3943d89a9536f387c";
+const PINNED_2_0_22: &str = "c294aa4cee4953cb5051ab2dfb1353af3169dc729ef0ec4e7b6ad31ab9116bc0";
 
 /// One operation LUNA depends on: operation id, method and path, the
 /// request-body fields LUNA sends (`None` = no body), and the query
@@ -139,6 +139,16 @@ const REQUIREMENTS: &[Requirement] = &[
     ),
     op("model.list", "get", "/api/model", None, &[]),
     op("command.list", "get", "/api/command", None, &[]),
+    // OC-06: live and full shell output by cursor; MCP server names for
+    // typing `<server>_<tool>` calls.
+    op(
+        "shell.output",
+        "get",
+        "/api/shell/{id}/output",
+        None,
+        &["cursor", "limit"],
+    ),
+    op("mcp.list", "get", "/api/mcp", None, &[]),
 ];
 
 /// The v2 permission rule shape LUNA sends in `permissions`.
@@ -395,8 +405,13 @@ pub(super) fn check_contract(version: &str, spec: &Value) -> Result<CompatReport
     check_rule_shape(spec, &operations, &mut missing);
 
     let fingerprint = {
+        // Keys sorted explicitly: the app builds serde_json with
+        // `preserve_order` (GPUI enables it) while harness-only builds sort,
+        // and the pin must not depend on which binary computed it.
         let mut hasher = Sha256::new();
-        hasher.update(serde_json::to_vec(&fingerprint_input).unwrap_or_default());
+        hasher.update(
+            serde_json::to_vec(&sorted_keys(&Value::Array(fingerprint_input))).unwrap_or_default(),
+        );
         format!("{:x}", hasher.finalize())
     };
     if !missing.is_empty() {
@@ -520,6 +535,23 @@ fn required_fields(schema: &Value) -> BTreeSet<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// A copy with every object's keys in sorted order, whatever map ordering
+/// serde_json was built with.
+fn sorted_keys(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = map
+                .iter()
+                .map(|(key, value)| (key.clone(), sorted_keys(value)))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            Value::Object(entries.into_iter().collect())
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sorted_keys).collect()),
+        other => other.clone(),
+    }
 }
 
 /// A schema with `$ref`s inlined (bounded depth) and documentation keys

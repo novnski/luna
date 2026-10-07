@@ -765,12 +765,13 @@ async fn v2_wire_tool_frames_open_and_resolve_chips() {
             }
         )]
     );
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].0, "fixture:msg_a:call_1");
+    let payload = envelope(results[0].1.as_deref().expect("output"));
+    assert_eq!(payload["tool"], "read");
     assert_eq!(
-        results,
-        vec![(
-            "fixture:msg_a:call_1".to_owned(),
-            Some("1: The secret word is BANANA42".to_owned())
-        )]
+        payload["content"],
+        json!([{"type": "text", "text": "1: The secret word is BANANA42"}])
     );
 }
 
@@ -1102,12 +1103,21 @@ fn main_feed_user_text_is_the_prompt_echo_and_never_renders() {
     assert!(part_snapshot_events(&mut child, &part, false, None).is_empty());
 }
 
+/// The `native` payload of an OpenCode tool-result envelope.
+fn envelope(output: &str) -> Value {
+    let value: Value = serde_json::from_str(output).expect("envelope JSON");
+    let payload = value["lunaToolOutput"].clone();
+    assert_eq!(payload["kind"], "native");
+    assert_eq!(payload["provider"], "opencode");
+    payload
+}
+
 #[test]
 fn tool_parts_open_and_resolve_once() {
     let mut feed = feed_with_assistant("msg_a");
     let running = json!({
         "id": "prt_t", "messageID": "msg_a", "sessionID": "ses_1",
-        "type": "tool", "tool": "bash", "callID": "call-1",
+        "type": "tool", "tool": "shell", "callID": "call-1",
         "state": {"status": "running", "input": {"command": "echo ok"}},
     });
     let events = part_snapshot_events(&mut feed, &running, true, None);
@@ -1119,15 +1129,30 @@ fn tool_parts_open_and_resolve_once() {
     assert!(part_snapshot_events(&mut feed, &running, true, None).is_empty());
     let done = json!({
         "id": "prt_t", "messageID": "msg_a", "sessionID": "ses_1",
-        "type": "tool", "tool": "bash", "callID": "call-1",
-        "state": {"status": "completed", "input": {"command": "echo ok"}, "output": "ok\n"},
+        "type": "tool", "tool": "shell", "callID": "call-1",
+        "state": {"status": "completed", "output": "ok\n",
+                  "content": [{"type": "text", "text": "ok\n"}],
+                  "metadata": {"truncated": false, "exit": 0}},
     });
     let events = part_snapshot_events(&mut feed, &done, true, None);
-    assert!(matches!(
-        events.as_slice(),
-        [AgentEvent::ToolResult { id, is_error: false, output: Some(o), .. }]
-            if id == "call-1" && o == "ok\n"
-    ));
+    let [
+        AgentEvent::ToolResult {
+            id,
+            is_error: false,
+            output: Some(o),
+            ..
+        },
+    ] = events.as_slice()
+    else {
+        panic!("one result: {events:?}");
+    };
+    assert_eq!(id, "call-1");
+    let payload = envelope(o);
+    assert_eq!(payload["content"][0]["text"], "ok\n");
+    assert_eq!(payload["metadata"]["exit"], 0);
+    assert_eq!(payload["input"]["command"], "echo ok");
+    // A replayed terminal frame never resolves the chip twice.
+    assert!(part_snapshot_events(&mut feed, &done, true, None).is_empty());
 }
 
 #[test]
@@ -1210,7 +1235,7 @@ fn child_binding_falls_back_to_title_match() {
 
 #[test]
 fn tool_names_type_the_common_calls() {
-    let call = oc_tool_call("bash", &json!({"command": "ls -la"}));
+    let call = oc_tool_call("shell", &json!({"command": "ls -la", "workdir": "/w"}), &[]);
     assert_eq!(
         call,
         ToolCall::Exec {
@@ -1219,7 +1244,8 @@ fn tool_names_type_the_common_calls() {
     );
     let call = oc_tool_call(
         "edit",
-        &json!({"filePath": "/w/a.rs", "oldString": "a", "newString": "b"}),
+        &json!({"path": "/w/a.rs", "oldString": "a", "newString": "b"}),
+        &[],
     );
     assert_eq!(
         call,
@@ -1229,21 +1255,34 @@ fn tool_names_type_the_common_calls() {
             new_string: Some("b".into()),
         }
     );
-    let call = oc_tool_call("task", &json!({"description": "Scan crates"}));
+    let call = oc_tool_call("grep", &json!({"pattern": "fn", "include": "*.rs"}), &[]);
+    assert_eq!(
+        call,
+        ToolCall::Search {
+            pattern: "fn".into(),
+            path: None,
+        }
+    );
+    let call = oc_tool_call(
+        "subagent",
+        &json!({"agent": "general", "description": "Scan crates", "prompt": "scan"}),
+        &[],
+    );
     assert!(matches!(&call, ToolCall::Unknown { name, .. } if name == "Agent: Scan crates"));
     assert!(call.is_subagent_spawn());
-    let call = oc_tool_call(
-        "todowrite",
-        &json!({"todos": [
-            {"content": "step one", "status": "completed"},
-            {"content": "step two", "status": "pending"},
-        ]}),
-    );
+    let call = oc_tool_call("task", &json!({"description": "Scan crates"}), &[]);
+    assert!(call.is_subagent_spawn());
+    // MCP `<server>_<tool>`: the longest configured server name wins.
+    let servers = vec!["my".to_owned(), "my_srv".to_owned()];
+    let call = oc_tool_call("my_srv_fetch_page", &json!({"u": 1}), &servers);
     assert!(matches!(
         &call,
-        ToolCall::Todo { items } if items.len() == 2 && items[0].done && !items[1].done
+        ToolCall::Mcp { server, tool, input: Some(_) } if server == "my_srv" && tool == "fetch_page"
     ));
-    let call = oc_tool_call("mystery", &json!({"x": 1}));
+    // 1.x names render generic, input preserved.
+    let call = oc_tool_call("bash", &json!({"command": "ls"}), &[]);
+    assert!(matches!(&call, ToolCall::Unknown { name, input: Some(_) } if name == "bash"));
+    let call = oc_tool_call("mystery", &json!({"x": 1}), &[]);
     assert!(matches!(&call, ToolCall::Unknown { name, input: Some(_) } if name == "mystery"));
     assert!(!call.is_subagent_spawn());
 }

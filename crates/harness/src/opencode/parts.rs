@@ -1,5 +1,9 @@
 //! Per-part streaming state: text/reasoning/tool snapshots and deltas.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use sha2::{Digest, Sha256};
+
 use super::*;
 
 /// Per-part streaming state (dedup between full-part snapshots and deltas).
@@ -9,8 +13,23 @@ pub(super) struct PartState {
     pub(super) kind: String,
     /// Bytes of part text already emitted (snapshots resend the full text).
     pub(super) emitted: usize,
+    /// Digest of the text already emitted: a snapshot whose prefix differs
+    /// is a rewrite, never extended with a mismatched suffix.
+    pub(super) digest: Sha256,
     pub(super) tool_started: bool,
     pub(super) tool_done: bool,
+    /// The native tool name and complete arguments, remembered from the
+    /// call for the result projection (terminal frames carry neither).
+    pub(super) tool: String,
+    pub(super) input: Value,
+    /// The typed call of the first chip, and every chip id the call opened
+    /// (one per file operation for a multi-file patch).
+    pub(super) call: Option<ToolCall>,
+    pub(super) chips: Vec<String>,
+    /// A running shell call's live output capture, and its summary once
+    /// drained.
+    pub(super) shell: Option<ShellTail>,
+    pub(super) live: Option<LiveOutput>,
 }
 
 /// Streaming state for one opencode session's feed (ours or a child's).
@@ -21,6 +40,28 @@ pub(super) struct SessionFeed {
     /// Parts whose message ROLE isn't known yet, replayed when it lands.
     pub(super) pending_parts: Vec<Value>,
     pub(super) parts: HashMap<String, PartState>,
+    /// Configured MCP server names (`GET /api/mcp`), for typing
+    /// `<server>_<tool>` calls, and how often they were looked up.
+    pub(super) mcp_servers: Vec<String>,
+    pub(super) mcp_lookups: u8,
+}
+
+/// Rewritten text snapshots are diagnosed (lengths only), a bounded number
+/// of times per process.
+const MAX_REWRITE_DIAGNOSTICS: usize = 16;
+
+fn note_text_rewrite(kind: &str, emitted: usize, snapshot: usize) {
+    static SEEN: AtomicUsize = AtomicUsize::new(0);
+    if SEEN.fetch_add(1, Ordering::Relaxed) >= MAX_REWRITE_DIAGNOSTICS {
+        return;
+    }
+    tracing::info!(
+        target: "luna_harness::opencode",
+        kind,
+        emitted,
+        snapshot,
+        "OpenCode rewrote a streamed item; the transcript keeps the streamed text"
+    );
 }
 
 /// A part snapshot: emit whatever text extends what already streamed, open /
@@ -102,16 +143,27 @@ pub(super) fn part_snapshot_events(
                     kind: kind.to_owned(),
                     ..PartState::default()
                 });
+            // The transcript is append-only: a snapshot that extends what
+            // streamed adds its suffix; a rewrite (shorter, mid-character
+            // or a different prefix) keeps the streamed text and is
+            // diagnosed, never answered with a mismatched suffix.
+            let rewritten = text.get(..entry.emitted).is_none_or(|prefix| {
+                entry.emitted > 0
+                    && Sha256::digest(prefix.as_bytes()) != entry.digest.clone().finalize()
+            });
+            if rewritten {
+                note_text_rewrite(kind, entry.emitted, text.len());
+                return Vec::new();
+            }
             let Some(suffix) = text
                 .get(entry.emitted..)
                 .filter(|s| !s.is_empty())
                 .map(str::to_owned)
             else {
-                // Shorter (or mid-char) snapshot: a rewrite this decoder
-                // doesn't model — drop it rather than duplicate text.
                 return Vec::new();
             };
             entry.emitted = text.len();
+            entry.digest.update(suffix.as_bytes());
             vec![if entry.kind == "reasoning" {
                 AgentEvent::ReasoningDelta { text: suffix }
             } else {
@@ -150,12 +202,21 @@ pub(super) fn part_snapshot_events(
                 });
             let mut events = Vec::new();
             let has_input = input.as_object().is_some_and(|o| !o.is_empty());
-            if !entry.tool_started && (has_input || matches!(status, "completed" | "error")) {
+            // `called` (running) carries the complete arguments; a call
+            // whose arguments are empty still opens its chip there.
+            if !entry.tool_started
+                && (has_input || matches!(status, "running" | "completed" | "error"))
+            {
                 entry.tool_started = true;
-                events.push(AgentEvent::ToolCall {
-                    id: call_id.clone(),
-                    call: oc_tool_call(tool, &input),
-                });
+                entry.tool = tool.to_owned();
+                entry.input = input.clone();
+                let chips = tool_chips(&call_id, tool, &input, &feed.mcp_servers);
+                entry.call = chips.first().map(|chip| chip.call.clone());
+                entry.chips = chips.iter().map(|chip| chip.id.clone()).collect();
+                events.extend(chips.into_iter().map(|chip| AgentEvent::ToolCall {
+                    id: chip.id,
+                    call: chip.call,
+                }));
                 // A task spawn on the MAIN feed registers a pending chip so
                 // the child's session.created (or its metadata) can bind.
                 if tool == "task"
@@ -167,21 +228,11 @@ pub(super) fn part_snapshot_events(
             }
             if entry.tool_started && !entry.tool_done && matches!(status, "completed" | "error") {
                 entry.tool_done = true;
-                let output = part
-                    .get("state")
-                    .and_then(|s| {
-                        s.get("output")
-                            .or_else(|| s.get("error"))
-                            .and_then(Value::as_str)
-                    })
-                    .filter(|t| !t.is_empty())
-                    .map(|t| cap_text(t, OUTPUT_CAP));
-                events.push(AgentEvent::ToolResult {
-                    id: call_id,
-                    is_error: status == "error",
-                    output,
-                    diff: None,
-                });
+                let state = part.get("state").unwrap_or(&Value::Null);
+                events.extend(tool_result_events(&call_id, entry, state));
+                // Nothing of the call is needed past its result.
+                entry.input = Value::Null;
+                entry.shell = None;
             }
             events
         }
@@ -221,6 +272,7 @@ pub(super) fn part_delta_events(
         return Vec::new();
     }
     entry.emitted += delta.len();
+    entry.digest.update(delta.as_bytes());
     vec![if entry.kind == "reasoning" {
         AgentEvent::ReasoningDelta {
             text: delta.to_owned(),

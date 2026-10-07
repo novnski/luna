@@ -633,6 +633,7 @@ pub(super) async fn run_session(session: Session) {
                             turn: &mut turn,
                             pending_usage: &mut pending_usage,
                             context_windows: &context_windows,
+                            bus_tx: &command_tx,
                         }).await;
                         match outcome {
                             BusOutcome::Continue => {}
