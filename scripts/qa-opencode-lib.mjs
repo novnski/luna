@@ -448,6 +448,8 @@ export function approvalDecision(question, action) {
 //   {pick: 'text'|['a','b']} choose options whose label contains the text
 //   (else the first option); {text: '...'} typed answer; {dismiss: true}
 //   empty answers; {mcp: 'Accept'|'Decline'|'Cancel', values: {field: v}}.
+export const acceptsTypedAnswer = question => !question.options?.length || !question.input || Boolean(question.input.allowOther);
+
 export function buildAnswers(questions, policy = {}) {
   if (policy.dismiss) return questions.map(q => ({questionId: q.id, labels: []}));
   return questions.map(question => {
@@ -466,7 +468,9 @@ export function buildAnswers(questions, policy = {}) {
       const value = wanted ?? schema.default ?? ({string: 'qa', integer: 1, number: 1, boolean: true})[schema.valueType];
       return {questionId: question.id, labels: value == null ? [] : [typeof value === 'string' ? value : JSON.stringify(value)]};
     }
-    if (policy.text != null && (!question.options?.length || question.input?.allowOther)) return {questionId: question.id, labels: [policy.text]};
+    // UserInputQuestion::accepts_typed_answer: no options, no provider input
+    // policy (legacy: typed answer always offered) or an explicit allowOther.
+    if (policy.text != null && acceptsTypedAnswer(question)) return {questionId: question.id, labels: [policy.text]};
     const options = question.options ?? [];
     if (!options.length) return {questionId: question.id, labels: [policy.text ?? 'qa answer']};
     const wanted = [].concat(policy.pick ?? []).map(s => String(s).toLowerCase());

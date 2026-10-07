@@ -37,7 +37,7 @@ import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {parseArgs} from 'node:util';
 import {
-  Evidence, NotAnswerable, Rpc, UnknownOutcome, applyTranscriptFrame, approvalDecision, assertQaIdentity,
+  Evidence, NotAnswerable, Rpc, UnknownOutcome, acceptsTypedAnswer, applyTranscriptFrame, approvalDecision, assertQaIdentity,
   assertRehearsalIdentity, buildAnswers, captureWireSlice, fileHashes, finishEvidence, isLunaCrossTask, lunaSource,
   makeFixture, maskNonce, normalizeEntries, now, readJsonl, recordSend, root, settleSend, sha256, solidPng, spawnFakeEngine,
   taskCommandParams, textOf, waitOn, wireOffsets,
@@ -243,7 +243,7 @@ async function attachChildren(s, parentRole, prefix, sinceMessageId = null) {
 const SCENARIOS = {
   S1: {
     title: 'Approvals and questions', validation: ['OCE-16', 'OCE-05'], parity: true, permissionMode: 'ask', phases: ['run'],
-    steps: ['allow-once', 'deny-with-feedback', 'cancel-turn', 'question-single', 'question-multi', 'stale-answer-after-stop'],
+    steps: ['allow-once', 'deny-with-feedback', 'cancel-turn', 'question-single', 'question-multi', 'question-free-text', 'stale-answer-after-stop'],
     // The commands run an interpreter so no provider auto-allows them: Claude
     // Code runs `echo` and in-workspace file writes without asking in
     // acceptEdits, which LUNA's ask mode maps to. Both providers must ask.
@@ -254,6 +254,7 @@ const SCENARIOS = {
       single: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly COLOR-${n}-<the color I chose>.`,
       multi: `Use your tool for asking the user a multiple-choice question that allows multiple selections (do not ask in plain text). Ask me to choose one or more of these options: alpha, beta, gamma. After I answer, reply with exactly PICKED-${n}- followed by my choices joined with "+".`,
       stale: `Use your shell tool to run exactly this command: python3 -c "print('S1-STALE-${n}')"\nThen reply with only the command's output.`,
+      free: `Use your tool for asking the user a question (do not ask in plain text). Ask me for my favourite colour, offering red, green and blue as options and letting me type my own answer instead. After I answer, reply with exactly FREE-${n}- followed by my answer in lowercase.`,
     }),
     unverified: ['MCP elicitation forms need a mock MCP server fixture (not part of this runner); the answerer supports them (buildAnswers mcp policy).',
       'Question steps at T2 need a scripted mock entry; run them at T3.'],
@@ -311,6 +312,18 @@ const SCENARIOS = {
         s.info('multi-select-flag', 'the provider marked the question multi-select', shown?.questions.map(q => q.multiSelect) ?? null, Boolean(shown?.questions.some(q => q.multiSelect)));
         s.settled(t.wait);
         s.modelCheck('multi-answer-consumed', `reply names alpha and gamma (PICKED-${s.nonce}-...)`, t.reply.slice(0, 200), /alpha/i.test(t.reply) && /gamma/i.test(t.reply));
+      });
+      await s.step('question-free-text', async () => {
+        let shown = null;
+        const t = await s.turn(root, P.free, {answer: pending => {
+          if (pending.questions.some(q => q.approval)) return {approval: 'allow-once'};
+          shown ??= pending;
+          return {text: 'teal'};
+        }});
+        s.modelCheck('free-question-shown', 'the question reached the shared panel', shown?.questions.map(q => ({options: q.options, multi: q.multiSelect, input: q.input ?? null})) ?? null, Boolean(shown));
+        if (shown) s.check('free-text-offered', 'the question panel offers a typed answer (accepts_typed_answer: no options, no input policy, or allowOther)', shown?.questions.map(q => acceptsTypedAnswer(q)) ?? null, Boolean(shown?.questions.some(acceptsTypedAnswer)));
+        s.settled(t.wait);
+        s.modelCheck('free-text-consumed', `reply is FREE-${s.nonce}-teal (the typed answer reached the model)`, t.reply.slice(0, 200), t.reply.toLowerCase().includes(`free-${s.nonce}-teal`.toLowerCase()));
       });
       await s.step('stale-answer-after-stop', async () => {
         const chatId = s.chatId(root);
