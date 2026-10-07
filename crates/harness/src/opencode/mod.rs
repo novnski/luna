@@ -13,11 +13,12 @@
 //! - spawn `opencode serve --stdio --port 0` with `OPENCODE_PASSWORD`
 //!   (HTTP Basic, username `opencode`): stdin is the ownership lease, the
 //!   stdout `{"url": ...}` line is readiness, and `GET /api/info` proves a
-//!   2.x server.
+//!   2.x server. The boot checks the live `/openapi.json` against the
+//!   operations and request fields LUNA depends on (`compat`).
 //! - one global SSE bus (`GET /api/event`) carries every session's traffic,
 //!   child (subagent) sessions included, token-level. Frames are rewritten
 //!   into internal 1.x-shaped payloads ([`normalize_v2_frame`]) so the turn
-//!   engine stays as it was.
+//!   engine stays as it was; unknown event types are logged once.
 //! - a turn is `POST /api/session/{id}/prompt` (model set once on the
 //!   session); the END of the turn is the terminal execution frame for
 //!   THAT session (`session.execution.succeeded/.failed/.interrupted`).
@@ -32,6 +33,7 @@
 //! - this file: [`OpencodeHarness`] and its `Harness` impl.
 //! - `resolve`: executable resolution (2.x only, version-probed).
 //! - `server`: the `opencode serve` child, readiness, HTTP helpers.
+//! - `compat`: the boot-time OpenAPI contract and the pinned event set.
 //! - `catalog`: models, variants, slash commands, session model switch.
 //! - `usage`: token/context usage and compaction.
 //! - `history`: message listing, fork planning and readback.
@@ -68,6 +70,7 @@ use crate::{
 
 mod bus;
 mod catalog;
+mod compat;
 mod forms;
 mod history;
 mod parts;
@@ -84,6 +87,7 @@ mod wire_v2;
 
 use bus::*;
 use catalog::*;
+use compat::*;
 use parts::*;
 use permissions::*;
 use prompt::*;
@@ -96,6 +100,7 @@ use turn::*;
 use usage::*;
 use wire_v2::*;
 
+pub use compat::{CompatReport, CompatStatus, opencode_compat_report};
 pub use resolve::{
     OpencodeResolution, OpencodeSource, last_opencode_resolution, resolve_opencode_executable,
 };

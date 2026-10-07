@@ -247,6 +247,11 @@ impl Server {
             }
             tokio::time::sleep(HEALTH_POLL).await;
         }
+        // The API contract LUNA depends on, before anything is sent.
+        if let Err(error) = ensure_compatible(&server).await {
+            server.shutdown(Duration::from_secs(1)).await;
+            return Err(error);
+        }
         Ok(server)
     }
 

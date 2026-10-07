@@ -102,6 +102,7 @@ pub(super) async fn stream_bus(tx: &mpsc::Sender<BusMsg>, resp: reqwest::Respons
                 let Ok(event) = serde_json::from_str::<Value>(data) else {
                     continue;
                 };
+                note_event_type(event.get("type").and_then(Value::as_str).unwrap_or(""));
                 let payloads = normalize_v2_frame(event, &mut v2_tool_names);
                 if v2_tool_names.len() > MAX_PENDING_V2_TOOLS {
                     let _ = tx.send(BusMsg::Disconnected).await;

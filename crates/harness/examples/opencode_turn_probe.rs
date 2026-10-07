@@ -99,8 +99,26 @@ async fn main() {
         }
     };
     eprintln!("--- done: {status:?} text={text:?} tools={tools}");
+    print_resolution();
     match status {
         Some(luna_proto::DoneStatus::Completed) if !text.trim().is_empty() => {}
         _ => std::process::exit(1),
+    }
+}
+
+/// The binary and API contract this process used (OC-00/OC-02 evidence).
+fn print_resolution() {
+    let Some(resolution) = luna_harness::opencode::last_opencode_resolution() else {
+        eprintln!("RESOLVED none");
+        return;
+    };
+    let version = resolution.version.as_deref().unwrap_or("unknown");
+    eprintln!(
+        "RESOLVED {} version={version} source={:?}",
+        resolution.path.display(),
+        resolution.source
+    );
+    if let Some(report) = luna_harness::opencode::opencode_compat_report(version) {
+        eprintln!("COMPAT {report:?}");
     }
 }

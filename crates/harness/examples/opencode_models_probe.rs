@@ -23,10 +23,29 @@ async fn main() {
                 );
             }
             eprintln!("--- {} models in {:?}", models.len(), start.elapsed());
+            print_resolution();
         }
         Err(e) => {
             eprintln!("discovery failed: {e}");
+            print_resolution();
             std::process::exit(1);
         }
+    }
+}
+
+/// The binary and API contract this process used (OC-00/OC-02 evidence).
+fn print_resolution() {
+    let Some(resolution) = luna_harness::opencode::last_opencode_resolution() else {
+        eprintln!("RESOLVED none");
+        return;
+    };
+    let version = resolution.version.as_deref().unwrap_or("unknown");
+    eprintln!(
+        "RESOLVED {} version={version} source={:?}",
+        resolution.path.display(),
+        resolution.source
+    );
+    if let Some(report) = luna_harness::opencode::opencode_compat_report(version) {
+        eprintln!("COMPAT {report:?}");
     }
 }
