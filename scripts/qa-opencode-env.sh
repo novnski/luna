@@ -121,7 +121,8 @@ wrapper="$profile/bin/opencode"
   # refuse the commands that only manage that shared service or the real
   # installation. `serve` and `acp` (what LUNA and the T2 rig run) and the
   # local-only `debug`, `mcp` and `plugin` commands pass through unchanged.
-  # No export or exec happens inside these blocks, so LUNA's storage replay
+  # No export, exec or opaque builtin word (an unquoted `.` pattern reads as
+  # `source`) sits inside these blocks, so LUNA's storage replay
   # (crates/harness/src/opencode/storage.rs) still evaluates the wrapper.
   cat <<'WRAPPER'
 case "${1-}" in
@@ -135,7 +136,7 @@ if [ "$luna_qa_private" = 1 ]; then
   case "${1-}" in
     models|stats|run|api|reload|mini) luna_qa_cmd=$1; shift; set -- "$luna_qa_cmd" --standalone "$@" ;;
     auth|session) case "${2-}" in list|login|logout|export|import|switch|delete) luna_qa_cmd=$1; luna_qa_sub=$2; shift 2; set -- "$luna_qa_cmd" "$luna_qa_sub" --standalone "$@" ;; esac ;;
-    -c|--continue|-s|--session|--prompt|--auto|/*|./*|../*|.|..) set -- --standalone "$@" ;;
+    -c|--continue|-s|--session|--prompt|--auto|/*|./*|../*|'.'|'..') set -- --standalone "$@" ;;
     "") set -- --standalone ;;
   esac
 fi
