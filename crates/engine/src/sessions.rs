@@ -7125,6 +7125,85 @@ impl Inner {
             .is_some_and(|h| !lock(&h.routed_steers).is_empty())
     }
 
+    /// The waiting status the run's still-open requests imply: approval wins
+    /// over a plain question; `None` when nothing waits on the user.
+    fn pending_input_status(&self, chat_id: &str) -> Option<SessionStatus> {
+        let pending = lock(&self.runs)
+            .get(chat_id)
+            .map(|handle| handle.pending_inputs.clone())?;
+        let pending = lock(&pending);
+        if pending
+            .values()
+            .any(|input| input.questions.iter().any(|q| q.approval.is_some()))
+        {
+            Some(SessionStatus::AwaitingApproval)
+        } else if !pending.is_empty() {
+            Some(SessionStatus::AwaitingInput)
+        } else {
+            None
+        }
+    }
+
+    /// Take the run's still-open provider requests out of its pending map
+    /// (OCF-51), so a turn-end drain does not answer them. Engine-owned LUNA
+    /// cards stay behind and are drained with their turn.
+    fn take_provider_inputs(&self, chat_id: &str, run_id: &str) -> Vec<(String, PendingInput)> {
+        let pending = lock(&self.runs)
+            .get(chat_id)
+            .filter(|run| run.run_id == run_id)
+            .map(|run| run.pending_inputs.clone());
+        let Some(pending) = pending else {
+            return Vec::new();
+        };
+        let mut pending = lock(&pending);
+        let provider: Vec<String> = pending
+            .iter()
+            .filter(|(_, input)| matches!(input.kind, PendingInputKind::Provider))
+            .map(|(id, _)| id.clone())
+            .collect();
+        provider
+            .into_iter()
+            .filter_map(|id| pending.remove(&id).map(|input| (id, input)))
+            .collect()
+    }
+
+    /// Register a carried late ask again under a fresh request id and return
+    /// its visible `InputRequested`. The native answer channel is unchanged
+    /// (adapters never see request ids); only the card is new, because the
+    /// panel serves the newest assistant entry.
+    fn reregister_late_ask(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        input: PendingInput,
+    ) -> Option<AgentEvent> {
+        let (pending, engine_tx) = lock(&self.runs)
+            .get(chat_id)
+            .filter(|run| run.run_id == run_id)
+            .map(|run| (run.pending_inputs.clone(), run.engine_tx.clone()))?;
+        let request_id = new_id();
+        let questions = input.questions.clone();
+        lock(&pending).insert(request_id.clone(), input);
+        schedule_provider_input_cleanup(
+            pending.clone(),
+            engine_tx.clone(),
+            request_id.clone(),
+            &questions,
+        );
+        schedule_approval_expiry(pending, engine_tx, request_id.clone(), &questions);
+        // Same projection as the input bridge: no launch URL leaves memory.
+        let mut visible = questions;
+        for question in &mut visible {
+            if let Some(meta) = &mut question.mcp {
+                meta.launch_url = None;
+            }
+        }
+        Some(AgentEvent::InputRequested {
+            request_id,
+            questions: visible,
+        })
+    }
+
     /// Retire explicit native steers owned by the turn that just reached a
     /// terminal provider boundary. Ordinary warm routes stay in FIFO order
     /// for their legacy follow-up-turn fallback.
@@ -7784,6 +7863,26 @@ fn finish_segment<'a>(
     }
 }
 
+/// A late ask's card (OCF-51): its own finished assistant entry holding the
+/// open input part, below everything the parked run already wrote.
+fn write_late_ask_card(
+    doc: &SessionDoc,
+    device_id: &str,
+    requested: &AgentEvent,
+) -> Result<(), DocError> {
+    let mut parts = Vec::new();
+    fold_event_into_parts(&mut parts, requested);
+    finish_segment(
+        doc,
+        None,
+        &new_id(),
+        device_id,
+        now_ms(),
+        &parts,
+        MessageStatus::Complete,
+    )
+}
+
 /// `~` / `~/…` → this host's home directory. Anything else passes through.
 fn expand_home(cwd: &str) -> String {
     match cwd.strip_prefix("~") {
@@ -8381,6 +8480,10 @@ async fn drive_run(
     // parked-session reaper out so it never kills a child mid-workflow; a
     // task that goes silent still lets the reaper end eventually.
     let mut native_activity_at: Option<tokio::time::Instant> = None;
+    // Late asks (OCF-51): requests background work raised after the root
+    // turn's Done, each shown in its own finished entry and still waiting on
+    // the user. They hold the idle reaper like an active turn's question.
+    let mut parked_asks: std::collections::HashSet<String> = std::collections::HashSet::new();
     let final_status = loop {
         let event: AgentEvent = if let Some(event) = prepared_events.pop_front() {
             event
@@ -8411,11 +8514,12 @@ async fn drive_run(
                 // Idle reaper (luna SESSION_IDLE_MS): a parked persistent session
                 // nobody returned to in 30 minutes releases its child. The turn
                 // was finalized at Done, so this end is clean — no aborted stamp.
+                // A late ask still waiting on the user is not idleness.
                 _ = tokio::time::sleep_until(
                     idle_since
                         .map(|at| at.max(native_activity_at.unwrap_or(at)) + SESSION_IDLE)
                         .unwrap_or_else(tokio::time::Instant::now)
-                ), if idle_since.is_some() => {
+                ), if idle_since.is_some() && parked_asks.is_empty() => {
                     tracing::info!(chat = %chat_id, "reaping idle persistent session");
                     if let Some(token) = lock(&inner.runs)
                         .get(&chat_id)
@@ -9046,8 +9150,9 @@ async fn drive_run(
             continue;
         }
         // Claude's adapter mints a turn id at each root `system:init`, and
-        // OpenCode's at each prompt it posts. It only arms the LUNA tool
-        // fence; wake turns keep their existing lifecycle.
+        // OpenCode's at each prompt it posts. Inside a turn it only arms the
+        // LUNA tool fence; Claude wake turns keep their self-continued
+        // lifecycle.
         if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Opencode)
             && let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event
         {
@@ -9057,6 +9162,39 @@ async fn drive_run(
             {
                 inner.rearm_codex_checkpoint_after_done(&chat_id, &run_id, Some(thread_id));
                 inner.observe_codex_checkpoint(&chat_id, &run_id, Some(thread_id), turn_id);
+            }
+            // OCF-124/167: OpenCode announces a background completion's wake
+            // (a root execution LUNA never prompted) authoritatively, and it
+            // ends with its own Done. Open it as its own provider turn now,
+            // like Codex: the parked gate's self-continued trigger only sees
+            // text or a new tool after the resume gate, so a reasoning-only
+            // wake, or one answering inside the gate, was dropped. A LUNA
+            // follow-up started on the parked run mints the same event
+            // before its Steered boundary; its routed steer says it is not a
+            // wake.
+            if harness_id == HarnessId::Opencode
+                && idle_since.is_some()
+                && !inner.has_pending_steers(&chat_id, &run_id)
+            {
+                tracing::info!(chat = %chat_id, %turn_id, "parked session resumed by a provider wake turn");
+                idle_since = None;
+                self_continued_turn = true;
+                entry_id = new_id();
+                segment_started = now_ms();
+                last_stream_activity = tokio::time::Instant::now();
+                inner.set_status(&chat_id, SessionStatus::Working, true);
+                let turn_cwd = lock(&inner.last_requests)
+                    .get(&chat_id)
+                    .map(|request| request.cwd.clone());
+                if let Some(cwd) = turn_cwd.as_deref() {
+                    if let Some(checkpoints) = inner.git_checkpoints.get() {
+                        checkpoints.start(&chat_id, &run_id, cwd).await;
+                    }
+                    SessionsEngine {
+                        inner: inner.clone(),
+                    }
+                    .note_turn_start(&chat_id, cwd);
+                }
             }
             continue;
         }
@@ -9258,10 +9396,38 @@ async fn drive_run(
                     AgentEvent::Done { .. } => {
                         idle_since = None;
                     }
-                    // A question with NO turn behind it (post-turn permission
-                    // noise): answer it empty right here. Un-parking into
-                    // AwaitingInput would disarm the idle reaper with no Done
-                    // ever coming — stranded status, leaked warm child.
+                    // A LATE ASK (OCF-51): background native work (a Claude
+                    // background task, an OpenCode background subagent, a
+                    // native task) outlives the root turn and asks after its
+                    // Done. That request is real: it goes to the chat's
+                    // shared panel in its own entry and stays answerable,
+                    // but the run stays PARKED (no turn runs; the answer goes
+                    // straight to the native request), so the reaper and the
+                    // turn state are untouched.
+                    AgentEvent::InputRequested { request_id, .. }
+                        if inner.has_live_native_work(&chat_id, &run_id) =>
+                    {
+                        if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                            journal_failure = Some(error);
+                            break SessionStatus::Errored;
+                        }
+                        if let Err(error) = write_late_ask_card(doc_ref, &device_id, &event) {
+                            tracing::warn!(chat = %chat_id, %error, "late ask entry write failed");
+                        }
+                        parked_asks.insert(request_id.clone());
+                        native_activity_at = Some(tokio::time::Instant::now());
+                        if let Some(status) = inner.pending_input_status(&chat_id) {
+                            inner.set_status(&chat_id, status, false);
+                        }
+                        tracing::info!(chat = %chat_id, request = %request_id,
+                            "parked session: late input request from background work shown");
+                        continue;
+                    }
+                    // A question with NO turn and no background work behind
+                    // it (post-turn permission noise): answer it empty right
+                    // here. Un-parking into AwaitingInput would disarm the
+                    // idle reaper with no Done ever coming — stranded status,
+                    // leaked warm child.
                     AgentEvent::InputRequested { request_id, .. } => {
                         let resolver = lock(&inner.runs)
                             .get(&chat_id)
@@ -9270,6 +9436,25 @@ async fn drive_run(
                             let _ = pending.resolver.send(Vec::new());
                         }
                         tracing::debug!(chat = %chat_id, "parked session: post-turn input request auto-declined");
+                        continue;
+                    }
+                    // A late ask settled (answered, withdrawn natively, or
+                    // expired): close its card; the run stays parked.
+                    AgentEvent::InputResolved { request_id } if parked_asks.remove(request_id) => {
+                        if let Err(error) = inner.publish(&chat_id, &event, run_permit.as_ref()) {
+                            journal_failure = Some(error);
+                            break SessionStatus::Errored;
+                        }
+                        if let Err(error) = doc_ref.resolve_input(request_id) {
+                            tracing::warn!(chat = %chat_id, request = %request_id, %error, "late ask resolve failed");
+                        }
+                        // The reaper window restarts from the answer, not
+                        // from the root turn's Done.
+                        native_activity_at = Some(tokio::time::Instant::now());
+                        let status = inner
+                            .pending_input_status(&chat_id)
+                            .unwrap_or(SessionStatus::Idle);
+                        inner.set_status(&chat_id, status, false);
                         continue;
                     }
                     // A stale answer settling after its turn already closed:
@@ -9844,26 +10029,17 @@ async fn drive_run(
                     false,
                 );
             }
-            AgentEvent::InputResolved { .. } => {
+            AgentEvent::InputResolved { request_id } => {
+                // A late ask carried into this turn lives in its own
+                // finished entry, outside the live fold.
+                if parked_asks.remove(request_id)
+                    && let Err(error) = doc_ref.resolve_input(request_id)
+                {
+                    tracing::warn!(chat = %chat_id, request = %request_id, %error, "late ask resolve failed");
+                }
                 // One completed form must not hide another concurrent prompt.
-                let remaining = lock(&inner.runs)
-                    .get(&chat_id)
-                    .map(|handle| handle.pending_inputs.clone());
-                let status = remaining
-                    .as_ref()
-                    .and_then(|pending| {
-                        let pending = lock(pending);
-                        if pending
-                            .values()
-                            .any(|input| input.questions.iter().any(|q| q.approval.is_some()))
-                        {
-                            Some(SessionStatus::AwaitingApproval)
-                        } else if !pending.is_empty() {
-                            Some(SessionStatus::AwaitingInput)
-                        } else {
-                            None
-                        }
-                    })
+                let status = inner
+                    .pending_input_status(&chat_id)
                     .unwrap_or(SessionStatus::Working);
                 inner.set_status(&chat_id, status, false);
             }
@@ -9983,6 +10159,28 @@ async fn drive_run(
             // the session into Working with no turn behind it — stranded
             // Working, timer forever, reaper disarmed. Empty answers unblock
             // the harness-side bridge like an interrupt does.
+            //
+            // OCF-51: a provider request still open at a COMPLETED turn end is
+            // owed by background work, not by this turn (a turn cannot finish
+            // while its own request blocks it): a background child that asked
+            // during the turn, or a late ask carried through a wake turn.
+            // While that work is live and the run parks, it is carried over
+            // the boundary (a fresh card below) instead of answered empty.
+            let carried_late_asks = if *status == DoneStatus::Completed
+                && steerable
+                && !interrupted
+                && inner.has_live_native_work(&chat_id, &run_id)
+            {
+                inner.take_provider_inputs(&chat_id, &run_id)
+            } else {
+                Vec::new()
+            };
+            for (request_id, _) in &carried_late_asks {
+                parked_asks.remove(request_id);
+                if let Err(error) = doc_ref.resolve_input(request_id) {
+                    tracing::warn!(chat = %chat_id, request = %request_id, %error, "carried ask card close failed");
+                }
+            }
             let pending = lock(&inner.runs)
                 .get(&chat_id)
                 .filter(|h| h.run_id == run_id)
@@ -9990,6 +10188,14 @@ async fn drive_run(
             if let Some(pending) = pending {
                 for (_, pending) in lock(&pending).drain() {
                     let _ = pending.resolver.send(Vec::new());
+                }
+            }
+            // Every earlier late-ask card closes (a carried ask gets a fresh
+            // card once the run parks); they live in their own entries,
+            // outside the fold resolved below.
+            for request_id in parked_asks.drain() {
+                if let Err(error) = doc_ref.resolve_input(&request_id) {
+                    tracing::warn!(chat = %chat_id, request = %request_id, %error, "late ask resolve failed");
                 }
             }
             let message_status = match status {
@@ -10145,9 +10351,36 @@ async fn drive_run(
                 saw_session_started = true;
                 idle_since = Some(tokio::time::Instant::now());
                 self_continued_turn = false;
+                // Carried late asks: a fresh card below this turn, so the
+                // panel (which serves the newest assistant entry) shows it.
+                for (_, input) in carried_late_asks {
+                    let Some(requested) = inner.reregister_late_ask(&chat_id, &run_id, input)
+                    else {
+                        continue;
+                    };
+                    if let Err(error) = inner.publish(&chat_id, &requested, run_permit.as_ref()) {
+                        journal_failure = Some(error);
+                        break;
+                    }
+                    if let Err(error) = write_late_ask_card(doc_ref, &device_id, &requested) {
+                        tracing::warn!(chat = %chat_id, %error, "late ask entry write failed");
+                    }
+                    if let AgentEvent::InputRequested { request_id, .. } = requested {
+                        parked_asks.insert(request_id);
+                    }
+                }
+                if journal_failure.is_some() {
+                    break SessionStatus::Errored;
+                }
+                // Parked; still waiting on the user when an ask was carried
+                // (no Idle flicker a queued message could slip through).
+                let parked_status = inner.pending_input_status(&chat_id);
+                if parked_status.is_some() {
+                    native_activity_at = Some(tokio::time::Instant::now());
+                }
                 inner.set_status_with_completion(
                     &chat_id,
-                    SessionStatus::Idle,
+                    parked_status.unwrap_or(SessionStatus::Idle),
                     false,
                     completed_turn,
                 );
@@ -10198,6 +10431,13 @@ async fn drive_run(
     }
     nested_spawns.refreeze(&inner, &chat_id);
     crate::native_tasks::settle_session_ended(doc_ref, &chat_id);
+    // A late ask open when a parked run ends (reaper, child death, stream
+    // end): its resolver dies with the run, so its card must not stay open.
+    for request_id in parked_asks.drain() {
+        if let Err(error) = doc_ref.resolve_input(&request_id) {
+            tracing::warn!(chat = %chat_id, request = %request_id, %error, "late ask resolve failed");
+        }
+    }
     // Any child transcript still streaming freezes as-is: the parent event
     // stream is gone, so this sink cannot receive more content in this run.
     for (_, sink) in subagents.drain() {
