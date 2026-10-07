@@ -10,7 +10,16 @@
 //! Environment:
 //! - `PROBE_MODE`: `ask` (default) or `full` — the LUNA permission mode.
 //! - `PROBE_APPROVAL`: the approval label to answer (`Allow once`
-//!   (default), `Deny`, `Cancel turn`).
+//!   (default), `Allow for session`, `Deny`, `Cancel turn`).
+//!   `PROBE_APPROVALS`: comma-separated labels answered in order (the last
+//!   one repeats), e.g. `Allow for session,Allow once`.
+//! - `PROBE_MAX_APPROVALS`: maximum approval cards the first run may show.
+//! - `PROBE_RESUME_PROMPT`: a second run on the same harness that resumes
+//!   the first run's session (a later turn of the same chat);
+//!   `PROBE_RESUME_MAX_APPROVALS` bounds its approval cards and
+//!   `PROBE_RESUME_MODE` (`ask`/`full`) sets its permission mode.
+//!   `PROBE_RESUME2_PROMPT` / `_MAX_APPROVALS` / `_MIN_APPROVALS` / `_MODE`:
+//!   a third run, after the second.
 //! - `PROBE_CHOICE`: the option index (0-based) chosen on question panels
 //!   (default 0); `PROBE_TYPED=<text>` answers with typed text instead;
 //!   `PROBE_DISMISS=1` dismisses (empty answers).
@@ -111,6 +120,27 @@ async fn main() {
         _ => PermissionMode::Ask,
     };
     let approval_label = env("PROBE_APPROVAL").unwrap_or_else(|| "Allow once".into());
+    let approval_labels: Vec<String> = env("PROBE_APPROVALS")
+        .map(|labels| labels.split(',').map(|l| l.trim().to_owned()).collect())
+        .unwrap_or_else(|| vec![approval_label.clone()]);
+    let max_approvals: Option<u32> = env("PROBE_MAX_APPROVALS").and_then(|n| n.parse().ok());
+    // Later runs resuming the first run's session: (prompt, mode, min, max).
+    let resumes: Vec<(String, PermissionMode, u32, Option<u32>)> = ["RESUME", "RESUME2"]
+        .iter()
+        .map_while(|key| {
+            let prompt = env(&format!("PROBE_{key}_PROMPT"))?;
+            let mode = match env(&format!("PROBE_{key}_MODE")).as_deref() {
+                Some("full") => PermissionMode::Full,
+                Some("ask") => PermissionMode::Ask,
+                _ => mode,
+            };
+            let min = env(&format!("PROBE_{key}_MIN_APPROVALS"))
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(0);
+            let max = env(&format!("PROBE_{key}_MAX_APPROVALS")).and_then(|n| n.parse().ok());
+            Some((prompt, mode, min, max))
+        })
+        .collect();
     let choice: usize = env("PROBE_CHOICE")
         .and_then(|c| c.parse().ok())
         .unwrap_or(0);
@@ -156,20 +186,26 @@ async fn main() {
         worktree: None,
     };
     eprintln!(
-        "--- mode={mode:?} cwd={cwd} approval={approval_label:?} choice={choice} typed={typed:?} dismiss={dismiss}"
+        "--- mode={mode:?} cwd={cwd} approvals={approval_labels:?} choice={choice} typed={typed:?} dismiss={dismiss}"
     );
 
     let seen = Arc::new(Mutex::new(Seen::default()));
     let seen_input = Arc::clone(&seen);
-    let request_input = Box::new(move |questions: Vec<UserInputQuestion>| {
+    let answer_input = Arc::new(move |questions: Vec<UserInputQuestion>| {
         let (tx, rx) = oneshot::channel();
         eprintln!("INPUT {} question(s)", questions.len());
         let mut answers = Vec::new();
         for question in &questions {
             describe(question);
             let labels: Vec<String> = if question.approval.is_some() {
-                seen_input.lock().unwrap().approvals += 1;
-                vec![approval_label.clone()]
+                let mut seen = seen_input.lock().unwrap();
+                let label = approval_labels
+                    .get(seen.approvals as usize)
+                    .or(approval_labels.last())
+                    .cloned()
+                    .unwrap_or_default();
+                seen.approvals += 1;
+                vec![label]
             } else if let Some(mcp) = &question.mcp {
                 seen_input.lock().unwrap().questions += 1;
                 // MCP forms: PROBE_FIELDS[name] (a string or a list of
@@ -218,6 +254,8 @@ async fn main() {
         let _ = tx.send(answers);
         rx
     });
+    let input_for_resume = Arc::clone(&answer_input);
+    let request_input = Box::new(move |questions| (answer_input)(questions));
 
     let (steer_tx, steering) = mpsc::channel(8);
     // A follow-up turn in the same run (a fresh execution, so tools that
@@ -243,7 +281,7 @@ async fn main() {
     }
     let mut stream = harness
         .run(
-            request,
+            request.clone(),
             RunControls {
                 request_input,
                 steering,
@@ -256,6 +294,7 @@ async fn main() {
     let mut text = String::new();
     let mut tools = 0u32;
     let mut subagent_events = 0u32;
+    let mut session_id: Option<String> = None;
     let status = loop {
         let ev =
             match tokio::time::timeout(std::time::Duration::from_secs(180), stream.next()).await {
@@ -303,6 +342,13 @@ async fn main() {
             }
             Ok(AgentEvent::Error { message }) => eprintln!("CHIP {message}"),
             Ok(AgentEvent::ContextUsage { .. }) => {}
+            Ok(AgentEvent::SessionStarted {
+                session_id: started,
+                ..
+            }) => {
+                eprintln!("SESSION {started}");
+                session_id = Some(started);
+            }
             Ok(other) => eprintln!("EV {other:?}"),
             Err(e) => eprintln!("ERR {e}"),
         }
@@ -339,9 +385,98 @@ async fn main() {
     let text_ok = expect_text
         .as_deref()
         .is_none_or(|needle| text.to_lowercase().contains(&needle.to_lowercase()));
-    let counts_ok = approvals >= min_approvals && questions >= min_questions;
-    eprintln!("--- verdict: status_ok={status_ok} text_ok={text_ok} counts_ok={counts_ok}");
-    if !(status_ok && text_ok && counts_ok) {
+    let counts_ok = approvals >= min_approvals
+        && questions >= min_questions
+        && max_approvals.is_none_or(|max| approvals <= max);
+    // Later turns of the same chat: new runs on the same harness resume the
+    // session (session allowances must hold while the mode is unchanged).
+    let mut resume_ok = true;
+    for (index, (prompt, resume_mode, min, max)) in resumes.into_iter().enumerate() {
+        let Some(session) = session_id.clone() else {
+            resume_ok = false;
+            break;
+        };
+        let before = seen.lock().unwrap().approvals;
+        eprintln!(
+            "--- resume run {} on {session} mode={resume_mode:?}: {prompt:?}",
+            index + 1
+        );
+        let mut resumed = request.clone();
+        resumed.prompt = prompt;
+        resumed.resume = Some(session);
+        resumed.permission_mode = resume_mode;
+        resumed.auto_approve = resume_mode == PermissionMode::Full;
+        resumed.permission_policy = Some(PermissionPolicy {
+            requested_mode: resume_mode,
+            effective_mode: resume_mode,
+            machine_name: "probe-machine".into(),
+            ..Default::default()
+        });
+        let (_resume_tx, resume_steering) = mpsc::channel(1);
+        let input = Arc::clone(&input_for_resume);
+        let mut stream = harness
+            .run(
+                resumed,
+                RunControls {
+                    request_input: Box::new(move |questions| (input)(questions)),
+                    steering: resume_steering,
+                    interrupt: CancellationToken::new(),
+                    invoke_luna_tool: None,
+                },
+            )
+            .await
+            .expect("resume run starts");
+        let mut status = None;
+        while let Ok(Some(ev)) =
+            tokio::time::timeout(std::time::Duration::from_secs(180), stream.next()).await
+        {
+            match ev {
+                Ok(AgentEvent::Done {
+                    status: done,
+                    error,
+                    ..
+                }) => {
+                    if let Some(error) = error {
+                        eprintln!("ERR {error}");
+                    }
+                    status = Some(done);
+                    break;
+                }
+                Ok(AgentEvent::TextDelta { text }) => eprintln!("TXT {text}"),
+                Ok(AgentEvent::ToolCall { id, call }) => eprintln!("TOOL {id} {call:?}"),
+                Ok(AgentEvent::ToolResult {
+                    id,
+                    is_error,
+                    output,
+                    ..
+                }) => {
+                    let clipped: String = output.unwrap_or_default().chars().take(300).collect();
+                    eprintln!("RESULT {id} error={is_error} {clipped:?}");
+                }
+                Ok(AgentEvent::Error { message }) => eprintln!("CHIP {message}"),
+                Ok(_) => {}
+                Err(e) => eprintln!("ERR {e}"),
+            }
+        }
+        // Let the run tear down before the next one boots.
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+            while stream.next().await.is_some() {}
+        })
+        .await;
+        let resumed_approvals = seen.lock().unwrap().approvals - before;
+        let ok = status == Some(luna_proto::DoneStatus::Completed)
+            && resumed_approvals >= min
+            && max.is_none_or(|max| resumed_approvals <= max);
+        eprintln!(
+            "--- resume run {} done: {status:?} approvals={resumed_approvals} ok={ok}",
+            index + 1
+        );
+        resume_ok &= ok;
+    }
+    eprintln!(
+        "--- verdict: status_ok={status_ok} text_ok={text_ok} counts_ok={counts_ok} resume_ok={resume_ok}"
+    );
+    if !(status_ok && text_ok && counts_ok && resume_ok) {
         std::process::exit(1);
     }
 }

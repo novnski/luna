@@ -198,6 +198,9 @@ pub struct OpencodeHarness {
     live: LiveServers,
     /// Bound on a compaction after its admission.
     compaction_wait: Duration,
+    /// LUNA-owned "Allow for session" grants by OpenCode session (OC-04):
+    /// a chat's later runs re-apply them while its mode is unchanged.
+    session_grants: SessionGrants,
 }
 
 impl Default for OpencodeHarness {
@@ -214,6 +217,7 @@ impl Default for OpencodeHarness {
             live_runs: LiveRuns::default(),
             live: LiveServers::default(),
             compaction_wait: compaction_wait(),
+            session_grants: SessionGrants::default(),
         }
     }
 }
@@ -680,6 +684,7 @@ impl Harness for OpencodeHarness {
             live_runs: self.live_runs.clone(),
             live: self.live.clone(),
             luna,
+            grants: self.session_grants.clone(),
         }));
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))

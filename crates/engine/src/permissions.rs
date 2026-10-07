@@ -57,8 +57,10 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
             supports_workspace_sandbox: true,
             supports_automatic_reviewer: false,
             supports_live_mode_change: false,
-            // OpenCode 2 persists `always` grants project-wide; LUNA never
-            // sends one.
+            // Like Claude, negotiated per approval: a card offers "Allow for
+            // session" when the request carries OpenCode's own save patterns,
+            // kept as a LUNA-owned session rule. LUNA never sends OpenCode's
+            // project-wide `always`.
             supports_task_allowance: false,
             approval_kinds: vec![Command, FileChange, Network, ExternalPath, Tool],
             network_control:
@@ -68,7 +70,7 @@ pub fn provider_capabilities(harness: HarnessId) -> ProviderPermissionCapabiliti
                 "OpenCode has no automatic reviewer, so Approve for me is unavailable.".into(),
                 "OpenCode has no OS sandbox: Ask confines tools with OpenCode's own permission rules, and an approved shell command runs unconfined."
                     .into(),
-                "Allow for session is not offered: OpenCode 2 saves such grants as project-wide rules."
+                "Allow for session is a LUNA-owned rule on the chat's OpenCode session, never an OpenCode saved rule: it lasts until LUNA restarts or the chat's permission mode changes, and covers the session that asked (a sub-agent's grant stays with that sub-agent)."
                     .into(),
                 "Native sub-agents are capped at the chat's mode when OpenCode creates them; their own agent restrictions and your configured OpenCode denies stay in force."
                     .into(),

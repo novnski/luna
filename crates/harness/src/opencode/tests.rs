@@ -454,22 +454,44 @@ fn permission_modes_compile_to_session_scoped_rules() {
 }
 
 #[test]
-fn task_allowance_is_never_offered_and_replies_use_decision() {
-    assert!(!opencode_supports_task_allowance());
-    assert!(!opencode_approval_options().contains(&"Allow for task".to_string()));
+fn session_allowance_is_a_session_rule_and_replies_use_decision() {
+    let labels = |grant: &[Rule]| -> Vec<String> {
+        opencode_approval_choices(grant)
+            .into_iter()
+            .map(|choice| choice.label)
+            .collect()
+    };
+    assert_eq!(labels(&[]), ["Deny", "Allow once", "Cancel turn"]);
+    let grant = session_grant_rules(&json!({"action":"shell","save":["python3 *"]}));
     assert_eq!(
-        opencode_permission_reply_body(Some("Allow once")),
+        labels(&grant),
+        ["Deny", "Allow once", "Allow for session", "Cancel turn"]
+    );
+    assert_eq!(
+        opencode_permission_reply_body(Some("Allow once"), false),
         json!({"decision":"once"})
     );
-    // Deny (and anything unrecognized or unanswered) rejects WITH feedback
-    // so the model continues; Cancel turn rejects without it and stops.
-    for answer in [Some("Allow for task"), Some("Deny"), None] {
-        let body = opencode_permission_reply_body(answer);
+    // "Allow for session" is `once` plus LUNA's own session rule, never
+    // OpenCode's project-wide `always`.
+    assert_eq!(
+        opencode_permission_reply_body(Some("Allow for session"), true),
+        json!({"decision":"once"})
+    );
+    // Deny (and anything unrecognized, unanswered, or a session allowance
+    // the card never offered) rejects WITH feedback so the model continues;
+    // Cancel turn rejects without it and stops.
+    for (answer, offered) in [
+        (Some("Allow for task"), true),
+        (Some("Allow for session"), false),
+        (Some("Deny"), true),
+        (None, true),
+    ] {
+        let body = opencode_permission_reply_body(answer, offered);
         assert_eq!(body["decision"], "reject");
         assert!(body["message"].as_str().is_some_and(|m| !m.is_empty()));
     }
     assert_eq!(
-        opencode_permission_reply_body(Some("Cancel turn")),
+        opencode_permission_reply_body(Some("Cancel turn"), true),
         json!({"decision":"reject"})
     );
 }
@@ -630,6 +652,7 @@ impl TurnWire {
             live_runs: LiveRuns::default(),
             live: LiveServers::default(),
             luna: None,
+            grants: SessionGrants::default(),
         }));
         Self {
             bus,

@@ -16,6 +16,9 @@
 //! - `PROBE_EXPECT=<text>`: text the child's transcript must contain once the
 //!   approved command ran (e.g. the command's output).
 //! - `PROBE_TIMEOUT_S=<s>`: overall deadline (default 420).
+//! - `PROBE_ROOT_DONE_TEXT=<text>`: the text that marks the root turn's
+//!   final entry (default `ROOT-DONE`, what the default prompt asks for; a
+//!   scripted mock model replies `MOCK_TOOL_RESULT ...` instead).
 //!
 //! Writes into `<out-dir>`: `root-entries.json` and `sub-<chip>.json` (the
 //! documents as stored), `status.jsonl` (every session status transition),
@@ -141,6 +144,10 @@ async fn main() {
             .into()
     });
     let decision_label = std::env::var("PROBE_DECISION").unwrap_or_else(|_| "Allow once".into());
+    let root_done_text = std::env::var("PROBE_ROOT_DONE_TEXT")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "ROOT-DONE".into());
     let expect = std::env::var("PROBE_EXPECT").ok().filter(|e| !e.is_empty());
     let timeout = std::env::var("PROBE_TIMEOUT_S")
         .ok()
@@ -235,7 +242,7 @@ async fn main() {
         root.iter().position(|e| {
             e.role == MessageRole::Assistant
                 && e.status == Some(luna_doc::MessageStatus::Complete)
-                && entry_text(e).0.contains("ROOT-DONE")
+                && entry_text(e).0.contains(root_done_text.as_str())
         })
     };
     let root_done = wait_until(deadline, "the root turn's Done", || {
