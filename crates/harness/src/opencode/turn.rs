@@ -31,6 +31,8 @@ pub(super) struct Session {
     pub(super) interrupt_grace: Duration,
     pub(super) kill_grace: Duration,
     pub(super) known_commands: Option<Vec<SlashCommand>>,
+    /// Where the run registers its server for out-of-turn controls.
+    pub(super) live: LiveServers,
 }
 
 pub(super) fn new_message_id() -> String {
@@ -104,6 +106,7 @@ pub(super) async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         known_commands,
+        live,
     } = session;
     let RunControls {
         request_input,
@@ -125,12 +128,16 @@ pub(super) async fn run_session(session: Session) {
 
     // ---- session create/resume -------------------------------------------
     let setup = async {
+        // The model a resumed session last ran: a different request is a
+        // mid-chat switch, read back as such.
+        let mut previous_model = None;
         let session_id = match &request.resume {
             Some(resume) => {
                 // Sessions are durable server-side: resume = reuse the id.
                 // A failed lookup (including a transient server failure) is
                 // not authorization to discard this conversation's history.
                 let info = server.session_info(resume, dir).await?;
+                previous_model = info.get("model").and_then(model_key);
                 info.get("id")
                     .and_then(Value::as_str)
                     .unwrap_or(resume)
@@ -155,21 +162,34 @@ pub(super) async fn run_session(session: Session) {
         let providers = server.provider_catalog(dir).await.unwrap_or_default();
 
         // The requested model (+ variant) is set on the session once;
-        // prompts carry only text and files.
+        // prompts carry only text and files. A variant the model no longer
+        // offers is dropped, never sent (OCF-101).
+        let mut requested = None;
         if let Some((provider, model_id)) = request
             .model
             .as_deref()
             .and_then(|m| m.split_once('/'))
             .map(|(p, m)| (p.to_owned(), m.to_owned()))
         {
-            let variant = pick_variant(&providers, &provider, &model_id, request.reasoning);
+            let (variant, dropped) = select_variant(
+                &providers,
+                &provider,
+                &model_id,
+                request.reasoning,
+                &request.model_options,
+            );
             server
                 .set_model(&session_id, &provider, &model_id, variant.as_deref(), dir)
                 .await?;
+            requested = Some(RequestedRuntime {
+                model: format!("{provider}/{model_id}"),
+                variant,
+                dropped,
+            });
         }
-        Ok::<(String, ProviderCatalog), HarnessError>((session_id, providers))
+        Ok::<_, HarnessError>((session_id, providers, previous_model, requested))
     };
-    let (session_id, providers) = tokio::select! {
+    let (session_id, providers, previous_model, requested) = tokio::select! {
         res = setup => match res {
             Ok(v) => v,
             Err(e) => {
@@ -195,24 +215,12 @@ pub(super) async fn run_session(session: Session) {
         }
     };
 
-    let context_windows: HashMap<String, u64> = providers
-        .all
-        .iter()
-        .flatten()
-        .flat_map(|provider| {
-            provider
-                .models
-                .iter()
-                .flat_map(|models| models.iter())
-                .filter_map(|(id, model)| {
-                    Some((
-                        format!("{}/{}", provider.id.as_deref()?, id),
-                        model.limit.context.filter(|n| *n > 0)?,
-                    ))
-                })
-        })
-        .collect();
+    // Context windows per model, the step model and the turn's accounting.
+    let mut usage = UsageState::new(&providers);
     drop(providers);
+    // Out-of-turn controls (compaction) for this session use this server
+    // while the run lives; unregistered on every exit path.
+    let live_server = live.register(&session_id, &server);
 
     let mut assistant_message_id = new_message_id();
     if !send(
@@ -254,6 +262,28 @@ pub(super) async fn run_session(session: Session) {
         return;
     }
 
+    // Requested vs effective model and variant, read back from the session
+    // (OCF-104); the image capability check uses the effective model.
+    if let Some(requested) = &requested {
+        let readback = model_readback(
+            &server,
+            &session_id,
+            dir,
+            requested,
+            previous_model.as_deref(),
+            &mut usage,
+        )
+        .await;
+        if !send(&event_tx, readback).await {
+            server.shutdown(kill_grace).await;
+            return;
+        }
+    }
+    let image_model = usage
+        .effective_model
+        .clone()
+        .or_else(|| requested.as_ref().map(|requested| requested.model.clone()));
+
     // ---- SSE bus ----------------------------------------------------------
     let (bus_tx, mut bus_rx) = mpsc::channel::<BusMsg>(256);
     // Slash-command failures re-enter the loop through the same channel.
@@ -290,6 +320,8 @@ pub(super) async fn run_session(session: Session) {
         &request.prompt,
         TurnSpec {
             attachments: &request.attachments,
+            input_items: &request.input_items,
+            model: image_model.as_deref(),
         },
         &command_tx,
     )
@@ -324,7 +356,8 @@ pub(super) async fn run_session(session: Session) {
     let mut pending_spawns: VecDeque<PendingSpawn> = VecDeque::new();
     // Child sessions created before their spawn chip was seen (id → title).
     let mut unbound_children: HashMap<String, String> = HashMap::new();
-    let mut queued_steers: VecDeque<String> = VecDeque::new();
+    // Each queued steer keeps its own images and typed selections (OCF-32).
+    let mut queued_steers: VecDeque<TurnInput> = VecDeque::new();
     let mut steering_open = true;
     let mut interrupt_requested = false;
     let mut pending_usage: Option<AgentEvent> = None;
@@ -375,9 +408,11 @@ pub(super) async fn run_session(session: Session) {
                     &session_id,
                     dir,
                     &commands,
-                    &steer,
+                    &steer.prompt,
                     TurnSpec {
-                        attachments: &[],
+                        attachments: &steer.attachments,
+                        input_items: &steer.input_items,
+                        model: image_model.as_deref(),
                     },
                     &command_tx,
                 )
@@ -497,7 +532,7 @@ pub(super) async fn run_session(session: Session) {
                             continue 'main;
                         }
                         if turn.active {
-                            queued_steers.push_back(steer.prompt);
+                            queued_steers.push_back(TurnInput::from_steer(&steer));
                         } else {
                             // Between turns (shouldn't happen — the engine
                             // steers live runs — but deliver, don't drop).
@@ -507,21 +542,27 @@ pub(super) async fn run_session(session: Session) {
                                 assistant_message_id: Some(prev),
                                 next_assistant_message_id: Some(next),
                             }).await;
-                            if post_prompt(
+                            match post_prompt(
                                 &server,
                                 &session_id,
                                 dir,
                                 &commands,
                                 &steer.prompt,
                                 TurnSpec {
-                                    attachments: &[],
+                                    attachments: &steer.attachments,
+                                    input_items: &steer.input_items,
+                                    model: image_model.as_deref(),
                                 },
                                 &command_tx,
                             )
                             .await
-                            .is_ok()
                             {
-                                turn = TurnState::begin(stall);
+                                Ok(()) => turn = TurnState::begin(stall),
+                                Err(e) => {
+                                    let _ = send(&event_tx, AgentEvent::Error {
+                                        message: e.to_string(),
+                                    }).await;
+                                }
                             }
                         }
                     }
@@ -632,7 +673,7 @@ pub(super) async fn run_session(session: Session) {
                             unbound_children: &mut unbound_children,
                             turn: &mut turn,
                             pending_usage: &mut pending_usage,
-                            context_windows: &context_windows,
+                            usage: &mut usage,
                         }).await;
                         match outcome {
                             BusOutcome::Continue => {}
@@ -654,5 +695,7 @@ pub(super) async fn run_session(session: Session) {
         tracing::debug!(target: "luna_harness::opencode", "run loop ended without settling");
     }
     bus_handle.abort();
+    // New out-of-turn controls boot their own server from here on.
+    drop(live_server);
     server.shutdown(kill_grace).await;
 }

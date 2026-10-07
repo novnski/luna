@@ -181,8 +181,9 @@ const ATTACHMENT_PROMPT_HEADER: &str = "Attached images (local files — open th
 
 /// Codex receives these images natively as `localImage`; telling it to also
 /// "open" them only causes a redundant `viewImage` call. Drop the lines for
-/// natively sent paths and keep any path that is not sent natively.
-fn without_native_image_trailer(prompt: &str, native: &HashSet<&str>) -> String {
+/// natively sent paths and keep any path that is not sent natively. OpenCode
+/// (`files[]`, which it labels with the path itself) uses the same rule.
+pub(crate) fn without_native_image_trailer(prompt: &str, native: &HashSet<&str>) -> String {
     let marker = format!("\n\n{ATTACHMENT_PROMPT_HEADER}\n");
     let Some(at) = prompt.rfind(&marker) else {
         return prompt.to_owned();

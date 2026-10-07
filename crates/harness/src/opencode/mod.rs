@@ -37,7 +37,8 @@
 //! - `compat`: the boot-time OpenAPI contract and the pinned event set.
 //! - `wire_log`: the opt-in redacted QA wire log.
 //! - `catalog`: models, variants, slash commands, session model switch.
-//! - `usage`: token/context usage and compaction.
+//! - `usage`: usage, cost, context occupancy, model readback, compaction.
+//! - `inputs`: images as `files[]`, typed skills, input admission.
 //! - `history`: message listing, fork planning and readback.
 //! - `turn`: the run loop (setup, first prompt, steering, settlement).
 //! - `transport`: the SSE bus reader; `wire_v2`: the 2.x frame normalizer.
@@ -75,6 +76,7 @@ mod catalog;
 mod compat;
 mod forms;
 mod history;
+mod inputs;
 mod parts;
 mod permissions;
 mod prompt;
@@ -91,6 +93,7 @@ mod wire_v2;
 use bus::*;
 use catalog::*;
 use compat::*;
+use inputs::*;
 use parts::*;
 use permissions::*;
 use prompt::*;
@@ -105,6 +108,7 @@ use wire_log::*;
 use wire_v2::*;
 
 pub use compat::{CompatReport, CompatStatus, opencode_compat_report};
+pub use inputs::{model_accepts_images, validate_inputs};
 pub use resolve::{
     OpencodeResolution, OpencodeSource, last_opencode_resolution, resolve_opencode_executable,
 };
@@ -144,6 +148,11 @@ pub struct OpencodeHarness {
     /// Coalesce concurrent picker/title probes: several cold opencode boots
     /// at once are slower than one.
     probe_lock: tokio::sync::Mutex<()>,
+    /// Live runs' servers by session: out-of-turn controls (compaction) go
+    /// to the chat's own server instead of booting a second one.
+    live: LiveServers,
+    /// Bound on a compaction after its admission.
+    compaction_wait: Duration,
 }
 
 impl Default for OpencodeHarness {
@@ -157,6 +166,8 @@ impl Default for OpencodeHarness {
             models_cache: tokio::sync::Mutex::new(None),
             commands_cache: std::sync::Mutex::new(HashMap::new()),
             probe_lock: tokio::sync::Mutex::new(()),
+            live: LiveServers::default(),
+            compaction_wait: compaction_wait(),
         }
     }
 }
@@ -344,6 +355,14 @@ impl Harness for OpencodeHarness {
         Ok(models)
     }
 
+    /// The engine cache's refresh: the same live `GET /api/model` read
+    /// (OpenCode has no bundled fallback list), so a failed probe reaches
+    /// the cache, which keeps its last good snapshot, and an empty catalog
+    /// is never saved (OCF-100).
+    async fn models_live(&self) -> Result<Vec<Model>, HarnessError> {
+        self.models().await
+    }
+
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
         let location = discovery_location(None);
         match self.cached_commands(&location) {
@@ -366,10 +385,21 @@ impl Harness for OpencodeHarness {
         }
     }
 
+    /// Provider-owned compaction, complete only on `compaction.ended`. A
+    /// chat with a live run compacts on that run's server (the item steers
+    /// in at its next step boundary); otherwise a server is booted for the
+    /// session and kept alive until the outcome. The boot is outside the
+    /// post-admission bound.
     async fn compact_context(&self, request: ContextCompactRequest) -> Result<(), HarnessError> {
-        let mut server = self.server(Some(&request.cwd)).await?;
+        let dir = (!request.cwd.is_empty()).then_some(request.cwd.as_str());
+        if let Some(live) = self.live.get(&request.session_id) {
+            return live
+                .compact_session(&request.session_id, dir, self.compaction_wait)
+                .await;
+        }
+        let mut server = self.server(dir).await?;
         let result = server
-            .compact_session(&request.session_id, Some(&request.cwd))
+            .compact_session(&request.session_id, dir, self.compaction_wait)
             .await;
         server.shutdown(self.kill_grace).await;
         result
@@ -380,6 +410,13 @@ impl Harness for OpencodeHarness {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        // Images and typed selections are checked before anything boots:
+        // a rejection keeps the draft (RejectedBeforeAcceptance).
+        validate_inputs(
+            request.model.as_deref(),
+            &request.attachments,
+            &request.input_items,
+        )?;
         let cwd = (!request.cwd.is_empty()).then(|| request.cwd.clone());
         let server = self.server(cwd.as_deref()).await?;
         // Only that location's commands: a home-scoped list would miss the
@@ -394,6 +431,7 @@ impl Harness for OpencodeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             known_commands,
+            live: self.live.clone(),
         }));
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))
@@ -409,31 +447,11 @@ mod tests;
 mod context_tests {
     use super::*;
     #[test]
-    fn context_includes_cache_and_uses_reported_model_limit() {
-        let windows = HashMap::from([("provider/model".into(), 200000)]);
-        let info = json!({"providerID":"provider","modelID":"model", "tokens": {
+    fn context_includes_cache_and_output_but_not_reasoning() {
+        let tokens = json!({
             "input": 200, "output": 100, "reasoning": 50, "cache": {"read":40000,"write":1800}
-        }});
-        assert_eq!(
-            context_usage_event(&info, &windows),
-            Some(AgentEvent::ContextUsage {
-                tokens: Some(42100),
-                window: Some(200000)
-            })
-        );
-        assert_eq!(
-            context_usage_event(&json!({"tokens":{"input":0,"output":0}}), &windows),
-            None
-        );
-        assert_eq!(
-            context_usage_event(
-                &json!({"time":{"completed":1},"tokens":{"input":0,"output":0}}),
-                &windows
-            ),
-            Some(AgentEvent::ContextUsage {
-                tokens: Some(0),
-                window: None
-            })
-        );
+        });
+        assert_eq!(step_context_tokens(&tokens), 42100);
+        assert_eq!(step_context_tokens(&json!({"input":0,"output":0})), 0);
     }
 }

@@ -349,9 +349,14 @@ fn fork_readback_remaps_compaction_references_but_preserves_semantic_nested_fiel
 
 #[test]
 fn compact_posts_an_object_body_on_the_v2_route() {
+    // The caller names the inbox item so `compaction.started.inputID`
+    // correlates the outcome.
     assert_eq!(
-        compact_http_request("session-2"),
-        ("/api/session/session-2/compact".into(), json!({}))
+        compact_http_request("session-2", "msg_1"),
+        (
+            "/api/session/session-2/compact".into(),
+            json!({"id": "msg_1"})
+        )
     );
 }
 
@@ -549,6 +554,7 @@ impl TurnWire {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_millis(50),
             known_commands: Some(vec![]),
+            live: LiveServers::default(),
         }));
         Self {
             bus,
@@ -663,6 +669,16 @@ async fn v2_wire_streams_text_and_settles_on_execution_success() {
         json!({
             "sessionID": "fixture", "assistantMessageID": "msg_a", "ordinal": 0,
             "text": "PONG"
+        }),
+    );
+    // Per-step usage (turn tokens and context) and the running totals.
+    wire.v2(
+        "session.step.ended",
+        json!({
+            "sessionID": "fixture", "assistantMessageID": "msg_a",
+            "finish": "stop", "cost": 0,
+            "tokens": {"input": 10, "output": 2, "reasoning": 0,
+                       "cache": {"read": 0, "write": 0}}
         }),
     );
     wire.v2(
@@ -1299,9 +1315,11 @@ fn v2_frames_normalize_to_v1_payloads() {
             json!({"id":"evt_2","type":kind,"data":{"sessionID":"ses_1"}}),
             &mut tools,
         );
+        // The turn's accounting rides ahead of its terminal frame.
         assert_eq!(
             out,
             vec![
+                json!({"type":"luna.turn.ended","properties":{"sessionID":"ses_1"}}),
                 json!({"type":if kind == "session.execution.interrupted" { "session.interrupted" } else { "session.idle" },"properties":{"sessionID":"ses_1"}})
             ]
         );
@@ -1312,10 +1330,11 @@ fn v2_frames_normalize_to_v1_payloads() {
             "sessionID":"ses_1","error":{"type":"provider.auth","message":""}}}),
         &mut tools,
     );
-    assert_eq!(out.len(), 2);
+    assert_eq!(out.len(), 3);
+    assert_eq!(out[0]["type"], "luna.turn.ended");
     // Empty message (live shape) falls back to the error type.
     assert_eq!(
-        out[0],
+        out[1],
         json!({"type":"session.error","properties":{
             "sessionID":"ses_1",
             "error":{"name":"provider.auth","data":{"message":"provider.auth"}}}}),
@@ -1333,13 +1352,18 @@ fn v2_frames_normalize_to_v1_payloads() {
     // as a part delta keyed by message + kind + ordinal.
     let out = normalize_v2_frame(
         json!({"id":"evt_5","type":"session.step.started","data":{
-            "sessionID":"ses_1","assistantMessageID":"msg_a"}}),
+            "sessionID":"ses_1","assistantMessageID":"msg_a",
+            "model":{"providerID":"opencode","id":"muse","variant":"low"}}}),
         &mut tools,
     );
     assert_eq!(
         out,
-        vec![json!({"type":"message.updated","properties":{
-            "info":{"sessionID":"ses_1","id":"msg_a","role":"assistant"}}})]
+        vec![
+            json!({"type":"luna.step.started","properties":{
+                "sessionID":"ses_1","messageID":"msg_a","model":"opencode/muse","variant":"low"}}),
+            json!({"type":"message.updated","properties":{
+                "info":{"sessionID":"ses_1","id":"msg_a","role":"assistant"}}})
+        ]
     );
     let out = normalize_v2_frame(
         json!({"id":"evt_6","type":"session.text.delta","data":{
@@ -1371,7 +1395,8 @@ fn v2_frames_normalize_to_v1_payloads() {
             "type":"tool","tool":"read",
             "state":{"status":"running","input":{"path":"/tmp/x"}}}}})]
     );
-    // Usage totals reach the engine as an assistant message.updated.
+    // Usage totals are running totals for accounting, never a synthetic
+    // assistant message (which used to become a fork checkpoint).
     let out = normalize_v2_frame(
         json!({"id":"evt_9","type":"session.usage.updated","data":{
             "sessionID":"ses_1","cost":0,
@@ -1380,10 +1405,10 @@ fn v2_frames_normalize_to_v1_payloads() {
     );
     assert_eq!(
         out,
-        vec![json!({"type":"message.updated","properties":{
-            "info":{"sessionID":"ses_1","id":"usage","role":"assistant",
-                    "tokens":{"input":10,"output":2,"reasoning":0,
-                              "cache":{"read":0,"write":0}}}}})]
+        vec![json!({"type":"luna.usage.totals","properties":{
+            "sessionID":"ses_1","cost":0,
+            "tokens":{"input":10,"output":2,"reasoning":0,
+                      "cache":{"read":0,"write":0}}}})]
     );
     // The permission ask keeps its 1.x name on 2.x (observed live when a
     // tool reaches outside the workspace); the permission bridge replies.
@@ -1451,7 +1476,7 @@ fn v2_model_list_folds_into_provider_catalog() {
 
 #[test]
 fn prompt_body_v2_carries_text_and_files_only() {
-    let body = prompt_body_v2("hello", &["/tmp/shot.png".to_owned()]);
+    let body = prompt_body_v2("hello", &["/tmp/shot.png".to_owned()], &[]);
     assert_eq!(body["text"], "hello");
     assert_eq!(body["files"][0]["uri"], "file:///tmp/shot.png");
     assert_eq!(body["files"][0]["name"], "shot.png");

@@ -37,7 +37,8 @@ pub(super) struct BusCtx<'a> {
     pub(super) unbound_children: &'a mut HashMap<String, String>,
     pub(super) turn: &'a mut TurnState,
     pub(super) pending_usage: &'a mut Option<AgentEvent>,
-    pub(super) context_windows: &'a HashMap<String, u64>,
+    /// Context windows, step model, turn accounting, compaction lifecycle.
+    pub(super) usage: &'a mut UsageState,
 }
 
 /// Wrap an event as subagent-attributed traffic.
@@ -90,13 +91,29 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         unbound_children,
         turn,
         pending_usage,
-        context_windows,
+        usage,
     } = ctx;
     let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
     if kind.is_empty() {
         return BusOutcome::Continue;
     }
     let props = event.get("properties").unwrap_or(&Value::Null);
+    // Usage, cost, context, model readback and compaction lifecycle
+    // (`luna.*` payloads from the usage family).
+    if let Some(outcome) = handle_accounting(AccountingCtx {
+        kind,
+        props,
+        session_id,
+        server,
+        dir,
+        event_tx,
+        usage,
+        pending_usage,
+    })
+    .await
+    {
+        return outcome;
+    }
     let event_session = props
         .get("sessionID")
         .and_then(Value::as_str)
@@ -252,27 +269,10 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                     .assistant_messages
                     .entry(message.to_owned())
                     .or_insert(role == "assistant");
+                // Always a real `msg_` id (step.started): usage no longer
+                // rides a synthetic message, so it is never a checkpoint.
                 if role == "assistant" {
                     turn.provider_checkpoint_id = Some(message.to_owned());
-                }
-                // Token usage rides the assistant message; the last one
-                // before idle wins, emitted right before Done.
-                if role == "assistant"
-                    && let Some(tokens) = info.get("tokens")
-                {
-                    if let Some(usage) = context_usage_event(info, context_windows)
-                        && !send(event_tx, usage).await
-                    {
-                        return BusOutcome::ConsumerGone;
-                    }
-                    let input = tokens.get("input").and_then(Value::as_u64).unwrap_or(0);
-                    let output = tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
-                    if input > 0 || output > 0 {
-                        *pending_usage = Some(AgentEvent::Usage {
-                            input_tokens: input,
-                            output_tokens: output,
-                        });
-                    }
                 }
                 let events = replay_pending(main_feed, message, true, turn);
                 return forward(event_tx, events).await;

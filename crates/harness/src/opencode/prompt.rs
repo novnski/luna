@@ -32,13 +32,13 @@ pub(super) fn session_create_body(dir: Option<&str>, permission_rules: &Value) -
     }
 }
 
-/// Attachments as v2 `files` entries (`{uri, name}`).
+/// Attachments as v2 `files` entries (`{uri, name}`), one per distinct
+/// path: the server reads each `file:` URI itself when it admits the turn.
 pub(super) fn attachment_files(attachments: &[String]) -> Vec<Value> {
-    attachments
-        .iter()
+    unique(attachments)
         .map(|path| {
             json!({
-                "uri": format!("file://{path}"),
+                "uri": file_uri(path),
                 "name": std::path::Path::new(path)
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -48,29 +48,81 @@ pub(super) fn attachment_files(attachments: &[String]) -> Vec<Value> {
         .collect()
 }
 
-/// 2.x prompt body: plain text plus `{uri, name}` file attachments. Model
-/// and variant do NOT ride here — they were set on the session at run
-/// start (`POST /api/session/{id}/model`).
-pub(super) fn prompt_body_v2(prompt: &str, attachments: &[String]) -> Value {
-    json!({ "text": prompt, "files": attachment_files(attachments) })
+/// `file://` URL for an absolute host path. The server parses it with the
+/// WHATWG URL parser and `fileURLToPath`, so `#`, `?`, `%` and spaces in a
+/// path must be percent-encoded or the server reads another file.
+pub(super) fn file_uri(path: &str) -> String {
+    let mut uri = String::from("file://");
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~/".contains(&byte) {
+            uri.push(byte as char);
+        } else {
+            uri.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    uri
 }
 
-/// 2.x command body: `{name, text, files?}` (`session.command`).
-pub(super) fn command_body(name: &str, text: &str, attachments: &[String]) -> Value {
-    let mut body = json!({ "name": name, "text": text });
-    if !attachments.is_empty() {
-        body["files"] = Value::Array(attachment_files(attachments));
+/// 2.x prompt body: text plus `{uri, name}` file attachments and typed
+/// `skills[{id}]` (only when selected). Natively sent images leave LUNA's
+/// path trailer (OpenCode labels each file itself). Model and variant do NOT
+/// ride here — they are set on the session (`POST /api/session/{id}/model`).
+pub(super) fn prompt_body_v2(prompt: &str, attachments: &[String], skills: &[Value]) -> Value {
+    let mut body = json!({
+        "text": native_prompt_text(prompt, attachments),
+        "files": attachment_files(attachments),
+    });
+    if !skills.is_empty() {
+        body["skills"] = Value::Array(skills.to_vec());
     }
     body
 }
 
-/// What a posted turn carries besides its text (model and variant are set
-/// on the session, not the prompt).
-pub(super) struct TurnSpec<'a> {
-    pub(super) attachments: &'a [String],
+/// 2.x command body: `{name, text, files?, skills?}` (`session.command`).
+pub(super) fn command_body(
+    name: &str,
+    text: &str,
+    attachments: &[String],
+    skills: &[Value],
+) -> Value {
+    let mut body = json!({ "name": name, "text": native_prompt_text(text, attachments) });
+    if !attachments.is_empty() {
+        body["files"] = Value::Array(attachment_files(attachments));
+    }
+    if !skills.is_empty() {
+        body["skills"] = Value::Array(skills.to_vec());
+    }
+    body
 }
 
-/// Send a turn: a leading `/command` known to the agent routes through the
+/// Re-check every image right before the server is told to read it (the
+/// file may have changed since admission) and log what is sent: the same
+/// type, size and hash must reach the provider on every route.
+fn verify_files(attachments: &[String]) -> Result<(), HarnessError> {
+    for path in unique(attachments) {
+        let facts = check_image(path)?;
+        tracing::info!(
+            target: "luna_harness::opencode",
+            "files[] {path} {} {}B sha256:{}",
+            facts.media_type,
+            facts.bytes,
+            facts.sha256
+        );
+    }
+    Ok(())
+}
+
+/// What a posted turn carries besides its text (model and variant are set
+/// on the session, not the prompt): staged images and typed selections.
+pub(super) struct TurnSpec<'a> {
+    pub(super) attachments: &'a [String],
+    pub(super) input_items: &'a [luna_proto::ComposerInput],
+    /// The session's model (`provider/model`) for the image-capability
+    /// check; `None` when the run did not choose one.
+    pub(super) model: Option<&'a str>,
+}
+
+/// Send a turn:a leading `/command` known to the agent routes through the
 /// command endpoint (the server does NOT parse slash text out of an
 /// ordinary prompt); everything else is a prompt. The command endpoint is
 /// synchronous on the wire (204 only after the command's callback, which can
@@ -85,14 +137,28 @@ pub(super) async fn post_prompt(
     spec: TurnSpec<'_>,
     bus: &mpsc::Sender<BusMsg>,
 ) -> Result<(), HarnessError> {
-    let TurnSpec { attachments } = spec;
+    let TurnSpec {
+        attachments,
+        input_items,
+        model,
+    } = spec;
+    // Nothing is posted for a turn whose images or skills cannot be sent:
+    // OpenCode would strip images for a text-only model without a word.
+    if !attachments.is_empty()
+        && let Some(model) = model
+        && model_accepts_images(model) == Some(false)
+    {
+        return Err(text_only_model(model));
+    }
+    verify_files(attachments)?;
+    let skills = server.skill_refs(dir, input_items).await?;
     if let Some(rest) = prompt.strip_prefix('/') {
         let mut split = rest.splitn(2, char::is_whitespace);
         let name = split.next().unwrap_or_default();
         let arguments = split.next().unwrap_or_default().trim().to_owned();
         if !name.is_empty() && commands.iter().any(|c| c.name == name) {
             let path = format!("/api/session/{session_id}/command");
-            let body = command_body(name, &arguments, attachments);
+            let body = command_body(name, &arguments, attachments, &skills);
             let command = name.to_owned();
             let server = server.detached();
             let dir_owned = dir.map(str::to_owned);
@@ -125,9 +191,9 @@ pub(super) async fn post_prompt(
             return Ok(());
         }
     }
-    // Prompts carry text + `{uri, name}` files; model/variant were set on
-    // the session at run start.
-    let body = prompt_body_v2(prompt, attachments);
+    // Prompts carry text, `{uri, name}` files and typed skills;
+    // model/variant were set on the session at run start.
+    let body = prompt_body_v2(prompt, attachments, &skills);
     let path = format!("/api/session/{session_id}/prompt");
     server.post_json(&path, dir, &body).await.map(|_| ())
 }
