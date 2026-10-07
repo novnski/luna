@@ -158,6 +158,15 @@ def plan(state: State, body: dict) -> dict:
     if not tools:
         return {"scenario": "auxiliary", "source": "no-tools", "kind": "text", "text": "LUNA mock title"}
     user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
+    # OpenCode 2 compaction appends its summary prompt (a <template> of `##`
+    # sections, or a retry nudge) as the last user message and rejects a
+    # summary without one of those headings ("did not match the required
+    # template"). Answer it with a minimal templated summary; never consume
+    # the script.
+    latest = text_of(user.get("content"))
+    if ("<template>" in latest and "## Important Context" in latest) or "did not fill in the required summary template" in latest:
+        return {"scenario": "compaction", "source": "compaction-prompt", "kind": "text",
+                "text": "## Important Context\n- LUNA mock compaction summary; earlier turns were mock replies."}
     markers = MARKER.findall(text_of(user.get("content")))
     entry, source = None, "default"
     if markers and markers[-1][0] in SCENARIOS:

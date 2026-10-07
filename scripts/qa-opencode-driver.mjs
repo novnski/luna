@@ -188,22 +188,22 @@ export class Driver {
 
   // Idle chats get session.run, busy chats queueMessage with holdForTurnEnd
   // (crates/ui/src/composer.rs); the command id is the message id.
-  async send(chatId, text, {attachments = [], label = 'message', queue = null} = {}) {
+  async send(chatId, text, {attachments = [], label = 'message', queue = null, inputItems = []} = {}) {
     const chat = this.chats.get(chatId);
     const mark = this.sessions.mark(chatId);
     const messageId = crypto.randomUUID();
     const useQueue = queue ?? this.busy(chatId);
     const config = chat.config;
     const intent = useQueue
-      ? {kind: 'queueMessage', messageId, text, attachments, inputItems: [], holdForTurnEnd: true, execution: config}
+      ? {kind: 'queueMessage', messageId, text, attachments, inputItems, holdForTurnEnd: true, execution: config}
       : {kind: 'session', command: {kind: 'run', messageId, request: {
-        prompt: text, inputItems: [], harness: config.harness, providerAccountId: config.providerAccountId ?? null,
+        prompt: text, inputItems, harness: config.harness, providerAccountId: config.providerAccountId ?? null,
         model: config.model ?? null, reasoning: config.reasoning ?? null, modelOptions: config.modelOptions ?? {}, cwd: chat.cwd,
         sandbox: 'workspace-write', autoApprove: false, permissionMode: config.permissionMode, parentPermissionCeiling: null,
         environmentPermissionCeiling: null, permissionPolicy: null, resume: null, attachments}}};
     const path = useQueue ? 'queueMessage' : 'run';
     const {receipt} = await this.execute(chatId, intent, {label, sendKind: 'message', commandId: messageId, awaitTerminal: false,
-      extra: {chatRole: chat.role, messageId, path, prompt: text, promptSha256: sha256(maskNonce(text, this.nonce)), attachments}});
+      extra: {chatRole: chat.role, messageId, path, prompt: text, promptSha256: sha256(maskNonce(text, this.nonce)), attachments, inputItems}});
     if (!['applied', 'pending'].includes(receipt?.status)) throw new Error(`send on ${chat.role} ${receipt?.status}: ${receipt?.reason?.message ?? ''}`);
     return {messageId, mark, receipt, path};
   }
@@ -255,7 +255,18 @@ export class Driver {
         if (!error.timeout) throw error;
         return result({result: 'timeout'});
       }
-      if (outcome.type === 'settled') return result({result: 'settled', status: outcome.status, settledBy: outcome.by ?? 'session'});
+      if (outcome.type === 'settled') {
+        // Session and transcript are separate subscriptions: the session can
+        // report idle a few hundred ms before the reply entry lands (seen
+        // live). Give the reply a short grace and record the lag.
+        if (messageId && outcome.status === 'idle' && !this.replySettled(chat.mirror.entries, messageId)) {
+          const idleAt = Date.now();
+          const late = await chat.mirror.waitFor(entries => this.replySettled(entries, messageId), {timeoutMs: 5000, label: 'reply after idle'}).then(() => true, () => false);
+          this.observe('replyAfterIdle', {chat: chat.role, arrived: late, lagMs: Date.now() - idleAt});
+          if (late) return result({result: 'settled', status: outcome.status, settledBy: 'session-then-document', replyLagMs: Date.now() - idleAt});
+        }
+        return result({result: 'settled', status: outcome.status, settledBy: outcome.by ?? 'session'});
+      }
       const {pending} = outcome;
       this.observe('inputs', {chat: chat.role, questions: pending.questions.map(questionShape)});
       const action = answer ? answer(pending) : null;
@@ -340,11 +351,21 @@ export class Driver {
     return {snapshot, review, config};
   }
 
+  // The UI's fork lineage link (crates/ui/src/links.rs workspace_locator and
+  // luna_conversation_link). Only the local scope is reproducible over RPC:
+  // the synced scopes hash the signed-in user, which the engine does not
+  // expose, so they get null and the engine refuses the fork truthfully.
+  sourceLink(taskId) {
+    if (this.engine?.workspaceScope !== 'local' || !this.engine?.deviceId) return null;
+    const workspace = crypto.createHash('sha256').update(`Local\0device:${this.engine.deviceId}`).digest('hex').slice(0, 16);
+    return `luna://open/chat/${encodeURIComponent(taskId)}?workspace=${encodeURIComponent(workspace)}`;
+  }
+
   async fork(taskId, {boundary, messageId = null, title = null, initialPrompt = null, role}) {
     const {snapshot, review, config} = await this.reviewToken(taskId, messageId);
     const newTaskId = crypto.randomUUID();
     const forkConfig = {...config, permissionMode: forkInitialPermission(config)};
-    const result = await this.execute(taskId, {kind: 'forkTask', newTaskId, boundary, messageId, title, initialPrompt, config: forkConfig, review, sourceLink: null},
+    const result = await this.execute(taskId, {kind: 'forkTask', newTaskId, boundary, messageId, title, initialPrompt, config: forkConfig, review, sourceLink: this.sourceLink(taskId)},
       {label: `fork ${boundary}`, sendKind: 'history', snapshot, extra: {newTaskId, boundary, messageId, role}});
     if (result.receipt?.status === 'applied') {
       const source = this.chats.get(taskId);

@@ -11,6 +11,12 @@
 //   node scripts/qa-opencode-scenarios.mjs run <S#> --provider opencode|claude-code
 //        --tier T2|T3 [--model <id>] [--variant <level>] [--evidence-root <dir>]
 //        [--turn-timeout <s>] [--allow-usage-store] [--ax] [--phase pre|post --run <dir>]
+//   Live-only extras (never rehearsed): S2X background child ask after the
+//   root Done, parked follow-up and per-child Stop; S4X OpenCode server
+//   SIGSTOP/SIGCONT and SIGKILL with an approval or a form pending
+//   [--hold-ms] [--mock-url at T2]; S4S provider stall mid-turn (T2 mock with a long --slow-ms)
+//   [--stall-wait-ms]; S8X automatic compaction with a small-context mock
+//   model (T2) [--big-command].
 //
 // Scenarios (validation-plan.md §4): S1 OCE-16/05 approvals and questions;
 // S2 OCE-01/21 subagent attribution and background work; S3 OCE-18 LUNA tool
@@ -33,8 +39,8 @@ import {parseArgs} from 'node:util';
 import {
   Evidence, NotAnswerable, Rpc, UnknownOutcome, applyTranscriptFrame, approvalDecision, assertQaIdentity,
   assertRehearsalIdentity, buildAnswers, captureWireSlice, fileHashes, finishEvidence, isLunaCrossTask, lunaSource,
-  makeFixture, maskNonce, normalizeEntries, now, readJsonl, root, sha256, solidPng, spawnFakeEngine, taskCommandParams,
-  textOf, waitOn, wireOffsets,
+  makeFixture, maskNonce, normalizeEntries, now, readJsonl, recordSend, root, settleSend, sha256, solidPng, spawnFakeEngine,
+  taskCommandParams, textOf, waitOn, wireOffsets,
 } from './qa-opencode-lib.mjs';
 import {Driver, forkInitialPermission, reviewLabel} from './qa-opencode-driver.mjs';
 
@@ -94,10 +100,10 @@ class ScenarioContext {
       wait.result === 'settled' && statuses.includes(wait.status));
   }
 
-  async turn(role, text, {mock = null, answer = null, attachments = [], queue = null, timeoutMs = this.turnTimeout, label = 'message'} = {}) {
+  async turn(role, text, {mock = null, answer = null, attachments = [], queue = null, timeoutMs = this.turnTimeout, label = 'message', inputItems = []} = {}) {
     const chatId = this.chatId(role);
     if (queue !== true) await this.d.waitIdle(chatId).catch(() => null);
-    const sent = await this.d.send(chatId, this.p(text, mock), {attachments, queue, label});
+    const sent = await this.d.send(chatId, this.p(text, mock), {attachments, queue, label, inputItems});
     const wait = await this.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer, timeoutMs});
     return {...sent, wait, reply: this.replyAfter(role, sent.messageId)};
   }
@@ -122,6 +128,91 @@ class ScenarioContext {
 }
 
 const markerInTools = (tools, marker) => tools.some(t => !t.isError && String(t.output ?? '').includes(marker));
+const allTools = entries => entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool'));
+const AUTO_DECLINED = /closed this approval without an answer|dismissed without an answer/i;
+const textDump = entries => entries.map(e => JSON.stringify(e.parts ?? [])).join('\n');
+
+// Waits on frames for `done(entries, handled)` while answering each new
+// pending request with `policy(pending)` through the UI path; a request the
+// policy declines ends the wait with {pending}.
+async function waitAnswering(s, role, done, {policy = allowAll, timeoutMs = 180000, label = 'condition'} = {}) {
+  const chatId = s.chatId(role);
+  const chat = s.d.chatByRole(role);
+  const answered = new Set();
+  const handled = [];
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let outcome;
+    try {
+      outcome = await waitOn([s.d.sessions, chat.mirror], () => {
+        const value = done(chat.mirror.entries, handled);
+        if (value) return {type: 'done', value};
+        const pending = chat.mirror.currentPending();
+        if (pending && !answered.has(pending.requestId)) return {type: 'pending', pending};
+        return null;
+      }, Math.max(1, deadline - Date.now()), label);
+    } catch (error) {
+      if (error.timeout) return {timeout: true, handled};
+      throw error;
+    }
+    if (outcome.type === 'done') return {value: outcome.value, handled};
+    const action = policy(outcome.pending);
+    if (!action) return {pending: outcome.pending, handled};
+    answered.add(outcome.pending.requestId);
+    const {receipt} = await s.d.answer(chatId, outcome.pending, action);
+    handled.push({requestId: outcome.pending.requestId, action, status: receipt?.status ?? null, at: now()});
+  }
+}
+
+// Operator fault injection (S4X): the exact `opencode serve --stdio` child of
+// the verified QA app pid whose cwd is this scenario's fixture. Nothing else
+// (the user's own `opencode serve --service`, other chats' servers) matches.
+function opencodeServersFor(appPid, dir) {
+  const want = fs.realpathSync(dir);
+  const rows = spawnSync('ps', ['-axo', 'pid=,ppid=,command='], {encoding: 'utf8'}).stdout.split('\n')
+    .map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/)).filter(Boolean)
+    .map(m => ({pid: Number(m[1]), ppid: Number(m[2]), command: m[3]}))
+    .filter(row => row.ppid === appPid && /\/opencode serve --stdio\b/.test(row.command));
+  const out = [];
+  for (const row of rows) {
+    const cwd = (spawnSync('lsof', ['-a', '-p', String(row.pid), '-d', 'cwd', '-Fn'], {encoding: 'utf8'}).stdout.match(/^n(.*)$/m) ?? [])[1];
+    if (cwd && fs.existsSync(cwd) && fs.realpathSync(cwd) === want) out.push({...row, cwd});
+  }
+  return out;
+}
+
+function signalServer(s, server, signal) {
+  const current = spawnSync('ps', ['-p', String(server.pid), '-o', 'ppid=,command='], {encoding: 'utf8'}).stdout.trim();
+  assert.ok(current.startsWith(`${s.d.identity.pid} `) && /\/opencode serve --stdio\b/.test(current), `server ${server.pid} is no longer the QA app's opencode child: ${current}`);
+  s.evidence.command({method: 'operator-signal', params: {pid: server.pid, signal, cwd: server.cwd}, phase: s.evidence.phase, at: now()});
+  process.kill(server.pid, signal);
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// What the user sees for `role` right now: session status, last assistant
+// entry status and its part kinds, open cards, provider notice.
+function userView(s, role) {
+  const chat = s.d.chatByRole(role);
+  const last = chat.mirror.entries.filter(e => e.role === 'assistant').at(-1);
+  return {at: now(), status: s.d.sessions.status(chat.id), lastStatus: last?.status ?? null,
+    lastParts: (last?.parts ?? []).map(p => p.kind === 'tool' ? `tool:${p.call?.kind}:${p.resolved ? 'resolved' : 'open'}${p.isError ? ':error' : ''}` : p.kind === 'input' ? `input:${p.resolved ? 'resolved' : 'open'}` : p.kind),
+    lastText: textOf(last ?? {}).slice(-240), openInputs: chat.mirror.pendingInputs().map(p => p.requestId),
+    providerNotice: chat.mirror.latest.providerNotice ?? null};
+}
+
+// Samples userView every `everyMs` until `untilFn()` or `ms` elapse.
+async function timeline(s, role, ms, everyMs = 5000, untilFn = () => false) {
+  const rows = [];
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    rows.push(userView(s, role));
+    if (untilFn()) break;
+    await sleep(Math.min(everyMs, Math.max(1, end - Date.now())));
+  }
+  rows.push(userView(s, role));
+  return rows;
+}
 const SUBAGENT_TERMINAL = new Set(['done', 'failed', 'interrupted', 'unobserved']);
 const subagentParts = entries => entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool' && p.call?.kind === 'unknown' && /^Agent(:|$)/.test(p.call.name ?? '')));
 const lunaParts = entries => entries.flatMap(e => (e.parts ?? []).filter(p => p.kind === 'tool' && p.call?.kind === 'mcp' && p.call.server === 'luna'));
@@ -153,13 +244,16 @@ const SCENARIOS = {
   S1: {
     title: 'Approvals and questions', validation: ['OCE-16', 'OCE-05'], parity: true, permissionMode: 'ask', phases: ['run'],
     steps: ['allow-once', 'deny-with-feedback', 'cancel-turn', 'question-single', 'question-multi', 'stale-answer-after-stop'],
+    // The commands run an interpreter so no provider auto-allows them: Claude
+    // Code runs `echo` and in-workspace file writes without asking in
+    // acceptEdits, which LUNA's ask mode maps to. Both providers must ask.
     prompts: n => ({
-      allow: `Use your shell tool to run exactly this command: echo S1-ALLOW-${n}\nThen reply with only the command's output. Do not run any other command.`,
-      deny: `Use your shell tool to run exactly this command: echo S1-DENY-${n}\nIf you are not allowed to run it, do not retry; reply with exactly S1-DENIED-${n}.`,
-      cancel: `Use your shell tool to run exactly this command: echo S1-CANCEL-${n}\nThen reply with only the command's output.`,
+      allow: `Use your shell tool to run exactly this command: python3 -c "print('S1-ALLOW-${n}')"\nThen reply with only the command's output. Do not run any other command.`,
+      deny: `Use your shell tool to run exactly this command: python3 -c "print('S1-DENY-${n}')"\nIf you are not allowed to run it, do not retry; reply with exactly S1-DENIED-${n}.`,
+      cancel: `Use your shell tool to run exactly this command: python3 -c "print('S1-CANCEL-${n}')"\nThen reply with only the command's output.`,
       single: `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly COLOR-${n}-<the color I chose>.`,
       multi: `Use your tool for asking the user a multiple-choice question that allows multiple selections (do not ask in plain text). Ask me to choose one or more of these options: alpha, beta, gamma. After I answer, reply with exactly PICKED-${n}- followed by my choices joined with "+".`,
-      stale: `Use your shell tool to run exactly this command: echo S1-STALE-${n}\nThen reply with only the command's output.`,
+      stale: `Use your shell tool to run exactly this command: python3 -c "print('S1-STALE-${n}')"\nThen reply with only the command's output.`,
     }),
     unverified: ['MCP elicitation forms need a mock MCP server fixture (not part of this runner); the answerer supports them (buildAnswers mcp policy).',
       'Question steps at T2 need a scripted mock entry; run them at T3.'],
@@ -634,8 +728,10 @@ const SCENARIOS = {
 
   S7: {
     title: 'Images, compaction and discovery', validation: ['OCE-08', 'OCE-14', 'OCE-20'], parity: true, permissionMode: 'full', phases: ['run'],
-    steps: ['image-initial', 'image-queued', 'image-steer', 'compaction', 'discovery'],
+    steps: ['image-initial', 'image-follow-up', 'image-queued', 'image-steer', 'compaction', 'discovery', 'skill-pick', 'command-with-attachment'],
     prompts: n => ({
+      skill: 'Use the selected skill and follow its instructions exactly. Do not use tools.',
+      commandImage: '/qa-img',
       image: 'What is the dominant color of the attached image? Reply with exactly one lowercase color word and nothing else. Do not use tools.',
       busy: `Use your shell tool to run exactly this command: sleep 12\nThen reply with exactly SLEPT-${n}.`,
       luna: `Call the get_workspace tool from the luna MCP server. Then reply with exactly WS-${n}- followed by the project name. Do not use any other tool.`,
@@ -643,17 +739,23 @@ const SCENARIOS = {
     }),
     fixture(fx, nonce) {
       const body = `---\ndescription: LUNA QA echo command\n---\nReply with exactly CMD-ECHO-${nonce} and nothing else. Do not use tools.\n`;
+      const imageBody = `---\ndescription: LUNA QA image command\n---\nReply with exactly CMD-IMG-${nonce}- followed by the dominant color of the attached image as one lowercase word. Do not use tools.\n`;
       for (const dir of ['.opencode/command', '.claude/commands']) {
         fs.mkdirSync(path.join(fx.dir, dir), {recursive: true});
         fs.writeFileSync(path.join(fx.dir, dir, 'qa-echo.md'), body);
+        fs.writeFileSync(path.join(fx.dir, dir, 'qa-img.md'), imageBody);
       }
+      // One project skill both providers discover (.claude/skills, QF-02).
+      fs.mkdirSync(path.join(fx.dir, '.claude/skills/qa-skill'), {recursive: true});
+      fs.writeFileSync(path.join(fx.dir, '.claude/skills/qa-skill/SKILL.md'),
+        `---\nname: qa-skill\ndescription: LUNA QA skill that answers with a fixed marker\n---\nWhen this skill is used, reply with exactly SKILL-OK-${nonce} and nothing else.\n`);
       fx.git('add', '.opencode', '.claude');
-      fx.git('commit', '-q', '-m', 'qa commands');
+      fx.git('commit', '-q', '-m', 'qa commands and skill');
     },
     unverified: ['Auto-compaction mid-turn (OCE-14) needs a small-context mock; this scenario runs manual compaction.',
       'Invalid, oversized and SVG attachments and the app-restart image path (OCE-08 5-6) are not driven here.'],
     async run(s, P) {
-      const colors = {red: [220, 20, 20], blue: [20, 40, 220], green: [20, 200, 40]};
+      const colors = {red: [220, 20, 20], blue: [20, 40, 220], green: [20, 200, 40], yellow: [235, 210, 20], purple: [130, 30, 200]};
       const image = async name => s.d.upload(solidPng(64, 64, colors[name]), `qa-${name}.png`);
       const busyTurn = async () => {
         const sent = await s.d.send(s.chatId('root'), s.p(P.busy, 'tool-shell:sleep 12'));
@@ -668,6 +770,16 @@ const SCENARIOS = {
         s.check('image-part', 'the user row shows the image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
         s.modelCheck('image-consumed', 'the model names the image colour (red)', t.reply.slice(0, 80), /\bred\b/i.test(t.reply));
         s.ids.images = [{step: 'image-initial', ...staged}];
+      });
+      await s.step('image-follow-up', async () => {
+        const staged = await image('yellow');
+        const t = await s.turn('root', P.image, {mock: 'image', attachments: [staged.path]});
+        s.settled(t.wait);
+        s.check('follow-up-path', 'an idle follow-up with an image is sent as a run', t.path, t.path === 'run');
+        const user = s.entries('root').find(e => e.id === t.messageId);
+        s.check('follow-up-image-part', 'the follow-up user row shows the image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
+        s.modelCheck('follow-up-image-consumed', 'the model names the follow-up image colour (yellow)', t.reply.slice(0, 80), /\byellow\b/i.test(t.reply));
+        s.ids.images.push({step: 'image-follow-up', ...staged});
       });
       await s.step('image-queued', async () => {
         const busy = await busyTurn();
@@ -722,6 +834,27 @@ const SCENARIOS = {
         const record = await s.d.chatRecord(s.chatId('root'));
         s.info('title-generated', 'the chat has a generated title (run_title)', record?.title ?? null, Boolean(record?.title));
       });
+      await s.step('skill-pick', async () => {
+        const catalog = await s.d.rpc.call('ListComposerCatalog', {chatId: s.chatId('root'), refresh: true}, {timeoutMs: 90000}).catch(error => ({error: String(error.message ?? error)}));
+        s.evidence.save('composer-catalog-skills.json', catalog);
+        const entry = (catalog?.entries ?? []).find(e => e.kind === 'skill' && /qa-skill/.test(e.name));
+        s.check('skill-listed', 'the project skill qa-skill is in the composer catalog for this chat', entry ? {kind: entry.kind, name: entry.name, path: path.basename(entry.path)} : (catalog?.entries ?? []).filter(e => e.kind === 'skill').map(e => e.name), Boolean(entry));
+        if (!entry) return;
+        const t = await s.turn('root', P.skill, {mock: `text:SKILL-OK-${s.nonce}`, inputItems: [{type: 'skill', name: entry.name, path: entry.path}], answer: allowAll});
+        s.settled(t.wait);
+        const user = s.entries('root').find(e => e.id === t.messageId);
+        s.info('skill-row', 'the user row records the typed skill selection', (user?.parts ?? []).map(p => p.kind), true);
+        s.modelCheck('skill-used', `the typed skill pick reached the model (SKILL-OK-${s.nonce})`, t.reply.slice(0, 120), t.reply.includes(`SKILL-OK-${s.nonce}`));
+      });
+      await s.step('command-with-attachment', async () => {
+        const staged = await image('purple');
+        const t = await s.turn('root', P.commandImage, {mock: 'image', attachments: [staged.path], answer: allowAll});
+        s.settled(t.wait);
+        const user = s.entries('root').find(e => e.id === t.messageId);
+        s.check('command-image-part', 'the slash-command row keeps its image part', (user?.parts ?? []).map(p => p.kind), (user?.parts ?? []).some(p => p.kind === 'image'));
+        s.modelCheck('command-ran-with-image', `the command ran (CMD-IMG-${s.nonce}) and saw the image (purple/violet)`, t.reply.slice(0, 120), t.reply.includes(`CMD-IMG-${s.nonce}`) && /purple|violet|magenta/i.test(t.reply));
+        s.ids.images.push({step: 'command-with-attachment', ...staged});
+      });
     },
   },
 
@@ -762,6 +895,416 @@ const SCENARIOS = {
         const goal = await s.d.goal(s.chatId('root'), {action: 'get'});
         s.info('goal-get', 'goals: OpenCode reports unavailable with the shared copy; Claude has native /goal', {status: goal.receipt?.status, reason: goal.receipt?.reason?.message ?? null}, true);
       });
+    },
+  },
+
+  // ---------------------------------------------------------------- live-only extras
+  // Added for the in-app E2E round: background child asks after the root Done,
+  // server faults, a provider stall and automatic compaction. They are `extra`:
+  // never rehearsed (the fake engine has no background children, server
+  // processes or mock provider) and outside the S1..S8 parity set.
+  S2X: {
+    title: 'Background child ask after Done, wake turn, parked follow-up, foreground child Stop', validation: ['OCE-01', 'OCE-05', 'OCE-21'],
+    parity: true, extra: true, permissionMode: 'ask', phases: ['run'],
+    steps: ['late-child-ask', 'follow-up-while-parked', 'foreground-child-stop'],
+    prompts: n => ({
+      late: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent with the description "Asking child" and this task: "First use your file read tool to read README.md, then use your file search (glob) tool to list the *.md files, then use your shell tool to run exactly this command and nothing else: python3 -c 'print("LATE-ASK-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly ROOT-DONE-${n} and end your turn.`,
+      parked: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent with the description "Sleeping child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(45); print("PARKED-CHILD-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly PARKED-ROOT-${n} and end your turn.`,
+      followup: `Reply with exactly FOLLOWUP-${n}. Do not use tools.`,
+      fg: `Use your subagent tool to launch ONE subagent in the foreground (do not run it in the background) with the description "Foreground child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(90); print("FG-CHILD-${n}")'. Then reply with only the command output." Wait for the subagent to finish, then reply with exactly FG-ROOT-${n} followed by what the subagent reported.`,
+    }),
+    unverified: ['Whether the child asks after the root Done depends on model timing; an ask during the root turn is answered and recorded as early (ask-timing).',
+      'Claude Code background agents may not raise host asks; the Claude run records what it does.'],
+    async run(s, P) {
+      const chatId = s.chatId('root');
+      const wakeAfter = (entries, anchorId) => {
+        const at = entries.findIndex(e => e.id === anchorId);
+        return at < 0 ? [] : entries.slice(at + 1).filter(e => e.role === 'assistant' && ['complete', 'aborted'].includes(e.status) && (e.parts ?? []).some(p => p.kind === 'text' || p.kind === 'reasoning'));
+      };
+      await s.step('late-child-ask', async () => {
+        const early = [];
+        const t = await s.turn('root', P.late, {mock: 'subagent-background', answer: pending => {
+          if (!pending.questions.some(q => q.approval)) return null;
+          early.push({requestId: pending.requestId});
+          return {approval: 'allow-once'};
+        }});
+        s.settled(t.wait, 'root-turn-settled');
+        s.modelCheck('root-done', `root replied ROOT-DONE-${s.nonce}`, t.reply.slice(0, 160), t.reply.includes(s.m('ROOT-DONE')));
+        s.ids.rootDone = s.after('root', t.messageId).filter(e => e.role === 'assistant').at(-1)?.id ?? null;
+        s.info('ask-timing', 'the child asked after the root Done (late) rather than during the root turn', {early: early.length}, early.length === 0);
+        const chat = s.d.chatByRole('root');
+        if (!early.length) {
+          const late = await chat.mirror.waitFor(() => chat.mirror.currentPending(), {timeoutMs: 150000, label: 'late child ask'}).catch(() => null);
+          s.d.capture('s2x-late-ask-card');
+          s.check('late-ask-shown', 'the background child approval reaches the root chat panel after the root Done (OCF-51)',
+            late ? late.questions.map(q => ({header: q.header ?? null, kind: q.approval?.actionKind ?? 'question', subagent: q.approval?.details?.subagent ?? null})) : null,
+            Boolean(late?.questions.some(q => q.approval)));
+          if (late?.questions.some(q => q.approval)) {
+            const {receipt} = await s.d.answer(chatId, late, {approval: 'allow-once'});
+            s.check('late-ask-answered', 'Allow once on the late card is applied', receipt?.status, receipt?.status === 'applied');
+          }
+        }
+        const wake = await waitAnswering(s, 'root', entries => (wakeAfter(entries, s.ids.rootDone).length && !s.d.busy(chatId) ? wakeAfter(entries, s.ids.rootDone) : null),
+          {timeoutMs: 240000, label: 'wake turn after the late ask'});
+        const wakeEntries = wake.value ?? wakeAfter(s.entries('root'), s.ids.rootDone);
+        s.check('wake-turn-rendered', 'the background completion renders as its own assistant (wake) turn after ROOT-DONE', wakeEntries.map(e => ({status: e.status, parts: (e.parts ?? []).map(p => p.kind)})), wakeEntries.length >= 1);
+        s.info('wake-reasoning', 'the wake turn keeps its reasoning parts', wakeEntries.map(e => (e.parts ?? []).filter(p => p.kind === 'reasoning').length), wakeEntries.some(e => (e.parts ?? []).some(p => p.kind === 'reasoning')));
+        const children = await attachChildren(s, 'root', 'late-child', t.messageId);
+        const childEntries = children.flatMap(role => s.entries(role));
+        s.modelCheck('late-child-ran', `the child ran its command (LATE-ASK-${s.nonce} in the child transcript)`, markerInTools(allTools(childEntries), s.m('LATE-ASK')), markerInTools(allTools(childEntries), s.m('LATE-ASK')));
+        const declined = AUTO_DECLINED.test(textDump([...s.entries('root'), ...childEntries]));
+        s.check('no-auto-decline', 'no approval was closed without an answer (root and child documents)', declined, !declined);
+        s.check('no-open-card', 'no unresolved card is left on the root after the wake', chat.mirror.pendingInputs().length, chat.mirror.pendingInputs().length === 0);
+        s.d.capture('s2x-wake-turn');
+      });
+      await s.step('follow-up-while-parked', async () => {
+        await s.d.waitIdle(chatId, {timeoutMs: 180000}).catch(() => null);
+        const t = await s.turn('root', P.parked, {mock: 'subagent-background', answer: allowAll});
+        s.settled(t.wait, 'parked-root-settled');
+        s.modelCheck('parked-root-reply', `root replied PARKED-ROOT-${s.nonce}`, t.reply.slice(0, 160), t.reply.includes(s.m('PARKED-ROOT')));
+        const parkedDone = s.after('root', t.messageId).filter(e => e.role === 'assistant').at(-1)?.id ?? null;
+        const approved = t.wait.handled.length ? {handled: t.wait.handled}
+          : await waitAnswering(s, 'root', (entries, handled) => handled.length >= 1, {timeoutMs: 150000, label: 'sleeping child approval'});
+        s.check('parked-child-approved', 'the sleeping child approval was shown and answered (during or after the root turn)', (approved.handled ?? []).map(h => h.status), (approved.handled ?? []).some(h => h.status === 'applied'));
+        // Let the status settle after the answer before reading the parked state.
+        await sleep(5000);
+        const chip = subagentParts(s.after('root', t.messageId))[0];
+        s.info('parked-state', 'session status and child chip while parked (root Done, background child running)', {session: s.d.sessions.status(chatId), chip: chip?.subagentStatus ?? null}, chip?.subagentStatus === 'running');
+        // Sent at once, like a user typing while the child still runs (no wait for idle).
+        const sentF = await s.d.send(chatId, s.p(P.followup, `text:${s.m('FOLLOWUP')}`));
+        s.info('follow-up-path', 'how the composer sends while parked (run when idle, queueMessage when busy)', sentF.path, true);
+        const fw = await s.d.waitTurn(chatId, {mark: sentF.mark, messageId: sentF.messageId, answer: allowAll, timeoutMs: s.turnTimeout});
+        s.settled(fw, 'follow-up-settled');
+        const freply = s.replyAfter('root', sentF.messageId);
+        s.modelCheck('follow-up-reply', `follow-up replied FOLLOWUP-${s.nonce}`, freply.slice(0, 160), freply.includes(s.m('FOLLOWUP')));
+        const count = s.entries('root').filter(e => e.id === sentF.messageId).length;
+        s.check('follow-up-once', 'the follow-up user row appears exactly once', count, count === 1);
+        const settled = await waitAnswering(s, 'root', entries => {
+          const chips = subagentParts(entries.slice(Math.max(0, entries.findIndex(e => e.id === t.messageId))));
+          return chips.length && chips.every(p => SUBAGENT_TERMINAL.has(p.subagentStatus)) && !s.d.busy(chatId) ? chips : null;
+        }, {timeoutMs: 240000, label: 'parked child settled'});
+        s.check('parked-child-settled', 'the parked child chip settles after the follow-up (not lost)', (settled.value ?? []).map(p => p.subagentStatus), Boolean(settled.value));
+        const children = await attachChildren(s, 'root', 'parked-child', t.messageId);
+        const childEntries = children.flatMap(role => s.entries(role));
+        s.modelCheck('parked-child-ran', `PARKED-CHILD-${s.nonce} in the child transcript`, markerInTools(allTools(childEntries), s.m('PARKED-CHILD')), markerInTools(allTools(childEntries), s.m('PARKED-CHILD')));
+        s.info('parked-wake', 'assistant turns after the parked root reply (follow-up reply and wake)', wakeAfter(s.entries('root'), parkedDone).map(e => (e.parts ?? []).map(p => p.kind)), true);
+        const declined = AUTO_DECLINED.test(textDump([...s.entries('root'), ...childEntries]));
+        s.check('no-auto-decline', 'no approval was closed without an answer', declined, !declined);
+        s.d.capture('s2x-after-parked');
+      });
+      await s.step('foreground-child-stop', async () => {
+        await s.d.waitIdle(chatId, {timeoutMs: 180000}).catch(() => null);
+        const sent = await s.d.send(chatId, s.p(P.fg, 'subagent'));
+        const ready = await waitAnswering(s, 'root', (entries, handled) => {
+          const at = entries.findIndex(e => e.id === sent.messageId);
+          const chip = at >= 0 ? subagentParts(entries.slice(at + 1)).find(p => p.subagentStatus === 'running') : null;
+          return chip && handled.length >= 1 ? chip : null;
+        }, {timeoutMs: 180000, label: 'foreground child running its approved command'});
+        s.check('fg-child-running', 'a running foreground child whose command was approved', ready.value ? {status: ready.value.subagentStatus, approvals: ready.handled.map(h => h.status)} : {timeout: Boolean(ready.timeout)}, Boolean(ready.value));
+        if (!ready.value) return;
+        await sleep(3000);
+        const children = await attachChildren(s, 'root', 'fg-child', sent.messageId);
+        s.check('nested-transcript', 'the foreground child has its own nested transcript with entries', children.map(role => s.entries(role).length), children.length >= 1 && children.every(role => s.entries(role).length > 0));
+        s.d.capture('s2x-foreground-child');
+        const work = await s.d.rpc.call('GetTaskWork', {taskId: chatId});
+        s.evidence.save('task-work-before-stop.json', work);
+        const item = (work.items ?? []).find(i => i.kind === 'nativeChild' && !['completed', 'failed', 'stopped'].includes(i.state) && i.canStop);
+        s.check('child-work-row', 'the running child is a stoppable nativeChild row in the task work panel', item ? {kind: item.kind, state: item.state, canStop: item.canStop} : (work.items ?? []).map(i => ({kind: i.kind, state: i.state, canStop: i.canStop})), Boolean(item));
+        if (!item) return;
+        const preview = await s.d.rpc.call('PreviewStopTaskWork', {taskId: chatId, workIds: [item.id]});
+        s.evidence.save('task-work-stop-preview.json', preview);
+        const requestId = crypto.randomUUID();
+        const send = recordSend(s.evidence, {kind: 'stopWork', label: 'per-child stop', step: 'foreground-child-stop', taskId: chatId, workIds: [item.id], previewId: preview.previewId, requestId});
+        let receipt;
+        try {
+          receipt = await s.d.rpc.call('StopTaskWork', {taskId: chatId, workIds: [item.id], previewId: preview.previewId, requestId});
+          settleSend(s.evidence, send, {outcome: 'applied', receipt});
+        } catch (error) {
+          settleSend(s.evidence, send, {outcome: error.unknown ? 'unknown' : 'rejected', error: String(error.message ?? error)});
+          throw error;
+        }
+        s.evidence.save('task-work-stop-receipt.json', receipt);
+        s.check('child-stop-receipt', 'StopTaskWork reports the child stopped or stop requested', (receipt?.results ?? []).map(r => r.status), (receipt?.results ?? []).some(r => ['stopped', 'requested'].includes(r.status)));
+        const chipEnd = await waitAnswering(s, 'root', entries => {
+          const at = entries.findIndex(e => e.id === sent.messageId);
+          const chip = at >= 0 ? subagentParts(entries.slice(at + 1))[0] : null;
+          return chip && SUBAGENT_TERMINAL.has(chip.subagentStatus) ? chip : null;
+        }, {timeoutMs: 90000, label: 'child chip terminal after per-child stop'});
+        s.check('child-chip-stopped', 'the child chip ends terminal after the per-child Stop', chipEnd.value?.subagentStatus ?? null, Boolean(chipEnd.value));
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer: allowAll, timeoutMs: 180000});
+        s.settled(wait, 'root-turn-ends-after-child-stop', ['idle', 'errored']);
+        s.info('root-after-child-stop', 'the root turn continues and ends on its own after only the child was stopped', {status: wait.status, statuses: wait.statuses, reply: s.replyAfter('root', sent.messageId).slice(0, 200)}, wait.status === 'idle');
+        const leaked = markerInTools(allTools(children.flatMap(role => s.entries(role))), s.m('FG-CHILD'));
+        s.check('child-command-stopped', `FG-CHILD-${s.nonce} never appears after the per-child Stop`, leaked, !leaked);
+        s.d.capture('s2x-after-child-stop');
+      });
+    },
+  },
+
+  S4X: {
+    title: 'OpenCode server paused (SIGSTOP/SIGCONT) or killed (SIGKILL) with an approval or a form pending', validation: ['OCE-04', 'OCE-05'],
+    parity: false, extra: true, permissionMode: 'ask', phases: ['run'],
+    steps: ['sigstop-approval', 'kill-approval', 'continue-after-kill', 'sigstop-form', 'kill-form', 'continue-after-form-kill'],
+    prompts: n => ({
+      approval: tag => `Use your shell tool to run exactly this command: echo S4X-${tag}-${n}\nThen reply with only the command's output. Do not run any other command.`,
+      form: tag => `Use your tool for asking the user a multiple-choice question (do not ask in plain text). Ask me to choose exactly one color from these options: red, green, blue. After I answer, reply with exactly S4X-${tag}-${n}-<the color I chose>.`,
+      after: tag => `Reply with exactly S4X-${tag}-${n}. Do not use tools.`,
+    }),
+    unverified: ['Only the chat\'s OpenCode server process is faulted; LUNA is not restarted (S4 covers an app restart).',
+      'SIGSTOP pauses the whole server (SSE and HTTP); a pure SSE cut needs a proxy (the adapter has a recorded steer-drop probe).'],
+    async run(s, P) {
+      const chatId = s.chatId('root');
+      const holdMs = Number(s.opts['hold-ms'] ?? 75000);
+      const lower = tag => tag.toLowerCase();
+      // Short-lived catalog servers can share the chat's cwd: wait for one
+      // match, else take the longest-running server and record the choice.
+      const server = async () => {
+        let found = [];
+        for (let i = 0; i < 10; i += 1) {
+          found = opencodeServersFor(s.d.identity.pid, s.fixture.dir);
+          if (found.length === 1) return found[0];
+          await sleep(500);
+        }
+        assert.ok(found.length > 0, 'no opencode server child runs for the fixture');
+        const age = pid => {
+          const raw = spawnSync('ps', ['-p', String(pid), '-o', 'etimes='], {encoding: 'utf8'}).stdout.trim();
+          return Number(raw) || 0;
+        };
+        const pick = [...found].sort((a, b) => age(b.pid) - age(a.pid))[0];
+        s.info('server-choice', 'several opencode servers share the fixture cwd; the longest-running one was faulted', found.map(f => ({pid: f.pid, age: age(f.pid)})), true);
+        return pick;
+      };
+      const begin = async (tag, kind) => {
+        await s.d.waitIdle(chatId, {timeoutMs: 120000}).catch(() => null);
+        const text = kind === 'approval' ? P.approval(tag) : P.form(tag);
+        if (s.tier === 'T2' && kind === 'form') {
+          // The mock has no question scenario: queue a scripted `question`
+          // tool call (the prompt carries no marker, so the script is used).
+          assert.ok(s.opts['mock-url'], 'S4X forms at T2 need --mock-url to script the question tool');
+          const entry = {scenario: 'tool', name: 'question', arguments: {questions: [{question: 'Choose exactly one color', header: 'Color',
+            options: [{label: 'red', description: 'red'}, {label: 'green', description: 'green'}, {label: 'blue', description: 'blue'}], multiple: false}]}};
+          const res = await fetch(`${s.opts['mock-url']}/__mock/script`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(entry)});
+          s.evidence.command({method: 'mock-script', params: entry, outcome: res.status, phase: s.evidence.phase, at: now()});
+          assert.equal(res.status, 200, 'the mock refused the scripted question entry');
+        }
+        const sent = await s.d.send(chatId, s.p(text, kind === 'approval' ? `tool-shell:echo S4X-${tag}-${s.nonce}` : null));
+        const pending = await s.d.waitPending(chatId, {timeoutMs: 180000});
+        const isApproval = pending.questions.some(q => q.approval);
+        s.check(`${lower(tag)}-pending`, `a pending ${kind} before the fault`, {approval: isApproval, questions: pending.questions.length}, kind === 'approval' ? isApproval : !isApproval);
+        s.d.capture(`s4x-${lower(tag)}-before`);
+        return {sent, pending};
+      };
+      const answerFor = kind => (kind === 'approval' ? {approval: 'allow-once'} : {pick: 'green'});
+      const outcome = (tag, kind, sent) => {
+        const reply = s.replyAfter('root', sent.messageId);
+        if (kind === 'approval') {
+          const hits = s.toolsAfter('root', sent.messageId).filter(t => !t.isError && String(t.output ?? '').includes(s.m(`S4X-${tag}`))).length;
+          s.modelCheck(`${lower(tag)}-output`, `the approved command ran (S4X-${tag}-${s.nonce})`, {hits, reply: reply.slice(0, 120)}, hits >= 1 || reply.includes(s.m(`S4X-${tag}`)));
+          s.check(`${lower(tag)}-ran-at-most-once`, 'the approved command ran at most once (no replay)', hits, hits <= 1);
+        } else {
+          s.modelCheck(`${lower(tag)}-form-consumed`, `reply is S4X-${tag}-${s.nonce}-green`, reply.slice(0, 160), reply.toLowerCase().includes(`s4x-${tag}-${s.nonce}-green`.toLowerCase()));
+        }
+      };
+      const sigstop = async (tag, kind) => {
+        const {sent, pending} = await begin(tag, kind);
+        const srv = await server();
+        s.evidence.save(`s4x-${lower(tag)}-server.json`, srv);
+        let held;
+        signalServer(s, srv, 'SIGSTOP');
+        try {
+          held = await timeline(s, 'root', holdMs, 5000);
+        } finally {
+          signalServer(s, srv, 'SIGCONT');
+        }
+        const resumed = await timeline(s, 'root', 45000, 3000);
+        s.evidence.save(`s4x-${lower(tag)}-timeline.json`, {pendingBefore: pending.requestId, holdMs, held, resumed});
+        const cards = s.d.chatByRole('root').mirror.pendingInputs();
+        s.check(`${lower(tag)}-one-open-card`, 'after SIGCONT exactly one open card for the request (re-shown once, no duplicates)', cards.map(c => (c.requestId === pending.requestId ? 'same-request' : 'other-request')), cards.length === 1);
+        s.d.capture(`s4x-${lower(tag)}-after-resume`);
+        const live = s.d.chatByRole('root').mirror.currentPending();
+        if (live) {
+          const {receipt} = await s.d.answer(chatId, live, answerFor(kind));
+          s.check(`${lower(tag)}-answerable`, 'the pending request is answerable after the pause (receipt applied)', receipt?.status, receipt?.status === 'applied');
+        } else {
+          s.check(`${lower(tag)}-answerable`, 'the pending request is answerable after the pause', 'no open card', false);
+        }
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer: allowAll, timeoutMs: s.turnTimeout});
+        s.settled(wait, `${lower(tag)}-turn-completes`);
+        outcome(tag, kind, sent);
+        const inputs = s.after('root', sent.messageId).flatMap(e => (e.parts ?? []).filter(p => p.kind === 'input'));
+        s.info(`${lower(tag)}-input-parts`, 'input parts written for this turn (resolved flags)', inputs.map(p => p.resolved), inputs.length <= 2);
+      };
+      const kill = async (tag, kind) => {
+        const {sent, pending} = await begin(tag, kind);
+        const srv = await server();
+        s.evidence.save(`s4x-${lower(tag)}-server.json`, srv);
+        signalServer(s, srv, 'SIGKILL');
+        const killedAt = now();
+        const mirror = s.d.chatByRole('root').mirror;
+        const after = await timeline(s, 'root', 150000, 3000, () => !s.d.busy(chatId) || mirror.pendingInputs().some(p => p.requestId !== pending.requestId));
+        s.evidence.save(`s4x-${lower(tag)}-timeline.json`, {pendingBefore: pending.requestId, killedAt, after});
+        s.d.capture(`s4x-${lower(tag)}-after-kill`);
+        const cards = mirror.pendingInputs();
+        s.check(`${lower(tag)}-no-duplicate-cards`, 'at most one open card after the kill', cards.length, cards.length <= 1);
+        s.info(`${lower(tag)}-user-view`, 'what the user sees after the server was killed', userView(s, 'root'), true);
+        const reshown = cards.find(c => c.requestId !== pending.requestId) ?? null;
+        if (reshown) {
+          const {receipt} = await s.d.answer(chatId, mirror.currentPending() ?? reshown, answerFor(kind));
+          s.check(`${lower(tag)}-reshown-answerable`, 'a re-shown request after the kill is answerable', receipt?.status, receipt?.status === 'applied');
+          const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer: allowAll, timeoutMs: s.turnTimeout});
+          s.settled(wait, `${lower(tag)}-turn-completes`, ['idle', 'errored']);
+          outcome(tag, kind, sent);
+          return;
+        }
+        const busy = s.d.busy(chatId);
+        s.check(`${lower(tag)}-not-stuck`, 'the chat is not left working after the server died (ends within 150 s)', s.d.sessions.status(chatId), !busy);
+        const stillOpen = cards.some(c => c.requestId === pending.requestId);
+        s.check(`${lower(tag)}-old-card-closed`, 'the pre-kill card is closed or truthfully kept (not left open as if live)', {stillOpen, resolved: mirror.inputResolved(pending.requestId)}, !stillOpen || busy);
+        let probe;
+        try {
+          probe = (await s.d.answer(chatId, pending, answerFor(kind), {probe: true})).receipt;
+        } catch (error) {
+          probe = {status: error instanceof NotAnswerable ? 'not-answerable' : 'rpc-error', reason: {message: String(error.message ?? error)}};
+        }
+        s.info(`${lower(tag)}-stale-probe`, 'answering the pre-kill request has no effect (receipt recorded)', {status: probe?.status, reason: probe?.reason?.code ?? probe?.reason?.message ?? null}, probe?.status !== 'applied');
+        if (kind === 'approval') {
+          const quiet = await s.stays('root', entries => markerInTools(allTools(entries), s.m(`S4X-${tag}`)), 15000);
+          s.check(`${lower(tag)}-no-late-run`, 'the killed request never runs afterwards', quiet, quiet);
+        }
+        const last = mirror.entries.filter(e => e.role === 'assistant').at(-1);
+        const lastText = textOf(last ?? {});
+        s.check(`${lower(tag)}-truthful-end`, 'the interrupted turn is not presented as a normal completion', {status: last?.status ?? null, text: lastText.slice(-200)},
+          last?.status !== 'complete' || /interrupt|stopp|fail|error|lost|exit|crash|unavailable|terminated|killed/i.test(lastText));
+      };
+      const resume = async tag => {
+        const t = await s.turn('root', P.after(tag), {mock: `text:${s.m(`S4X-${tag}`)}`, answer: allowAll});
+        s.settled(t.wait);
+        s.modelCheck(`${lower(tag)}-reply`, `reply S4X-${tag}-${s.nonce}`, t.reply.slice(0, 120), t.reply.includes(s.m(`S4X-${tag}`)));
+        const servers = opencodeServersFor(s.d.identity.pid, s.fixture.dir);
+        s.info(`${lower(tag)}-server`, 'one (new) opencode server serves the chat after the kill', servers.map(x => x.pid), servers.length === 1);
+      };
+      await s.step('sigstop-approval', () => sigstop('STOPA', 'approval'));
+      await s.step('kill-approval', () => kill('KILLA', 'approval'));
+      await s.step('continue-after-kill', () => resume('AFTERA'));
+      await s.step('sigstop-form', () => sigstop('STOPF', 'form'));
+      await s.step('kill-form', () => kill('KILLF', 'form'));
+      await s.step('continue-after-form-kill', () => resume('AFTERF'));
+    },
+  },
+
+  S4S: {
+    title: 'Provider stalls mid-turn (mock provider with a long --slow-ms, T2)', validation: ['OCE-04'], parity: false, extra: true, permissionMode: 'full', phases: ['run'],
+    steps: ['stall-mid-turn', 'continue-after-stall'],
+    prompts: n => ({stall: `Write one short sentence that contains the word STALL-${n}. Do not use tools.`, after: `Reply with exactly AFTER-STALL-${n}. Do not use tools.`}),
+    unverified: ['LUNA_OPENCODE_ACTIVITY_STALL_MS keeps its default (10 min) in the signed QA app.'],
+    async run(s, P) {
+      assert.equal(s.tier, 'T2', 'S4S needs the mock provider (T2) started with a long --slow-ms');
+      const chatId = s.chatId('root');
+      await s.step('stall-mid-turn', async () => {
+        const sent = await s.d.send(chatId, s.p(P.stall, 'slow'));
+        const started = Date.now();
+        const limit = Number(s.opts['stall-wait-ms'] ?? 720000);
+        let finished = false;
+        const waiting = s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, timeoutMs: limit}).then(w => { finished = true; return w; });
+        const rows = await timeline(s, 'root', limit + 5000, 15000, () => finished);
+        const wait = await waiting;
+        const elapsed = Date.now() - started;
+        s.evidence.save('stall-timeline.json', {sentAt: new Date(started).toISOString(), elapsedMs: elapsed, rows});
+        const firstText = rows.find(r => r.lastParts.includes('text'));
+        s.info('stall-first-text', 'partial text reached the transcript before the stall', firstText?.at ?? null, Boolean(firstText));
+        s.check('stall-ends-truthfully', 'the stalled turn ends (errored) instead of spinning Working forever', `${wait.result}:${wait.status} after ${Math.round(elapsed / 1000)} s`, wait.result === 'settled');
+        s.info('stall-user-view', 'what the user sees when the stall ends', userView(s, 'root'), true);
+        if (wait.result !== 'settled') {
+          const stopped = await s.d.stop(chatId);
+          s.info('stall-stop', 'Stop after the wait budget', stopped.receipt?.status, stopped.receipt?.status === 'applied');
+          await s.d.waitIdle(chatId, {timeoutMs: 60000}).catch(() => null);
+        }
+        s.d.capture('s4s-after-stall');
+      });
+      await s.step('continue-after-stall', async () => {
+        const t = await s.turn('root', P.after, {mock: `text:${s.m('AFTER-STALL')}`});
+        s.settled(t.wait);
+        s.check('after-stall-reply', `the chat continues (AFTER-STALL-${s.nonce})`, t.reply.slice(0, 120), t.reply.includes(s.m('AFTER-STALL')));
+      });
+    },
+  },
+
+  S8X: {
+    title: 'Automatic compaction mid-turn and manual compaction ordering (small-context mock, T2)', validation: ['OCE-14'], parity: false, extra: true, permissionMode: 'full', phases: ['run'],
+    steps: ['warm-up', 'large-tool-turn', 'next-turn', 'manual-compaction', 'after-compaction'],
+    prompts: n => ({warm: `Reply with exactly WARM-${n}. Do not use tools.`, big: `Run the shell command you are given and then reply with BIG-${n}.`, after: `Reply with exactly AFTER-COMPACT-${n}. Do not use tools.`}),
+    unverified: ['Compaction thresholds depend on the mock model limit configured in the isolated profile (recorded in result.md).'],
+    async run(s, P) {
+      assert.equal(s.tier, 'T2', 'S8X needs the small-context mock model (T2)');
+      const chatId = s.chatId('root');
+      const mirror = s.d.chatByRole('root').mirror;
+      const controls = [];
+      const record = () => {
+        const json = JSON.stringify(mirror.latest.contextControl ?? null);
+        if (controls.at(-1)?.json !== json) controls.push({at: now(), json, session: s.d.sessions.status(chatId)});
+      };
+      mirror.on('change', record);
+      s.d.sessions.on('change', record);
+      const compactRows = since => controls.filter(c => c.at >= since).map(c => ({at: c.at, session: c.session, compact: JSON.parse(c.json)?.compact ?? null}));
+      try {
+        await s.step('warm-up', async () => {
+          const t = await s.turn('root', P.warm, {mock: `text:${s.m('WARM')}`});
+          s.settled(t.wait);
+        });
+        // The mock answers a tool result with text, so one turn cannot chain
+        // two tool rounds: the large turn overflows the small window and the
+        // automatic compaction lands at its end or at the start of the next
+        // turn. Both turns are observed and must each complete exactly once.
+        const autoSince = now();
+        await s.step('large-tool-turn', async () => {
+          const t = await s.turn('root', P.big, {mock: `tool-shell:${s.opts['big-command'] ?? 'seq 1 6000'}`});
+          s.settled(t.wait);
+          s.ids.big = t.messageId;
+          s.info('large-turn-statuses', 'session statuses during the large turn', s.d.sessions.statusesSince(chatId, t.mark), true);
+        });
+        await s.step('next-turn', async () => {
+          const t = await s.turn('root', P.after.replace('AFTER-COMPACT', 'NEXT'), {mock: `text:NEXT-${s.nonce}`});
+          s.settled(t.wait);
+          s.info('next-turn-statuses', 'session statuses during the next turn', s.d.sessions.statusesSince(chatId, t.mark), true);
+          const rows = compactRows(autoSince);
+          s.evidence.save('auto-compaction-controls.json', rows);
+          const auto = rows.filter(r => r.compact && r.compact.status !== 'idle');
+          s.check('auto-compaction-seen', 'automatic compaction ran (context-control lifecycle) after the window overflowed', auto.map(r => `${r.at.slice(11, 23)} ${r.compact.status}:${r.compact.mechanism ?? ''} session=${r.session}`), auto.length > 0);
+          for (const [label, id] of [['large', s.ids.big], ['next', t.messageId]]) {
+            const rest = s.after('root', id);
+            const nextUser = rest.findIndex(e => e.role === 'user');
+            const replies = (nextUser < 0 ? rest : rest.slice(0, nextUser)).filter(e => e.role === 'assistant');
+            s.info(`${label}-turn-entries`, `assistant entries of the ${label} turn (status and part kinds)`, replies.map(e => ({status: e.status, parts: (e.parts ?? []).map(p => p.kind)})), replies.length >= 1);
+          }
+          s.modelCheck('next-turn-reply', `the turn after compaction completes (NEXT-${s.nonce})`, t.reply.slice(0, 120), t.reply.includes(`NEXT-${s.nonce}`));
+        });
+        await s.step('manual-compaction', async () => {
+          await s.d.waitIdle(chatId).catch(() => null);
+          const since = now();
+          const compact = await s.d.compact(chatId);
+          const atReceipt = JSON.parse(JSON.stringify(mirror.latest.contextControl ?? null));
+          s.check('compact-receipt', 'compactContext applied', {status: compact.receipt?.status, reason: compact.receipt?.reason?.code ?? null}, compact.receipt?.status === 'applied');
+          await mirror.waitFor(() => {
+            const c = mirror.latest.contextControl?.compact;
+            return c && c.status && c.status !== 'running' && controls.some(r => r.at >= since && JSON.parse(r.json)?.compact?.status === 'running');
+          }, {timeoutMs: 180000, label: 'manual compaction ended'}).catch(() => null);
+          const rows = compactRows(since);
+          s.evidence.save('manual-compaction-controls.json', {atReceipt, rows});
+          const statuses = rows.map(r => r.compact?.status ?? null).filter(Boolean);
+          s.check('manual-lifecycle', 'manual compaction shows running then a terminal status', statuses, statuses.includes('running') && statuses.some(x => x !== 'running'));
+          const firstTerminal = rows.findIndex(r => r.compact && r.compact.status !== 'running');
+          s.info('session-during-compaction', 'session status while manual compaction runs (LUNA keeps the chat idle; compaction is context-control lifecycle)', rows.slice(0, Math.max(0, firstTerminal)).filter(r => r.compact?.status === 'running').map(r => r.session), rows.filter(r => r.compact?.status === 'running').every(r => r.session !== 'idle'));
+        });
+        await s.step('after-compaction', async () => {
+          const t = await s.turn('root', P.after, {mock: `text:${s.m('AFTER-COMPACT')}`});
+          s.settled(t.wait);
+          s.check('after-compaction-reply', `the chat continues (AFTER-COMPACT-${s.nonce})`, t.reply.slice(0, 120), t.reply.includes(s.m('AFTER-COMPACT')));
+        });
+      } finally {
+        mirror.off('change', record);
+        s.d.sessions.off('change', record);
+        s.evidence.save('context-controls.json', controls);
+      }
     },
   },
 };
@@ -1032,7 +1575,7 @@ async function selfCheck() {
       assert.equal(maskNonce(a, 'AAAA1111'), maskNonce(b, 'BBBB2222'), `${id} prompts depend on more than the nonce`);
       assert.ok(s.validation.length && s.steps.length && s.phases.length, `${id} is incomplete`);
     }
-    assert.deepEqual(Object.keys(SCENARIOS), ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8']);
+    assert.deepEqual(Object.keys(SCENARIOS).filter(id => !SCENARIOS[id].extra), ['S1', 'S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8']);
   });
   ok('QF-20 normalization keeps kinds and drops volatile values', () => {
     const entries = [{id: 'x1', role: 'assistant', status: 'complete', parts: [
@@ -1072,7 +1615,8 @@ function removeRehearsalFixtures(runDirs) {
 // QF-21: the whole runner against a fake engine this process spawned. Proves
 // the plumbing (RPC shapes, waits, evidence, diff), never LUNA behaviour.
 async function rehearse(target, opts) {
-  const ids = !target || target === 'all' ? Object.keys(SCENARIOS) : [target];
+  const ids = !target || target === 'all' ? Object.keys(SCENARIOS).filter(id => !SCENARIOS[id].extra) : [target];
+  assert.ok(ids.every(id => SCENARIOS[id] && !SCENARIOS[id].extra), 'live-only extra scenarios are not rehearsed (no fake background children, servers or mock)');
   const out = path.resolve(opts['evidence-root'] ?? path.join(root, 'target/qa/opencode-rehearsal'));
   const summary = [];
   const fakeArgs = opts['fake-args'] ? opts['fake-args'].split(' ') : [];
@@ -1155,6 +1699,7 @@ const {values: opts, positionals} = parseArgs({
     provider: {type: 'string', default: 'opencode'}, tier: {type: 'string'}, model: {type: 'string'}, variant: {type: 'string'},
     'evidence-root': {type: 'string'}, 'turn-timeout': {type: 'string'}, 'allow-usage-store': {type: 'boolean', default: false},
     phase: {type: 'string'}, run: {type: 'string'}, 'fake-args': {type: 'string'}, 'rpc-timeout': {type: 'string'}, ax: {type: 'boolean', default: false},
+    'hold-ms': {type: 'string'}, 'stall-wait-ms': {type: 'string'}, 'big-command': {type: 'string'}, 'mock-url': {type: 'string'},
   },
   allowPositionals: true,
 });
