@@ -1,3 +1,4 @@
+use super::history::*;
 use super::*;
 
 fn ignore_fork_progress(_: ProviderForkProgress) -> Result<(), HarnessError> {
