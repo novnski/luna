@@ -1,6 +1,8 @@
 //! L16 local historical usage and normalized limit snapshots. Historical
 //! parser/cache behavior follows T3 Code's MIT transcript contracts, adapted
-//! to Rust. Explicit synthetic fixture settings isolate native limit probes.
+//! to Rust; OpenCode history is read from its local databases the way T3 does
+//! (`usage_opencode_history.rs`). Explicit synthetic fixture settings isolate
+//! native limit probes.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
@@ -19,6 +21,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+#[path = "usage_opencode_history.rs"]
+mod opencode_history;
+
 // Reparse existing transcripts after changing Codex notification identities.
 const CACHE_VERSION: u32 = 3;
 const MAX_FILES: usize = 10_000;
@@ -36,6 +41,7 @@ const SYNTHETIC_MARKER: &str = ".luna-usage-synthetic";
 const SYNTHETIC_USAGE_VARIABLES: &[&str] = &[
     "LUNA_USAGE_SYNTHETIC_CODEX_HOME",
     "LUNA_USAGE_SYNTHETIC_CLAUDE_HOME",
+    "LUNA_USAGE_SYNTHETIC_OPENCODE_DATA",
     "LUNA_USAGE_SYNTHETIC_CACHE_DIR",
     "LUNA_USAGE_SYNTHETIC_PRICES_JSON",
     "LUNA_USAGE_SYNTHETIC_LIMITS_JSON",
@@ -419,9 +425,10 @@ fn scan_file(
     deadline: Instant,
 ) -> std::io::Result<(CachedFile, bool)> {
     if provider == UsageProvider::OpenCodeGo {
+        // OpenCode history lives in its databases, never in JSONL transcripts.
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "OpenCode history has no verified synthetic transcript adapter",
+            "OpenCode history is read from its databases, not JSONL transcripts",
         ));
     }
     let metadata = fs::metadata(path)?;
@@ -601,6 +608,7 @@ fn actual_provider_homes() -> Vec<PathBuf> {
             homes.push(PathBuf::from(path).join(child));
         }
     }
+    homes.extend(opencode_history::configured_roots());
     homes
 }
 
@@ -680,6 +688,7 @@ fn cache_path() -> Option<PathBuf> {
     for variable in [
         "LUNA_USAGE_SYNTHETIC_CODEX_HOME",
         "LUNA_USAGE_SYNTHETIC_CLAUDE_HOME",
+        "LUNA_USAGE_SYNTHETIC_OPENCODE_DATA",
     ] {
         if std::env::var_os(variable).is_some_and(|provider_home| {
             let provider_home = PathBuf::from(provider_home);
@@ -1494,13 +1503,16 @@ fn aggregate_records_for_periods(
 }
 
 /// Reads only marked, explicitly configured synthetic homes. Never resolves
-/// CODEX_HOME/Claude home as a source and never invokes a provider account.
+/// CODEX_HOME/Claude home/OpenCode data as a source and never invokes a
+/// provider account.
 pub fn snapshot(request: UsageRequest) -> UsageSnapshot {
-    snapshot_impl(request, None, None)
+    snapshot_impl(request, None, None, None)
 }
 
 /// Read selected provider transcripts without touching their credentials or
 /// writing into their homes. The cache is stored only in LUNA's data dir.
+/// OpenCode history comes from T3's data roots (`OPENCODE_DATA_DIR`, else
+/// `$XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`).
 pub fn snapshot_live(
     request: UsageRequest,
     codex_home: Option<PathBuf>,
@@ -1508,9 +1520,35 @@ pub fn snapshot_live(
     data_dir: PathBuf,
     enabled: Vec<UsageProvider>,
 ) -> UsageSnapshot {
+    let opencode_roots = enabled
+        .contains(&UsageProvider::OpenCodeGo)
+        .then(opencode_history::data_roots)
+        .unwrap_or_default();
+    snapshot_live_with_opencode(
+        request,
+        codex_home,
+        claude_home,
+        opencode_roots,
+        data_dir,
+        enabled,
+    )
+}
+
+/// `snapshot_live` with explicit OpenCode data directories, each holding
+/// `opencode*.db` and optional legacy `storage/message` history. They are
+/// opened read-only and only usage fields are read.
+pub fn snapshot_live_with_opencode(
+    request: UsageRequest,
+    codex_home: Option<PathBuf>,
+    claude_home: PathBuf,
+    opencode_roots: Vec<PathBuf>,
+    data_dir: PathBuf,
+    enabled: Vec<UsageProvider>,
+) -> UsageSnapshot {
     snapshot_impl(
         request,
         Some((codex_home, claude_home, data_dir)),
+        Some(opencode_roots),
         Some(enabled),
     )
 }
@@ -1518,6 +1556,7 @@ pub fn snapshot_live(
 fn snapshot_impl(
     request: UsageRequest,
     live: Option<(Option<PathBuf>, PathBuf, PathBuf)>,
+    opencode_roots: Option<Vec<PathBuf>>,
     enabled: Option<Vec<UsageProvider>>,
 ) -> UsageSnapshot {
     static SCAN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1571,6 +1610,34 @@ fn snapshot_impl(
     let cache_file_count = cache.files.len();
     let mut records = Vec::new();
     let deadline = started + MAX_SCAN_TIME;
+    // OpenCode databases are cheap indexed reads, so a cold multi-gigabyte
+    // Codex scan cannot starve them of the shared deadline. Their read window
+    // is the cache retention window, independent of the requested period.
+    let opencode = enabled
+        .as_ref()
+        .is_none_or(|items| items.contains(&UsageProvider::OpenCodeGo))
+        .then(|| {
+            let roots = match opencode_roots {
+                Some(roots) => Ok(roots),
+                None => safe_fixture_root(std::env::var_os("LUNA_USAGE_SYNTHETIC_OPENCODE_DATA"))
+                    .map(|root| root.into_iter().collect()),
+            };
+            let mut source = opencode_history::add_source(
+                roots,
+                cutoff,
+                (read_at - 93 * 86_400_000).min(cutoff),
+                deadline,
+                cache,
+                &mut records,
+            );
+            if live.is_some() {
+                source.environment_id = "local".into();
+                if source.status == UsageSourceStatus::Unsupported {
+                    source.detail = Some("OpenCode data directory is unavailable".into());
+                }
+            }
+            source
+        });
     let (codex, claude) = if let Some((codex_home, claude_home, _)) = live.as_ref() {
         (
             add_live_source(
@@ -1625,28 +1692,17 @@ fn snapshot_impl(
         .filter(|(_, record)| record.legacy_parser)
         .map(|(provider, _)| *provider as u8)
         .collect();
-    let mut sources: Vec<_> = vec![
-        codex,
-        claude,
-        UsageSource {
-            provider: UsageProvider::OpenCodeGo,
-            environment_id: if live.is_some() { "local" } else { "local-synthetic" }.into(),
-            fingerprint: String::new(),
-            status: UsageSourceStatus::Unsupported,
-            distinct_sessions: 0,
-            files_scanned: 0,
-            files_cached: 0,
-            failed_files: 0,
-            detail: Some("OpenCode historical session usage is not in the T3/BB usage adapters; Go subscription limits are separate".into()),
-        },
-    ]
-    .into_iter()
-    .filter(|source| {
-        enabled
-            .as_ref()
-            .is_none_or(|items| items.contains(&source.provider))
-    })
-    .collect();
+    // OpenCode history follows T3's database reader; Go subscription limits
+    // are a separate read-only limits source.
+    let mut sources: Vec<_> = [codex, claude]
+        .into_iter()
+        .chain(opencode)
+        .filter(|source| {
+            enabled
+                .as_ref()
+                .is_none_or(|items| items.contains(&source.provider))
+        })
+        .collect();
     for source in &mut sources {
         if legacy_providers.contains(&(source.provider as u8)) {
             source.status = UsageSourceStatus::Partial;
@@ -1691,7 +1747,7 @@ fn snapshot_impl(
             sources.iter().any(|source| {
                 matches!(
                     source.provider,
-                    UsageProvider::Codex | UsageProvider::Claude
+                    UsageProvider::Codex | UsageProvider::Claude | UsageProvider::OpenCodeGo
                 )
             })
         })
@@ -2343,10 +2399,13 @@ mod tests {
             include_limits: true,
             price_overrides: HashMap::new(),
         };
-        let first = snapshot_live(
+        // Never resolve the developer's real OpenCode store from a unit test.
+        let opencode = vec![root.path().join("opencode-data")];
+        let first = snapshot_live_with_opencode(
             request.clone(),
             Some(codex.clone()),
             claude.clone(),
+            opencode.clone(),
             data.clone(),
             vec![
                 UsageProvider::Codex,
@@ -2369,10 +2428,11 @@ mod tests {
             21
         );
         assert!(data.join("usage-scan-v2.json").is_file());
-        let second = snapshot_live(
+        let second = snapshot_live_with_opencode(
             request.clone(),
             Some(codex.clone()),
             claude.clone(),
+            opencode,
             data.clone(),
             vec![
                 UsageProvider::Codex,
@@ -2472,14 +2532,17 @@ mod tests {
             .map(|bucket| bucket.tokens.total())
             .sum();
         eprintln!(
-            "History readback: {} buckets, {tokens} tokens, source statuses {:?}/{:?}, scanned {}/{}, failed {}/{}",
+            "History readback: {} buckets, {tokens} tokens, source statuses {:?}/{:?}/{:?}, scanned {}/{}/{}, failed {}/{}/{}",
             snapshot.summary.buckets.len(),
             snapshot.summary.sources[0].status,
             snapshot.summary.sources[1].status,
+            snapshot.summary.sources[2].status,
             snapshot.summary.sources[0].files_scanned,
             snapshot.summary.sources[1].files_scanned,
+            snapshot.summary.sources[2].files_scanned,
             snapshot.summary.sources[0].failed_files,
-            snapshot.summary.sources[1].failed_files
+            snapshot.summary.sources[1].failed_files,
+            snapshot.summary.sources[2].failed_files
         );
         assert!(snapshot.summary.sources[0].status != UsageSourceStatus::Unsupported);
         assert!(tokens > 0);
