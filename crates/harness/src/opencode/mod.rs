@@ -1,45 +1,36 @@
-//! Native opencode driver — the same HTTP + SSE protocol the opencode
-//! desktop app speaks, replacing the ACP path (`opencode acp`).
+//! Native OpenCode driver over OpenCode 2's own HTTP + SSE API — the
+//! surface the OpenCode desktop app and the official `Standalone` launcher
+//! use. OpenCode 1.x (1.18) is no longer supported (PD-15): the resolver
+//! skips 1.x binaries and a 1.x-only machine gets an actionable error.
 //!
-//! Why not ACP: opencode's own ACP layer settles a prompt on the FIRST
-//! `session.status{idle}` it observes after subscribing, uncorrelated with
-//! the submitted turn, and it ignores `session.error` and `session.idle`
-//! entirely (`packages/opencode/src/acp/event.ts`, 1.18.x) — the source of
-//! "done while still working" and silently-hung turns. It also drops all
-//! subagent traffic and thinking never reaches the ACP wire usefully. The
-//! desktop app doesn't use ACP; neither do we.
+//! Transport decision (OC-02 step 7): HTTP + SSE is kept. ACP (`opencode
+//! acp`, a lossy private translation of the same HTTP surface that runs one
+//! prompt at a time), the TypeScript SDK/client (a JS sidecar with no wire
+//! gain) and `opencode run --format json` (a one-shot projection without
+//! approvals or forms) are rejected.
 //!
-//! Two server generations are spoken, detected at boot from the health
-//! endpoints ([`Protocol`]): the 1.18 "v1" wire (verified against 1.18.31)
-//! and the 2.x `/api/*` wire (verified against 2.0.3):
-//! - spawn `opencode serve --port <free> --hostname 127.0.0.1` with
-//!   `OPENCODE_SERVER_PASSWORD=<uuid>` (HTTP Basic, username `opencode`);
-//!   readiness + protocol = `GET /api/health` vs `GET /global/health`.
-//! - one global SSE bus (`GET /api/event` on 2.x, `GET /global/event` on
-//!   1.x) carries every session's traffic, child (subagent) sessions
-//!   included, token-level. 2.x frames are rewritten into the 1.x payload
-//!   shapes ([`normalize_v2_frame`]) so the turn engine is wire-agnostic.
-//! - a turn is `POST /api/session/{id}/prompt` (2.x; model set once on the
-//!   session) or `POST /session/{id}/prompt_async` (1.x, fire-and-forget
-//!   204); the END of the turn is the terminal execution/status frame for
-//!   THAT session — exactly what the desktop's working-predicate keys on.
-//!   Busy is re-asserted at the top of every agent-loop iteration, so idle
-//!   after busy is authoritative, not a lull.
-//! - reasoning streams as reasoning parts on both wires →
-//!   [`AgentEvent::ReasoningDelta`], the thinking feed.
+//! The wire, verified against 2.0.22:
+//! - spawn `opencode serve --stdio --port 0` with `OPENCODE_PASSWORD`
+//!   (HTTP Basic, username `opencode`): stdin is the ownership lease, the
+//!   stdout `{"url": ...}` line is readiness, and `GET /api/info` proves a
+//!   2.x server.
+//! - one global SSE bus (`GET /api/event`) carries every session's traffic,
+//!   child (subagent) sessions included, token-level. Frames are rewritten
+//!   into internal 1.x-shaped payloads ([`normalize_v2_frame`]) so the turn
+//!   engine stays as it was.
+//! - a turn is `POST /api/session/{id}/prompt` (model set once on the
+//!   session); the END of the turn is the terminal execution frame for
+//!   THAT session (`session.execution.succeeded/.failed/.interrupted`).
+//! - reasoning streams as reasoning items → [`AgentEvent::ReasoningDelta`].
 //!
-//! Failure surfacing (the #169 class): a dying provider is VISIBLE here —
-//! `session.status{type:"retry", attempt, message}` streams per attempt.
-//! Attempt ≥ [`RETRY_REPORT_ATTEMPT`] surfaces an error chip; attempt ≥
-//! [`RETRY_ABORT_ATTEMPT`] aborts the turn instead of retrying forever.
-//! A prompt that produces NO session-scoped event within
-//! [`default_stall_bound`] (`LUNA_OPENCODE_STALL_MS`, 0 disables) errors
-//! out instead of spinning "Working" forever.
+//! A prompt that produces NO session-scoped event within the stall bound
+//! (`LUNA_OPENCODE_STALL_MS`, 0 disables) errors out instead of spinning
+//! "Working" forever.
 //!
 //! Module map (each submodule does `use super::*`, and this module
 //! glob-imports each submodule, so names resolve crate-locally):
 //! - this file: [`OpencodeHarness`] and its `Harness` impl.
-//! - `resolve`: executable resolution.
+//! - `resolve`: executable resolution (2.x only, version-probed).
 //! - `server`: the `opencode serve` child, readiness, HTTP helpers.
 //! - `catalog`: models, variants, slash commands, session model switch.
 //! - `usage`: token/context usage and compaction.
@@ -49,7 +40,7 @@
 //! - `bus`: routing one normalized payload; `parts`: part streaming state.
 //! - `subagents`: spawn chips and child binding; `tools`: tool vocabulary.
 //! - `permissions`: rules, approval options, permission replies.
-//! - `forms`: questions; `prompt`: session create and turn submission.
+//! - `forms`: v2 forms (questions); `prompt`: session create, turn submit.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
@@ -69,9 +60,9 @@ use luna_proto::{
     SteeringMode, TodoItem, ToolCall, UserInputAnswer, UserInputQuestion,
 };
 
-use crate::process::{Child, Command, Stdio};
+use crate::process::{Child, ChildStdin, Command, Stdio};
 use crate::{
-    ContextCompactRequest, Harness, HarnessError, ProviderForkProgress,
+    CommandScope, ContextCompactRequest, Harness, HarnessError, ProviderForkProgress,
     ProviderForkProgressReporter, RunControls, shutdown_child,
 };
 
@@ -93,7 +84,6 @@ mod wire_v2;
 
 use bus::*;
 use catalog::*;
-use forms::*;
 use parts::*;
 use permissions::*;
 use prompt::*;
@@ -106,7 +96,9 @@ use turn::*;
 use usage::*;
 use wire_v2::*;
 
-pub use resolve::resolve_opencode_executable;
+pub use resolve::{
+    OpencodeResolution, OpencodeSource, last_opencode_resolution, resolve_opencode_executable,
+};
 
 /// Effort ladder surfaced in the picker; applied per run by picking the
 /// first of these variant ids the chosen model actually advertises. Must
@@ -119,9 +111,16 @@ const REASONING_LEVELS: &[ReasoningLevel] = &[
     ReasoningLevel::Max,
 ];
 
-// ---------------------------------------------------------------------------
-// Harness
-// ---------------------------------------------------------------------------
+/// The location a discovery call answers for: the run's directory when one
+/// is known, else the user's home (where global provider config lives).
+fn discovery_location(cwd: Option<&str>) -> String {
+    match cwd.filter(|cwd| !cwd.is_empty()) {
+        Some(cwd) => cwd.to_owned(),
+        None => crate::executable::home_or_current_dir()
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
 
 pub struct OpencodeHarness {
     executable: Option<PathBuf>,
@@ -131,7 +130,8 @@ pub struct OpencodeHarness {
     kill_grace: Duration,
     startup_timeout: Duration,
     models_cache: tokio::sync::Mutex<Option<(Instant, Vec<Model>)>>,
-    commands_cache: tokio::sync::OnceCell<Vec<SlashCommand>>,
+    /// Slash commands per discovery location (a run's cwd, or home).
+    commands_cache: std::sync::Mutex<HashMap<String, Vec<SlashCommand>>>,
     /// Coalesce concurrent picker/title probes: several cold opencode boots
     /// at once are slower than one.
     probe_lock: tokio::sync::Mutex<()>,
@@ -146,7 +146,7 @@ impl Default for OpencodeHarness {
             kill_grace: Duration::from_secs(3),
             startup_timeout: startup_timeout(),
             models_cache: tokio::sync::Mutex::new(None),
-            commands_cache: tokio::sync::OnceCell::new(),
+            commands_cache: std::sync::Mutex::new(HashMap::new()),
             probe_lock: tokio::sync::Mutex::new(()),
         }
     }
@@ -175,15 +175,19 @@ impl OpencodeHarness {
         self
     }
 
+    /// The OpenCode 2 binary this harness launches: the explicit path (its
+    /// existence validated like Codex and Claude overrides), else
+    /// `OPENCODE_EXECUTABLE`, else the search. A 1.x-only machine gets
+    /// "OpenCode 2 is required (found 1.18.x …)".
     fn resolve_executable(&self) -> Result<PathBuf, HarnessError> {
         if let Some(exe) = &self.executable {
-            return Ok(exe.clone());
+            let exe = crate::executable::validate_native_override(exe)?;
+            return check_explicit(exe, OpencodeSource::Explicit).map(|r| r.path);
         }
-        resolve_opencode_executable().ok_or_else(|| HarnessError::NotInstalled(INSTALL_HINT.into()))
+        resolve_opencode().map(|resolution| resolution.path)
     }
 
-    /// Boot (or attach to) a server for a run/probe. Probes have no chat cwd:
-    /// they boot in the user's home, where global provider config lives.
+    /// Boot (or attach to) a server for a run/probe in `cwd`.
     async fn server(&self, cwd: Option<&str>) -> Result<Server, HarnessError> {
         if let Some(base) = &self.base_url {
             return Ok(Server::attached(base.clone()));
@@ -192,13 +196,29 @@ impl OpencodeHarness {
         Server::spawn(&exe, cwd, self.startup_timeout).await
     }
 
-    /// One short-lived server answers both discovery calls. Also primes the
-    /// commands cache so concurrent picker/composer fetches share one boot.
+    fn cached_commands(&self, location: &str) -> Option<Vec<SlashCommand>> {
+        self.commands_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(location).cloned())
+    }
+
+    fn cache_commands(&self, location: &str, commands: Vec<SlashCommand>) {
+        if let Ok(mut cache) = self.commands_cache.lock() {
+            cache.insert(location.to_owned(), commands);
+        }
+    }
+
+    /// One short-lived server, booted in the user's home and scoped to it
+    /// (`x-opencode-directory`), answers both discovery calls. Also primes
+    /// that location's commands so concurrent picker/composer fetches share
+    /// one boot.
     async fn probe_models(&self) -> Result<Vec<Model>, HarnessError> {
         let _guard = self.probe_lock.lock().await;
-        let mut server = self.server(None).await?;
+        let location = discovery_location(None);
+        let mut server = self.server(Some(&location)).await?;
         let result = async {
-            let providers = server.provider_catalog(None).await?;
+            let providers = server.provider_catalog(Some(&location)).await?;
             let models = models_from_providers(&providers);
             if models.is_empty() {
                 return Err(HarnessError::Protocol(
@@ -206,8 +226,8 @@ impl OpencodeHarness {
                         .into(),
                 ));
             }
-            if let Ok(commands) = server.commands_wire(None).await {
-                let _ = self.commands_cache.set(commands_from_wire(&commands));
+            if let Ok(commands) = server.commands_wire(Some(&location)).await {
+                self.cache_commands(&location, commands_from_wire(&commands));
             }
             Ok(models)
         }
@@ -216,17 +236,21 @@ impl OpencodeHarness {
         result
     }
 
-    async fn probe_commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
+    /// Slash commands as the server sees them in `location`.
+    async fn probe_commands(&self, location: &str) -> Result<Vec<SlashCommand>, HarnessError> {
         let _guard = self.probe_lock.lock().await;
-        if let Some(commands) = self.commands_cache.get() {
-            return Ok(commands.clone());
+        if let Some(commands) = self.cached_commands(location) {
+            return Ok(commands);
         }
-        let mut server = self.server(None).await?;
+        let mut server = self.server(Some(location)).await?;
         let result = server
-            .commands_wire(None)
+            .commands_wire(Some(location))
             .await
             .map(|v| commands_from_wire(&v));
         server.shutdown(self.kill_grace).await;
+        if let Ok(commands) = &result {
+            self.cache_commands(location, commands.clone());
+        }
         result
     }
 }
@@ -244,20 +268,21 @@ impl Harness for OpencodeHarness {
         true
     }
     /// Steers queue and deliver as the next prompt when the live turn goes
-    /// idle — opencode has no mid-turn injection on this wire.
+    /// idle (native mid-turn steering is not advertised yet, PD-2).
     fn steering_mode(&self) -> SteeringMode {
         SteeringMode::TurnBoundary
     }
     fn reasoning_levels(&self) -> &[ReasoningLevel] {
         REASONING_LEVELS
     }
+    /// Any OpenCode binary counts, whatever its generation: a 1.x-only
+    /// machine keeps the provider visible, and its actions fail with the
+    /// actionable "OpenCode 2 is required" error instead of it vanishing.
     fn installed(&self) -> bool {
-        self.executable.is_some()
-            || self.base_url.is_some()
-            || resolve_opencode_executable().is_some()
+        self.executable.is_some() || self.base_url.is_some() || opencode_present()
     }
-    /// `session.status{idle}` is a real terminal frame per turn: the engine
-    /// can retire its quiesce watchdogs.
+    /// The execution terminal frames are real per-turn terminals: the
+    /// engine can retire its quiesce watchdogs.
     fn deterministic_turn_end(&self) -> bool {
         true
     }
@@ -291,9 +316,9 @@ impl Harness for OpencodeHarness {
         result
     }
 
-    /// Live discovery off `GET /provider` (what the desktop app populates its
-    /// picker from). Only overlapping calls share a result, so provider/auth
-    /// changes are visible on the next request. Failures remain retryable.
+    /// Live discovery off `GET /api/model`. Only overlapping calls share a
+    /// result, so provider/auth changes are visible on the next request.
+    /// Failures remain retryable.
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         if self.base_url.is_none() {
             self.resolve_executable()?;
@@ -311,20 +336,31 @@ impl Harness for OpencodeHarness {
     }
 
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
-        self.commands_cache
-            .get_or_try_init(|| self.probe_commands())
-            .await
-            .cloned()
+        let location = discovery_location(None);
+        match self.cached_commands(&location) {
+            Some(commands) => Ok(commands),
+            None => self.probe_commands(&location).await,
+        }
+    }
+
+    /// Commands as a run in `scope.cwd` would see them (project commands
+    /// live in the location's config).
+    async fn commands_in(&self, scope: &CommandScope) -> Result<Vec<SlashCommand>, HarnessError> {
+        let cwd = scope
+            .cwd
+            .as_ref()
+            .map(|cwd| cwd.to_string_lossy().into_owned());
+        let location = discovery_location(cwd.as_deref());
+        match self.cached_commands(&location) {
+            Some(commands) => Ok(commands),
+            None => self.probe_commands(&location).await,
+        }
     }
 
     async fn compact_context(&self, request: ContextCompactRequest) -> Result<(), HarnessError> {
         let mut server = self.server(Some(&request.cwd)).await?;
         let result = server
-            .compact_session(
-                &request.session_id,
-                Some(&request.cwd),
-                request.model.as_deref(),
-            )
+            .compact_session(&request.session_id, Some(&request.cwd))
             .await;
         server.shutdown(self.kill_grace).await;
         result
@@ -337,6 +373,9 @@ impl Harness for OpencodeHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let cwd = (!request.cwd.is_empty()).then(|| request.cwd.clone());
         let server = self.server(cwd.as_deref()).await?;
+        // Only that location's commands: a home-scoped list would miss the
+        // project's own commands (the run fetches them when uncached).
+        let known_commands = cwd.as_deref().and_then(|cwd| self.cached_commands(cwd));
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
             server,
@@ -345,7 +384,7 @@ impl Harness for OpencodeHarness {
             request,
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
-            known_commands: self.commands_cache.get().cloned(),
+            known_commands,
         }));
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))

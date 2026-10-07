@@ -139,12 +139,14 @@ pub(super) async fn run_session(session: Session) {
             None => create_session(&server, dir, &permission_rules).await?,
         };
         if request.resume.is_some() {
-            let path = match server.protocol().await {
-                Protocol::V1 => format!("/session/{session_id}"),
-                Protocol::V2 => format!("/api/session/{session_id}"),
-            };
+            // `session.update` (204): the resumed session takes this run's
+            // LUNA permission mode as its v2 ruleset.
             server
-                .patch_json(&path, dir, &json!({ "permission": permission_rules }))
+                .patch_json(
+                    &format!("/api/session/{session_id}"),
+                    dir,
+                    &json!({ "permissions": permission_rules }),
+                )
                 .await?;
         }
 
@@ -152,14 +154,13 @@ pub(super) async fn run_session(session: Session) {
         // variants so the requested effort only rides models that have it.
         let providers = server.provider_catalog(dir).await.unwrap_or_default();
 
-        // 2.x: the requested model (+ variant) is set on the session once;
+        // The requested model (+ variant) is set on the session once;
         // prompts carry only text and files.
-        if server.protocol().await == Protocol::V2
-            && let Some((provider, model_id)) = request
-                .model
-                .as_deref()
-                .and_then(|m| m.split_once('/'))
-                .map(|(p, m)| (p.to_owned(), m.to_owned()))
+        if let Some((provider, model_id)) = request
+            .model
+            .as_deref()
+            .and_then(|m| m.split_once('/'))
+            .map(|(p, m)| (p.to_owned(), m.to_owned()))
         {
             let variant = pick_variant(&providers, &provider, &model_id, request.reasoning);
             server
@@ -194,14 +195,6 @@ pub(super) async fn run_session(session: Session) {
         }
     };
 
-    let model = request
-        .model
-        .as_deref()
-        .and_then(|m| m.split_once('/'))
-        .map(|(provider, model)| (provider.to_owned(), model.to_owned()));
-    let variant = model.as_ref().and_then(|(provider, model_id)| {
-        pick_variant(&providers, provider, model_id, request.reasoning)
-    });
     let context_windows: HashMap<String, u64> = providers
         .all
         .iter()
@@ -263,12 +256,9 @@ pub(super) async fn run_session(session: Session) {
 
     // ---- SSE bus ----------------------------------------------------------
     let (bus_tx, mut bus_rx) = mpsc::channel::<BusMsg>(256);
-    let bus_handle = tokio::spawn(bus_task(
-        server.base.clone(),
-        server.auth.clone(),
-        server.protocol().await,
-        bus_tx,
-    ));
+    // Slash-command failures re-enter the loop through the same channel.
+    let command_tx = bus_tx.clone();
+    let bus_handle = tokio::spawn(bus_task(server.base.clone(), server.auth.clone(), bus_tx));
 
     // ---- first prompt -----------------------------------------------------
     // The bus has no replay: wait for the subscription to be LIVE before
@@ -299,10 +289,9 @@ pub(super) async fn run_session(session: Session) {
         &commands,
         &request.prompt,
         TurnSpec {
-            model: model.as_ref(),
-            variant: variant.as_deref(),
             attachments: &request.attachments,
         },
+        &command_tx,
     )
     .await
     {
@@ -388,10 +377,9 @@ pub(super) async fn run_session(session: Session) {
                     &commands,
                     &steer,
                     TurnSpec {
-                        model: model.as_ref(),
-                        variant: variant.as_deref(),
                         attachments: &[],
                     },
+                    &command_tx,
                 )
                 .await
                 {
@@ -461,12 +449,14 @@ pub(super) async fn run_session(session: Session) {
                     turn.idle_ready = true;
                     let abort = tokio::time::timeout(
                         Duration::from_secs(5),
-                        server.abort_session(&session_id, dir),
+                        server.interrupt_session(&session_id, dir),
                     )
                     .await;
-                    if !matches!(abort, Ok(Ok(_))) {
-                        // The abort endpoint failing means the server itself
-                        // is wedged: settle now and tear down hard.
+                    if !matches!(abort, Ok(Ok(true))) {
+                        // `interrupted: false` means nothing is running (no
+                        // terminal frame will follow); a failing endpoint
+                        // means the server itself is wedged. Either way,
+                        // settle now.
                         settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
                         let _ = send(&event_tx, AgentEvent::Done {
                             status: DoneStatus::Interrupted,
@@ -477,9 +467,10 @@ pub(super) async fn run_session(session: Session) {
                         done_sent = true;
                         break 'main;
                     }
-                    // Abort emits session.status{idle} (with or without a
-                    // live runner) — the settle path below finishes up. The
-                    // grace guards a server that never delivers it.
+                    // The interrupt ends the execution with
+                    // `session.execution.interrupted` — the settle path below
+                    // finishes up. The grace guards a server that never
+                    // delivers it.
                     abort_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
                 } else {
                     let _ = send(&event_tx, AgentEvent::Done {
@@ -523,10 +514,9 @@ pub(super) async fn run_session(session: Session) {
                                 &commands,
                                 &steer.prompt,
                                 TurnSpec {
-                                    model: model.as_ref(),
-                                    variant: variant.as_deref(),
                                     attachments: &[],
                                 },
+                                &command_tx,
                             )
                             .await
                             .is_ok()
@@ -557,7 +547,7 @@ pub(super) async fn run_session(session: Session) {
                     stall.unwrap_or(DEFAULT_STALL_BOUND).as_secs()
                 );
                 let _ = send(&event_tx, AgentEvent::Error { message: message.clone() }).await;
-                let _ = server.abort_session(&session_id, dir).await;
+                let _ = server.interrupt_session(&session_id, dir).await;
                 settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
                 let _ = send(&event_tx, AgentEvent::Done {
                     status: DoneStatus::Errored,
@@ -613,6 +603,18 @@ pub(super) async fn run_session(session: Session) {
                         }).await;
                         done_sent = true;
                         break 'main;
+                    }
+                    BusMsg::CommandFailed(message) => {
+                        // A command that never started its execution would
+                        // otherwise stall until the watchdog; one that did
+                        // start settles from its own terminal frame.
+                        if !send(&event_tx, AgentEvent::Error { message: message.clone() }).await {
+                            break 'main;
+                        }
+                        if turn.active && !turn.saw_activity {
+                            turn.error = Some(message);
+                            settle_idle!('main);
+                        }
                     }
                     BusMsg::Event(event) => {
                         let outcome = handle_bus_event(BusCtx {

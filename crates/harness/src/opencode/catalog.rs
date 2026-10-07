@@ -36,41 +36,36 @@ pub(super) fn variant_to_level(id: &str) -> Option<ReasoningLevel> {
 
 impl Server {
     /// Provider catalog for the picker, variant picking, and context
-    /// windows. V1 advertises it on `/provider`; 2.x splits it into a flat
-    /// enabled-model list on `/api/model` that folds into the same shape.
+    /// windows: the flat enabled-model list on `/api/model`, folded into the
+    /// provider-grouped shape the run setup consumes.
     pub(super) async fn provider_catalog(
         &self,
         directory: Option<&str>,
     ) -> Result<ProviderCatalog, HarnessError> {
-        match self.protocol().await {
-            Protocol::V1 => self.get("/provider", directory).await,
-            Protocol::V2 => {
-                // The 2.x catalog syncs from models.dev shortly after the
-                // health endpoint opens: an empty list right then is a race,
-                // not a fact — poll briefly before believing it.
-                for attempt in 0..5 {
-                    let list: V2ModelList = self.get("/api/model", directory).await?;
-                    if !list.data.is_empty() || attempt == 4 {
-                        return Ok(catalog_from_v2_models(list.data));
-                    }
-                    tokio::time::sleep(Duration::from_secs(2)).await;
+        // The catalog syncs from models.dev shortly after boot: an empty list
+        // (or a 503 `ServiceUnavailableError`) right then is a race, not a
+        // fact — poll briefly before believing it.
+        for attempt in 0..5 {
+            let last = attempt == 4;
+            match self.get::<V2ModelList>("/api/model", directory).await {
+                Ok(list) if !list.data.is_empty() || last => {
+                    return Ok(catalog_from_v2_models(list.data));
                 }
-                unreachable!("loop returns on the last attempt")
+                Ok(_) => {}
+                Err(error) if !last && error.to_string().contains(" 503 ") => {}
+                Err(error) => return Err(error),
             }
+            tokio::time::sleep(Duration::from_secs(2)).await;
         }
+        unreachable!("loop returns on the last attempt")
     }
 
-    /// Slash commands; both wires carry `{name, description}` entries (2.x
-    /// wrapped in `{data}`).
+    /// Slash commands: `GET /api/command` → `{data: [{name, description?}]}`.
     pub(super) async fn commands_wire(
         &self,
         directory: Option<&str>,
     ) -> Result<Value, HarnessError> {
-        let path = match self.protocol().await {
-            Protocol::V1 => "/command",
-            Protocol::V2 => "/api/command",
-        };
-        let raw = self.get_json(path, directory).await?;
+        let raw = self.get_json("/api/command", directory).await?;
         Ok(unwrap_data(raw))
     }
 

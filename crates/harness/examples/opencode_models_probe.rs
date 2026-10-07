@@ -1,6 +1,6 @@
 //! Live probe: opencode model discovery through the native driver — boots
-//! `opencode serve`, reads `GET /provider`, prints the picker catalog
-//! (connected providers only). Needs `opencode` on PATH (or
+//! `opencode serve`, reads `GET /api/model`, prints the picker catalog
+//! (enabled models only). Needs OpenCode 2 on PATH (or
 //! OPENCODE_EXECUTABLE); no provider auth required (the anonymous Zen tier
 //! always connects).
 //!

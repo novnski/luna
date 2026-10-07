@@ -9,10 +9,7 @@ impl Server {
         session_id: &str,
         directory: Option<&str>,
     ) -> Result<Vec<Value>, HarnessError> {
-        let path = match self.protocol().await {
-            Protocol::V1 => format!("/session/{session_id}/message"),
-            Protocol::V2 => format!("/api/session/{session_id}/message"),
-        };
+        let path = format!("/api/session/{session_id}/message");
         let value = unwrap_data(self.get_json(&path, directory).await?);
         value.as_array().cloned().ok_or_else(|| {
             HarnessError::Protocol("opencode session messages response was not an array".into())
@@ -28,10 +25,7 @@ impl Server {
     ) -> Result<ProviderForkResult, HarnessError> {
         let source_messages = self.session_messages(source_session_id, directory).await?;
         let (expected_source, message_id) = opencode_fork_plan(&source_messages, boundary)?;
-        let path = match self.protocol().await {
-            Protocol::V1 => format!("/session/{source_session_id}/fork"),
-            Protocol::V2 => format!("/api/session/{source_session_id}/fork"),
-        };
+        let path = format!("/api/session/{source_session_id}/fork");
         let body = message_id
             .map(|message_id| json!({ "messageID": message_id }))
             .unwrap_or_else(|| json!({}));

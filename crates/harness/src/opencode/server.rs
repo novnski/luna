@@ -1,5 +1,10 @@
 //! The `opencode serve` child process and its HTTP plumbing: spawn,
 //! readiness, auth, request helpers, error text and shutdown.
+//!
+//! OpenCode 2 only (PD-15): readiness and generation come from the
+//! authenticated `GET /api/info` (a JSON `version` that parses as 2.x; 200 =
+//! ready, 503 = still booting, 500 = failed). The 1.x `/global/*` surface and
+//! the removed 2.0.3-era `/api/health` are not probed.
 
 use super::*;
 
@@ -9,13 +14,16 @@ use super::*;
 pub(super) const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) const STARTUP_TIMEOUT_ENV: &str = "LUNA_OPENCODE_STARTUP_TIMEOUT_SECS";
 
-/// Health-poll cadence while the server boots.
+/// Readiness-poll cadence while the server boots.
 pub(super) const HEALTH_POLL: Duration = Duration::from_millis(150);
 
+/// Bound on the pre-SIGTERM interrupt of still-running executions.
+pub(super) const SHUTDOWN_INTERRUPT_BUDGET: Duration = Duration::from_secs(3);
+
 /// Bound on ordinary (non-SSE) HTTP calls: everything is loopback and the
-/// only slow route is a cold /provider catalog. The synchronous per-turn
+/// only slow route is a cold model catalog. The synchronous per-turn
 /// command endpoint deliberately bypasses this (its response can take the
-/// whole turn and is ignored anyway).
+/// whole turn).
 pub(super) const CALL_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub(super) fn startup_timeout() -> Duration {
@@ -27,105 +35,106 @@ pub(super) fn startup_timeout() -> Duration {
         .unwrap_or(DEFAULT_STARTUP_TIMEOUT)
 }
 
-/// A kernel-assigned free localhost port, released for the child to claim.
-pub(super) fn free_localhost_port() -> Option<u16> {
-    std::net::TcpListener::bind(("127.0.0.1", 0))
-        .and_then(|l| l.local_addr())
-        .map(|a| a.port())
-        .ok()
+/// The `--stdio` readiness line: `{"url":"http://127.0.0.1:<port>"}`. Only
+/// a loopback http url is accepted (LUNA never talks to anything else).
+pub(super) fn ready_url(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line.trim()).ok()?;
+    let url = value.get("url")?.as_str()?.trim_end_matches('/');
+    let rest = url.strip_prefix("http://")?;
+    let host = rest.split('/').next()?;
+    let loopback = ["127.0.0.1:", "localhost:", "[::1]:"]
+        .iter()
+        .any(|prefix| host.starts_with(prefix));
+    loopback.then(|| url.to_owned())
 }
 
 pub(super) struct Server {
     pub(super) child: Option<Child>,
+    /// The child's stdin, held open as the `--stdio` ownership lease: the
+    /// server exits when it reaches EOF (also when LUNA dies).
+    pub(super) lease: Option<ChildStdin>,
     pub(super) base: String,
     /// `Authorization` header value (`Basic <b64>`), when we own the process.
     pub(super) auth: Option<String>,
     pub(super) client: reqwest::Client,
     pub(super) stderr_tail: crate::StderrTail,
-    /// Wire generation, resolved once via the health endpoints.
-    pub(super) protocol: tokio::sync::OnceCell<Protocol>,
+    /// The server's `/api/info` version once readiness proved it (spawned
+    /// servers only; an attached test server is assumed to speak 2.x).
+    pub(super) version: Option<String>,
 }
 
-/// The attached server's wire generation: the 1.x "v1" global namespace
-/// (`/global/*`, `/session/*`, prompt_async) and the 2.x `/api/*` surface
-/// (session-scoped model, prompt with delivery, interrupt).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Protocol {
-    V1,
-    V2,
-}
-
-impl Protocol {
-    /// One readiness poll across both generations. 2.x answers
-    /// `GET /api/health` with `{healthy, version}` and serves its web UI on
-    /// `/global/health`; 1.x answers `GET /global/health` with
-    /// `{healthy, version}` AND also serves `/api/health` — with
-    /// `{"healthy":true}`, no version (both observed live). The version
-    /// field is the only unambiguous discriminator. `None` = still booting.
-    pub(super) async fn detect(server: &Server) -> Option<Self> {
-        for (path, protocol) in [
-            ("/api/health", Protocol::V2),
-            ("/global/health", Protocol::V1),
-        ] {
-            if let Ok(resp) = server.get_raw(path).await
-                && resp.status().is_success()
-                && let Ok(v) = resp.json::<Value>().await
-                && v.get("version").and_then(Value::as_str).is_some()
-            {
-                return Some(protocol);
-            }
-        }
-        None
-    }
+/// One `GET /api/info` readiness observation.
+pub(super) enum InfoProbe {
+    /// 200 with a 2.x version.
+    Ready(String),
+    /// Not answering yet, or 503 while the app graph starts.
+    Booting,
+    /// The server answered that it cannot start (500), or it is not an
+    /// OpenCode 2 server. Final: waiting longer will not help.
+    Failed(String),
 }
 
 impl Server {
     pub(super) fn attached(base: String) -> Self {
         Self {
             child: None,
+            lease: None,
             base: base.trim_end_matches('/').to_owned(),
             auth: None,
             client: http_client(),
             stderr_tail: crate::StderrTail::default(),
-            protocol: tokio::sync::OnceCell::new(),
+            version: None,
         }
     }
 
-    /// The resolved wire generation: detected against the live server on
-    /// first use (spawn seeds the cell during the readiness loop).
-    pub(super) async fn protocol(&self) -> Protocol {
-        *self
-            .protocol
-            .get_or_init(|| async { Protocol::detect(self).await.unwrap_or(Protocol::V1) })
-            .await
+    /// A non-owning handle on the same server for a detached task (replies,
+    /// command turns): same base and auth, never shuts the process down.
+    pub(super) fn detached(&self) -> Self {
+        Self {
+            child: None,
+            lease: None,
+            base: self.base.clone(),
+            auth: self.auth.clone(),
+            client: self.client.clone(),
+            stderr_tail: crate::StderrTail::default(),
+            version: self.version.clone(),
+        }
     }
 
-    /// Spawn `opencode serve` on a free loopback port with a per-run Basic
-    /// password, and wait for a generation-bearing health answer (which
-    /// also resolves [`Protocol`]).
+    /// Spawn `opencode serve --stdio --port 0`, the official private-server
+    /// launch (`cli/src/services/standalone.ts`):
+    /// - the per-run Basic password rides `OPENCODE_PASSWORD` (plus the
+    ///   legacy `OPENCODE_SERVER_PASSWORD`); in `--stdio` mode the server
+    ///   deletes both from its environment, so agent tool processes cannot
+    ///   read it and self-approve over the API.
+    /// - stdin is piped and held as the ownership lease: the server exits on
+    ///   EOF, so it dies with LUNA even when LUNA cannot clean up.
+    /// - the OS picks the port; the server prints `{"url": ...}` on stdout
+    ///   once boot completes — readiness without a port race or polling.
+    /// - `GET /api/info` then proves a ready 2.x server (503 = keep waiting).
     pub(super) async fn spawn(
         exe: &std::path::Path,
         cwd: Option<&str>,
         startup: Duration,
     ) -> Result<Self, HarnessError> {
-        let port = free_localhost_port().ok_or_else(|| {
-            HarnessError::Protocol("no free localhost port for opencode serve".into())
-        })?;
         let password = uuid::Uuid::new_v4().to_string();
         let mut cmd = Command::new(exe);
         cmd.arg("serve")
+            .arg("--stdio")
             .arg("--port")
-            .arg(port.to_string())
-            .arg("--hostname")
-            .arg("127.0.0.1")
+            .arg("0")
+            .env("OPENCODE_PASSWORD", &password)
             .env("OPENCODE_SERVER_PASSWORD", &password)
-            .env("OPENCODE_CLIENT", "luna");
+            .env("OPENCODE_CLIENT", "luna")
+            // Read by OpenCode builds that gate the embedded web UI (set by
+            // the desktop app too); a no-op where unsupported (2.0.22).
+            .env("OPENCODE_DISABLE_EMBEDDED_WEB_UI", "1");
         crate::compose_child_path(&mut cmd, exe);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let mut child = cmd.spawn().map_err(|e| {
@@ -135,6 +144,7 @@ impl Server {
                 HarnessError::Io(e)
             }
         })?;
+        let lease = child.stdin.take();
         let stderr_tail = crate::StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
             let tail = stderr_tail.clone();
@@ -146,6 +156,24 @@ impl Server {
                 }
             });
         }
+        // stdout: the one `{"url"}` readiness line, then drained for the
+        // process lifetime so a chatty build can never block on a full pipe.
+        let (url_tx, mut url_rx) = tokio::sync::oneshot::channel::<String>();
+        if let Some(stdout) = child.stdout.take() {
+            tokio::spawn(async move {
+                let mut url_tx = Some(url_tx);
+                let mut lines = tokio::io::BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    if let Some(url) = ready_url(&line)
+                        && let Some(tx) = url_tx.take()
+                    {
+                        let _ = tx.send(url);
+                        continue;
+                    }
+                    tracing::debug!(target: "luna_harness::opencode", "stdout: {line}");
+                }
+            });
+        }
 
         use base64::Engine as _;
         let auth = format!(
@@ -154,43 +182,130 @@ impl Server {
         );
         let mut server = Self {
             child: Some(child),
-            base: format!("http://127.0.0.1:{port}"),
+            lease,
+            base: String::new(),
             auth: Some(auth),
             client: http_client(),
             stderr_tail,
-            protocol: tokio::sync::OnceCell::new(),
+            version: None,
         };
 
-        // Readiness: the server binds a few seconds into the process's life
-        // (minutes on plugin-heavy cold starts). An exited child fails fast
-        // with its stderr tail instead of burning the whole budget.
+        // Readiness, bounded by one budget: the url line (minutes on
+        // plugin-heavy cold starts), then a 2.x `/api/info`. An exited child
+        // fails fast with its stderr tail instead of burning the budget.
         let deadline = tokio::time::Instant::now() + startup;
+        let timed_out = |server_phase: &str| {
+            HarnessError::Protocol(format!(
+                "opencode serve did not {server_phase} within {}s (raise {} if this \
+                 machine's plugin load is genuinely slow)",
+                startup.as_secs(),
+                STARTUP_TIMEOUT_ENV,
+            ))
+        };
+        let mut stdout_closed = false;
         loop {
-            if let Some(child) = server.child.as_mut()
-                && let Ok(Some(status)) = child.try_wait()
-            {
-                return Err(HarnessError::Protocol(crate::crash_message(
-                    "opencode serve",
-                    Some(status),
-                    &server.stderr_tail,
-                )));
+            if let Some(status) = server.exited() {
+                return Err(server.crashed(status));
             }
-            if let Some(protocol) = Protocol::detect(&server).await {
-                let _ = server.protocol.set(protocol);
-                break;
+            if stdout_closed {
+                // No url will come; the exit check above reports why on the
+                // next pass (or the deadline does).
+                tokio::time::sleep(HEALTH_POLL).await;
+            } else {
+                match tokio::time::timeout(HEALTH_POLL, &mut url_rx).await {
+                    Ok(Ok(url)) => {
+                        server.base = url;
+                        break;
+                    }
+                    Ok(Err(_)) => stdout_closed = true,
+                    Err(_) => {}
+                }
             }
             if tokio::time::Instant::now() >= deadline {
                 server.shutdown(Duration::from_secs(1)).await;
-                return Err(HarnessError::Protocol(format!(
-                    "opencode serve did not become healthy within {}s (raise {} if this \
-                     machine's plugin load is genuinely slow)",
-                    startup.as_secs(),
-                    STARTUP_TIMEOUT_ENV,
-                )));
+                return Err(timed_out("print its listening url"));
+            }
+        }
+        loop {
+            if let Some(status) = server.exited() {
+                return Err(server.crashed(status));
+            }
+            match server.probe_info().await {
+                InfoProbe::Ready(version) => {
+                    server.version = Some(version);
+                    break;
+                }
+                InfoProbe::Failed(message) => {
+                    server.shutdown(Duration::from_secs(1)).await;
+                    return Err(HarnessError::Protocol(message));
+                }
+                InfoProbe::Booting => {}
+            }
+            if tokio::time::Instant::now() >= deadline {
+                server.shutdown(Duration::from_secs(1)).await;
+                return Err(timed_out("become ready"));
             }
             tokio::time::sleep(HEALTH_POLL).await;
         }
         Ok(server)
+    }
+
+    fn exited(&mut self) -> Option<std::process::ExitStatus> {
+        self.child.as_mut()?.try_wait().ok().flatten()
+    }
+
+    fn crashed(&self, status: std::process::ExitStatus) -> HarnessError {
+        HarnessError::Protocol(crate::crash_message(
+            "opencode serve",
+            Some(status),
+            &self.stderr_tail,
+        ))
+    }
+
+    /// One bounded `GET /api/info`. OpenCode 2 answers it with
+    /// `{version, pid, urls, paths}` even before its app graph is ready: the
+    /// STATUS is the readiness (200 ready, 503 booting, 500 failed) and the
+    /// version is the generation. Anything without a JSON version — the 1.x
+    /// web UI, an empty 404 — is not an OpenCode 2 server.
+    pub(super) async fn probe_info(&self) -> InfoProbe {
+        let Ok(resp) = self.get_raw("/api/info").await else {
+            return InfoProbe::Booting;
+        };
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        let version = serde_json::from_str::<Value>(&body)
+            .ok()
+            .and_then(|v| v.get("version").and_then(Value::as_str).map(str::to_owned));
+        match version {
+            Some(version) if resolve::version_major(&version) == Some(resolve::REQUIRED_MAJOR) => {
+                if status.is_success() {
+                    InfoProbe::Ready(version)
+                } else if status == reqwest::StatusCode::SERVICE_UNAVAILABLE {
+                    InfoProbe::Booting
+                } else {
+                    InfoProbe::Failed(format!(
+                        "opencode serve {version} failed to start: {status} {}",
+                        truncate_body(&body)
+                    ))
+                }
+            }
+            Some(version) => InfoProbe::Failed(format!(
+                "OpenCode 2 is required, but the server reports version {version}"
+            )),
+            None if status == reqwest::StatusCode::UNAUTHORIZED => InfoProbe::Failed(
+                "opencode serve rejected LUNA's server credentials (401 on /api/info)".into(),
+            ),
+            // Not listening yet answers as a transport error above; a server
+            // that answers without a version is the wrong generation.
+            None if status.is_success() || status == reqwest::StatusCode::NOT_FOUND => {
+                InfoProbe::Failed(format!(
+                    "not an OpenCode 2 server: /api/info answered {status} without a version \
+                     (OpenCode 1.x is no longer supported; install: curl -fsSL \
+                     https://opencode.ai/install | bash)"
+                ))
+            }
+            None => InfoProbe::Booting,
+        }
     }
 
     pub(super) fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
@@ -201,10 +316,8 @@ impl Server {
         req
     }
 
-    /// Bounded health probe. opencode's boot window ACCEPTS connections but
-    /// parks the request until the app is ready — and a request parked early
-    /// enough is never answered at all (observed live, 1.18.18), so an
-    /// unbounded send() wedges the whole startup. Abandon and re-poll.
+    /// Bounded readiness probe: the boot window may accept a connection and
+    /// park the request, so a probe abandons after 2 s and re-polls.
     pub(super) async fn get_raw(&self, path: &str) -> Result<reqwest::Response, reqwest::Error> {
         self.request(reqwest::Method::GET, path)
             .timeout(Duration::from_secs(2))
@@ -213,7 +326,7 @@ impl Server {
     }
 
     /// GET with the session's directory scope (the server's per-request
-    /// instance selector; both carriers set, matching the official SDK).
+    /// location selector, the `x-opencode-directory` header).
     pub(super) async fn get_json(
         &self,
         path: &str,
@@ -247,16 +360,14 @@ impl Server {
             .timeout(CALL_TIMEOUT);
         let resp = self
             .scoped(req, directory)
-            .await
             .send()
             .await
             .map_err(|e| HarnessError::Protocol(format!("opencode GET {path}: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(HarnessError::Protocol(format!(
-                "opencode GET {path}: {status} {}",
-                truncate_body(&body)
+            return Err(HarnessError::Protocol(http_error_message(
+                "GET", path, status, &body,
             )));
         }
         Ok(resp)
@@ -277,28 +388,22 @@ impl Server {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
-    pub(super) async fn patch_json(
+    /// POST with NO request body (`session.interrupt` takes none).
+    pub(super) async fn post_empty(
         &self,
         path: &str,
         directory: Option<&str>,
-        body: &Value,
     ) -> Result<Value, HarnessError> {
-        let mut request = self
-            .client
-            .patch(format!("{}{}", self.base, path))
-            .json(body);
-        if let Some(directory) = directory {
-            request = request.header("x-opencode-directory", directory);
-        }
-        if let Some(auth) = &self.auth {
-            request = request.header("authorization", auth);
-        }
-        let response = request
+        let req = self
+            .request(reqwest::Method::POST, path)
+            .timeout(CALL_TIMEOUT);
+        let resp = self
+            .scoped(req, directory)
             .send()
             .await
-            .map_err(|error| HarnessError::Protocol(format!("opencode PATCH {path}: {error}")))?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
+            .map_err(|e| HarnessError::Protocol(format!("opencode POST {path}: {e}")))?;
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
         if !status.is_success() {
             return Err(HarnessError::Protocol(post_error_message(
                 path, status, &text,
@@ -307,9 +412,32 @@ impl Server {
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
+    pub(super) async fn patch_json(
+        &self,
+        path: &str,
+        directory: Option<&str>,
+        body: &Value,
+    ) -> Result<Value, HarnessError> {
+        let req = self
+            .request(reqwest::Method::PATCH, path)
+            .timeout(CALL_TIMEOUT)
+            .json(body);
+        let response =
+            self.scoped(req, directory).send().await.map_err(|error| {
+                HarnessError::Protocol(format!("opencode PATCH {path}: {error}"))
+            })?;
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(HarnessError::Protocol(http_error_message(
+                "PATCH", path, status, &text,
+            )));
+        }
+        Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
     /// POST returning `(status, raw body)`; only transport failures error.
-    /// HTTP status handling is the caller's (the lazy-migration retry in
-    /// [`create_session`] needs to see 5xx, not a preformatted message).
+    /// HTTP status handling is the caller's.
     pub(super) async fn post_json_raw(
         &self,
         path: &str,
@@ -322,7 +450,6 @@ impl Server {
             .json(body);
         let resp = self
             .scoped(req, directory)
-            .await
             .send()
             .await
             .map_err(|e| HarnessError::Protocol(format!("opencode POST {path}: {e}")))?;
@@ -331,72 +458,103 @@ impl Server {
         Ok((status, text))
     }
 
-    /// Directory scope: the server's per-request instance selector. V1 takes
-    /// it as a query param (plus header, matching the official SDK); V2's
-    /// strict query validation rejects unknown params — there the header
-    /// alone scopes the request (verified live, 2.0.3).
-    pub(super) async fn scoped(
+    /// Location scope: the server's per-request location selector. The 2.x
+    /// query validation rejects unknown params, so the header alone scopes
+    /// the request (percent-encoded, as the official SDK sends it).
+    pub(super) fn scoped(
         &self,
-        mut req: reqwest::RequestBuilder,
+        req: reqwest::RequestBuilder,
         directory: Option<&str>,
     ) -> reqwest::RequestBuilder {
-        if let Some(dir) = directory {
-            req = req.header("x-opencode-directory", encode_directory(dir));
-            if self.protocol().await == Protocol::V1 {
-                req = req.query(&[("directory", dir)]);
-            }
+        match directory {
+            Some(dir) => req.header("x-opencode-directory", encode_directory(dir)),
+            None => req,
         }
-        req
     }
 
+    /// Tear down an owned server. SIGTERM and stdin EOF both end a running
+    /// execution as `interrupted{reason: "shutdown"}` and KEEP its restart
+    /// claim, which the user's managed OpenCode service later resumes
+    /// unobserved. So first interrupt whatever still executes here (bounded;
+    /// a user interrupt releases the claim), then release the stdin lease,
+    /// then SIGTERM → SIGKILL after `kill_grace`.
     pub(super) async fn shutdown(&mut self, kill_grace: Duration) {
+        let running = self
+            .child
+            .as_mut()
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)));
+        if running && !self.base.is_empty() {
+            let _ = tokio::time::timeout(SHUTDOWN_INTERRUPT_BUDGET, self.interrupt_active()).await;
+        }
+        drop(self.lease.take());
         if let Some(child) = self.child.as_mut() {
             shutdown_child(child, kill_grace).await;
         }
     }
 
-    /// Session lookup for resume; both wires answer with the info object
-    /// (2.x wrapped in `{data}`).
+    /// Interrupt every execution this server process owns
+    /// (`GET /api/session/active` is process-local).
+    async fn interrupt_active(&self) {
+        let Ok(active) = self.get_json("/api/session/active", None).await else {
+            return;
+        };
+        let active = unwrap_data(active);
+        let Some(sessions) = active.as_object() else {
+            return;
+        };
+        for session_id in sessions.keys() {
+            match self.interrupt_session(session_id, None).await {
+                Ok(interrupted) => tracing::debug!(
+                    target: "luna_harness::opencode",
+                    "interrupted {session_id} before shutdown (interrupted={interrupted})"
+                ),
+                Err(error) => tracing::debug!(
+                    target: "luna_harness::opencode",
+                    "could not interrupt {session_id} before shutdown: {error}"
+                ),
+            }
+        }
+    }
+
+    /// Session lookup for resume (`GET /api/session/{id}` → `{data}`).
     pub(super) async fn session_info(
         &self,
         session_id: &str,
         directory: Option<&str>,
     ) -> Result<Value, HarnessError> {
-        let path = match self.protocol().await {
-            Protocol::V1 => format!("/session/{session_id}"),
-            Protocol::V2 => format!("/api/session/{session_id}"),
-        };
-        let info = self.get_json(&path, directory).await?;
+        let info = self
+            .get_json(&format!("/api/session/{session_id}"), directory)
+            .await?;
         Ok(unwrap_data(info))
     }
 
-    /// Is the session mid-turn? V1 keeps a status map on `/session/status`;
-    /// V2 lists running sessions on `/api/session/active`. `Err` = can't
-    /// tell — the caller treats that as still running.
+    /// Is the session mid-turn? `GET /api/session/active` lists the running
+    /// sessions this server process owns. `Err` = can't tell — the caller
+    /// treats that as still running.
     pub(super) async fn session_running(
         &self,
         session_id: &str,
         directory: Option<&str>,
     ) -> Result<bool, HarnessError> {
-        let path = match self.protocol().await {
-            Protocol::V1 => "/session/status",
-            Protocol::V2 => "/api/session/active",
-        };
-        let map = unwrap_data(self.get_json(path, directory).await?);
+        let map = unwrap_data(self.get_json("/api/session/active", directory).await?);
         Ok(map.get(session_id).is_some())
     }
 
-    /// End the live turn.
-    pub(super) async fn abort_session(
+    /// Interrupt the session's active execution (`POST …/interrupt`, no
+    /// body). `Ok(false)` = nothing to interrupt: the session was idle, or
+    /// another process owns the execution — no terminal frame will follow.
+    pub(super) async fn interrupt_session(
         &self,
         session_id: &str,
         directory: Option<&str>,
-    ) -> Result<Value, HarnessError> {
-        let path = match self.protocol().await {
-            Protocol::V1 => format!("/session/{session_id}/abort"),
-            Protocol::V2 => format!("/api/session/{session_id}/interrupt"),
-        };
-        self.post_json(&path, directory, &Value::Null).await
+    ) -> Result<bool, HarnessError> {
+        let answer = self
+            .post_empty(&format!("/api/session/{session_id}/interrupt"), directory)
+            .await?;
+        Ok(unwrap_data(answer)
+            .get("interrupted")
+            .and_then(Value::as_bool)
+            .unwrap_or(true))
     }
 }
 
@@ -423,12 +581,16 @@ pub(super) fn encode_directory(dir: &str) -> String {
     out
 }
 
+/// Diagnostics clip: long enough for a tagged error envelope with its
+/// message, bounded so a stray HTML page can't flood a chip.
+const BODY_CLIP: usize = 1000;
+
 pub(super) fn truncate_body(body: &str) -> String {
     let trimmed = body.trim();
-    if trimmed.len() <= 300 {
+    if trimmed.len() <= BODY_CLIP {
         trimmed.to_owned()
     } else {
-        let mut end = 300;
+        let mut end = BODY_CLIP;
         while end > 0 && !trimmed.is_char_boundary(end) {
             end -= 1;
         }
@@ -436,12 +598,54 @@ pub(super) fn truncate_body(body: &str) -> String {
     }
 }
 
-/// POST failure text; 5xx adds where the body's `ref` resolves — opencode's
-/// own error bodies say only "Check server logs for details.", which sends
-/// users to us instead of the log that holds the actual cause.
-pub(super) fn post_error_message(path: &str, status: reqwest::StatusCode, body: &str) -> String {
-    let base = format!("opencode POST {path}: {status} {}", truncate_body(body));
+/// The human part of a 2.x tagged error envelope
+/// (`{_tag, message, kind?, field?}`), e.g. `CommandNotFoundError: Command
+/// not found: nope`. `None` when the body isn't such an envelope.
+pub(super) fn describe_error_envelope(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body.trim()).ok()?;
+    let tag = value
+        .get("_tag")
+        .or_else(|| value.get("name"))
+        .and_then(Value::as_str);
+    let message = value
+        .get("message")
+        .or_else(|| value.pointer("/data/message"))
+        .and_then(Value::as_str)
+        .filter(|message| !message.is_empty());
+    let mut text = match (tag, message) {
+        (Some(tag), Some(message)) => format!("{tag}: {message}"),
+        (Some(tag), None) => tag.to_owned(),
+        (None, Some(message)) => message.to_owned(),
+        (None, None) => return None,
+    };
+    let detail: Vec<String> = ["kind", "field"]
+        .into_iter()
+        .filter_map(|key| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|v| format!("{key} {v}"))
+        })
+        .collect();
+    if !detail.is_empty() {
+        text.push_str(&format!(" ({})", detail.join(", ")));
+    }
+    Some(truncate_body(&text))
+}
+
+/// Failure text for any HTTP call: the decoded error envelope when there is
+/// one, else the clipped body.
+pub(super) fn http_error_message(
+    method: &str,
+    path: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> String {
+    let detail = describe_error_envelope(body).unwrap_or_else(|| truncate_body(body));
+    let base = format!("opencode {method} {path}: {status} {detail}");
     if status.is_server_error() {
+        // OpenCode's own 5xx bodies say only "Check server logs for
+        // details."; point at the log that holds the cause.
         format!(
             "{base} (server-side fault; the body's ref keys the cause in \
              ~/.local/share/opencode/log/opencode.log)"
@@ -449,6 +653,11 @@ pub(super) fn post_error_message(path: &str, status: reqwest::StatusCode, body: 
     } else {
         base
     }
+}
+
+/// POST failure text (see [`http_error_message`]).
+pub(super) fn post_error_message(path: &str, status: reqwest::StatusCode, body: &str) -> String {
+    http_error_message("POST", path, status, body)
 }
 
 /// Decode large catalogs without collecting a second, full HTTP body first.
@@ -473,7 +682,7 @@ pub(super) async fn decode_json_response<T: serde::de::DeserializeOwned + Send +
     .map_err(|e| e.to_string())?
 }
 
-/// Both wires wrap responses in `{data}` on 2.x only; unwrap when present.
+/// 2.x wraps most responses in `{data}`; unwrap when present.
 pub(super) fn unwrap_data(value: Value) -> Value {
     value
         .get("data")

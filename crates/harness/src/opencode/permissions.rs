@@ -1,64 +1,72 @@
 //! Permission rules, approval options and permission replies.
+//!
+//! OpenCode 2 rules are `[{action, resource, effect}]`, evaluated LAST match
+//! wins, with the session's rules merged after the agent's (so they decide).
+//! Replies are `POST /api/session/{s}/permission/{id}/reply` with
+//! `{decision: "once" | "always" | "reject", message?}`. LUNA never sends
+//! `always` (PD-8): on 2.x it writes durable project-wide rules.
 
 use super::*;
 
+/// The LUNA permission mode as a v2 session ruleset (v2 action names:
+/// `shell`, `edit`, `read`, `glob`, `grep`, `webfetch`, `websearch`,
+/// `external_directory`, `question`, `subagent`, MCP tool names).
 pub(super) fn opencode_permission_rules(mode: luna_proto::PermissionMode) -> Value {
     match mode {
         luna_proto::PermissionMode::Full => json!([
-            { "permission": "*", "pattern": "*", "action": "allow" }
+            { "action": "*", "resource": "*", "effect": "allow" }
         ]),
         // Auto is resolved to Ask by the engine for OpenCode.
         luna_proto::PermissionMode::Ask | luna_proto::PermissionMode::Auto => json!([
-            { "permission": "*", "pattern": "*", "action": "ask" },
-            { "permission": "read", "pattern": "*", "action": "allow" },
-            { "permission": "edit", "pattern": "*", "action": "allow" },
-            { "permission": "glob", "pattern": "*", "action": "allow" },
-            { "permission": "grep", "pattern": "*", "action": "allow" },
-            { "permission": "list", "pattern": "*", "action": "allow" },
-            { "permission": "bash", "pattern": "*", "action": "ask" },
-            { "permission": "webfetch", "pattern": "*", "action": "ask" },
-            { "permission": "websearch", "pattern": "*", "action": "ask" },
-            { "permission": "external_directory", "pattern": "*", "action": "ask" },
-            // OpenCode uses the LAST matching rule. Keep sensitive env files
-            // behind approval while allowing explicit example templates.
-            { "permission": "read", "pattern": "*.env", "action": "ask" },
-            { "permission": "read", "pattern": "*.env.*", "action": "ask" },
-            { "permission": "read", "pattern": "*.env.example", "action": "allow" },
-            { "permission": "edit", "pattern": "*.env", "action": "ask" },
-            { "permission": "edit", "pattern": "*.env.*", "action": "ask" },
-            { "permission": "edit", "pattern": "*.env.example", "action": "allow" },
-            { "permission": "write", "pattern": "*.env", "action": "ask" },
-            { "permission": "write", "pattern": "*.env.*", "action": "ask" },
-            { "permission": "write", "pattern": "*.env.example", "action": "allow" }
+            { "action": "*", "resource": "*", "effect": "ask" },
+            { "action": "read", "resource": "*", "effect": "allow" },
+            { "action": "glob", "resource": "*", "effect": "allow" },
+            { "action": "grep", "resource": "*", "effect": "allow" },
+            // The native question tool asks the user through LUNA's input
+            // panel; gating it behind an approval first would double-ask
+            // (OpenCode's own default agent allows it).
+            { "action": "question", "resource": "*", "effect": "allow" },
+            { "action": "shell", "resource": "*", "effect": "ask" },
+            { "action": "edit", "resource": "*", "effect": "ask" },
+            { "action": "external_directory", "resource": "*", "effect": "ask" },
+            { "action": "webfetch", "resource": "*", "effect": "ask" },
+            { "action": "websearch", "resource": "*", "effect": "ask" },
+            // Last match wins: keep sensitive env files behind approval while
+            // allowing explicit example templates.
+            { "action": "read", "resource": "*.env", "effect": "ask" },
+            { "action": "read", "resource": "*.env.*", "effect": "ask" },
+            { "action": "read", "resource": "*.env.example", "effect": "allow" }
         ]),
     }
 }
 
-pub(super) fn opencode_supports_task_allowance(protocol: Protocol) -> bool {
-    // 1.x keeps `always` grants only in the lifetime of this LUNA-owned
-    // server process (one task runtime). 2.x persists them into project-wide
-    // rules, which outlives the task and is therefore not an L04 task grant.
-    protocol == Protocol::V1
+/// 2.x persists `always` grants into project-wide rules that outlive the
+/// task, so there is no task-scoped allowance to offer (PD-8).
+pub(super) fn opencode_supports_task_allowance() -> bool {
+    false
 }
 
-pub(super) fn opencode_approval_options(protocol: Protocol) -> Vec<String> {
+pub(super) fn opencode_approval_options() -> Vec<String> {
     let mut options = vec!["Deny".into(), "Allow once".into()];
-    if opencode_supports_task_allowance(protocol) {
+    if opencode_supports_task_allowance() {
         options.push("Allow for task".into());
     }
     options.push("Cancel".into());
     options
 }
 
-pub(super) fn opencode_permission_reply(
-    protocol: Protocol,
-    decision: Option<&str>,
-) -> &'static str {
+/// The native decision for a LUNA answer. Anything but an explicit "Allow
+/// once" — including a forged or stale "Allow for task" — fails closed.
+pub(super) fn opencode_permission_reply(decision: Option<&str>) -> &'static str {
     match decision {
         Some("Allow once") => "once",
-        Some("Allow for task") if opencode_supports_task_allowance(protocol) => "always",
         _ => "reject",
     }
+}
+
+/// The v2 reply body.
+pub(super) fn opencode_permission_reply_body(decision: Option<&str>) -> Value {
+    json!({ "decision": opencode_permission_reply(decision) })
 }
 
 /// A native `permission.asked` request, with what answering it needs.
@@ -70,6 +78,7 @@ pub(super) struct PermissionAsk<'a> {
     pub(super) unbound_children: &'a HashMap<String, String>,
     pub(super) server: &'a Server,
     pub(super) dir: Option<&'a str>,
+    pub(super) event_tx: &'a mpsc::Sender<Result<AgentEvent, HarnessError>>,
     pub(super) request_input: &'a Arc<RequestInput>,
     pub(super) auto_approve: bool,
     pub(super) permission_policy: &'a luna_proto::PermissionPolicy,
@@ -86,6 +95,7 @@ pub(super) async fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcom
         unbound_children,
         server,
         dir,
+        event_tx,
         request_input,
         auto_approve,
         permission_policy,
@@ -102,65 +112,51 @@ pub(super) async fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcom
     let Some(id) = props.get("id").and_then(Value::as_str) else {
         return BusOutcome::Continue;
     };
-    let session = session.to_owned();
-    let protocol = server.protocol().await;
-    let supports_task_allowance = opencode_supports_task_allowance(protocol);
-    // 1.x: global permission endpoint + a session-scoped fallback;
-    // 2.x: the reply rides the session's permission route
-    // (`{"reply": "once" | "always" | "reject"}`).
-    let (reply_path, fallback_path) = match protocol {
-        Protocol::V1 => (
-            format!("/permission/{id}/reply"),
-            Some(format!("/session/{session}/permissions/{id}")),
-        ),
-        Protocol::V2 => (
-            format!("/api/session/{session}/permission/{id}/reply"),
-            None,
-        ),
-    };
-    let base = server.base.clone();
-    let auth = server.auth.clone();
+    let reply_path = format!("/api/session/{session}/permission/{id}/reply");
+    let reply_server = server.detached();
     let dir_owned = dir.map(str::to_owned);
-    let protocol_cell = server.protocol.clone();
+    let failures = event_tx.clone();
     let permission_input = Arc::clone(request_input);
-    let permission_name = props
-        .get("permission")
+    // v2 request: `{id, sessionID, action, resources[], save?, metadata?,
+    // source?: {type, messageID, id}, message?}`.
+    let action = props
+        .get("action")
         .and_then(Value::as_str)
         .unwrap_or("tool");
-    let patterns = props
-        .get("patterns")
+    let resources = props
+        .get("resources")
         .and_then(Value::as_array)
-        .map(|patterns| {
-            patterns
+        .map(|resources| {
+            resources
                 .iter()
                 .filter_map(Value::as_str)
                 .collect::<Vec<_>>()
                 .join(", ")
         })
         .unwrap_or_default();
-    let summary = if patterns.is_empty() {
-        format!("OpenCode requests {permission_name} permission")
+    let summary = if resources.is_empty() {
+        format!("OpenCode requests {action} permission")
     } else {
-        format!("OpenCode requests {permission_name} permission for {patterns}")
+        format!("OpenCode requests {action} permission for {resources}")
     };
     let question = UserInputQuestion {
         id: format!("permission:{id}"),
         header: "Permission".into(),
         question: format!("{summary}. Target: {}.", permission_policy.machine_name),
-        options: opencode_approval_options(protocol),
+        options: opencode_approval_options(),
         multi_select: false,
         mcp: None,
         approval: Some(luna_proto::ApprovalRequest {
             provider_request_id: id.to_owned(),
             provider: HarnessId::Opencode,
             turn_id: props
-                .get("messageID")
+                .pointer("/source/messageID")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
             machine_name: permission_policy.machine_name.clone(),
-            action_kind: match permission_name {
-                "bash" => luna_proto::ApprovalActionKind::Command,
-                "edit" | "write" => luna_proto::ApprovalActionKind::FileChange,
+            action_kind: match action {
+                "shell" => luna_proto::ApprovalActionKind::Command,
+                "edit" => luna_proto::ApprovalActionKind::FileChange,
                 "webfetch" | "websearch" => luna_proto::ApprovalActionKind::Network,
                 "external_directory" => luna_proto::ApprovalActionKind::ExternalPath,
                 _ => luna_proto::ApprovalActionKind::Tool,
@@ -172,20 +168,12 @@ pub(super) async fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcom
                 .unwrap_or_default()
                 .as_millis() as i64
                 + 120_000,
-            supports_task_allowance,
+            supports_task_allowance: opencode_supports_task_allowance(),
             details: None,
         }),
         input: None,
     };
     tokio::spawn(async move {
-        let server = Server {
-            child: None,
-            base,
-            auth,
-            client: http_client(),
-            stderr_tail: crate::StderrTail::default(),
-            protocol: protocol_cell,
-        };
         let decision: Option<String> = if auto_approve {
             Some("Allow once".into())
         } else {
@@ -203,25 +191,17 @@ pub(super) async fn handle_permission_asked(ask: PermissionAsk<'_>) -> BusOutcom
                     .and_then(|answer| answer.labels.into_iter().next())
             })
         };
-        // V2 "always" writes durable project-wide permission rules,
-        // so even a forged/stale task-allowance answer fails closed.
-        let reply = opencode_permission_reply(protocol, decision.as_deref());
-        if server
-            .post_json(
-                &reply_path,
-                dir_owned.as_deref(),
-                &json!({ "reply": reply }),
-            )
+        let body = opencode_permission_reply_body(decision.as_deref());
+        // A failed reply leaves the native tool blocked: say so instead of
+        // silently pretending the approval was delivered.
+        if let Err(error) = reply_server
+            .post_json(&reply_path, dir_owned.as_deref(), &body)
             .await
-            .is_err()
-            && let Some(fallback_path) = fallback_path
         {
-            let _ = server
-                .post_json(
-                    &fallback_path,
-                    dir_owned.as_deref(),
-                    &json!({ "response": reply }),
-                )
+            let _ = failures
+                .send(Ok(AgentEvent::Error {
+                    message: format!("OpenCode did not accept the permission reply: {error}"),
+                }))
                 .await;
         }
     });

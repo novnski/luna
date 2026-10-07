@@ -10,37 +10,32 @@ pub(super) const BUS_RECONNECT_ATTEMPTS: u32 = 40;
 
 /// What the bus reader hands the session loop.
 pub(super) enum BusMsg {
-    /// A stream (re)connected and delivered its first frame. The FIRST one
-    /// gates the initial prompt: the v1 bus has NO replay, and a
-    /// fast-failing turn (bad model id errors in ~200ms) can emit
-    /// busy → session.error → idle before a late subscription exists —
-    /// observed live (1.18.21), leaving only the stall watchdog. Later ones
-    /// mean a reconnect gap that may have swallowed our idle: the loop
-    /// re-syncs from `GET /session/status`.
+    /// A stream (re)connected and delivered its first frame (2.x always
+    /// opens with `server.connected`). The FIRST one gates the initial
+    /// prompt: `/api/event` has NO replay, and a fast-failing turn (bad
+    /// model id) can run its whole lifecycle before a late subscription
+    /// exists. Later ones mean a reconnect gap that may have swallowed our
+    /// terminal: the loop re-syncs from `GET /api/session/active`.
     Connected,
     Event(Value),
     /// The stream is gone past the reconnect budget (or the reader saw the
     /// consumer close).
     Disconnected,
+    /// A slash command's synchronous `POST …/command` failed (a tagged
+    /// 4xx/5xx or a transport error). Not a bus frame: the detached command
+    /// task reports it here so the turn settles instead of stalling.
+    CommandFailed(String),
 }
 
-/// Tail the event bus into the session loop: `/global/event` on 1.x,
-/// `/api/event` on 2.x (which serves nothing unless `Accept:
-/// text/event-stream` is sent — observed live, 2.0.3). Reconnects on
+/// Tail the event bus (`GET /api/event`, which serves nothing unless
+/// `Accept: text/event-stream` is sent — observed live, 2.0.3) into the
+/// session loop. Reconnects on
 /// transient drops (the server is our own child on loopback); past the
 /// budget the loop learns via [`BusMsg::Disconnected`] and errors the run —
 /// missed frames mean the transcript can no longer be trusted.
-pub(super) async fn bus_task(
-    base: String,
-    auth: Option<String>,
-    protocol: Protocol,
-    tx: mpsc::Sender<BusMsg>,
-) {
+pub(super) async fn bus_task(base: String, auth: Option<String>, tx: mpsc::Sender<BusMsg>) {
     let client = http_client();
-    let url = match protocol {
-        Protocol::V1 => format!("{base}/global/event"),
-        Protocol::V2 => format!("{base}/api/event"),
-    };
+    let url = format!("{base}/api/event");
     let mut failures: u32 = 0;
     loop {
         if tx.is_closed() {
@@ -55,7 +50,7 @@ pub(super) async fn bus_task(
         match req.send().await {
             Ok(resp) if resp.status().is_success() => {
                 failures = 0;
-                stream_bus(&tx, resp, protocol).await;
+                stream_bus(&tx, resp).await;
                 if tx.is_closed() {
                     return;
                 }
@@ -73,11 +68,7 @@ pub(super) async fn bus_task(
     }
 }
 
-pub(super) async fn stream_bus(
-    tx: &mpsc::Sender<BusMsg>,
-    resp: reqwest::Response,
-    protocol: Protocol,
-) {
+pub(super) async fn stream_bus(tx: &mpsc::Sender<BusMsg>, resp: reqwest::Response) {
     let mut stream = resp.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();
     let mut announced = false;
@@ -111,19 +102,15 @@ pub(super) async fn stream_bus(
                 let Ok(event) = serde_json::from_str::<Value>(data) else {
                     continue;
                 };
-                if protocol == Protocol::V2 {
-                    let payloads = normalize_v2_frame(event, &mut v2_tool_names);
-                    if v2_tool_names.len() > MAX_PENDING_V2_TOOLS {
-                        let _ = tx.send(BusMsg::Disconnected).await;
+                let payloads = normalize_v2_frame(event, &mut v2_tool_names);
+                if v2_tool_names.len() > MAX_PENDING_V2_TOOLS {
+                    let _ = tx.send(BusMsg::Disconnected).await;
+                    return;
+                }
+                for payload in payloads {
+                    if tx.send(BusMsg::Event(payload)).await.is_err() {
                         return;
                     }
-                    for payload in payloads {
-                        if tx.send(BusMsg::Event(payload)).await.is_err() {
-                            return;
-                        }
-                    }
-                } else if tx.send(BusMsg::Event(event)).await.is_err() {
-                    return;
                 }
             }
         }

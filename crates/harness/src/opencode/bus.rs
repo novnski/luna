@@ -72,8 +72,8 @@ pub(super) async fn settle_children(
     }
 }
 
-/// Route one `/global/event` payload. The envelope is
-/// `{directory, payload: {type, properties}}`; `sync` mirror frames drop.
+/// Route one normalized bus payload (`{type, properties}`, the internal
+/// shape [`normalize_v2_frame`] produces).
 pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
     let BusCtx {
         event,
@@ -92,14 +92,11 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         pending_usage,
         context_windows,
     } = ctx;
-    // Envelope styles: /global/event wraps ({payload: {...}}); a bare
-    // /event feed (tests) delivers the payload directly.
-    let payload = event.get("payload").unwrap_or(event);
-    let kind = payload.get("type").and_then(Value::as_str).unwrap_or("");
-    if kind == "sync" || kind.is_empty() {
+    let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
+    if kind.is_empty() {
         return BusOutcome::Continue;
     }
-    let props = payload.get("properties").unwrap_or(&Value::Null);
+    let props = event.get("properties").unwrap_or(&Value::Null);
     let event_session = props
         .get("sessionID")
         .and_then(Value::as_str)
@@ -162,7 +159,7 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                         if !send(event_tx, AgentEvent::Error { message: msg }).await {
                             return BusOutcome::ConsumerGone;
                         }
-                        let _ = server.abort_session(session_id, dir).await;
+                        let _ = server.interrupt_session(session_id, dir).await;
                     } else if attempt >= RETRY_REPORT_ATTEMPT && !turn.retry_reported {
                         turn.retry_reported = true;
                         let msg = format!(
@@ -399,23 +396,10 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 unbound_children,
                 server,
                 dir,
+                event_tx,
                 request_input,
                 auto_approve,
                 permission_policy,
-            })
-            .await
-        }
-        "question.asked" => {
-            handle_question_asked(QuestionAsk {
-                props,
-                event_session,
-                session_id,
-                children,
-                unbound_children,
-                server,
-                dir,
-                event_tx,
-                request_input,
             })
             .await
         }
