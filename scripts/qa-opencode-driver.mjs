@@ -4,6 +4,7 @@
 // docs/reference/qa-infrastructure.md, "OpenCode QA".
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import {
   NotAnswerable, ReceiptWatch, SessionWatch, StreamWatch, TranscriptMirror, UnknownOutcome,
   approvalDecision, approvalShape, buildAnswers, captureWindow, isLunaCrossTask, maskNonce,
@@ -29,8 +30,8 @@ export const forkInitialPermission = config => (config.effectivePermissionMode =
 const errorText = error => String(error?.message ?? error);
 
 export class Driver {
-  constructor({rpc, evidence, identity, provider, nonce, rpcTimeoutMs = 45000, ax = false}) {
-    Object.assign(this, {rpc, evidence, identity, provider, nonce, rpcTimeoutMs, ax});
+  constructor({rpc, evidence, identity, provider, nonce, rpcTimeoutMs = 45000, ax = false, captureHoldMs = 0}) {
+    Object.assign(this, {rpc, evidence, identity, provider, nonce, rpcTimeoutMs, ax, captureHoldMs});
     this.chats = new Map();
     this.receiptWatches = new Map();
     this.steps = [];
@@ -272,7 +273,7 @@ export class Driver {
       }
       const {pending} = outcome;
       this.observe('inputs', {chat: chat.role, questions: pending.questions.map(questionShape)});
-      const action = answer ? answer(pending) : null;
+      const action = answer ? await answer(pending) : null;
       if (!action) return result({result: 'pending', pending});
       answered.add(pending.requestId);
       const {receipt} = await this.answer(chatId, pending, action);
@@ -487,6 +488,19 @@ export class Driver {
     }
     this.evidence.save(`state/${label.replace(/[^a-z0-9._-]+/gi, '-')}.json`, state);
     return state;
+  }
+
+  // --capture-hold-ms: keep a live card or panel unanswered for that long
+  // before the capture, so the operator can bring the chat on screen and
+  // record it (presentation-only, QF-19). The hold and its window are logged.
+  async holdForCapture(label) {
+    if (this.captureHoldMs > 0 && !this.identity.rehearsal) {
+      const at = now();
+      console.error(`HOLD ${label}: card pending, capturing in ${this.captureHoldMs} ms (chat ${this.step?.label ?? '-'})`);
+      this.evidence.save(path.join('holds', `${label.replace(/[^a-z0-9._-]+/gi, '-')}.json`), {label, at, holdMs: this.captureHoldMs, step: this.step?.label ?? null});
+      await new Promise(resolve => setTimeout(resolve, this.captureHoldMs));
+    }
+    return this.capture(label);
   }
 
   capture(label) {

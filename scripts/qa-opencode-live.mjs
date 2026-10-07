@@ -11,6 +11,9 @@
 //        [--answer none|allow-once|deny|cancel] [--pick <option text>]
 //        [--capture [--ax]] [--expect-status idle|errored] [--turn-timeout <seconds>]
 //        [--mock-url <url>] [--mock-log <path>] [--evidence-root <dir>]
+//        [--untitled [--title-wait <seconds>]]   (X1: create the chat without a
+//        title, like the UI's new chat, and wait on WatchChats for LUNA's
+//        automatic title)
 //   node scripts/qa-opencode-live.mjs snapshot [--run <dir>]
 //   node scripts/qa-opencode-live.mjs verify-restart [--run <dir>]
 //   node scripts/qa-opencode-live.mjs answer --run <dir> --action allow-once|deny|cancel|pick:<text>|text:<text>|dismiss|mcp:Accept|mcp:Decline|mcp:Cancel
@@ -62,6 +65,8 @@ const {values: opt} = parseArgs({
     run: {type: 'string'},
     action: {type: 'string'},
     label: {type: 'string'},
+    untitled: {type: 'boolean', default: false},
+    'title-wait': {type: 'string', default: '120'},
   },
 });
 if (!['run', 'snapshot', 'verify-restart', 'answer', 'capture'].includes(mode)) {
@@ -181,7 +186,7 @@ try {
       sandbox: permissionMode === 'full' ? 'danger-full-access' : 'workspace-write'};
     manifest.config = config;
     const spaceId = await driver.createProject(fixture.dir);
-    const chatId = await driver.createChat({role: 'root', spaceId, cwd: fixture.dir, config, title: `OpenCode QA ${opt.scenario}`});
+    const chatId = await driver.createChat({role: 'root', spaceId, cwd: fixture.dir, config, title: opt.untitled ? undefined : `OpenCode QA ${opt.scenario}`});
     evidence.check('chat-created', 'createChat applied', 'applied', true);
     await driver.snapshot('before');
 
@@ -203,6 +208,29 @@ try {
       const count = after.chats.root.transcript.filter(entry => entry.id === send.messageId).length;
       evidence.check(`send-${send.index}-once`, 'the user message appears exactly once in the transcript', count, count === 1);
     }
+    if (opt.untitled) await driver.runStep('auto-title', async () => {
+      // X1: the title generator runs detached after a completed exchange, so
+      // wait on the WatchChats subscription (QF-15), never an RPC loop.
+      const started = Date.now();
+      const titles = [];
+      const title = await new Promise(resolve => {
+        let done = false;
+        const finish = value => { if (done) return; done = true; clearTimeout(timer); sub.close(); resolve(value); };
+        const timer = setTimeout(() => finish(null), Number(opt['title-wait']) * 1000);
+        const sub = rpc.subscribe('WatchChats', {}, item => {
+          const list = Array.isArray(item) ? item : item?.chats ?? [];
+          const chat = list.find(c => c.id === chatId);
+          const value = chat?.title?.trim() ?? '';
+          if (titles.at(-1)?.title !== value) titles.push({atMs: Date.now() - started, title: value});
+          if (value) finish(value);
+        });
+      });
+      const first = prompts[0] ?? '';
+      const fallback = first.split(/\s+/).filter(Boolean).slice(0, 7).join(' ').slice(0, 48);
+      evidence.save('auto-title.json', {chatId, title, waitedMs: Date.now() - started, titles, fallback, titleWaitSeconds: Number(opt['title-wait'])});
+      driver.check('title-generated', 'the untitled chat received an automatic title (X1)', title, Boolean(title));
+      driver.info('title-from-model', 'the title is model-generated, not the first-words fallback', {title, fallback}, Boolean(title) && title !== fallback);
+    });
     const record = await driver.chatRecord(chatId).catch(() => null);
     manifest.effective = {config: record?.config ?? null, title: record?.title ?? null};
     manifest.native = {sessionId: after.chats.root.identity?.currentBinding?.providerTaskId ?? null, readback: isOpencode ? 'wire log only (LUNA-private server)' : 'n/a'};

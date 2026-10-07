@@ -11,6 +11,8 @@
 //   node scripts/qa-opencode-scenarios.mjs run <S#> --provider opencode|claude-code
 //        --tier T2|T3 [--model <id>] [--variant <level>] [--evidence-root <dir>]
 //        [--turn-timeout <s>] [--allow-usage-store] [--ax] [--phase pre|post --run <dir>]
+//        [--capture-hold-ms <ms>]  (keep the S1 approval card, S1 question panel
+//        and S2X late card unanswered that long so the operator can capture them)
 //   Live-only extras (never rehearsed): S2X background child ask after the
 //   root Done, parked follow-up and per-child Stop; S4X OpenCode server
 //   SIGSTOP/SIGCONT and SIGKILL with an approval or a form pending
@@ -156,7 +158,7 @@ async function waitAnswering(s, role, done, {policy = allowAll, timeoutMs = 1800
       throw error;
     }
     if (outcome.type === 'done') return {value: outcome.value, handled};
-    const action = policy(outcome.pending);
+    const action = await policy(outcome.pending);
     if (!action) return {pending: outcome.pending, handled};
     answered.add(outcome.pending.requestId);
     const {receipt} = await s.d.answer(chatId, outcome.pending, action);
@@ -262,9 +264,9 @@ const SCENARIOS = {
       const root = 'root';
       await s.step('allow-once', async () => {
         let card = null;
-        const t = await s.turn(root, P.allow, {mock: `tool-shell:echo ${s.m('S1-ALLOW')}`, answer: pending => {
+        const t = await s.turn(root, P.allow, {mock: `tool-shell:echo ${s.m('S1-ALLOW')}`, answer: async pending => {
           card ??= pending;
-          s.d.capture('s1-approval-card');
+          await s.d.holdForCapture('s1-approval-card');
           return {approval: 'allow-once'};
         }});
         s.check('approval-shown', 'an approval card reached the shared panel', card ? card.questions.map(q => q.approval?.actionKind ?? 'question') : null, Boolean(card?.questions.some(q => q.approval)));
@@ -291,10 +293,10 @@ const SCENARIOS = {
       });
       await s.step('question-single', async () => {
         let shown = null;
-        const t = await s.turn(root, P.single, {answer: pending => {
+        const t = await s.turn(root, P.single, {answer: async pending => {
           if (pending.questions.some(q => q.approval)) return {approval: 'allow-once'};
           shown ??= pending;
-          s.d.capture('s1-question-panel');
+          await s.d.holdForCapture('s1-question-panel');
           return {pick: 'green'};
         }});
         s.modelCheck('question-shown', 'the question reached the shared question panel (no approval)', shown?.questions.map(q => ({options: q.options, multi: q.multiSelect})) ?? null, Boolean(shown));
@@ -968,7 +970,7 @@ const SCENARIOS = {
         const chat = s.d.chatByRole('root');
         if (!early.length) {
           const late = await chat.mirror.waitFor(() => chat.mirror.currentPending(), {timeoutMs: 150000, label: 'late child ask'}).catch(() => null);
-          s.d.capture('s2x-late-ask-card');
+          await s.d.holdForCapture('s2x-late-ask-card');
           s.check('late-ask-shown', 'the background child approval reaches the root chat panel after the root Done (OCF-51)',
             late ? late.questions.map(q => ({header: q.header ?? null, kind: q.approval?.actionKind ?? 'question', subagent: q.approval?.details?.subagent ?? null})) : null,
             Boolean(late?.questions.some(q => q.approval)));
@@ -1414,7 +1416,8 @@ async function runScenario(id, opts, {rehearsal = null} = {}) {
   evidence.writeManifest();
 
   await rpc.connect();
-  const driver = new Driver({rpc, evidence, identity, provider, nonce, rpcTimeoutMs: Number(opts['rpc-timeout'] ?? 45000), ax: Boolean(opts.ax)});
+  const driver = new Driver({rpc, evidence, identity, provider, nonce, rpcTimeoutMs: Number(opts['rpc-timeout'] ?? 45000), ax: Boolean(opts.ax),
+    captureHoldMs: Number(opts['capture-hold-ms'] ?? 0)});
   let failure = null;
   let stopped = [];
   try {
@@ -1734,7 +1737,7 @@ const {values: opts, positionals} = parseArgs({
     provider: {type: 'string', default: 'opencode'}, tier: {type: 'string'}, model: {type: 'string'}, variant: {type: 'string'},
     'evidence-root': {type: 'string'}, 'turn-timeout': {type: 'string'}, 'allow-usage-store': {type: 'boolean', default: false},
     phase: {type: 'string'}, run: {type: 'string'}, 'fake-args': {type: 'string'}, 'rpc-timeout': {type: 'string'}, ax: {type: 'boolean', default: false},
-    'hold-ms': {type: 'string'}, 'stall-wait-ms': {type: 'string'}, 'big-command': {type: 'string'}, 'mock-url': {type: 'string'},
+    'hold-ms': {type: 'string'}, 'capture-hold-ms': {type: 'string'}, 'stall-wait-ms': {type: 'string'}, 'big-command': {type: 'string'}, 'mock-url': {type: 'string'},
   },
   allowPositionals: true,
 });
