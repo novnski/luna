@@ -52,7 +52,9 @@
 //! - `transport`: the SSE bus reader (durable-seq tracking, reconnect gap
 //!   detection, read-idle); `wire_v2`: the 2.x frame normalizer.
 //! - `bus`: routing one normalized payload; `parts`: part streaming state.
-//! - `subagents`: spawn chips and child binding; `tools`: tool vocabulary.
+//! - `subagents`: native child sessions at any depth (spawn chips, binding,
+//!   status, progress, settlement) and background shell rows; `child_stop`:
+//!   per-child Stop (`stop_native_child`); `tools`: tool vocabulary.
 //! - `tool_output`: tool results as the shared `lunaToolOutput` envelope
 //!   and diffs; `shell_tail`: live and full shell output.
 //! - `permissions`: mode compilation, rule readback, child ceilings, the
@@ -87,6 +89,7 @@ use crate::{
 
 mod bus;
 mod catalog;
+mod child_stop;
 mod compat;
 mod delivery;
 mod forms;
@@ -109,6 +112,7 @@ mod wire_v2;
 
 use bus::*;
 use catalog::*;
+use child_stop::*;
 use compat::*;
 use delivery::*;
 use forms::*;
@@ -168,6 +172,8 @@ pub struct OpencodeHarness {
     /// Coalesce concurrent picker/title probes: several cold opencode boots
     /// at once are slower than one.
     probe_lock: tokio::sync::Mutex<()>,
+    /// Live runs by root session, for per-child Stop.
+    live_runs: LiveRuns,
 }
 
 impl Default for OpencodeHarness {
@@ -181,6 +187,7 @@ impl Default for OpencodeHarness {
             models_cache: tokio::sync::Mutex::new(None),
             commands_cache: std::sync::Mutex::new(HashMap::new()),
             probe_lock: tokio::sync::Mutex::new(()),
+            live_runs: LiveRuns::default(),
         }
     }
 }
@@ -392,6 +399,20 @@ impl Harness for OpencodeHarness {
         }
     }
 
+    /// Per-child Stop, like Claude (CC-08): interrupt the child session of
+    /// the live run bound to `native_session_id`. `Requested` is a receipt;
+    /// the child's own `execution.interrupted` settles its chip.
+    async fn stop_native_child(
+        &self,
+        native_session_id: &str,
+        spawn_tool_use_id: &str,
+    ) -> Result<crate::NativeTaskStop, HarnessError> {
+        Ok(self
+            .live_runs
+            .stop(native_session_id, spawn_tool_use_id)
+            .await)
+    }
+
     async fn compact_context(&self, request: ContextCompactRequest) -> Result<(), HarnessError> {
         let mut server = self.server(Some(&request.cwd)).await?;
         let result = server
@@ -420,6 +441,7 @@ impl Harness for OpencodeHarness {
             interrupt_grace: self.interrupt_grace,
             kill_grace: self.kill_grace,
             known_commands,
+            live_runs: self.live_runs.clone(),
         }));
         Ok(futures::stream::unfold(event_rx, |mut rx| async move {
             rx.recv().await.map(|ev| (ev, rx))

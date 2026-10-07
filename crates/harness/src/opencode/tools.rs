@@ -148,8 +148,8 @@ pub(super) fn oc_tool_call(name: &str, input: &Value, mcp_servers: &[String]) ->
         "websearch" => ToolCall::WebSearch {
             query: s(&["query"]).unwrap_or_default(),
         },
-        // The genus-gated spawn naming every driver shares. `task` is the
-        // 1.x spelling the subagent package still keys its binding on.
+        // The genus-gated spawn naming every driver shares (v2 `subagent`,
+        // v1 `task`).
         "subagent" | "task" => ToolCall::Unknown {
             name: s(&["description"])
                 .map(|d| format!("Agent: {d}"))

@@ -14,6 +14,9 @@ pub(super) enum BusOutcome {
     /// holds a non-user reason).
     TurnInterrupted,
     ConsumerGone,
+    /// The root started an execution LUNA did not prompt (a background
+    /// completion's wake): a provider-initiated turn.
+    ProviderTurn,
 }
 
 pub(super) type RequestInput = Box<
@@ -32,9 +35,8 @@ pub(super) struct BusCtx<'a> {
     pub(super) auto_approve: bool,
     pub(super) permission_policy: &'a luna_proto::PermissionPolicy,
     pub(super) main_feed: &'a mut SessionFeed,
-    pub(super) children: &'a mut HashMap<String, ChildRun>,
-    pub(super) pending_spawns: &'a mut VecDeque<PendingSpawn>,
-    pub(super) unbound_children: &'a mut HashMap<String, String>,
+    /// Native child sessions and background jobs (`subagents`).
+    pub(super) children: &'a mut ChildTree,
     pub(super) turn: &'a mut TurnState,
     pub(super) pending_usage: &'a mut Option<AgentEvent>,
     pub(super) context_windows: &'a HashMap<String, u64>,
@@ -43,38 +45,6 @@ pub(super) struct BusCtx<'a> {
     /// The run's own bus channel: live shell output pages re-enter the loop
     /// through it, so their activity stays ordered before the result.
     pub(super) bus_tx: &'a mpsc::Sender<BusMsg>,
-}
-
-/// Wrap an event as subagent-attributed traffic.
-pub(super) fn tag(parent: &str, event: AgentEvent) -> AgentEvent {
-    AgentEvent::Subagent {
-        parent_tool_use_id: parent.to_owned(),
-        event: Box::new(event),
-    }
-}
-
-pub(super) async fn settle_children(
-    children: &mut HashMap<String, ChildRun>,
-    event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
-    status: DoneStatus,
-) {
-    for child in children.values_mut() {
-        if child.done {
-            continue;
-        }
-        child.done = true;
-        let _ = event_tx
-            .send(Ok(tag(
-                &child.parent_tool_use_id,
-                AgentEvent::Done {
-                    status,
-                    result: None,
-                    error: None,
-                    session_id: None,
-                },
-            )))
-            .await;
-    }
 }
 
 /// Route one normalized bus payload (`{type, properties}`, the internal
@@ -91,8 +61,6 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
         permission_policy,
         main_feed,
         children,
-        pending_spawns,
-        unbound_children,
         turn,
         pending_usage,
         context_windows,
@@ -220,26 +188,32 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             BusOutcome::Continue
         }
         "session.created" => {
+            // A child at ANY depth: its parent is the root or a session of
+            // this run's tree. Each binds to the spawn chip that created it.
             let info = props.get("info").unwrap_or(&Value::Null);
-            // Only DIRECT children bind; a grandchild's parentID is the
-            // child's session and renders inside the child's own doc.
-            if info.get("parentID").and_then(Value::as_str) != Some(session_id) {
-                return BusOutcome::Continue;
-            }
-            let Some(child_id) = info.get("id").and_then(Value::as_str) else {
+            let (Some(child_id), Some(parent)) = (
+                info.get("id").and_then(Value::as_str),
+                info.get("parentID").and_then(Value::as_str),
+            ) else {
                 return BusOutcome::Continue;
             };
-            if children.contains_key(child_id) {
-                return BusOutcome::Continue;
-            }
             let title = info
                 .get("title")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            if !bind_child(children, pending_spawns, child_id, title) {
-                unbound_children.insert(child_id.to_owned(), title.to_owned());
+            let events = children.on_session_created(session_id, child_id, parent, title);
+            forward(event_tx, events).await
+        }
+        OBSERVE => {
+            let observed = children.observe(session_id, props, turn.active);
+            if let BusOutcome::ConsumerGone = forward(event_tx, observed.events).await {
+                return BusOutcome::ConsumerGone;
             }
-            BusOutcome::Continue
+            if observed.wake_started {
+                BusOutcome::ProviderTurn
+            } else {
+                BusOutcome::Continue
+            }
         }
         "message.updated" => {
             let info = props.get("info").unwrap_or(&Value::Null);
@@ -280,20 +254,14 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 let events = replay_pending(main_feed, message, true, turn);
                 return forward(event_tx, events).await;
             }
-            if let Some(child) = children.get_mut(session) {
+            if let Some(child) = children.runs.get_mut(session) {
                 child
                     .feed
                     .assistant_messages
                     .entry(message.to_owned())
                     .or_insert(role == "assistant");
-                // A NEW user message on a settled child is a steer resuming
-                // it: un-latch so resumed traffic streams to the same chip.
-                if role == "user" && child.done {
-                    child.done = false;
-                }
                 let events = replay_pending(&mut child.feed, message, false, turn);
-                let parent = child.parent_tool_use_id.clone();
-                let tagged = events.into_iter().map(|ev| tag(&parent, ev)).collect();
+                let tagged = children.tagged(session, events);
                 return forward(event_tx, tagged).await;
             }
             BusOutcome::Continue
@@ -304,64 +272,21 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 return BusOutcome::Continue;
             };
             if session == session_id {
-                // A shell's final output drain precedes its result.
+                // A shell's final output drain precedes its result. Spawn
+                // chips register and settle from the raw v2 observation of
+                // the same frame (`subagents`).
                 let mut events = prepare_tool_part(main_feed, part, &tool_ctx).await;
-                events.extend(part_snapshot_events(
-                    main_feed,
-                    part,
-                    true,
-                    Some((children, pending_spawns, unbound_children)),
-                ));
+                events.extend(part_snapshot_events(main_feed, part, true));
                 mark_content(turn, &events);
-                let mut settle: Vec<AgentEvent> = Vec::new();
-                // A completed `task` part settles its child chip.
-                if let Some((child_session, failed)) = task_completion(part) {
-                    let by_meta = children
-                        .get_mut(&child_session)
-                        .map(|c| (child_session.clone(), c));
-                    let target = match by_meta {
-                        Some(v) => Some(v),
-                        None => {
-                            // No metadata binding: settle whichever child
-                            // streams to this part's chip.
-                            let part_id = part.get("id").and_then(Value::as_str).unwrap_or("");
-                            children
-                                .iter_mut()
-                                .find(|(_, c)| c.parent_tool_use_id == part_id)
-                                .map(|(id, c)| (id.clone(), c))
-                        }
-                    };
-                    if let Some((_, child)) = target
-                        && !child.done
-                    {
-                        child.done = true;
-                        settle.push(tag(
-                            &child.parent_tool_use_id,
-                            AgentEvent::Done {
-                                status: if failed {
-                                    DoneStatus::Errored
-                                } else {
-                                    DoneStatus::Completed
-                                },
-                                result: None,
-                                error: None,
-                                session_id: None,
-                            },
-                        ));
-                    }
-                }
-                let mut all = events;
-                all.extend(settle);
-                return forward(event_tx, all).await;
+                return forward(event_tx, events).await;
             }
-            if let Some(child) = children.get_mut(session) {
+            if let Some(child) = children.runs.get_mut(session) {
                 if child.done {
                     return BusOutcome::Continue;
                 }
                 let mut events = prepare_tool_part(&mut child.feed, part, &tool_ctx).await;
-                events.extend(part_snapshot_events(&mut child.feed, part, false, None));
-                let parent = child.parent_tool_use_id.clone();
-                let tagged = events.into_iter().map(|ev| tag(&parent, ev)).collect();
+                events.extend(part_snapshot_events(&mut child.feed, part, false));
+                let tagged = children.tagged(session, events);
                 return forward(event_tx, tagged).await;
             }
             BusOutcome::Continue
@@ -395,13 +320,12 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             if session == session_id {
                 return forward(event_tx, side(main_feed)).await;
             }
-            if let Some(child) = children.get_mut(session) {
+            if let Some(child) = children.runs.get_mut(session) {
                 if child.done {
                     return BusOutcome::Continue;
                 }
                 let events = side(&mut child.feed);
-                let parent = child.parent_tool_use_id.clone();
-                let tagged = events.into_iter().map(|ev| tag(&parent, ev)).collect();
+                let tagged = children.tagged(session, events);
                 return forward(event_tx, tagged).await;
             }
             BusOutcome::Continue
@@ -422,13 +346,12 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                 mark_content(turn, &events);
                 return forward(event_tx, events).await;
             }
-            if let Some(child) = children.get_mut(session) {
+            if let Some(child) = children.runs.get_mut(session) {
                 if child.done {
                     return BusOutcome::Continue;
                 }
                 let events = part_delta_events(&mut child.feed, props, part_id, delta);
-                let parent = child.parent_tool_use_id.clone();
-                let tagged = events.into_iter().map(|ev| tag(&parent, ev)).collect();
+                let tagged = children.tagged(session, events);
                 return forward(event_tx, tagged).await;
             }
             BusOutcome::Continue
@@ -441,8 +364,8 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             handle_permission_asked(PermissionAsk {
                 props,
                 event_session,
-                children,
-                unbound_children,
+                children: &children.runs,
+                unbound_children: &children.unbound,
                 server,
                 dir,
                 event_tx,

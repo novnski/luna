@@ -34,6 +34,9 @@ pub(super) const ADMISSION_GRACE: Duration = Duration::from_secs(3);
 const MAX_KNOWN_MESSAGES: usize = 512;
 /// Request ids remembered for reconnect dedupe.
 const MAX_SEEN_REQUESTS: usize = 1024;
+/// After the last background job of a parked run settles, how long the run
+/// waits for the root wake execution its completion starts.
+pub(super) const WAKE_GRACE: Duration = Duration::from_secs(10);
 
 /// What a wedged/silent run usually means for opencode.
 pub(super) const STALL_HINT: &str = "The model provider is likely unreachable or rejecting requests. \
@@ -67,6 +70,8 @@ pub(super) struct Session {
     pub(super) interrupt_grace: Duration,
     pub(super) kill_grace: Duration,
     pub(super) known_commands: Option<Vec<SlashCommand>>,
+    /// Per-child Stop registry (`stop_native_child`).
+    pub(super) live_runs: LiveRuns,
 }
 
 pub(super) fn new_message_id() -> String {
@@ -136,6 +141,10 @@ pub(super) struct TurnState {
     pub(super) started_ms: i64,
     /// A terminal waiting for this turn's delivery question to resolve.
     pub(super) undelivered: Option<(Terminal, tokio::time::Instant)>,
+    /// A provider-initiated wake turn (a background completion started the
+    /// root execution while no LUNA turn ran, OC-11): its own input's
+    /// delivery is not a second provider turn.
+    pub(super) wake: bool,
 }
 
 impl TurnState {
@@ -162,6 +171,7 @@ impl TurnState {
             admission_checked: false,
             started_ms: unix_ms(),
             undelivered: None,
+            wake: false,
         }
     }
 
@@ -277,6 +287,10 @@ enum Wake {
     Activity,
     Undelivered,
     Admission,
+    /// After a root Stop: the children's own terminals never all arrived.
+    Drain,
+    /// A parked run's background work ended and no wake turn followed.
+    Parked,
 }
 
 pub(super) async fn run_session(session: Session) {
@@ -288,6 +302,7 @@ pub(super) async fn run_session(session: Session) {
         interrupt_grace,
         kill_grace,
         known_commands,
+        live_runs,
     } = session;
     let RunControls {
         request_input,
@@ -433,6 +448,10 @@ pub(super) async fn run_session(session: Session) {
         server.shutdown(kill_grace).await;
         return;
     }
+    // Per-child Stop reaches this loop through the run's registration under
+    // its root session (released when the run ends).
+    let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<ChildStopRequest>();
+    let _live = live_runs.register(&session_id, stop_tx);
 
     // Advertise slash commands (composer popup); a warm cache skips the call.
     let commands = match known_commands {
@@ -554,10 +573,18 @@ pub(super) async fn run_session(session: Session) {
 
     // ---- main loop --------------------------------------------------------
     let mut main_feed = SessionFeed::default();
-    let mut children: HashMap<String, ChildRun> = HashMap::new();
-    let mut pending_spawns: VecDeque<PendingSpawn> = VecDeque::new();
-    // Child sessions created before their spawn chip was seen (id → title).
-    let mut unbound_children: HashMap<String, String> = HashMap::new();
+    // Native child sessions (any depth) and background jobs.
+    let mut children = ChildTree::default();
+    // The root turn settled while background work runs: the run stays alive,
+    // like a persistent adapter, for that work's traffic and wake turns.
+    let mut parked = false;
+    // After a root Stop: a bounded wait for the children's own terminals,
+    // and the stop reason its final Done carries.
+    let mut drain_deadline: Option<tokio::time::Instant> = None;
+    let mut drain_reason: Option<String> = None;
+    // A parked run's background work ended: the root wake its completion
+    // starts should follow within this deadline, else the run ends.
+    let mut wake_deadline: Option<tokio::time::Instant> = None;
     // Ordinary follow-ups (warm routing) wait for the turn boundary and
     // then run as their own turn; explicit steers go native.
     let mut held_followups: VecDeque<crate::SteerMessage> = VecDeque::new();
@@ -597,6 +624,65 @@ pub(super) async fn run_session(session: Session) {
     // readback and the reconnect resync (a macro so `break`/`continue` act
     // on the caller's loop): emit held usage, then Interrupted / the next
     // held follow-up / AssistantMessageCompleted + Done.
+    // Post one held follow-up as its own turn. Evaluates to `true` once the
+    // follow-up's turn is the current one; `false` when OpenCode refused it
+    // (the error is shown; the engine keeps the follow-up unconfirmed).
+    macro_rules! start_followup {
+        ($label:lifetime, $next:expr) => {{
+            let next: crate::SteerMessage = $next;
+            let id = luna_prompt_id(&session_id, next.message_id.as_deref());
+            let posted_ms = unix_ms();
+            let outcome = post_prompt(
+                &server,
+                &session_id,
+                dir,
+                &commands,
+                &next.prompt,
+                TurnSpec {
+                    attachments: &next.attachments,
+                    id: &id,
+                    delivery: PromptDelivery::Queue,
+                },
+                &command_tx,
+            )
+            .await;
+            let rotate_now = !inbox_live || outcome == PromptOutcome::Command;
+            let mut next_turn = TurnState::begin(stall);
+            next_turn.started_ms = posted_ms;
+            next_turn.provider_checkpoint_id = turn.provider_checkpoint_id.clone();
+            next_turn.luna_message_id = next.message_id.clone();
+            match admit(outcome, &mut next_turn, &id, posted_ms, &server, &session_id, dir, &event_tx).await {
+                Ok(()) => {
+                    turn = next_turn;
+                    parked = false;
+                    wake_deadline = None;
+                    if let Some(id) = &turn.inbox_id {
+                        known_messages.insert(id, MAX_KNOWN_MESSAGES);
+                    }
+                    if rotate_now {
+                        // No inbox evidence to wait for: the boundary
+                        // is the post itself (execution correlation).
+                        let (prev, next_id) = rotate(&mut assistant_message_id);
+                        if !send(&event_tx, AgentEvent::Steered {
+                            user_message_id: next.message_id.clone(),
+                            assistant_message_id: Some(prev),
+                            next_assistant_message_id: Some(next_id),
+                        }).await {
+                            break $label;
+                        }
+                    } else {
+                        turn.rotate_on_delivery = true;
+                    }
+                    true
+                }
+                Err(message) => {
+                    let _ = send(&event_tx, AgentEvent::Error { message }).await;
+                    false
+                }
+            }
+        }};
+    }
+
     macro_rules! settle_idle {
         ($label:lifetime) => {{
             if !turn.active {
@@ -618,7 +704,16 @@ pub(super) async fn run_session(session: Session) {
                 if let Some(reason) = &reason {
                     let _ = send(&event_tx, AgentEvent::Error { message: reason.clone() }).await;
                 }
-                settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
+                // Children settle on their own terminals (a stopped child's
+                // execution.interrupted), never locally: wait a bounded grace.
+                // One that never reports stays open (the engine shows it
+                // unobserved).
+                if children.has_open() && drain_deadline.is_none() {
+                    abort_deadline = None;
+                    drain_reason = reason;
+                    drain_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
+                    continue $label;
+                }
                 let _ = send(&event_tx, AgentEvent::Done {
                     status: DoneStatus::Interrupted,
                     result: None,
@@ -630,54 +725,10 @@ pub(super) async fn run_session(session: Session) {
             }
             let errored = turn.failed || (turn.error.is_some() && !turn.saw_content);
             if !errored && let Some(next) = held_followups.pop_front() {
-                let id = luna_prompt_id(&session_id, next.message_id.as_deref());
-                let posted_ms = unix_ms();
-                let outcome = post_prompt(
-                    &server,
-                    &session_id,
-                    dir,
-                    &commands,
-                    &next.prompt,
-                    TurnSpec {
-                        attachments: &next.attachments,
-                        id: &id,
-                        delivery: PromptDelivery::Queue,
-                    },
-                    &command_tx,
-                )
-                .await;
-                let rotate_now = !inbox_live || outcome == PromptOutcome::Command;
-                let mut next_turn = TurnState::begin(stall);
-                next_turn.started_ms = posted_ms;
-                next_turn.provider_checkpoint_id = turn.provider_checkpoint_id.clone();
-                next_turn.luna_message_id = next.message_id.clone();
-                match admit(outcome, &mut next_turn, &id, posted_ms, &server, &session_id, dir, &event_tx).await {
-                    Ok(()) => {
-                        turn = next_turn;
-                        if let Some(id) = &turn.inbox_id {
-                            known_messages.insert(id, MAX_KNOWN_MESSAGES);
-                        }
-                        if rotate_now {
-                            // No inbox evidence to wait for: the boundary
-                            // is the post itself (execution correlation).
-                            let (prev, next_id) = rotate(&mut assistant_message_id);
-                            if !send(&event_tx, AgentEvent::Steered {
-                                user_message_id: next.message_id.clone(),
-                                assistant_message_id: Some(prev),
-                                next_assistant_message_id: Some(next_id),
-                            }).await {
-                                break $label;
-                            }
-                        } else {
-                            turn.rotate_on_delivery = true;
-                        }
-                        continue $label;
-                    }
-                    Err(message) => {
-                        // The finished turn still settles as it ended; the
-                        // follow-up stays unconfirmed for the engine.
-                        let _ = send(&event_tx, AgentEvent::Error { message }).await;
-                    }
+                // A refused follow-up leaves the finished turn to settle as
+                // it ended.
+                if start_followup!($label, next) {
+                    continue $label;
                 }
             }
             let (prev, _next) = rotate(&mut assistant_message_id);
@@ -702,6 +753,12 @@ pub(super) async fn run_session(session: Session) {
                 session_id: Some(session_id.clone()),
             }).await;
             done_sent = true;
+            // Background subagents or shells outlive the root turn: stay for
+            // their traffic and the wake turn their completion starts.
+            if children.has_background_work() {
+                parked = true;
+                continue $label;
+            }
             break $label;
         }};
     }
@@ -744,8 +801,8 @@ pub(super) async fn run_session(session: Session) {
                         auto_approve: request.auto_approve,
                         permission_policy: &permission_policy,
                         requests: &requests,
-                        children: &children,
-                        unbound_children: &unbound_children,
+                        children: &children.runs,
+                        unbound_children: &children.unbound,
                         turn_active: turn.active,
                     })
                     .await;
@@ -770,8 +827,8 @@ pub(super) async fn run_session(session: Session) {
                         auto_approve: request.auto_approve,
                         permission_policy: &permission_policy,
                         requests: &requests,
-                        children: &children,
-                        unbound_children: &unbound_children,
+                        children: &children.runs,
+                        unbound_children: &children.unbound,
                         turn_active: turn.active,
                     })
                     .await;
@@ -827,9 +884,7 @@ pub(super) async fn run_session(session: Session) {
                 BusMsg::Request { id, session, pending } => {
                     seen_requests.insert(&id, MAX_SEEN_REQUESTS);
                     // Only this run's sessions hold the turn up.
-                    let ours = session == session_id
-                        || children.contains_key(&session)
-                        || unbound_children.contains_key(&session);
+                    let ours = children.owns(&session_id, &session);
                     if pending && ours {
                         pending_requests.insert(id, session);
                     } else if !pending {
@@ -838,6 +893,11 @@ pub(super) async fn run_session(session: Session) {
                     turn.last_activity = tokio::time::Instant::now();
                 }
                 BusMsg::Disconnected => {
+                    if parked && !turn.active {
+                        // A post-turn server death: every turn already
+                        // settled; open children stay unobserved.
+                        break $label;
+                    }
                     let crashed = match server.child.as_mut() {
                         Some(child) => child.try_wait().ok().flatten(),
                         None => None,
@@ -1042,6 +1102,12 @@ pub(super) async fn run_session(session: Session) {
                                     provider_interrupted = true;
                                     settle_idle!($label);
                                 }
+                                ("inbox.delivered", false, None) if turn.wake || (parked && !turn.active) => {
+                                    // A parked run's wake input (or the
+                                    // running wake turn's own): the root
+                                    // execution it starts is announced once,
+                                    // as the wake turn (BusOutcome::ProviderTurn).
+                                }
                                 ("inbox.delivered", false, None) => {
                                     // Input LUNA did not post (a background
                                     // completion, another client): a
@@ -1129,8 +1195,6 @@ pub(super) async fn run_session(session: Session) {
                         permission_policy: &permission_policy,
                         main_feed: &mut main_feed,
                         children: &mut children,
-                        pending_spawns: &mut pending_spawns,
-                        unbound_children: &mut unbound_children,
                         turn: &mut turn,
                         pending_usage: &mut pending_usage,
                         context_windows: &context_windows,
@@ -1143,6 +1207,46 @@ pub(super) async fn run_session(session: Session) {
                         BusOutcome::TurnIdle => on_terminal!($label, Terminal::Succeeded),
                         BusOutcome::TurnFailed => on_terminal!($label, Terminal::Failed),
                         BusOutcome::TurnInterrupted => on_terminal!($label, Terminal::Interrupted),
+                        BusOutcome::ProviderTurn if !interrupt_requested => {
+                            // A background completion's wake (OC-11): a
+                            // provider turn, ending with its own Done.
+                            parked = false;
+                            wake_deadline = None;
+                            let turn_id =
+                                format!("opencode-turn-{}", uuid::Uuid::new_v4().simple());
+                            if !send(&event_tx, AgentEvent::ProviderTurnStarted {
+                                thread_id: session_id.clone(),
+                                turn_id,
+                            }).await {
+                                break $label;
+                            }
+                            turn = TurnState::begin(None);
+                            turn.idle_ready = true;
+                            turn.wake = true;
+                            turn.note_activity();
+                        }
+                        BusOutcome::ProviderTurn => {}
+                    }
+                    if drain_deadline.is_some() && !children.has_open() {
+                        let _ = send(&event_tx, AgentEvent::Done {
+                            status: DoneStatus::Interrupted,
+                            result: None,
+                            error: drain_reason.take(),
+                            session_id: Some(session_id.clone()),
+                        }).await;
+                        done_sent = true;
+                        break $label;
+                    }
+                    if parked && !turn.active {
+                        // A completion reached the idle root, or the last
+                        // background job ended: its wake should follow.
+                        if children.take_wake_expected()
+                            || (wake_deadline.is_none() && !children.has_background_work())
+                        {
+                            wake_deadline = Some(tokio::time::Instant::now() + WAKE_GRACE);
+                        }
+                    } else {
+                        children.take_wake_expected();
                     }
                 }
             }
@@ -1156,9 +1260,15 @@ pub(super) async fn run_session(session: Session) {
         // iteration so the future doesn't hold a borrow of `turn`.
         let now = tokio::time::Instant::now();
         let mut deadlines: Vec<(tokio::time::Instant, Wake)> = Vec::new();
-        if let Some(deadline) = abort_deadline {
+        if let Some(deadline) = drain_deadline {
+            deadlines.push((deadline, Wake::Drain));
+        } else if let Some(deadline) = abort_deadline {
             deadlines.push((deadline, Wake::Abort));
-        } else if turn.active {
+        } else if !turn.active {
+            if parked && let Some(deadline) = wake_deadline {
+                deadlines.push((deadline, Wake::Parked));
+            }
+        } else {
             if !turn.saw_activity
                 && let Some(deadline) = turn.stall_deadline
             {
@@ -1200,6 +1310,10 @@ pub(super) async fn run_session(session: Session) {
                 // Stop clears pending input: queued follow-ups never run
                 // (the engine pauses the queue after Stop).
                 held_followups.clear();
+                // Background children are independent of the root: stop each
+                // through the same per-child interrupt (foreground children
+                // stop natively with the root).
+                stop_background_children(&children, &server, dir);
                 if turn.active {
                     turn.idle_ready = true;
                     turn.undelivered = None;
@@ -1244,6 +1358,11 @@ pub(super) async fn run_session(session: Session) {
                     // finishes up. The grace guards a server that never
                     // delivers it.
                     abort_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
+                } else if children.has_open() {
+                    // Parked: wait for the stopped children's own terminals.
+                    parked = false;
+                    wake_deadline = None;
+                    drain_deadline = Some(tokio::time::Instant::now() + interrupt_grace);
                 } else {
                     let _ = send(&event_tx, AgentEvent::Done {
                         status: DoneStatus::Interrupted,
@@ -1319,12 +1438,36 @@ pub(super) async fn run_session(session: Session) {
                             continue 'main;
                         }
                         // Ordinary warm routing: its own turn, posted at this
-                        // turn's boundary. (A turn is always active here: the
-                        // loop ends with the Done that settles the last one.)
+                        // turn's boundary. With no turn running (a parked
+                        // run, OC-11) it starts now.
+                        if !turn.active && parked && !interrupt_requested {
+                            if !start_followup!('main, steer) {
+                                // Refused (the error is shown): the
+                                // follow-up's own turn ends here.
+                                let _ = send(&event_tx, AgentEvent::Done {
+                                    status: DoneStatus::Errored,
+                                    result: None,
+                                    error: Some("OpenCode did not accept the follow-up message.".into()),
+                                    session_id: Some(session_id.clone()),
+                                }).await;
+                            }
+                            continue 'main;
+                        }
                         held_followups.push_back(steer);
                     }
-                    None => steering_open = false,
+                    None => {
+                        steering_open = false;
+                        // The engine retires an idle runtime by closing its
+                        // mailbox: a parked run ends instead of lingering.
+                        if parked && !turn.active {
+                            break 'main;
+                        }
+                    }
                 }
+            }
+
+            Some(request) = stop_rx.recv() => {
+                answer_stop(request, &children, &server, dir);
             }
 
             posted = steer_posted_rx.recv() => {
@@ -1379,6 +1522,27 @@ pub(super) async fn run_session(session: Session) {
             _ = wake_sleep => {
                 let Some((_, wake)) = next else { continue 'main };
                 match wake {
+                    Wake::Drain => {
+                        // Children that never reported their terminal stay
+                        // open (the engine shows them unobserved).
+                        let _ = send(&event_tx, AgentEvent::Done {
+                            status: DoneStatus::Interrupted,
+                            result: None,
+                            error: drain_reason.take(),
+                            session_id: Some(session_id.clone()),
+                        }).await;
+                        done_sent = true;
+                        break 'main;
+                    }
+                    Wake::Parked => {
+                        wake_deadline = None;
+                        if children.has_background_work() {
+                            // Another background job is still running.
+                            continue 'main;
+                        }
+                        // No wake followed: nothing is left to observe.
+                        break 'main;
+                    }
                     Wake::Abort => {
                         // Abort acknowledged nothing within the grace: hard stop.
                         settle_children(&mut children, &event_tx, DoneStatus::Interrupted).await;
