@@ -1,3 +1,4 @@
+use super::history::*;
 use super::*;
 
 fn ignore_fork_progress(_: ProviderForkProgress) -> Result<(), HarnessError> {
@@ -83,16 +84,14 @@ async fn fork_wire_with(
                 let body = serde_json::from_slice(&request[header_end..header_end + length])
                     .unwrap_or(Value::Null);
                 recorded.lock().unwrap().push((path.clone(), body));
-                if delay_fork_readback && path == "/session/forked" {
+                if delay_fork_readback && path == "/api/session/forked" {
                     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 }
                 let response = match path.as_str() {
-                    "/api/health" => json!({"healthy":true}),
-                    "/global/health" => json!({"healthy":true,"version":"1.18.31"}),
-                    "/session/source/message" => source_messages,
-                    "/session/source/fork" => json!({"id":"forked"}),
-                    "/session/forked" => json!({"id":"forked"}),
-                    "/session/forked/message" => fork_messages,
+                    "/api/session/source/message" => json!({"data": source_messages}),
+                    "/api/session/source/fork" => json!({"data":{"id":"forked"}}),
+                    "/api/session/forked" => json!({"data":{"id":"forked"}}),
+                    "/api/session/forked/message" => json!({"data": fork_messages}),
                     _ => json!({}),
                 };
                 let encoded = response.to_string();
@@ -136,7 +135,7 @@ async fn native_fork_adapter_remaps_regenerated_ids_and_rejects_leakage() {
         Some("fork-assistant-1")
     );
     assert!(requests.lock().unwrap().iter().any(|(path, body)| {
-        path == "/session/source/fork" && body == &json!({"messageID":"user-2"})
+        path == "/api/session/source/fork" && body == &json!({"messageID":"user-2"})
     }));
     server_task.abort();
 
@@ -249,7 +248,7 @@ async fn native_fork_progress_distinguishes_preflight_acknowledgement_and_readba
             .lock()
             .unwrap()
             .iter()
-            .all(|(path, _)| path != "/session/source/fork")
+            .all(|(path, _)| path != "/api/session/source/fork")
     );
     server_task.abort();
 }
@@ -349,72 +348,66 @@ fn fork_readback_remaps_compaction_references_but_preserves_semantic_nested_fiel
 }
 
 #[test]
-fn compact_routes_stay_provider_native_on_both_supported_protocols() {
+fn compact_posts_an_object_body_on_the_v2_route() {
     assert_eq!(
-        compact_http_request(Protocol::V1, "session-1", Some("openai/gpt-5")).unwrap(),
-        (
-            "/session/session-1/summarize".into(),
-            json!({ "providerID": "openai", "modelID": "gpt-5" })
-        )
+        compact_http_request("session-2"),
+        ("/api/session/session-2/compact".into(), json!({}))
     );
-    assert_eq!(
-        compact_http_request(Protocol::V2, "session-2", None).unwrap(),
-        ("/api/session/session-2/compact".into(), Value::Null)
-    );
-    assert!(compact_http_request(Protocol::V1, "session-3", None).is_err());
 }
 
 #[test]
 fn permission_modes_compile_to_session_scoped_rules() {
     let ask = opencode_permission_rules(luna_proto::PermissionMode::Ask);
-    assert!(
-        ask.as_array()
-            .unwrap()
-            .iter()
-            .any(|rule| { rule["permission"] == "bash" && rule["action"] == "ask" })
-    );
-    assert!(
-        ask.as_array()
-            .unwrap()
-            .iter()
-            .any(|rule| { rule["permission"] == "edit" && rule["action"] == "allow" })
-    );
-    let ask = ask.as_array().unwrap();
+    let rules = ask.as_array().unwrap();
+    // v2 rule shape only: {action, resource, effect}.
+    assert!(rules.iter().all(|rule| {
+        let rule = rule.as_object().unwrap();
+        rule.len() == 3
+            && rule.contains_key("action")
+            && rule.contains_key("resource")
+            && rule.contains_key("effect")
+    }));
+    for action in ["shell", "edit", "external_directory", "webfetch"] {
+        assert!(
+            rules
+                .iter()
+                .any(|rule| rule["action"] == action && rule["effect"] == "ask"),
+            "{action} must ask"
+        );
+    }
     assert_eq!(
-        &ask[ask.len() - 9..],
+        rules[0],
+        json!({ "action": "*", "resource": "*", "effect": "ask" })
+    );
+    assert_eq!(
+        &rules[rules.len() - 3..],
         &[
-            json!({ "permission": "read", "pattern": "*.env", "action": "ask" }),
-            json!({ "permission": "read", "pattern": "*.env.*", "action": "ask" }),
-            json!({ "permission": "read", "pattern": "*.env.example", "action": "allow" }),
-            json!({ "permission": "edit", "pattern": "*.env", "action": "ask" }),
-            json!({ "permission": "edit", "pattern": "*.env.*", "action": "ask" }),
-            json!({ "permission": "edit", "pattern": "*.env.example", "action": "allow" }),
-            json!({ "permission": "write", "pattern": "*.env", "action": "ask" }),
-            json!({ "permission": "write", "pattern": "*.env.*", "action": "ask" }),
-            json!({ "permission": "write", "pattern": "*.env.example", "action": "allow" }),
+            json!({ "action": "read", "resource": "*.env", "effect": "ask" }),
+            json!({ "action": "read", "resource": "*.env.*", "effect": "ask" }),
+            json!({ "action": "read", "resource": "*.env.example", "effect": "allow" }),
         ]
     );
     let full = opencode_permission_rules(luna_proto::PermissionMode::Full);
     assert_eq!(
         full,
-        json!([{ "permission": "*", "pattern": "*", "action": "allow" }])
+        json!([{ "action": "*", "resource": "*", "effect": "allow" }])
     );
 }
 
 #[test]
-fn task_allowance_is_only_offered_on_process_scoped_v1() {
-    assert!(opencode_supports_task_allowance(Protocol::V1));
-    assert!(!opencode_supports_task_allowance(Protocol::V2));
-    assert!(opencode_approval_options(Protocol::V1).contains(&"Allow for task".to_string()));
-    assert!(!opencode_approval_options(Protocol::V2).contains(&"Allow for task".to_string()));
+fn task_allowance_is_never_offered_and_replies_use_decision() {
+    assert!(!opencode_supports_task_allowance());
+    assert!(!opencode_approval_options().contains(&"Allow for task".to_string()));
     assert_eq!(
-        opencode_permission_reply(Protocol::V1, Some("Allow for task")),
-        "always"
+        opencode_permission_reply_body(Some("Allow once")),
+        json!({"decision":"once"})
     );
-    assert_eq!(
-        opencode_permission_reply(Protocol::V2, Some("Allow for task")),
-        "reject"
-    );
+    for answer in [Some("Allow for task"), Some("Deny"), Some("Cancel"), None] {
+        assert_eq!(
+            opencode_permission_reply_body(answer),
+            json!({"decision":"reject"})
+        );
+    }
 }
 
 /// Real HTTP/SSE transport with explicitly ordered turn events. No provider or
@@ -438,22 +431,12 @@ impl Drop for TurnWire {
 }
 
 impl TurnWire {
+    /// Serves the 2.x wire (`/api/*` routes, `{data}` wrappers).
     async fn start(queued: bool) -> Self {
-        Self::start_proto(queued, false).await
+        Self::start_policy(queued, true, None).await
     }
 
-    /// `v2` serves the 2.x wire (`/api/*` routes, `{data}` wrappers,
-    /// version-bearing `/api/health`); otherwise the 1.18 one.
-    async fn start_proto(queued: bool, v2: bool) -> Self {
-        Self::start_policy(queued, v2, true, None).await
-    }
-
-    async fn start_policy(
-        queued: bool,
-        v2: bool,
-        auto_approve: bool,
-        answer: Option<&'static str>,
-    ) -> Self {
+    async fn start_policy(queued: bool, auto_approve: bool, answer: Option<&'static str>) -> Self {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
@@ -493,7 +476,7 @@ impl TurnWire {
                         request.extend_from_slice(&buf[..n]);
                     }
                     if is_post { recorded.lock().unwrap().push((path.clone(), serde_json::from_slice(&request[header_end..header_end+length]).unwrap_or(Value::Null))); }
-                    if path == "/global/event" || path == "/api/event" {
+                    if path == "/api/event" {
                         socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n: connected\n\n").await.unwrap();
                         let mut events = bus_rx.lock().await.take().unwrap();
                         while let Some(event) = events.recv().await {
@@ -501,27 +484,16 @@ impl TurnWire {
                         }
                         return;
                     }
-                    let body = if v2 {
-                        match path.as_str() {
-                            "/api/health" => r#"{"healthy":true,"version":"2.0.3"}"#,
-                            "/api/session" => r#"{"data":{"id":"fixture"}}"#,
-                            "/api/command" => r#"{"data":[]}"#,
-                            // Non-empty: the catalog-sync retry loop must not stall tests.
-                            "/api/model" => r#"{"data":[{"providerID":"opencode","id":"muse","name":"Muse","limit":{"context":1000},"variants":[{"id":"low"}],"enabled":true}]}"#,
-                            _ => "{}",
-                        }
-                    } else {
-                        match path.as_str() {
-                            "/global/health" => r#"{"healthy":true,"version":"1.18.31"}"#,
-                            "/session" => r#"{"id":"fixture"}"#,
-                            "/command" => "[]",
-                            _ => "{}",
-                        }
+                    let body = match path.as_str() {
+                        "/api/info" => r#"{"version":"2.0.22","pid":1,"urls":[],"paths":{"tmp":"/tmp"}}"#,
+                        "/api/session" => r#"{"data":{"id":"fixture"}}"#,
+                        "/api/command" => r#"{"data":[]}"#,
+                        // Non-empty: the catalog-sync retry loop must not stall tests.
+                        "/api/model" => r#"{"data":[{"providerID":"opencode","id":"muse","name":"Muse","limit":{"context":1000},"variants":[{"id":"low"}],"enabled":true}]}"#,
+                        _ => "{}",
                     };
                     socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
-                    if path.ends_with("/prompt_async")
-                        || path.ends_with("/prompt")
-                        || path.ends_with("/abort")
+                    if path.ends_with("/prompt")
                         || path.ends_with("/interrupt")
                         || path == "/api/model"
                     {
@@ -571,7 +543,7 @@ impl TurnWire {
                 invoke_luna_tool: None,
             },
             request: serde_json::from_value(
-                json!({"prompt":"first", "cwd":"", "sandbox":"workspace-write", "autoApprove": auto_approve, "model": if v2 { Some("opencode/muse") } else { None }, "reasoning": "low"}),
+                json!({"prompt":"first", "cwd":"", "sandbox":"workspace-write", "autoApprove": auto_approve, "model": "opencode/muse", "reasoning": "low"}),
             )
             .unwrap(),
             interrupt_grace: Duration::from_secs(2),
@@ -595,16 +567,6 @@ impl TurnWire {
             .unwrap()
             .unwrap();
         assert!(path.ends_with(suffix), "unexpected request: {path}");
-    }
-
-    fn status(&self, status: &str) {
-        self.bus.send(json!({"type":"session.status", "properties":{"sessionID":"fixture", "status":{"type":status}}})).unwrap();
-    }
-
-    fn idle(&self) {
-        self.bus
-            .send(json!({"type":"session.idle", "properties":{"sessionID":"fixture"}}))
-            .unwrap();
     }
 
     /// Push one raw 2.x `/api/event` frame (normalized in the real
@@ -632,37 +594,46 @@ impl TurnWire {
 }
 
 #[tokio::test]
-async fn queued_turn_ignores_previous_turn_duplicate_idle() {
-    for status_first in [true, false] {
-        let mut wire = TurnWire::start(true).await;
-        wire.request("/prompt_async").await;
-        wire.status("busy");
-        // Both completion encodings belong to the first turn. The first frame
-        // submits the queued prompt; the second must not finish that new turn.
-        if status_first {
-            wire.status("idle");
-            wire.idle();
-        } else {
-            wire.idle();
-            wire.status("idle");
-        }
-        wire.request("/prompt_async").await;
-        wire.status("busy");
-        wire.bus.send(json!({"type":"message.updated", "properties":{"info":{"id":"answer", "sessionID":"fixture", "role":"assistant"}}})).unwrap();
-        wire.bus.send(json!({"type":"message.part.updated", "properties":{"part":{"id":"text", "messageID":"answer", "sessionID":"fixture", "type":"text", "text":"SECOND_OK"}}})).unwrap();
-        wire.status("idle");
-        let (status, text) = wire.done().await;
-        assert_eq!(status, DoneStatus::Completed);
-        assert_eq!(
-            text, "SECOND_OK",
-            "queued turn was completed before its response"
-        );
-    }
+async fn queued_turn_ignores_previous_turn_duplicate_terminal() {
+    let mut wire = TurnWire::start(true).await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
+    // A repeated terminal for the first turn: the first submits the queued
+    // prompt; the duplicate must not finish that new turn.
+    wire.v2(
+        "session.execution.succeeded",
+        json!({"sessionID": "fixture"}),
+    );
+    wire.v2(
+        "session.execution.succeeded",
+        json!({"sessionID": "fixture"}),
+    );
+    wire.request("/prompt").await;
+    wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
+    wire.v2(
+        "session.step.started",
+        json!({"sessionID":"fixture","assistantMessageID":"answer"}),
+    );
+    wire.v2(
+        "session.text.ended",
+        json!({"sessionID":"fixture","assistantMessageID":"answer","ordinal":0,"text":"SECOND_OK"}),
+    );
+    wire.v2(
+        "session.execution.succeeded",
+        json!({"sessionID": "fixture"}),
+    );
+    let (status, text) = wire.done().await;
+    assert_eq!(status, DoneStatus::Completed);
+    assert_eq!(
+        text, "SECOND_OK",
+        "queued turn was completed before its response"
+    );
 }
 
 #[tokio::test]
 async fn v2_wire_streams_text_and_settles_on_execution_success() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
@@ -733,7 +704,7 @@ async fn v2_wire_streams_text_and_settles_on_execution_success() {
 
 #[tokio::test]
 async fn v2_wire_tool_frames_open_and_resolve_chips() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
@@ -805,7 +776,7 @@ async fn v2_wire_tool_frames_open_and_resolve_chips() {
 
 #[tokio::test]
 async fn v2_execution_failure_and_interrupt_settle_the_turn() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
@@ -830,7 +801,7 @@ async fn v2_execution_failure_and_interrupt_settle_the_turn() {
     assert_eq!(status, DoneStatus::Errored);
     assert!(error.unwrap().contains("provider.auth"));
 
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     wire.v2("session.execution.started", json!({"sessionID": "fixture"}));
@@ -1050,24 +1021,6 @@ fn variants_only_ride_models_that_advertise_them() {
     );
 }
 
-#[test]
-fn prompt_body_carries_model_variant_and_attachments() {
-    let body = prompt_body(
-        "hello",
-        Some(("anthropic", "claude-opus-5")),
-        Some("high"),
-        &["/tmp/shot.png".to_owned()],
-    );
-    assert_eq!(body["model"]["providerID"], "anthropic");
-    assert_eq!(body["model"]["modelID"], "claude-opus-5");
-    assert_eq!(body["variant"], "high");
-    assert_eq!(body["parts"][0]["type"], "text");
-    assert_eq!(body["parts"][0]["text"], "hello");
-    assert_eq!(body["parts"][1]["type"], "file");
-    assert_eq!(body["parts"][1]["mime"], "image/png");
-    assert_eq!(body["parts"][1]["url"], "file:///tmp/shot.png");
-}
-
 fn feed_with_assistant(message: &str) -> SessionFeed {
     let mut feed = SessionFeed::default();
     feed.assistant_messages.insert(message.into(), true);
@@ -1253,30 +1206,6 @@ fn child_binding_falls_back_to_title_match() {
         "ses_c",
         "anything"
     ));
-}
-
-#[test]
-fn questions_map_to_input_panel_shape() {
-    let props = json!({
-        "id": "que_1",
-        "sessionID": "ses_1",
-        "questions": [{
-            "question": "Which color?",
-            "header": "Color",
-            "options": [
-                {"label": "Red", "description": "warm"},
-                {"label": "Blue", "description": "cool"},
-            ],
-            "multiple": true,
-        }],
-    });
-    let questions = map_questions(&props);
-    assert_eq!(questions.len(), 1);
-    assert_eq!(questions[0].id, "q0");
-    assert_eq!(questions[0].header, "Color");
-    assert_eq!(questions[0].question, "Which color?");
-    assert_eq!(questions[0].options, vec!["Red", "Blue"]);
-    assert!(questions[0].multi_select);
 }
 
 #[test]
@@ -1535,68 +1464,56 @@ fn prompt_body_v2_carries_text_and_files_only() {
 
 #[tokio::test]
 async fn permissions_stay_session_scoped_and_never_persist_grants() {
-    for v2 in [false, true] {
-        let mut wire = TurnWire::start_proto(false, v2).await;
-        if v2 {
-            wire.request("/api/model").await;
+    let mut wire = TurnWire::start(false).await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    let ask = |owner: Option<&str>, id: &str| {
+        let mut data = json!({"id":id, "action":"external_directory", "resources":["/private/*"]});
+        if let Some(owner) = owner {
+            data["sessionID"] = json!(owner);
         }
-        wire.request(if v2 { "/prompt" } else { "/prompt_async" })
-            .await;
-        let ask = |owner: Option<&str>, id: &str| {
-            let mut data =
-                json!({"id":id, "action":"external_directory", "resources":["/private/*"]});
-            if let Some(owner) = owner {
-                data["sessionID"] = json!(owner);
-            }
-            if v2 {
-                json!({"type":"permission.asked", "data":data})
-            } else {
-                json!({"type":"permission.asked", "properties":data})
-            }
-        };
-        wire.bus.send(ask(Some("foreign"), "foreign")).unwrap();
-        wire.bus.send(ask(None, "missing")).unwrap();
-        // Establish an owned child before its first permission request.
-        wire.bus.send(if v2 {
-            json!({"type":"session.created","data":{"sessionID":"child","parentID":"fixture"}})
-        } else {
-            json!({"type":"session.created","properties":{"info":{"id":"child","parentID":"fixture"}}})
-        }).unwrap();
-        wire.bus.send(ask(Some("child"), "child")).unwrap();
-        wire.bus.send(ask(Some("fixture"), "own")).unwrap();
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if wire
-                    .posts
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .filter(|(p, _)| p.contains("permission"))
-                    .count()
-                    >= 2
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
+        json!({"type":"permission.asked", "data":data})
+    };
+    wire.bus.send(ask(Some("foreign"), "foreign")).unwrap();
+    wire.bus.send(ask(None, "missing")).unwrap();
+    // Establish an owned child before its first permission request.
+    wire.bus
+        .send(json!({"type":"session.created","data":{"sessionID":"child","parentID":"fixture"}}))
         .unwrap();
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        let posts = wire.posts.lock().unwrap();
-        let approvals: Vec<_> = posts
-            .iter()
-            .filter(|(p, _)| p.contains("permission"))
-            .collect();
-        assert_eq!(
-            approvals.len(),
-            2,
-            "foreign or ownerless permission was answered"
-        );
-        for (path, body) in approvals {
-            assert_eq!(body["reply"], "once");
-            assert!(!path.contains("foreign") && !path.contains("missing"));
+    wire.bus.send(ask(Some("child"), "child")).unwrap();
+    wire.bus.send(ask(Some("fixture"), "own")).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if wire
+                .posts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(p, _)| p.contains("permission"))
+                .count()
+                >= 2
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let posts = wire.posts.lock().unwrap();
+    let approvals: Vec<_> = posts
+        .iter()
+        .filter(|(p, _)| p.contains("permission"))
+        .collect();
+    assert_eq!(
+        approvals.len(),
+        2,
+        "foreign or ownerless permission was answered"
+    );
+    for (path, body) in approvals {
+        assert_eq!(body, &json!({"decision":"once"}));
+        assert!(!path.contains("foreign") && !path.contains("missing"));
     }
 }
 
@@ -1604,7 +1521,7 @@ async fn permissions_stay_session_scoped_and_never_persist_grants() {
 async fn permissions_without_auto_approve_require_an_explicit_answer() {
     for accept in [false, true] {
         let answer = if accept { "Allow once" } else { "Deny" };
-        let mut wire = TurnWire::start_policy(false, true, false, Some(answer)).await;
+        let mut wire = TurnWire::start_policy(false, false, Some(answer)).await;
         wire.request("/api/model").await;
         wire.request("/prompt").await;
         wire.v2(
@@ -1627,49 +1544,36 @@ async fn permissions_without_auto_approve_require_an_explicit_answer() {
         })
         .await
         .unwrap();
-        assert_eq!(body["reply"], if accept { "once" } else { "reject" });
+        assert_eq!(body["decision"], if accept { "once" } else { "reject" });
     }
 }
 
 #[tokio::test]
 async fn task_allowance_never_persists_through_v2() {
-    for v2 in [false, true] {
-        let mut wire = TurnWire::start_policy(false, v2, false, Some("Allow for task")).await;
-        if v2 {
-            wire.request("/api/model").await;
-        }
-        wire.request(if v2 { "/prompt" } else { "/prompt_async" })
-            .await;
-        if v2 {
-            wire.v2(
-                "permission.asked",
-                json!({"id":"approval", "sessionID":"fixture"}),
-            );
-        } else {
-            wire.bus
-                .send(json!({"type":"permission.asked","properties":{
-                    "id":"approval", "sessionID":"fixture"
-                }}))
-                .unwrap();
-        }
-        let body = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if let Some((_, body)) = wire
-                    .posts
-                    .lock()
-                    .unwrap()
-                    .iter()
-                    .find(|(path, _)| path.contains("permission"))
-                {
-                    break body.clone();
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
+    let mut wire = TurnWire::start_policy(false, false, Some("Allow for task")).await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    wire.v2(
+        "permission.asked",
+        json!({"id":"approval", "sessionID":"fixture"}),
+    );
+    let body = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Some((_, body)) = wire
+                .posts
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(path, _)| path.contains("permission"))
+            {
+                break body.clone();
             }
-        })
-        .await
-        .unwrap();
-        assert_eq!(body["reply"], if v2 { "reject" } else { "always" });
-    }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(body, json!({"decision":"reject"}));
 }
 
 #[test]
@@ -1724,7 +1628,7 @@ fn v2_tools_are_scoped_and_retired_and_real_failures_are_visible() {
 
 #[tokio::test]
 async fn v2_reasoning_deltas_and_failed_tools_reach_the_feed() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     wire.v2("session.execution.started", json!({"sessionID":"fixture"}));
@@ -1771,22 +1675,37 @@ async fn v2_reasoning_deltas_and_failed_tools_reach_the_feed() {
 #[tokio::test]
 async fn prompt_error_and_interrupt_before_busy_still_settle() {
     let mut wire = TurnWire::start(false).await;
-    wire.request("/prompt_async").await;
-    wire.bus.send(json!({"type":"session.error", "properties":{"sessionID":"fixture", "error":{"name":"ProviderError", "data":{"message":"bad model"}}}})).unwrap();
-    wire.idle();
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
+    wire.v2(
+        "session.execution.failed",
+        json!({"sessionID":"fixture","error":{"type":"provider.invalid-request","message":"bad model"}}),
+    );
     assert_eq!(wire.done().await.0, DoneStatus::Errored);
 
     let mut wire = TurnWire::start(false).await;
-    wire.request("/prompt_async").await;
+    wire.request("/api/model").await;
+    wire.request("/prompt").await;
     wire.interrupt.cancel();
-    wire.request("/abort").await;
-    wire.idle();
+    wire.request("/interrupt").await;
+    wire.v2(
+        "session.execution.interrupted",
+        json!({"sessionID":"fixture","reason":"user"}),
+    );
     assert_eq!(wire.done().await.0, DoneStatus::Interrupted);
+    assert!(
+        wire.posts
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(path, body)| path == "/api/session/fixture/interrupt" && body.is_null()),
+        "interrupt carries no body"
+    );
 }
 
 #[tokio::test]
 async fn v2_model_selection_and_prompt_use_the_documented_bodies() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     let posts = wire.posts.lock().unwrap();
@@ -1810,7 +1729,7 @@ async fn v2_model_selection_and_prompt_use_the_documented_bodies() {
 
 #[tokio::test]
 async fn v2_pending_tool_overflow_fails_the_run_instead_of_growing_forever() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     for i in 0..=MAX_PENDING_V2_TOOLS {
@@ -1821,7 +1740,7 @@ async fn v2_pending_tool_overflow_fails_the_run_instead_of_growing_forever() {
 
 #[tokio::test]
 async fn v2_external_interrupt_is_not_reported_as_success() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     wire.v2(
@@ -1833,7 +1752,7 @@ async fn v2_external_interrupt_is_not_reported_as_success() {
 
 #[tokio::test]
 async fn v2_recovered_step_failure_does_not_poison_successful_execution() {
-    let mut wire = TurnWire::start_proto(false, true).await;
+    let mut wire = TurnWire::start(false).await;
     wire.request("/api/model").await;
     wire.request("/prompt").await;
     wire.v2("session.execution.started", json!({"sessionID":"fixture"}));

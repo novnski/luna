@@ -88,6 +88,24 @@ pub(crate) fn find_on_paths(exe: &str, extra: Vec<PathBuf>) -> Option<PathBuf> {
     )
 }
 
+/// Like [`find_on_paths`], but a runnable candidate must also satisfy
+/// `predicate` (OpenCode skips binaries of an unsupported generation and
+/// keeps searching in the same order).
+pub(crate) fn find_on_paths_matching(
+    exe: &str,
+    extra: Vec<PathBuf>,
+    predicate: impl FnMut(&Path) -> bool,
+) -> Option<PathBuf> {
+    find_on_paths_matching_with(
+        exe,
+        extra,
+        &|key| std::env::var_os(key),
+        crate::shell_env::login_shell_path().map(OsString::from),
+        Platform::current(),
+        predicate,
+    )
+}
+
 fn home_dir_with(env: &impl Fn(&str) -> Option<OsString>, platform: Platform) -> Option<PathBuf> {
     env("HOME")
         .filter(|value| !value.is_empty())

@@ -6,6 +6,14 @@
 //!     cargo run -p luna-harness --example opencode_turn_probe -- \
 //!         ~/.opencode/bin/opencode opencode/muse-spark-1.3-contributor-free \
 //!         "Read /tmp/note.txt and reply with its secret word."
+//!
+//! After Done the probe keeps draining until the adapter closes the stream,
+//! so the server teardown (interrupt of active sessions, lease release,
+//! SIGTERM) completes inside the probe. Teardown probes:
+//! - `PROBE_INTERRUPT_AFTER_MS=<ms>`: press Stop after the delay (expects
+//!   an Interrupted turn; exit 0 on Interrupted).
+//! - `PROBE_DROP_AFTER_MS=<ms>`: drop the event stream mid-turn, as a
+//!   vanished consumer would, then wait for the adapter's teardown (exit 0).
 
 use futures::StreamExt;
 use luna_harness::{CancellationToken, Harness, OpencodeHarness, RunControls};
@@ -43,6 +51,24 @@ async fn main() {
         resume: None,
         worktree: None,
     };
+    let delay = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .and_then(|ms| ms.parse::<u64>().ok())
+            .map(std::time::Duration::from_millis)
+    };
+    let interrupt_after = delay("PROBE_INTERRUPT_AFTER_MS");
+    let drop_after = delay("PROBE_DROP_AFTER_MS");
+    let interrupt = CancellationToken::new();
+    if let Some(after) = interrupt_after {
+        let interrupt = interrupt.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(after).await;
+            eprintln!("--- pressing Stop");
+            interrupt.cancel();
+        });
+    }
+    let started = std::time::Instant::now();
     let mut harness = OpencodeHarness::new();
     if let Some(exe) = exe {
         harness = harness.with_executable(exe);
@@ -53,7 +79,7 @@ async fn main() {
             RunControls {
                 request_input: Box::new(|_| panic!("probe must not ask for input")),
                 steering,
-                interrupt: CancellationToken::new(),
+                interrupt,
                 invoke_luna_tool: None,
             },
         )
@@ -62,6 +88,16 @@ async fn main() {
     let mut text = String::new();
     let mut tools = 0u32;
     let status = loop {
+        if let Some(after) = drop_after
+            && started.elapsed() >= after
+        {
+            eprintln!("--- dropping the event stream mid-turn");
+            drop(stream);
+            // The adapter notices on its next send and tears the server down.
+            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+            print_resolution();
+            return;
+        }
         let ev =
             match tokio::time::timeout(std::time::Duration::from_secs(120), stream.next()).await {
                 Ok(Some(ev)) => ev,
@@ -99,8 +135,37 @@ async fn main() {
         }
     };
     eprintln!("--- done: {status:?} text={text:?} tools={tools}");
+    // Let the adapter finish its teardown: the stream closes after it.
+    let drained = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while stream.next().await.is_some() {}
+    })
+    .await;
+    eprintln!(
+        "--- stream closed after teardown: {} ({:?} since start)",
+        drained.is_ok(),
+        started.elapsed()
+    );
+    print_resolution();
     match status {
+        Some(luna_proto::DoneStatus::Interrupted) if interrupt_after.is_some() => {}
         Some(luna_proto::DoneStatus::Completed) if !text.trim().is_empty() => {}
         _ => std::process::exit(1),
+    }
+}
+
+/// The binary and API contract this process used (OC-00/OC-02 evidence).
+fn print_resolution() {
+    let Some(resolution) = luna_harness::opencode::last_opencode_resolution() else {
+        eprintln!("RESOLVED none");
+        return;
+    };
+    let version = resolution.version.as_deref().unwrap_or("unknown");
+    eprintln!(
+        "RESOLVED {} version={version} source={:?}",
+        resolution.path.display(),
+        resolution.source
+    );
+    if let Some(report) = luna_harness::opencode::opencode_compat_report(version) {
+        eprintln!("COMPAT {report:?}");
     }
 }
