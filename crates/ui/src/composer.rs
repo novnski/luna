@@ -823,25 +823,57 @@ pub fn input_request_resolved(transcript: &[SessionMessageEntry], request_id: &s
     })
 }
 
-/// Latest open async card across assistant entries. Codex may keep speaking
-/// after emitting it, so a newer assistant message does not supersede it.
+/// The open async card the picker surfaces on its own: the latest unanswered
+/// card the conversation has not moved past. The agent may keep speaking
+/// after asking, so a newer assistant message does not supersede it; a newer
+/// USER message does (the card stays answerable from the transcript).
 pub fn pending_async_question(
     transcript: &[SessionMessageEntry],
 ) -> Option<(String, Vec<luna_proto::AsyncUserInputQuestion>)> {
-    transcript
-        .iter()
-        .rev()
-        .filter(|entry| entry.role == MessageRole::Assistant)
-        .find_map(|entry| {
-            entry.parts.iter().rev().find_map(|part| match part {
-                MessagePart::AsyncQuestion {
-                    id,
-                    questions,
-                    resolved: false,
-                } if !questions.is_empty() => Some((id.clone(), questions.clone())),
-                _ => None,
-            })
+    for entry in transcript.iter().rev() {
+        if entry.role == MessageRole::User {
+            return None;
+        }
+        if let Some(found) = entry.parts.iter().rev().find_map(|part| match part {
+            MessagePart::AsyncQuestion {
+                id,
+                questions,
+                resolved: false,
+                ..
+            } if !questions.is_empty() => Some((id.clone(), questions.clone())),
+            _ => None,
+        }) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Any async card by id, open or answered, with its answer history.
+pub fn async_question_card(
+    transcript: &[SessionMessageEntry],
+    message_id: &str,
+) -> Option<(
+    Vec<luna_proto::AsyncUserInputQuestion>,
+    Vec<luna_proto::AsyncQuestionAnswer>,
+)> {
+    transcript.iter().find_map(|entry| {
+        entry.parts.iter().find_map(|part| match part {
+            MessagePart::AsyncQuestion {
+                id,
+                questions,
+                answers,
+                ..
+            } if id == message_id && !questions.is_empty() => {
+                Some((questions.clone(), answers.clone()))
+            }
+            _ => None,
         })
+    })
+}
+
+fn async_answer_count(transcript: &[SessionMessageEntry], message_id: &str) -> usize {
+    async_question_card(transcript, message_id).map_or(0, |(_, answers)| answers.len())
 }
 
 fn async_question_resolved(transcript: &[SessionMessageEntry], message_id: &str) -> bool {
@@ -854,21 +886,20 @@ fn async_question_resolved(transcript: &[SessionMessageEntry], message_id: &str)
     })
 }
 
-fn async_question_open(transcript: &[SessionMessageEntry], message_id: &str) -> bool {
-    transcript.iter().any(|entry| {
-        entry.parts.iter().any(|part| {
-            matches!(part,
-                MessagePart::AsyncQuestion { id, resolved: false, .. } if id == message_id
-            )
-        })
-    })
-}
-
-fn async_question_command_id(chat_id: &str, request_id: &str, attempt: u32) -> String {
+fn async_question_command_id(
+    chat_id: &str,
+    request_id: &str,
+    revision: usize,
+    attempt: u32,
+) -> String {
     let mut digest = Sha256::new();
     digest.update(chat_id.len().to_be_bytes());
     digest.update(chat_id.as_bytes());
     digest.update(request_id.as_bytes());
+    // An amendment is a new answer, so a new command.
+    if revision > 0 {
+        digest.update((revision as u64).to_be_bytes());
+    }
     digest.update(attempt.to_be_bytes());
     let hex = digest
         .finalize()
@@ -913,7 +944,14 @@ struct AsyncQuestionSubmission {
     command_id: String,
     intent: serde_json::Value,
     state: AsyncDeliveryState,
+    /// Answers on the card before this one; readback waits for one more.
+    answers_before: usize,
 }
+
+/// How long an async picker that opened on its own stays up before it
+/// collapses into its transcript card (Codex desktop behaviour). It never
+/// answers: the agent already kept working.
+const ASYNC_PICKER_HIDE: Duration = Duration::from_secs(30);
 
 /// Paged question state ("1/3"): single-select auto-advances, multi-select and
 /// typed answers advance explicitly, number keys 1-9 select, Back pages back.
@@ -926,6 +964,9 @@ pub struct Wizard {
     picked: Vec<Vec<usize>>,
     typed: Vec<String>,
     url_opening: bool,
+    /// Async cards: answers already recorded on the card when this picker
+    /// opened. A new record means this picker's answer landed.
+    answers_at_open: usize,
 }
 
 impl Wizard {
@@ -939,6 +980,7 @@ impl Wizard {
             picked: vec![Vec::new(); n],
             typed: vec![String::new(); n],
             url_opening: false,
+            answers_at_open: 0,
         };
         for (index, question) in wizard.questions.iter().enumerate() {
             if let Some(luna_proto::McpInputKind::Field { schema, .. }) =
@@ -988,13 +1030,20 @@ impl Wizard {
                 .enumerate()
                 .map(|(ix, question)| UserInputQuestion {
                     id: ix.to_string(),
-                    header: "Question".into(),
+                    header: question.header.unwrap_or_else(|| "Question".into()),
                     question: question.title,
                     options: question.options.unwrap_or_default(),
-                    multi_select: false,
+                    multi_select: question.multi_select,
                     mcp: None,
                     approval: None,
-                    input: None,
+                    // Typed answers stay available, as for every async card.
+                    input: (!question.option_descriptions.is_empty()).then(|| {
+                        luna_proto::UserInputDetails {
+                            option_descriptions: question.option_descriptions,
+                            allow_other: true,
+                            ..Default::default()
+                        }
+                    }),
                 })
                 .collect(),
         );
@@ -4984,6 +5033,16 @@ pub struct Composer {
     held_auto_answers: HashSet<String>,
     /// Repaints the question panel's countdown once a second while it runs.
     countdown_task: Option<Task<()>>,
+    /// Async cards whose picker collapsed (timed out or "Answer later"),
+    /// keyed (chat, card id). Presentation only: the card stays open.
+    async_dismissed: HashSet<(String, String)>,
+    /// A card the user reopened from the transcript: (chat, card id,
+    /// answers on it at reopen). Wins over the auto-surfaced card.
+    async_reopened: Option<(String, String, usize)>,
+    /// Unsent picker state per async card, restored when it reopens.
+    async_drafts: HashMap<(String, String), Wizard>,
+    /// When the auto-surfaced async picker collapses unless touched.
+    async_hide_at: Option<((String, String), std::time::Instant)>,
     /// Preserve the exact command id and payload across uncertain transport
     /// outcomes. Retry can ask the host about the same command without
     /// producing a second user steer.
@@ -5398,6 +5457,10 @@ impl Composer {
             answered_requests: HashSet::new(),
             held_auto_answers: HashSet::new(),
             countdown_task: None,
+            async_dismissed: HashSet::new(),
+            async_reopened: None,
+            async_drafts: HashMap::new(),
+            async_hide_at: None,
             async_submissions: HashMap::new(),
             async_attempts: HashMap::new(),
             async_failure: None,
@@ -9933,6 +9996,10 @@ impl Composer {
         if !self.pending_scan_deferred {
             self.pending_scan_cache = scan_key.map(|scan_key| (scan_key, pending.clone()));
         }
+        let pending = {
+            let transcript = self.binding.transcript(self.state.read(cx)).to_vec();
+            self.present_async_candidate(pending, &key, &transcript)
+        };
         self.observe_pending_draft_owner(&key, cx);
 
         // A queue edit belongs to exactly one visible row. Navigation or a
@@ -10040,13 +10107,16 @@ impl Composer {
         self.finish_pending_draft_owner_stage(cx);
 
         let transcript = self.binding.transcript(self.state.read(cx)).to_vec();
+        // A submission settles when its answer is recorded on the card (one
+        // more record than before it was sent; amendments included).
         let settled: Vec<_> = self
             .async_submissions
-            .keys()
-            .filter(|(chat, id)| {
-                chat == &self.current_key && async_question_resolved(&transcript, id)
+            .iter()
+            .filter(|((chat, id), submission)| {
+                chat == &self.current_key
+                    && async_answer_count(&transcript, id) > submission.answers_before
             })
-            .cloned()
+            .map(|(key, _)| key.clone())
             .collect();
         for key in settled {
             self.clear_async_delivery_failure(&key);
@@ -10070,11 +10140,24 @@ impl Composer {
                     w.request_id == candidate.request_id && w.source == candidate.source
                 });
                 if !same {
+                    self.stash_async_draft(cx);
                     self.wizard = Some(candidate.clone());
                     self.advance_task = None;
                     let initial = candidate.current_typed().to_string();
                     self.answer_input
                         .update(cx, |input, cx| input.set_text(initial, cx));
+                    // An async picker that opened on its own hides after a
+                    // while (the agent kept working); a reopened one stays.
+                    let card = (self.current_key.clone(), candidate.request_id.clone());
+                    let reopened = self
+                        .async_reopened
+                        .as_ref()
+                        .is_some_and(|(chat, id, _)| (chat, id) == (&card.0, &card.1));
+                    self.async_hide_at = (candidate.source == QuestionSource::Async && !reopened)
+                        .then(|| (card, std::time::Instant::now() + ASYNC_PICKER_HIDE));
+                    if self.async_hide_at.is_some() {
+                        self.ensure_countdown_ticking(cx);
+                    }
                 }
             }
             _ => {
@@ -10086,15 +10169,25 @@ impl Composer {
                                 || (!transcript.is_empty()
                                     && !self.answered_requests.contains(&wizard.request_id))
                         }
+                        // An auto-surfaced card leaves once it is answered
+                        // or the conversation moved past it; it stays open
+                        // in the transcript either way.
                         QuestionSource::Async => {
                             async_question_resolved(&transcript, &wizard.request_id)
-                                || pending.as_ref().is_some_and(|candidate| {
+                                || pending.as_ref().is_none_or(|candidate| {
                                     candidate.request_id != wizard.request_id
                                 })
                         }
                     };
                     if released {
                         if wizard.source == QuestionSource::Async {
+                            if async_question_resolved(&transcript, &wizard.request_id) {
+                                self.async_drafts
+                                    .remove(&(self.current_key.clone(), wizard.request_id.clone()));
+                            } else {
+                                self.stash_async_draft(cx);
+                            }
+                            self.async_hide_at = None;
                             let key = (self.current_key.clone(), wizard.request_id.clone());
                             self.clear_async_delivery_failure(&key);
                             self.async_submissions.remove(&key);
@@ -11406,7 +11499,7 @@ impl Composer {
         let step = wizard.select(option_ix);
         let has_pick = wizard.page_has_pick();
         if !matches!(step, WizardStep::Done(_)) {
-            self.hold_auto_answer(cx);
+            self.note_wizard_interaction(cx);
         }
         self.answer_input.update(cx, |input, cx| {
             input.set_placeholder(
@@ -11477,6 +11570,172 @@ impl Composer {
         cx.notify();
     }
 
+    /// Seconds until the auto-surfaced async picker hides, if it will.
+    fn async_hide_left(&self) -> Option<u64> {
+        let ((chat, id), at) = self.async_hide_at.as_ref()?;
+        let shown = self
+            .wizard
+            .as_ref()
+            .is_some_and(|w| w.source == QuestionSource::Async && &w.request_id == id);
+        (shown && chat == &self.current_key).then(|| {
+            at.saturating_duration_since(std::time::Instant::now())
+                .as_secs()
+                + 1
+        })
+    }
+
+    /// Async picker presentation, UI-local and independent of the card's
+    /// lifecycle: a card the user reopened wins over the auto-surfaced one,
+    /// a collapsed card does not pop back up, and unsent picks survive.
+    fn present_async_candidate(
+        &mut self,
+        pending: Option<Wizard>,
+        key: &str,
+        transcript: &[SessionMessageEntry],
+    ) -> Option<Wizard> {
+        if let Some((chat, id, baseline)) = self.async_reopened.clone()
+            && chat == key
+        {
+            match async_question_card(transcript, &id) {
+                // Its new answer landed: the reopen is done.
+                Some((_, answers)) if answers.len() > baseline => {
+                    self.async_reopened = None;
+                    self.async_drafts.remove(&(chat.clone(), id.clone()));
+                    self.async_dismissed.insert((chat, id));
+                }
+                None if !transcript.is_empty() => self.async_reopened = None,
+                _ => {}
+            }
+        }
+        // A blocking question always comes first: the agent is waiting.
+        if pending
+            .as_ref()
+            .is_some_and(|w| w.source == QuestionSource::Blocking)
+        {
+            return pending;
+        }
+        if let Some((chat, id, baseline)) = self.async_reopened.clone()
+            && chat == key
+        {
+            if let Some(wizard) = self
+                .wizard
+                .as_ref()
+                .filter(|w| w.source == QuestionSource::Async && w.request_id == id)
+            {
+                return Some(wizard.clone());
+            }
+            let (questions, _) = async_question_card(transcript, &id)?;
+            let mut wizard = self
+                .async_drafts
+                .get(&(chat, id.clone()))
+                .cloned()
+                .unwrap_or_else(|| Wizard::new_async(id, questions));
+            wizard.answers_at_open = baseline;
+            return Some(wizard);
+        }
+        let candidate = pending?;
+        let card = (key.to_owned(), candidate.request_id.clone());
+        if self.async_dismissed.contains(&card) {
+            return None;
+        }
+        Some(self.async_drafts.get(&card).cloned().unwrap_or(candidate))
+    }
+
+    /// Keep the open async picker's unsent picks and typed text.
+    fn stash_async_draft(&mut self, cx: &mut Context<Self>) {
+        let Some(mut wizard) = self
+            .wizard
+            .clone()
+            .filter(|w| w.source == QuestionSource::Async)
+        else {
+            return;
+        };
+        let typed = self.answer_input.read(cx).text().to_string();
+        wizard.set_typed(typed);
+        let card = (self.current_key.clone(), wizard.request_id.clone());
+        let has_draft = wizard.picked.iter().any(|p| !p.is_empty())
+            || wizard.typed.iter().any(|t| !t.is_empty());
+        if has_draft {
+            self.async_drafts.insert(card, wizard);
+        } else {
+            self.async_drafts.remove(&card);
+        }
+    }
+
+    /// Collapse the async picker into its transcript card ("Answer later",
+    /// or the hide timer). The question stays open and the agent was never
+    /// waiting; nothing is sent.
+    fn collapse_async_picker(&mut self, cx: &mut Context<Self>) {
+        self.async_hide_at = None;
+        let Some(wizard) = self
+            .wizard
+            .clone()
+            .filter(|w| w.source == QuestionSource::Async)
+        else {
+            return;
+        };
+        if self.answered_requests.contains(&wizard.request_id) {
+            return;
+        }
+        self.stash_async_draft(cx);
+        let card = (self.current_key.clone(), wizard.request_id.clone());
+        if self
+            .async_reopened
+            .as_ref()
+            .is_some_and(|(chat, id, _)| (chat, id) == (&card.0, &card.1))
+        {
+            self.async_reopened = None;
+        }
+        self.async_dismissed.insert(card);
+        self.wizard = None;
+        self.advance_task = None;
+        self.answer_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        cx.notify();
+    }
+
+    /// Reopen an async card from the transcript (open or answered) with its
+    /// unsent draft. Answering an answered card sends an amendment.
+    pub(crate) fn open_async_question(
+        &mut self,
+        chat_id: String,
+        message_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        if chat_id != self.current_key {
+            return;
+        }
+        let transcript = self.binding.transcript(self.state.read(cx)).to_vec();
+        let Some((_, answers)) = async_question_card(&transcript, &message_id) else {
+            return;
+        };
+        if self
+            .wizard
+            .as_ref()
+            .is_some_and(|w| w.source == QuestionSource::Blocking)
+        {
+            return;
+        }
+        self.stash_async_draft(cx);
+        self.async_dismissed
+            .remove(&(chat_id.clone(), message_id.clone()));
+        self.async_reopened = Some((chat_id, message_id, answers.len()));
+        self.async_hide_at = None;
+        // Force the panel to rebuild for this card.
+        self.wizard = None;
+        self.on_state_changed(cx);
+    }
+
+    /// The user touched the panel: an async picker stops its hide timer and
+    /// a blocking one cancels LUNA's unattended answer.
+    fn note_wizard_interaction(&mut self, cx: &mut Context<Self>) {
+        if self.async_hide_left().is_some() {
+            self.async_hide_at = None;
+            cx.notify();
+        }
+        self.hold_auto_answer(cx);
+    }
+
     fn ensure_countdown_ticking(&mut self, cx: &mut Context<Self>) {
         if self.countdown_task.is_some() {
             return;
@@ -11487,9 +11746,17 @@ impl Composer {
                 let running = this
                     .update(cx, |composer, cx| {
                         cx.notify();
+                        if composer
+                            .async_hide_at
+                            .as_ref()
+                            .is_some_and(|(_, at)| std::time::Instant::now() >= *at)
+                        {
+                            composer.collapse_async_picker(cx);
+                        }
                         let running = composer
                             .auto_answer_countdown(chrono::Utc::now().timestamp_millis())
-                            .is_some();
+                            .is_some()
+                            || composer.async_hide_at.is_some();
                         if !running {
                             composer.countdown_task = None;
                         }
@@ -11683,13 +11950,9 @@ impl Composer {
         cx.notify();
     }
 
+    /// "Answer later": collapse the async picker; the card stays open.
     fn wizard_skip(&mut self, cx: &mut Context<Self>) {
-        if self.wizard.as_ref().is_some_and(|wizard| {
-            wizard.source == QuestionSource::Async
-                && !self.answered_requests.contains(&wizard.request_id)
-        }) {
-            self.wizard_finish(Vec::new(), cx);
-        }
+        self.collapse_async_picker(cx);
     }
 
     fn retry_async_submission(&mut self, cx: &mut Context<Self>) {
@@ -11747,8 +12010,9 @@ impl Composer {
                         cx.spawn(async move |this, cx| {
                             cx.background_executor().timer(Duration::from_secs(3)).await;
                             this.update(cx, |composer, cx| {
+                                let before = composer.async_submissions.get(&check_key).map_or(0, |submission| submission.answers_before);
                                 let unresolved = composer.current_key != check_key.0
-                                    || async_question_open(composer.binding.transcript(composer.state.read(cx)), &check_key.1);
+                                    || async_answer_count(composer.binding.transcript(composer.state.read(cx)), &check_key.1) <= before;
                                 if unresolved && let Some(submission) = composer.async_submissions.get_mut(&check_key)
                                     && submission.state == AsyncDeliveryState::Applied {
                                         submission.state = AsyncDeliveryState::Uncertain;
@@ -11814,7 +12078,12 @@ impl Composer {
         if async_question {
             let key = (chat_id.clone(), request_id.clone());
             let attempt = self.async_attempts.get(&key).copied().unwrap_or(0);
-            let command_id = async_question_command_id(&chat_id, &request_id, attempt);
+            let answers_before = wizard.answers_at_open.max(async_answer_count(
+                self.binding.transcript(self.state.read(cx)),
+                &request_id,
+            ));
+            let command_id =
+                async_question_command_id(&chat_id, &request_id, answers_before, attempt);
             let command = SessionCommandPayload::RespondAsyncQuestion {
                 message_id: request_id.clone(),
                 answers,
@@ -11826,6 +12095,7 @@ impl Composer {
                 command_id,
                 intent: serde_json::json!({ "kind": "session", "command": value }),
                 state: AsyncDeliveryState::Sending,
+                answers_before,
             };
             self.async_submissions.insert(key.clone(), submission);
             self.answered_requests.insert(request_id);
@@ -11968,8 +12238,9 @@ impl Composer {
 
     fn on_wizard_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         // Any key in the panel (including typing an answer) means the user
-        // is answering: LUNA must not answer for them.
-        self.hold_auto_answer(cx);
+        // is answering: LUNA must not answer for them, and an async picker
+        // must not hide under them.
+        self.note_wizard_interaction(cx);
         // Keys bubbling out of the free-text input must not double-handle:
         // digits select options only while the input is empty, and Enter is the
         // input's own Submit action when it has focus.
@@ -12022,6 +12293,35 @@ impl Composer {
         if countdown.is_some() {
             self.ensure_countdown_ticking(cx);
         }
+        // Async cards: the agent never waited. Say so, show the hide timer,
+        // and on a reopened answered card show what was sent before.
+        let async_note: Option<SharedString> = (wizard.source == QuestionSource::Async
+            && !submitting)
+            .then(|| {
+                let previous = async_question_card(
+                    self.binding.transcript(self.state.read(cx)),
+                    &wizard.request_id,
+                )
+                .and_then(|(_, answers)| answers.last().cloned())
+                .map(|last| {
+                    last.answers
+                        .iter()
+                        .flat_map(|answer| answer.labels.iter().cloned())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|labels| !labels.is_empty());
+                match (previous, self.async_hide_left()) {
+                    (Some(labels), _) => {
+                        format!("You answered {labels}. Send again to change it.").into()
+                    }
+                    (None, Some(left)) => format!(
+                        "The agent kept working. This hides in {left}s; answer any time from the chat."
+                    )
+                    .into(),
+                    (None, None) => "The agent kept working; answer any time.".into(),
+                }
+            });
         let delivery_state = self
             .async_submissions
             .get(&(self.current_key.clone(), wizard.request_id.clone()))
@@ -12403,15 +12703,30 @@ impl Composer {
                                     )),
                                 )
                             })
+                            .when_some(async_note, |el, note| {
+                                el.child(
+                                    div()
+                                        .id("wizard-async-note")
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_size(crate::typography::ui_rems(12.0))
+                                        .text_color(theme.readable_muted(0.7))
+                                        .child(note),
+                                )
+                            })
                             .when(
                                 wizard.source == QuestionSource::Async && !submitting,
                                 |el| {
                                     el.child(
-                                        crate::popover::btn_ghost(&theme, "Skip", "wizard-skip")
-                                            .id("wizard-skip")
-                                            .on_click(
-                                                cx.listener(|this, _, _, cx| this.wizard_skip(cx)),
-                                            ),
+                                        crate::popover::btn_ghost(
+                                            &theme,
+                                            "Answer later",
+                                            "wizard-skip",
+                                        )
+                                        .id("wizard-skip")
+                                        .on_click(
+                                            cx.listener(|this, _, _, cx| this.wizard_skip(cx)),
+                                        ),
                                     )
                                 },
                             ),
@@ -16643,6 +16958,7 @@ mod tests {
             vec![luna_proto::AsyncUserInputQuestion {
                 title: "Which option?".into(),
                 options: Some(vec!["A".into(), "B".into()]),
+                ..Default::default()
             }],
         );
         assert_eq!(wizard.source, QuestionSource::Async);
@@ -16659,11 +16975,13 @@ mod tests {
     fn async_question_command_id_is_stable_and_bounded() {
         let chat = "chat".repeat(100);
         let request = "call".repeat(100);
-        let first = async_question_command_id(&chat, &request, 0);
-        assert_eq!(first, async_question_command_id(&chat, &request, 0));
+        let first = async_question_command_id(&chat, &request, 0, 0);
+        assert_eq!(first, async_question_command_id(&chat, &request, 0, 0));
         assert!(first.len() < 128);
-        assert_ne!(first, async_question_command_id("other", &request, 0));
-        assert_ne!(first, async_question_command_id(&chat, &request, 1));
+        assert_ne!(first, async_question_command_id("other", &request, 0, 0));
+        assert_ne!(first, async_question_command_id(&chat, &request, 0, 1));
+        // An amendment (one answer already recorded) is a new command.
+        assert_ne!(first, async_question_command_id(&chat, &request, 1, 0));
     }
 
     #[test]
@@ -16676,8 +16994,10 @@ mod tests {
                 questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Which option?".into(),
                     options: Some(vec!["A".into(), "B".into()]),
+                    ..Default::default()
                 }],
                 resolved: false,
+                answers: Vec::new(),
             }],
             created_at: 1,
             device_id: "synthetic".into(),
@@ -16794,8 +17114,10 @@ mod tests {
                     questions: vec![luna_proto::AsyncUserInputQuestion {
                         title: "Optional question?".into(),
                         options: Some(vec!["A".into(), "B".into()]),
+                        ..Default::default()
                     }],
                     resolved: false,
+                    answers: Vec::new(),
                 }],
                 created_at: 1,
                 device_id: "synthetic".into(),
@@ -16812,66 +17134,16 @@ mod tests {
             composer.wizard_skip(cx);
         });
         let key = ("async-task".to_string(), "aq-call-1".to_string());
-        pump_until(cx, &runtime, |cx| {
-            composer.read_with(cx, |composer, _| {
-                composer
-                    .failure
-                    .as_ref()
-                    .is_some_and(|failure| failure.as_ref().contains("delivery is pending"))
-            })
-        });
-        composer.read_with(cx, |composer, cx| {
-            assert!(composer.wizard.is_some());
-            assert!(composer.async_submissions.contains_key(&key));
-            assert_eq!(composer.input.read(cx).text(), "Unrelated prompt");
-        });
-        assert_eq!(service.calls.load(Ordering::SeqCst), 1);
-        state.update(cx, |state, _| {
-            if let MessagePart::AsyncQuestion { resolved, .. } = &mut state.transcript[0].parts[0] {
-                *resolved = true;
-            }
-        });
-        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
-        composer.read_with(cx, |composer, cx| {
-            assert!(composer.wizard.is_none());
-            assert!(!composer.async_submissions.contains_key(&key));
-            assert!(
-                composer.failure.is_none(),
-                "the matching Pending banner clears"
-            );
-            assert_eq!(composer.input.read(cx).text(), "Unrelated prompt");
-        });
-        // Readback may beat the RPC reply; the late Pending result must not
-        // recreate a banner after the card has already been settled.
-        state.update(cx, |state, _| {
-            if let MessagePart::AsyncQuestion { id, resolved, .. } =
-                &mut state.transcript[0].parts[0]
-            {
-                *id = "aq-call-2".into();
-                *resolved = false;
-            }
-        });
-        composer.update(cx, |composer, cx| {
-            composer.on_state_changed(cx);
-            composer.wizard_skip(cx);
-        });
-        state.update(cx, |state, _| {
-            if let MessagePart::AsyncQuestion { resolved, .. } = &mut state.transcript[0].parts[0] {
-                *resolved = true;
-            }
-        });
-        composer.update(cx, |composer, cx| composer.on_state_changed(cx));
-        pump_until(cx, &runtime, |_| service.calls.load(Ordering::SeqCst) == 2);
         for _ in 0..10 {
             cx.run_until_parked();
             runtime.block_on(tokio::task::yield_now());
         }
+        // "Answer later" only collapses the picker: nothing is sent, the card
+        // stays open and the prompt draft is untouched.
+        assert_eq!(service.calls.load(Ordering::SeqCst), 0);
         composer.read_with(cx, |composer, cx| {
             assert!(composer.wizard.is_none());
-            assert!(
-                composer.failure.is_none(),
-                "late Pending reply stays settled"
-            );
+            assert!(!composer.async_submissions.contains_key(&key));
             assert_eq!(composer.input.read(cx).text(), "Unrelated prompt");
         });
         composer.update(cx, |composer, _| {
@@ -16978,8 +17250,10 @@ mod tests {
                     questions: vec![luna_proto::AsyncUserInputQuestion {
                         title: "Which option?".into(),
                         options: Some(vec!["A".into(), "B".into()]),
+                        ..Default::default()
                     }],
                     resolved: false,
+                    answers: Vec::new(),
                 }],
                 created_at: 1,
                 device_id: "synthetic".into(),

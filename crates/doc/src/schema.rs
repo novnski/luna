@@ -85,6 +85,8 @@ struct DocPartJson {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     resolved: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    answers: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     message: Option<String>,
     /// Tool output summary (additive — absent on old rows and old writers;
     /// pre-strip writers stored up to 4KB of capped output here).
@@ -207,11 +209,15 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             id,
             questions,
             resolved,
+            answers,
         } => DocPartJson {
             id: id.clone(),
             kind: "asyncQuestion".into(),
             questions: Some(serde_json::to_value(questions)?),
             resolved: Some(*resolved),
+            answers: (!answers.is_empty())
+                .then(|| serde_json::to_value(answers))
+                .transpose()?,
             ..Default::default()
         },
         MessagePart::Error { id, message } => DocPartJson {
@@ -274,6 +280,10 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
                 .and_then(|q| serde_json::from_value(q).ok())
                 .unwrap_or_default(),
             resolved: p.resolved.unwrap_or(false),
+            answers: p
+                .answers
+                .and_then(|a| serde_json::from_value(a).ok())
+                .unwrap_or_default(),
         },
         "error" => MessagePart::Error {
             id: p.id,
@@ -900,6 +910,61 @@ impl SessionDoc {
         self.resolve_question_part("asyncQuestion", message_id)
     }
 
+    /// Record one delivered answer on a nonblocking question card: append it
+    /// to the card's answer history and mark the card answered. Returns
+    /// `false` when no such card exists.
+    pub fn record_async_answer(
+        &self,
+        message_id: &str,
+        answer: &luna_proto::AsyncQuestionAnswer,
+    ) -> Result<bool, DocError> {
+        let messages = self.doc.get_list("messages");
+        for i in 0..messages.len() {
+            let Some(loro::ValueOrContainer::Container(loro::Container::Map(entry))) =
+                messages.get(i)
+            else {
+                continue;
+            };
+            let Some(loro::ValueOrContainer::Container(loro::Container::List(parts))) =
+                entry.get("parts")
+            else {
+                continue;
+            };
+            for j in 0..parts.len() {
+                let Some(loro::ValueOrContainer::Container(loro::Container::Map(part))) =
+                    parts.get(j)
+                else {
+                    continue;
+                };
+                let is_card = matches!(
+                    part.get("kind"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == "asyncQuestion"
+                ) && matches!(
+                    part.get("id"),
+                    Some(loro::ValueOrContainer::Value(LoroValue::String(s))) if s.as_str() == message_id
+                );
+                if !is_card {
+                    continue;
+                }
+                let mut history: Vec<luna_proto::AsyncQuestionAnswer> = match part.get("answers") {
+                    Some(loro::ValueOrContainer::Value(value)) => {
+                        serde_json::from_value(value.to_json_value()).unwrap_or_default()
+                    }
+                    _ => Vec::new(),
+                };
+                history.push(answer.clone());
+                part.insert(
+                    "answers",
+                    loro_value_from_json(&serde_json::to_value(&history)?),
+                )?;
+                part.insert("resolved", true)?;
+                self.doc.commit();
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn resolve_question_part(&self, kind: &str, id: &str) -> Result<bool, DocError> {
         let messages = self.doc.get_list("messages");
         for i in 0..messages.len() {
@@ -1209,6 +1274,9 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
     }
     if let Some(resolved) = doc_part.resolved {
         map.insert("resolved", resolved)?;
+    }
+    if let Some(answers) = &doc_part.answers {
+        map.insert("answers", loro_value_from_json(answers))?;
     }
     if let Some(message) = &doc_part.message {
         map.insert("message", message.as_str())?;
@@ -1638,6 +1706,9 @@ fn update_part_fields(map: &LoroMap, part: &MessagePart) -> Result<(), DocError>
     }
     if let Some(resolved) = doc_part.resolved {
         map.insert("resolved", resolved)?;
+    }
+    if let Some(answers) = &doc_part.answers {
+        map.insert("answers", loro_value_from_json(answers))?;
     }
     if let Some(message) = &doc_part.message {
         map.insert("message", message.as_str())?;
@@ -2075,8 +2146,10 @@ mod tests {
                 questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Which option?".into(),
                     options: Some(vec!["A".into(), "B".into()]),
+                    ..Default::default()
                 }],
                 resolved: false,
+                answers: Vec::new(),
             }],
             created_at: 1,
             device_id: "synthetic".into(),
@@ -2090,7 +2163,7 @@ mod tests {
             other
         });
         assert!(matches!(&restored.read_entries().unwrap()[0].parts[0],
-            MessagePart::AsyncQuestion { id, resolved: false, questions }
+            MessagePart::AsyncQuestion { id, resolved: false, questions, .. }
                 if id == "aq-call-1" && questions[0].title == "Which option?"));
         assert!(restored.resolve_async_question("aq-call-1").unwrap());
         assert!(!restored.resolve_async_question("aq-call-1").unwrap());

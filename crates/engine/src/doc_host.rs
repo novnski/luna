@@ -8042,35 +8042,55 @@ impl DocHost {
                 answers,
             } => {
                 // Unlike RespondInput, this provider tool has already
-                // returned. The card is transcript metadata; its response is
-                // either a durable dismissal or an ordinary user steer.
+                // returned. The card is transcript metadata; its answer is an
+                // ordinary user message (a steer while the agent works,
+                // otherwise a new turn). Any card stays answerable after its
+                // turn ends, and an answered card takes a later answer as an
+                // amendment: a new message, never a rewrite of what the agent
+                // already saw.
                 let question_set = handle.doc.read_entries()?.into_iter().rev().find_map(|e| {
                     e.parts.into_iter().find_map(|p| match p {
                         MessagePart::AsyncQuestion {
                             id,
                             questions,
-                            resolved: false,
-                        } if id == *message_id => Some(questions),
+                            answers: history,
+                            ..
+                        } if id == *message_id => Some((questions, history)),
                         _ => None,
                     })
                 });
-                let Some(questions) = question_set else {
+                let Some((questions, history)) = question_set else {
                     return Ok((
                         SessionCommandStatus::Rejected,
-                        Some("no open async question".into()),
+                        Some("no such async question".into()),
                     ));
                 };
-                let prompt = match async_answer_prompt(&questions, answers) {
+                // The same answer again (a double submit, or another client
+                // racing) is idempotent: nothing is delivered twice.
+                if history.last().is_some_and(|last| last.answers == *answers) {
+                    return Ok((
+                        SessionCommandStatus::Applied,
+                        Some("already answered with the same choice".into()),
+                    ));
+                }
+                let previous_answers = history.len();
+                let prompt = match async_answer_prompt(
+                    message_id,
+                    &questions,
+                    answers,
+                    previous_answers > 0,
+                ) {
                     Ok(prompt) => prompt,
                     Err(reason) => {
                         return Ok((SessionCommandStatus::Rejected, Some(reason.into())));
                     }
                 };
+                // Nothing selected is "answer later": presentation only. The
+                // card stays open and answerable.
                 let Some(prompt) = prompt else {
-                    handle.doc.resolve_async_question(message_id)?;
                     return Ok((
                         SessionCommandStatus::Applied,
-                        Some("question skipped".into()),
+                        Some("question left open".into()),
                     ));
                 };
                 let (status, detail) = self
@@ -8084,7 +8104,13 @@ impl DocHost {
                     )
                     .await?;
                 if status == SessionCommandStatus::Applied {
-                    handle.doc.resolve_async_question(message_id)?;
+                    handle.doc.record_async_answer(
+                        message_id,
+                        &luna_proto::AsyncQuestionAnswer {
+                            answers: answers.clone(),
+                            at_ms: entry.issued_at,
+                        },
+                    )?;
                 }
                 Ok((status, detail))
             }
@@ -8516,9 +8542,15 @@ impl DocHost {
 
 /// Format a late answer as ordinary user input. Empty answers mean Skip;
 /// malformed question ids must not silently turn an intended answer into Skip.
+/// The user message that carries an answer to a nonblocking question. The
+/// `[luna-question:<id>]` tag correlates it with the card for the agent (the
+/// runtime contract names the tag) and across clients; an amendment says it
+/// replaces the earlier answer.
 fn async_answer_prompt(
+    message_id: &str,
     questions: &[luna_proto::AsyncUserInputQuestion],
     answers: &[UserInputAnswer],
+    amendment: bool,
 ) -> Result<Option<String>, &'static str> {
     let mut lines = Vec::new();
     for answer in answers {
@@ -8541,8 +8573,13 @@ fn async_answer_prompt(
             lines.push(format!("{title}: {}", labels.join(", ")));
         }
     }
+    let lead = if amendment {
+        "I changed my answer to your earlier question; use this instead of my previous answer"
+    } else {
+        "Answering your earlier question"
+    };
     Ok((!lines.is_empty())
-        .then(|| format!("Answering your earlier question:\n{}", lines.join("\n"))))
+        .then(|| format!("{lead} [luna-question:{message_id}]:\n{}", lines.join("\n"))))
 }
 
 #[cfg(test)]
@@ -8555,23 +8592,37 @@ mod async_question_tests {
         let questions = vec![AsyncUserInputQuestion {
             title: "Which sample should I use?".into(),
             options: Some(vec!["A".into(), "B".into()]),
+            ..Default::default()
         }];
-        assert_eq!(async_answer_prompt(&questions, &[]).unwrap(), None);
+        assert_eq!(
+            async_answer_prompt("aq-1", &questions, &[], false).unwrap(),
+            None
+        );
         let answer = UserInputAnswer {
             question_id: "0".into(),
             labels: vec!["B".into()],
         };
         assert_eq!(
-            async_answer_prompt(&questions, &[answer]).unwrap(),
-            Some("Answering your earlier question:\nWhich sample should I use?: B".into())
+            async_answer_prompt("aq-1", &questions, std::slice::from_ref(&answer), false).unwrap(),
+            Some(
+                "Answering your earlier question [luna-question:aq-1]:\nWhich sample should I use?: B"
+                    .into()
+            )
+        );
+        assert!(
+            async_answer_prompt("aq-1", &questions, &[answer], true)
+                .unwrap()
+                .is_some_and(|prompt| prompt.starts_with("I changed my answer"))
         );
         assert!(
             async_answer_prompt(
+                "aq-1",
                 &questions,
                 &[UserInputAnswer {
                     question_id: "9".into(),
                     labels: vec!["A".into()],
-                }]
+                }],
+                false,
             )
             .is_err()
         );

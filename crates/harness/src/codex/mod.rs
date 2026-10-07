@@ -3450,6 +3450,7 @@ mod tests {
                 questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Which sample should I use?".into(),
                     options: Some(vec!["A".into(), "B".into()]),
+                    ..Default::default()
                 }],
             })
         );

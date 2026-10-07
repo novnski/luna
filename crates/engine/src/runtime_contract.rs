@@ -19,6 +19,9 @@ use crate::cross_task_tools::{CrossTaskAuthority, CrossTaskBackend, CrossTaskToo
 
 const MAX_INSTRUCTION_CHARS: usize = 16_000;
 const STATUS_TOOL: &str = "luna_status";
+/// Nonblocking questions for every provider. The live session handles the
+/// call (it shows a card in this chat); the generic invoke path refuses it.
+pub(crate) const ASK_USER_TOOL: &str = "ask_user";
 
 /// Future L24 settings feed this trusted engine input. It is never deserialized
 /// from the model's prompt, a task title, another thread, or client options.
@@ -77,6 +80,119 @@ fn status_tool() -> RuntimeToolDefinition {
     }
 }
 
+fn ask_user_tool() -> RuntimeToolDefinition {
+    RuntimeToolDefinition {
+        name: ASK_USER_TOOL.into(),
+        version: 1,
+        description: "Ask the user one to four multiple-choice questions WITHOUT waiting for the answer. Returns {accepted:true} immediately and shows the user a question card they can answer at any time; keep working on the option you recommend. Their answer arrives later as a user message tagged [luna-question:<questionId>]. List the option you would pick first and end its label with \"(Recommended)\".".into(),
+        input_schema: serde_json::json!({"type":"object","properties":{
+            "questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{
+                "question":{"type":"string","description":"The full question."},
+                "header":{"type":"string","description":"A short label for the card, up to 24 characters."},
+                "options":{"type":"array","maxItems":8,"items":{"type":"object","properties":{
+                    "label":{"type":"string"},
+                    "description":{"type":"string"}
+                },"required":["label"],"additionalProperties":false}},
+                "multiSelect":{"type":"boolean"}
+            },"required":["question"],"additionalProperties":false}}
+        },"required":["questions"],"additionalProperties":false}),
+        output_schema: serde_json::json!({"type":"object","properties":{
+            "accepted":{"type":"boolean"},
+            "questionId":{"type":"string"},
+            "note":{"type":"string"}
+        },"required":["accepted","questionId","note"],"additionalProperties":false}),
+        required_scopes: Vec::new(),
+        deadline_ms: 5_000,
+        idempotency: "per-call".into(),
+        presentation: "question".into(),
+        activity_classification: "luna-question".into(),
+    }
+}
+
+/// Validate `ask_user` input into card questions. Bounded so a model cannot
+/// flood the transcript; option labels must be distinct and nonempty.
+pub(crate) fn ask_user_questions(
+    arguments: &serde_json::Value,
+) -> Result<Vec<luna_proto::AsyncUserInputQuestion>, EngineError> {
+    let invalid = |why: &str| EngineError::Other(format!("Invalid ask_user input: {why}"));
+    let items = arguments
+        .get("questions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| invalid("questions must be an array"))?;
+    if items.is_empty() || items.len() > 4 {
+        return Err(invalid("ask one to four questions"));
+    }
+    items
+        .iter()
+        .map(|item| {
+            let title = item
+                .get("question")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| invalid("each question needs text"))?;
+            if title.chars().count() > 2_000 {
+                return Err(invalid("a question is longer than 2,000 characters"));
+            }
+            let header = item
+                .get("header")
+                .and_then(serde_json::Value::as_str)
+                .map(|text| one_line(text).chars().take(24).collect::<String>())
+                .filter(|text| !text.is_empty());
+            let raw = item
+                .get("options")
+                .and_then(serde_json::Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if raw.len() > 8 {
+                return Err(invalid("at most eight options per question"));
+            }
+            let mut labels = Vec::new();
+            let mut descriptions = Vec::new();
+            for option in &raw {
+                let (label, description) = match option {
+                    serde_json::Value::String(label) => (label.as_str(), ""),
+                    other => (
+                        other
+                            .get("label")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(""),
+                        other
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or(""),
+                    ),
+                };
+                let label = label.trim();
+                if label.is_empty()
+                    || label.chars().count() > 200
+                    || labels.iter().any(|l: &String| l == label)
+                {
+                    return Err(invalid(
+                        "option labels must be distinct, nonempty and short",
+                    ));
+                }
+                labels.push(label.to_owned());
+                descriptions.push(description.trim().chars().take(400).collect::<String>());
+            }
+            Ok(luna_proto::AsyncUserInputQuestion {
+                title: title.to_owned(),
+                options: (!labels.is_empty()).then_some(labels),
+                header,
+                option_descriptions: if descriptions.iter().all(String::is_empty) {
+                    Vec::new()
+                } else {
+                    descriptions
+                },
+                multi_select: item
+                    .get("multiSelect")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
 fn one_line(value: &str) -> String {
     value
         .chars()
@@ -110,10 +226,14 @@ fn bounded_instruction(
     })
 }
 
+/// Nonblocking questions through LUNA's `ask_user` tool, the same for every
+/// provider (Codex's own async questions land on the same card).
+const ASYNC_QUESTIONS_TEXT: &str = "Prefer LUNA's ask_user tool for questions: it returns immediately, shows the user a question card, and you keep working on your recommended option instead of waiting. The user's answer arrives later as a user message tagged [luna-question:<questionId>]; if it differs from what you assumed, adjust from there and say what changes (do not silently undo finished work). Use your built-in blocking question tool only when you truly cannot make progress without the answer.";
+
 /// The provider-neutral convention LUNA's unattended answers rely on. Every
 /// supported provider's question tool already documents the "(Recommended)"
 /// suffix; this says when to use it and what LUNA does with it.
-const QUESTIONS_TEXT: &str = "When you ask the user a multiple-choice question about how the work should go (an approach, a behavior, a trade-off), put the option you would pick first and end its label with \"(Recommended)\". The user is often away: if nobody answers in time, LUNA sends your recommended option as their answer and your turn continues. Mark nothing when the choice is purely the user's taste or needs facts only they have (a color, a name, wording, an account); LUNA then waits for them. Approval prompts always wait for the user.";
+const QUESTIONS_TEXT: &str = "When you ask the user a multiple-choice question about how the work should go (an approach, a behavior, a trade-off), put the option you would pick first and end its label with \"(Recommended)\". The user is often away: if a blocking question goes unanswered, LUNA sends your recommended option as their answer and your turn continues. Mark nothing when the choice is purely the user's taste or needs facts only they have (a color, a name, wording, an account); a blocking question then waits for them. Approval prompts always wait for the user.";
 
 fn core_text(context: &RuntimeContext) -> String {
     format!(
@@ -236,8 +356,12 @@ fn assemble(
         instructions.push(RuntimeInstructionSection {
             name: "LUNA questions".into(),
             source: RuntimeInstructionSource::LunaCore,
-            provenance: "engine unattended-answer policy".into(),
-            text: QUESTIONS_TEXT.into(),
+            provenance: "engine question policy".into(),
+            text: if tools_supported {
+                format!("{ASYNC_QUESTIONS_TEXT} {QUESTIONS_TEXT}")
+            } else {
+                QUESTIONS_TEXT.into()
+            },
         });
         if tools_supported {
             instructions.push(RuntimeInstructionSection {
@@ -303,10 +427,11 @@ fn assemble(
         });
         instructions.extend_from_slice(context_sections);
     }
-    let mut tools = tools_supported
-        .then_some(tool)
-        .into_iter()
-        .collect::<Vec<_>>();
+    let mut tools = if tools_supported {
+        vec![tool, ask_user_tool()]
+    } else {
+        Vec::new()
+    };
     let mut omitted_tools = (!tools_supported).then(|| OmittedRuntimeTool {
         name: STATUS_TOOL.into(),
         reason: match delivery {
@@ -494,6 +619,12 @@ pub async fn invoke_with_backend(
             "LUNA tool authorization scope is missing".into(),
         ));
     }
+    if name == ASK_USER_TOOL {
+        // Only the live session can put a card in its own chat.
+        return Err(EngineError::Other(
+            "ask_user is handled by the live LUNA session".into(),
+        ));
+    }
     let output = if name == STATUS_TOOL {
         if arguments != serde_json::json!({}) {
             return Err(EngineError::Other("Invalid LUNA tool input".into()));
@@ -579,7 +710,14 @@ mod tests {
     #[test]
     fn tool_and_guidance_are_exactly_co_present() {
         let fresh = compile(input(HarnessId::Codex)).unwrap().contract;
-        assert_eq!(fresh.tools.len(), 1);
+        assert_eq!(
+            fresh
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            [STATUS_TOOL, ASK_USER_TOOL]
+        );
         assert!(
             fresh
                 .instructions

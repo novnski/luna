@@ -4502,6 +4502,15 @@ impl Shell {
                     cx,
                 );
             }
+            TranscriptEvent::OpenAsyncQuestion {
+                chat_id,
+                message_id,
+            } => {
+                let (chat_id, message_id) = (chat_id.clone(), message_id.clone());
+                self.composer.update(cx, |composer, cx| {
+                    composer.open_async_question(chat_id, message_id, cx)
+                });
+            }
             TranscriptEvent::InterruptChat { chat_id } => {
                 let chat_id = chat_id.clone();
                 self.composer

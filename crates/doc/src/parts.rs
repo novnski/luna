@@ -460,14 +460,20 @@ pub enum MessagePart {
         #[serde(default)]
         resolved: bool,
     },
-    /// Codex `request_user_input_async` completes immediately. This durable
-    /// card never marks the run AwaitingInput and has no provider resolver.
+    /// A nonblocking question (Codex `request_user_input_async`, or LUNA's
+    /// `ask_user` for every provider) completes immediately. This durable card
+    /// never marks the run AwaitingInput and has no provider resolver.
+    /// `resolved` means answered at least once; `answers` is the delivered
+    /// history (a later answer amends, it never rewrites). Dismissing the
+    /// picker is presentation only and leaves the card open.
     #[serde(rename_all = "camelCase")]
     AsyncQuestion {
         id: String,
         questions: Vec<luna_proto::AsyncUserInputQuestion>,
         #[serde(default)]
         resolved: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        answers: Vec<luna_proto::AsyncQuestionAnswer>,
     },
     Error {
         id: String,
@@ -802,6 +808,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                     id,
                     questions: questions.clone(),
                     resolved: false,
+                    answers: Vec::new(),
                 });
             }
         }
@@ -1229,6 +1236,7 @@ mod tests {
             questions: vec![luna_proto::AsyncUserInputQuestion {
                 title: "Which option?".into(),
                 options: Some(vec!["A".into(), "B".into()]),
+                ..Default::default()
             }],
         };
         let mut parts = Vec::new();

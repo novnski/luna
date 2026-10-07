@@ -21,7 +21,10 @@
 //   with --slow-ms above 120000); S9U unattended answers: recommended option
 //   auto-picked, Keep waiting, taste questions wait (T3, both providers; set
 //   the QA data dir ui-settings.json unattendedAnswerSeconds to match
-//   [--unattended-ms], default 15000); S8X automatic compaction with a
+//   [--unattended-ms], default 15000); S9Q nonblocking questions through
+//   LUNA ask_user (T3, both providers): keep working, late answer as a new
+//   turn, amendment, idempotent repeat, answer steered into a running turn;
+//   S8X automatic compaction with a
 //   small-context mock model (T2) [--big-command].
 //
 // Scenarios (validation-plan.md §4): S1 OCE-16/05 approvals and questions;
@@ -1370,6 +1373,97 @@ const SCENARIOS = {
         s.settled(wait, 'taste-turn-settles', ['idle']);
         const reply = s.replyAfter('root', sent.messageId);
         s.modelCheck('taste-answer-consumed', `reply is ACCENT-${s.nonce}-green`, reply.slice(0, 200), reply.toLowerCase().includes(`accent-${s.nonce}-green`.toLowerCase()));
+      });
+    },
+  },
+
+  S9Q: {
+    title: 'Nonblocking questions (LUNA ask_user): agent keeps working, late answer as a new turn, amendment, steer while working, idempotent repeat', validation: ['PD-14'],
+    parity: true, extra: true, permissionMode: 'full', phases: ['run'],
+    steps: ['ask-and-keep-working', 'late-answer-new-turn', 'amend-answer', 'idempotent-repeat', 'answer-steers-running-turn'],
+    prompts: n => ({
+      ask: `Use LUNA's ask_user tool (not your built-in question tool) to ask me which date format the report should use, with exactly two options labelled "ISO 8601 (Recommended)" and "US format". Do not wait for my answer: right after asking, reply with exactly ASKED-${n} and end your turn. Later, whenever my answer to that question arrives, reply with exactly FORMAT-${n}- followed by the first word of the option I chose, in lowercase, and nothing else.`,
+      steer: `Use LUNA's ask_user tool (not your built-in question tool) to ask me which log level to use, with exactly two options labelled "Info (Recommended)" and "Debug". Do not wait for my answer. Then use your shell tool to run exactly this command: python3 -c "import time; time.sleep(25); print('WORK-${n}')". After the command finishes, reply with WORK-${n} and, if my answer to the log-level question has arrived by then, also LEVEL-${n}- followed by my choice in lowercase.`,
+    }),
+    unverified: ['Needs a provider session with LUNA tools attached (T3; Claude MCP, Codex dynamic/MCP or OpenCode MCP delivery).'],
+    async run(s, P) {
+      const chatId = s.chatId('root');
+      const cards = () => s.entries('root').flatMap(e => (e.parts ?? []).filter(p => p.kind === 'asyncQuestion'));
+      const userTexts = () => s.entries('root').filter(e => e.role === 'user').map(e => textOf(e));
+      const askTools = messageId => s.toolsAfter('root', messageId).filter(t => /ask_user$/.test(t.call?.tool ?? t.call?.name ?? ''));
+      const latestReply = () => textOf(s.entries('root').filter(e => e.role === 'assistant').at(-1) ?? {});
+      const waitReply = async (marker, label, timeoutMs = 240000) => {
+        const mirror = s.d.chatByRole('root').mirror;
+        await mirror.waitFor(entries => !s.d.busy(chatId) && entries.filter(e => e.role === 'assistant').some(e => textOf(e).toLowerCase().includes(marker.toLowerCase())),
+          {timeoutMs, label}).catch(() => null);
+        await s.d.waitIdle(chatId, {timeoutMs: 120000}).catch(() => null);
+      };
+      let card = null;
+      await s.step('ask-and-keep-working', async () => {
+        const t = await s.turn('root', P.ask, {answer: pending => (pending.questions.some(q => q.approval) ? {approval: 'allow-once'} : null)});
+        s.check('turn-did-not-wait', 'the turn ended without anyone answering (no blocking question)', t.wait.result, t.wait.result === 'settled');
+        s.check('never-awaiting-input', 'the chat never entered awaitingInput', t.wait.statuses, !(t.wait.statuses ?? []).includes('awaitingInput'));
+        s.modelCheck('asked-reply', `reply is ASKED-${s.nonce}`, t.reply.slice(0, 160), t.reply.includes(s.m('ASKED')));
+        const tools = askTools(t.messageId);
+        s.check('ask-user-tool', 'the agent called LUNA ask_user and it returned without error', tools.map(x => `${x.call?.name}:${x.resolved}:${x.isError}`), tools.some(x => x.resolved && !x.isError));
+        card = cards().at(-1) ?? null;
+        await s.d.holdForCapture('s9q-async-card');
+        s.d.capture('s9q-async-card');
+        s.check('card-open', 'an open nonblocking card holds the question and options', card ? {id: card.id, resolved: card.resolved, questions: card.questions} : null,
+          Boolean(card && !card.resolved && (card.questions?.[0]?.options ?? []).some(o => /ISO 8601/.test(o)) && (card.questions?.[0]?.options ?? []).some(o => /US format/.test(o))));
+      });
+      await s.step('late-answer-new-turn', async () => {
+        if (!card) throw new Error('no async card to answer');
+        const mark = s.d.sessions.mark(chatId);
+        const {receipt} = await s.d.answerAsync(chatId, card.id, [{questionId: '0', labels: ['US format']}]);
+        s.check('late-answer-applied', 'the late answer is applied after the turn ended', receipt?.status, receipt?.status === 'applied');
+        await waitReply(s.m('FORMAT'), 'reply to the late answer');
+        const delivered = userTexts().find(text => text.includes(`[luna-question:${card.id}]`) && text.includes('US format'));
+        s.check('answer-message-tagged', 'the answer reached the agent as a user message tagged with the card id', delivered?.slice(0, 200) ?? null, Boolean(delivered));
+        const now = cards().find(c => c.id === card.id);
+        s.check('card-answered', 'the card records one answer and reads as answered', now ? {resolved: now.resolved, answers: (now.answers ?? []).length} : null, Boolean(now?.resolved && (now.answers ?? []).length === 1));
+        s.check('new-turn-ran', 'a new turn ran for the answer', s.d.sessions.since(chatId, mark).map(h => h.status), s.d.sessions.since(chatId, mark).some(h => h.status === 'working'));
+        s.modelCheck('late-answer-consumed', `reply is FORMAT-${s.nonce}-us`, latestReply().slice(0, 160), latestReply().toLowerCase().includes(`format-${s.nonce}-us`.toLowerCase()));
+        s.d.capture('s9q-answered-card');
+      });
+      await s.step('amend-answer', async () => {
+        const {receipt} = await s.d.answerAsync(chatId, card.id, [{questionId: '0', labels: ['ISO 8601 (Recommended)']}], {label: 'amend async answer'});
+        s.check('amend-applied', 'a different later answer is applied as an amendment', receipt?.status, receipt?.status === 'applied');
+        await waitReply(`${s.m('FORMAT')}-iso`, 'reply to the amendment');
+        const amended = userTexts().find(text => text.startsWith('I changed my answer') && text.includes(`[luna-question:${card.id}]`) && text.includes('ISO 8601'));
+        s.check('amend-message', 'the amendment is a new user message saying it replaces the earlier answer', amended?.slice(0, 200) ?? null, Boolean(amended));
+        const now = cards().find(c => c.id === card.id);
+        s.check('card-history', 'the card keeps both answers in order', (now?.answers ?? []).map(a => a.answers?.[0]?.labels ?? []), (now?.answers ?? []).length === 2);
+        s.modelCheck('amend-consumed', `reply is FORMAT-${s.nonce}-iso`, latestReply().slice(0, 160), latestReply().toLowerCase().includes(`format-${s.nonce}-iso`.toLowerCase()));
+      });
+      await s.step('idempotent-repeat', async () => {
+        const before = userTexts().length;
+        const {receipt} = await s.d.answerAsync(chatId, card.id, [{questionId: '0', labels: ['ISO 8601 (Recommended)']}], {label: 'repeat async answer'});
+        s.check('repeat-applied', 'repeating the latest answer is accepted', {status: receipt?.status, reason: receipt?.reason?.message ?? null}, receipt?.status === 'applied');
+        const quiet = await s.stays('root', entries => entries.filter(e => e.role === 'user').length > before, 8000);
+        s.check('repeat-not-delivered', 'no second message is delivered for the same answer', quiet, quiet);
+        s.check('repeat-history', 'the card history is unchanged', (cards().find(c => c.id === card.id)?.answers ?? []).length, (cards().find(c => c.id === card.id)?.answers ?? []).length === 2);
+      });
+      await s.step('answer-steers-running-turn', async () => {
+        await s.d.waitIdle(chatId).catch(() => null);
+        const known = new Set(cards().map(c => c.id));
+        const sent = await s.d.send(chatId, s.p(P.steer), {label: 'steer question'});
+        const mirror = s.d.chatByRole('root').mirror;
+        const fresh = await mirror.waitFor(() => cards().find(c => !known.has(c.id)) ?? null, {timeoutMs: 180000, label: 'second async card'}).catch(() => null);
+        s.check('second-card', 'the agent asked through ask_user and kept working', fresh ? {id: fresh.id, busy: s.d.busy(chatId)} : null, Boolean(fresh));
+        if (!fresh) return;
+        const busyWhenAnswered = s.d.busy(chatId);
+        const {receipt} = await s.d.answerAsync(chatId, fresh.id, [{questionId: '0', labels: ['Debug']}], {label: 'answer while working'});
+        s.check('steer-answer-applied', 'the answer sent while the agent is still working is applied', {status: receipt?.status, reason: receipt?.reason?.message ?? null, busyWhenAnswered}, receipt?.status === 'applied');
+        s.info('answered-while-busy', 'the agent was still working when the answer was sent', busyWhenAnswered, busyWhenAnswered);
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, timeoutMs: 300000});
+        await s.d.waitIdle(chatId, {timeoutMs: 180000}).catch(() => null);
+        s.settled(wait, 'steer-turn-settles', ['idle']);
+        const delivered = userTexts().some(text => text.includes(`[luna-question:${fresh.id}]`) && text.includes('Debug'));
+        s.check('steer-answer-delivered', 'the answer reached the agent tagged with the card id', delivered, delivered);
+        const replies = s.entries('root').filter(e => e.role === 'assistant').map(e => textOf(e)).join('\n');
+        s.modelCheck('steer-answer-consumed', `the agent reported LEVEL-${s.nonce}-debug`, replies.slice(-300), replies.toLowerCase().includes(`level-${s.nonce}-debug`.toLowerCase()));
+        s.d.capture('s9q-steered');
       });
     },
   },

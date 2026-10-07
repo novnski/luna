@@ -2563,8 +2563,10 @@ async fn unsupported_auto_never_runs_as_hidden_ask() {
     assert!(core.sessions.session_status(CHAT).is_none());
 }
 
-/// Codex-style async questions are already complete provider tool calls:
-/// Skip only resolves the card, while a later answer uses normal prompt delivery.
+/// Nonblocking questions are already complete provider tool calls: "answer
+/// later" leaves the card open, a later answer uses normal prompt delivery
+/// tagged with the card id, the same answer again is idempotent, and a
+/// different later answer is delivered as an amendment.
 #[tokio::test(flavor = "multi_thread")]
 async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
     let dir = tempfile::tempdir().unwrap();
@@ -2588,6 +2590,7 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
                     questions: vec![luna_proto::AsyncUserInputQuestion {
                         title: "Which option?".into(),
                         options: Some(vec!["A".into(), "B".into()]),
+                        ..Default::default()
                     }],
                 },
                 done(DoneStatus::Completed),
@@ -2657,13 +2660,14 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
     )
     .await;
     assert!(entries(&core).iter().any(|e| {
-        e.parts.iter().any(|part|
-        matches!(part, MessagePart::AsyncQuestion { id, resolved: true, .. } if id == "aq-call-1")
-    )
+        e.parts.iter().any(|part| {
+            matches!(part, MessagePart::AsyncQuestion { id, resolved: false, answers, .. }
+            if id == "aq-call-1" && answers.is_empty())
+        })
     }));
     assert_eq!(
         command_status(&core, "skip-call-1").unwrap().1.as_deref(),
-        Some("question skipped")
+        Some("question left open")
     );
 
     handle
@@ -2676,8 +2680,10 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
                 questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Choose a later option".into(),
                     options: Some(vec!["A".into(), "B".into()]),
+                    ..Default::default()
                 }],
                 resolved: false,
+                answers: Vec::new(),
             }],
             created_at: chrono::Utc::now().timestamp_millis(),
             device_id: core.device_id.clone(),
@@ -2712,7 +2718,8 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
     }));
     assert!(entries(&core).iter().any(|e| {
         e.role == MessageRole::User && e.parts.iter().any(|part|
-        matches!(part, MessagePart::Text { text, .. } if text.contains("Choose a later option: B"))
+        matches!(part, MessagePart::Text { text, .. }
+            if text.contains("Choose a later option: B") && text.contains("[luna-question:aq-call-2]"))
     )
     }));
     queue_as_owner(
@@ -2730,9 +2737,9 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
     wait_for(
         || {
             command_status(&core, "duplicate-answer-call-2")
-                .is_some_and(|(status, _)| status == SessionCommandStatus::Rejected)
+                .is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
         },
-        "duplicate answer rejected",
+        "duplicate answer is idempotent",
     )
     .await;
     assert_eq!(
@@ -2746,6 +2753,44 @@ async fn async_question_skip_and_late_answer_use_distinct_durable_paths() {
             .count(),
         1
     );
+    queue_as_owner(
+        &core,
+        handle.doc(),
+        "amend-call-2",
+        SessionCommandPayload::RespondAsyncQuestion {
+            message_id: "aq-call-2".into(),
+            answers: vec![luna_proto::UserInputAnswer {
+                question_id: "0".into(),
+                labels: vec!["A".into()],
+            }],
+        },
+    );
+    wait_for(
+        || {
+            command_status(&core, "amend-call-2")
+                .is_some_and(|(status, _)| status == SessionCommandStatus::Applied)
+        },
+        "amended answer applied",
+    )
+    .await;
+    wait_for(
+        || {
+            entries_now(&core).iter().any(|e| {
+                e.role == MessageRole::User && e.parts.iter().any(|part|
+            matches!(part, MessagePart::Text { text, .. }
+                if text.starts_with("I changed my answer") && text.contains("Choose a later option: A"))
+        )
+            })
+        },
+        "amendment delivered as a new message",
+    )
+    .await;
+    assert!(entries(&core).iter().any(|e| {
+        e.parts.iter().any(|part| {
+            matches!(part, MessagePart::AsyncQuestion { id, answers, .. }
+            if id == "aq-call-2" && answers.len() == 2)
+        })
+    }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2789,6 +2834,7 @@ async fn async_answer_steer_waits_for_in_flight_tool_boundary() {
                         questions: vec![luna_proto::AsyncUserInputQuestion {
                             title: "Which option?".into(),
                             options: Some(vec!["A".into(), "B".into()]),
+                            ..Default::default()
                         }],
                     }))
                     .await;

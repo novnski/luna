@@ -5105,6 +5105,13 @@ impl SessionsEngine {
                                         &chat_id, &run_id, &contract, invocation, &cancel, backend,
                                     )
                                     .await
+                            } else if invocation.name == crate::runtime_contract::ASK_USER_TOOL
+                                && contract
+                                    .tools
+                                    .iter()
+                                    .any(|tool| tool.name == crate::runtime_contract::ASK_USER_TOOL)
+                            {
+                                sessions.invoke_ask_user(&chat_id, &run_id, &invocation)
                             } else {
                                 crate::runtime_contract::invoke_with_backend(
                                     &contract,
@@ -5586,6 +5593,46 @@ impl SessionsEngine {
             request_id: request_id.to_string(),
         });
         Ok(delivered)
+    }
+
+    /// LUNA `ask_user`: show a nonblocking question card in this run's chat
+    /// and return at once, for every provider. The card is an
+    /// `AsyncQuestions` event on the run's own pipeline (journaled and folded
+    /// like Codex's async questions); its answer is a later user message
+    /// through `RespondAsyncQuestion` (a steer while the agent works,
+    /// otherwise a new turn).
+    fn invoke_ask_user(
+        &self,
+        chat_id: &str,
+        run_id: &str,
+        invocation: &luna_harness::LunaToolInvocation,
+    ) -> Result<serde_json::Value, EngineError> {
+        let questions = crate::runtime_contract::ask_user_questions(&invocation.arguments)?;
+        let call_id = invocation.context.provider_call_id();
+        let message_id = if call_id.is_empty() {
+            format!("luna-ask-{}", new_id())
+        } else {
+            format!("luna-ask-{call_id}")
+        };
+        let ended = || EngineError::Other("the LUNA run that asked has ended".into());
+        let runs = lock(&self.inner.runs);
+        let run = runs
+            .get(chat_id)
+            .filter(|run| run.run_id == run_id)
+            .ok_or_else(ended)?;
+        run.engine_tx
+            .send(AgentEvent::AsyncQuestions {
+                message_id: message_id.clone(),
+                questions,
+            })
+            .map_err(|_| ended())?;
+        Ok(serde_json::json!({
+            "accepted": true,
+            // The card's id: the answer message carries it as
+            // [luna-question:<questionId>].
+            "questionId": format!("aq-{message_id}"),
+            "note": "The user sees a question card and may answer at any time. Keep working on your recommended option; their answer will arrive as a user message tagged with this questionId.",
+        }))
     }
 
     /// The user is answering this question themselves: cancel LUNA's pending

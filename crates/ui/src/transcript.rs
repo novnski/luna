@@ -1168,6 +1168,15 @@ pub enum RowKind {
         tools: Arc<Vec<ToolItem>>,
         auto_open: bool,
     },
+    /// A nonblocking question card (Codex async question or LUNA
+    /// `ask_user`). Clicking reopens it in the question panel, open or
+    /// answered (a later answer amends).
+    AsyncQuestionCard {
+        message_id: String,
+        title: SharedString,
+        status: SharedString,
+        answered: bool,
+    },
     InputChip {
         /// First question's header (chat-view.tsx `InputChip`: the resolved
         /// chip shows it; unresolved shows "Awaiting your answer…" — which
@@ -2005,7 +2014,58 @@ pub fn rows_for_entry(
                     }
                     // The async question is already shown in the assistant's
                     // text and as a separate answer card beside the composer.
-                    MessagePart::AsyncQuestion { .. } => {}
+                    MessagePart::AsyncQuestion {
+                        id: part_id,
+                        questions,
+                        resolved,
+                        answers,
+                    } => {
+                        let first = questions.first();
+                        let title: SharedString = single_line(
+                            &first
+                                .and_then(|q| q.header.clone())
+                                .or_else(|| first.map(|q| q.title.clone()))
+                                .unwrap_or_else(|| "Question".into()),
+                        )
+                        .into();
+                        let last = answers
+                            .last()
+                            .map(|last| {
+                                last.answers
+                                    .iter()
+                                    .flat_map(|answer| answer.labels.iter().cloned())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .filter(|labels| !labels.is_empty());
+                        let status: SharedString = match (&last, answers.len()) {
+                            (Some(labels), 1) => {
+                                format!("Answered: {} · click to change", single_line(labels))
+                            }
+                            (Some(labels), n) => format!(
+                                "Answered {n} times, latest: {} · click to change",
+                                single_line(labels)
+                            ),
+                            (None, _) => "Open · the agent kept working · click to answer".into(),
+                        }
+                        .into();
+                        rows.push(Row {
+                            id: format!("{}#{}", entry.id, part_id).into(),
+                            version: fnv1a(format!("{title}\0{status}").as_bytes()) << 1
+                                | *resolved as u64,
+                            turn_start: false,
+                            kind: RowKind::AsyncQuestionCard {
+                                message_id: part_id.clone(),
+                                title,
+                                status,
+                                answered: *resolved,
+                            },
+                            role: entry.role,
+                            entry_id: entry_id.clone(),
+                            timestamp: None,
+                            copy_text: None,
+                        });
+                    }
                     MessagePart::Error {
                         id: part_id,
                         message,
@@ -3166,6 +3226,7 @@ fn charged_row(row: &Row, seen: &mut HashSet<usize>) -> usize {
             }
         }
         RowKind::InputChip { header, .. } => header.len(),
+        RowKind::AsyncQuestionCard { title, status, .. } => title.len() + status.len(),
         RowKind::ErrorChip { message } => message.len(),
         RowKind::GoalAchieved { label } => label.len(),
         RowKind::GeneratedImage {
@@ -3970,6 +4031,11 @@ pub enum TranscriptEvent {
         task_id: String,
         message_id: String,
         text: String,
+    },
+    /// A nonblocking question card was clicked: reopen it in the panel.
+    OpenAsyncQuestion {
+        chat_id: String,
+        message_id: String,
     },
 }
 
@@ -7847,6 +7913,29 @@ impl Transcript {
                 RowKind::InputChip { header, resolved } => {
                     input_chip(header.clone(), *resolved, &theme)
                 }
+                RowKind::AsyncQuestionCard {
+                    message_id,
+                    title,
+                    status,
+                    answered,
+                } => {
+                    let chat_id = self
+                        .chat_id
+                        .clone()
+                        .or_else(|| self.state.read(cx).selected_chat.clone());
+                    let message_id = message_id.clone();
+                    async_question_card(&row.id, title.clone(), status.clone(), *answered, &theme)
+                        .when_some(chat_id, |el, chat_id| {
+                            el.cursor_pointer()
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(TranscriptEvent::OpenAsyncQuestion {
+                                        chat_id: chat_id.clone(),
+                                        message_id: message_id.clone(),
+                                    });
+                                }))
+                        })
+                        .into_any_element()
+                }
                 RowKind::GeneratedImage {
                     owner,
                     path,
@@ -9292,6 +9381,83 @@ fn error_chip(message: SharedString, theme: &Theme) -> AnyElement {
 /// ChatRoundLine, the medium "Question" label, then the truncating value —
 /// the first question's header once resolved, "Awaiting your answer…" while
 /// pending. Neutral tones throughout; resolution never recolors the chip.
+/// The transcript row of a nonblocking question card: always answerable,
+/// so it reads as a control (the caller adds the click).
+fn async_question_card(
+    row_id: &SharedString,
+    title: SharedString,
+    status: SharedString,
+    answered: bool,
+    theme: &Theme,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(gpui::ElementId::Name(
+            format!("async-question-{row_id}").into(),
+        ))
+        .py(crate::typography::ui_rems(4.0))
+        .w_full()
+        .child(
+            div()
+                .h(crate::typography::ui_rems(34.0))
+                .w_full()
+                .flex()
+                .items_center()
+                .gap(crate::typography::ui_rems(8.0))
+                .overflow_hidden()
+                .rounded(px(crate::theme::radius::LG))
+                .border_1()
+                .border_color(if answered {
+                    crate::theme::hairline(0.08)
+                } else {
+                    theme.accent.opacity(0.35)
+                })
+                .bg(crate::theme::ink(0.045))
+                .hover(|style| style.bg(crate::theme::ink(0.07)))
+                .px(crate::typography::ui_rems(8.0))
+                .text_size(crate::typography::ui_rems(12.0))
+                .child(
+                    div()
+                        .flex_none()
+                        .size(crate::typography::ui_rems(20.0))
+                        .rounded(px(crate::theme::radius::SM))
+                        .bg(crate::theme::ink(0.09))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            crate::icons::icon(crate::icons::CHAT_ROUND_LINE)
+                                .size(crate::typography::ui_rems(12.0))
+                                .text_color(theme.content_muted),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(crate::typography::ui_rems(320.0))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(theme.text.opacity(0.85))
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_color(if answered {
+                            theme.content_muted
+                        } else {
+                            theme.accent
+                        })
+                        .child(status),
+                ),
+        )
+}
+
 fn input_chip(header: SharedString, resolved: bool, theme: &Theme) -> AnyElement {
     let value: SharedString = if resolved {
         header
@@ -10592,6 +10758,9 @@ fn perf_row_text(row: &Row) -> (&'static str, String) {
                 .join("\n"),
         ),
         RowKind::InputChip { header, .. } => ("input", header.to_string()),
+        RowKind::AsyncQuestionCard { title, status, .. } => {
+            ("asyncQuestion", format!("{title}: {status}"))
+        }
         RowKind::ErrorChip { message } => ("error", message.to_string()),
         RowKind::GoalAchieved { label } => ("goal", label.to_string()),
         RowKind::GeneratedImage { name, .. } => ("image", name.clone()),
@@ -10686,8 +10855,12 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
         if let MessagePart::Input { resolved, .. } = part {
             acc.push(0x10 | *resolved as u8);
         }
-        if let MessagePart::AsyncQuestion { resolved, .. } = part {
+        if let MessagePart::AsyncQuestion {
+            resolved, answers, ..
+        } = part
+        {
             acc.push(0x20 | *resolved as u8);
+            acc.extend_from_slice(&(answers.len() as u32).to_be_bytes());
         }
     }
     crate::perf_counters::note_fingerprint(acc.len());

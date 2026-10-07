@@ -324,6 +324,14 @@ export class Driver {
       extra: {chatRole: chat?.role ?? null, requestId: pending.requestId, probe, ...detail}});
   }
 
+  // Answer (or amend) a nonblocking question card the way the panel does:
+  // SessionCommandPayload::RespondAsyncQuestion keyed by the card id, with
+  // answers keyed by question index (crates/ui/src/composer.rs).
+  async answerAsync(chatId, messageId, answers, {label = 'async answer'} = {}) {
+    return this.execute(chatId, {kind: 'session', command: {kind: 'respondAsyncQuestion', messageId, answers}},
+      {label, sendKind: 'answer', extra: {chatRole: this.chats.get(chatId)?.role ?? null, messageId, answers}});
+  }
+
   // The question panel's "Keep waiting" (any panel interaction sends the
   // same): cancel LUNA's unattended answer for this request
   // (SessionCommandPayload::HoldInput, crates/ui/src/composer.rs).

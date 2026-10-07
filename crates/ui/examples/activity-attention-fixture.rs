@@ -188,6 +188,7 @@ async fn seed(core: &EngineCore, root: &Path) -> anyhow::Result<()> {
                 questions: vec![luna_proto::AsyncUserInputQuestion {
                     title: "Which synthetic sample should I use?".into(),
                     options: Some(vec!["Option A".into(), "Option B".into()]),
+                    ..Default::default()
                 }],
                 resolved: false,
             }],

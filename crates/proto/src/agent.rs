@@ -973,14 +973,34 @@ pub struct UserInputAnswer {
     pub labels: Vec<String>,
 }
 
-/// A Codex async question is assistant-message metadata, not a pending
-/// `request_user_input` RPC. Its answer is a later user message.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A nonblocking question: Codex `request_user_input_async` agent-message
+/// metadata, or LUNA's `ask_user` tool for every provider. The provider call
+/// already returned; the answer is a later user message (a steer while the
+/// agent works, otherwise a new turn).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AsyncUserInputQuestion {
     pub title: String,
     #[serde(default)]
     pub options: Option<Vec<String>>,
+    /// Short chip label (LUNA `ask_user`); Codex sends none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header: Option<String>,
+    /// Parallel to `options`; empty strings when absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub option_descriptions: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub multi_select: bool,
+}
+
+/// One delivered answer to a nonblocking question card. A later answer is a
+/// new record (an amendment); it never rewrites what the agent already saw.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AsyncQuestionAnswer {
+    pub answers: Vec<UserInputAnswer>,
+    /// Epoch millis the host delivered it (steered or queued as a turn).
+    pub at_ms: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
