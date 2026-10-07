@@ -537,11 +537,11 @@ mod tests {
 #[cfg(all(test, any(target_os = "linux", windows)))]
 mod rendered_tests {
     use super::*;
-    use gpui::{Context, Render};
     #[cfg(windows)]
-    use gpui_platform::application as test_application;
+    use crate::test_platform::application as test_application;
     #[cfg(target_os = "linux")]
-    use gpui_platform::headless as test_application;
+    use crate::test_platform::headless as test_application;
+    use gpui::{Context, Render};
     thread_local! {
         pub(super) static TOOLTIP_BOUNDS: RefCell<Option<Rc<Cell<Option<Bounds<Pixels>>>>>> = RefCell::default();
     }

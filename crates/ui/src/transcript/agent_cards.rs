@@ -484,6 +484,7 @@ impl Render for AgentCard {
 
 impl Transcript {
     /// Fixture readback: the preview line a mounted card currently shows.
+    #[cfg(feature = "appshots-fixture")]
     pub(super) fn fixture_card_preview(&self, child_id: &str, cx: &gpui::App) -> Option<String> {
         let card = self.agent_cards.get(child_id)?.read(cx);
         card.snapshot

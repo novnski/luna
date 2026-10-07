@@ -74,6 +74,8 @@ pub mod syntax_cache;
 pub(crate) mod task_commands;
 pub mod task_work;
 pub mod terminal;
+#[cfg(test)]
+pub(crate) mod test_platform;
 pub mod theme;
 pub mod theme_library;
 pub mod transcript;

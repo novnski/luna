@@ -16007,7 +16007,7 @@ mod tests {
     #[test]
     fn resolved_layout_does_not_keep_notifying_on_repaint() {
         use std::cell::Cell;
-        gpui_platform::headless().run(|cx| {
+        crate::test_platform::headless().run(|cx| {
             cx.set_global(Theme::dark());
             let handle = cx.open_window(gpui::WindowOptions::default(), |_, cx| {
                 cx.new(|cx| {
@@ -16045,7 +16045,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn single_line_address_reveals_caret_and_maps_scrolled_pointer() {
-        gpui_platform::headless().run(|cx| {
+        crate::test_platform::headless().run(|cx| {
             cx.set_global(Theme::dark());
             let handle = cx
                 .open_window(gpui::WindowOptions::default(), |_, cx| {
@@ -16106,7 +16106,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn layout_cache_reuses_resize_frames_and_invalidates_text_inputs() {
-        gpui_platform::headless().run(|cx| {
+        crate::test_platform::headless().run(|cx| {
             cx.set_global(Theme::dark());
             let handle = cx
                 .open_window(gpui::WindowOptions::default(), |_, cx| {

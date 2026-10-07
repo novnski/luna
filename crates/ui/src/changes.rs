@@ -6126,7 +6126,7 @@ rename to new_name.rs
     fn native_diff_font_geometry() {
         // Windows headless mode uses NoopTextSystem. This regression needs
         // actual DirectWrite metrics, as it does CoreText/fontconfig elsewhere.
-        let platform = gpui_platform::current_platform(!cfg!(windows));
+        let platform = crate::test_platform::current_platform(!cfg!(windows));
         let text_system =
             gpui::WindowTextSystem::new(Arc::new(gpui::TextSystem::new(platform.text_system())));
         text_system

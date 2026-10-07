@@ -1444,7 +1444,7 @@ mod generated_image_tests {
 
     #[tokio::test]
     async fn generated_image_chunk_reader_targets_owner_and_bounds_decode() {
-        let executor = gpui_platform::background_executor();
+        let executor = crate::test_platform::background_executor();
         for (width, target, expected, succeeds) in [
             (64, Some("remote-owner"), "image/png", true),
             (64, None, "image/png", true),

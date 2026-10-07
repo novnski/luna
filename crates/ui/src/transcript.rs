@@ -13123,7 +13123,7 @@ mod tests {
         use super::*;
 
         fn with_transcript(test: impl FnOnce(&mut Transcript, &mut Context<Transcript>) + 'static) {
-            gpui_platform::headless().run(move |cx| {
+            crate::test_platform::headless().run(move |cx| {
                 let state = cx.new(|_| AppState::new());
                 let transcript = cx.new(|cx| Transcript::new(state, cx));
                 transcript.update(cx, test);
@@ -13150,7 +13150,7 @@ mod tests {
             test: impl FnOnce(Entity<Transcript>, gpui::WindowHandle<CachedTranscript>, &mut gpui::App)
             + 'static,
         ) {
-            gpui_platform::headless().run(move |cx| {
+            crate::test_platform::headless().run(move |cx| {
                 cx.set_global(Theme::dark());
                 let state = cx.new(|_| AppState::new());
                 let window = cx

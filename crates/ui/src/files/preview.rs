@@ -4138,7 +4138,7 @@ mod markdown_buffer_tests {
                 cx,
             );
         }
-        gpui_platform::headless().run(|cx| {
+        crate::test_platform::headless().run(|cx| {
             gpui_base::init(cx);
             cx.set_global(Theme::dark());
             let source =
