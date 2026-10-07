@@ -11,6 +11,8 @@
 //   node scripts/qa-opencode-scenarios.mjs run <S#> --provider opencode|claude-code
 //        --tier T2|T3 [--model <id>] [--variant <level>] [--evidence-root <dir>]
 //        [--turn-timeout <s>] [--allow-usage-store] [--ax] [--phase pre|post --run <dir>]
+//        [--capture-hold-ms <ms>]  (keep the S1 approval card, S1 question panel
+//        and S2X late card unanswered that long so the operator can capture them)
 //   Live-only extras (never rehearsed): S2X background child ask after the
 //   root Done, parked follow-up and per-child Stop; S4X OpenCode server
 //   SIGSTOP/SIGCONT and SIGKILL with an approval or a form pending
@@ -45,6 +47,11 @@ import {
 import {Driver, forkInitialPermission, reviewLabel} from './qa-opencode-driver.mjs';
 
 const PROVIDERS = ['opencode', 'claude-code'];
+// Subagent prompts name the agent type: with a bare "subagent tool" request
+// gpt-6-luna picked OpenCode's read-only `explore` agent, whose own rules deny
+// shell, so the child never asked (e2e-paid-r2 S2X). Both providers have a
+// general-purpose type with a shell tool; the text stays provider-neutral.
+const SHELL_AGENT = 'Use the general-purpose subagent type (one that has a shell tool), not a read-only explore agent.';
 
 // ------------------------------------------------------------------ context
 class ScenarioContext {
@@ -156,7 +163,7 @@ async function waitAnswering(s, role, done, {policy = allowAll, timeoutMs = 1800
       throw error;
     }
     if (outcome.type === 'done') return {value: outcome.value, handled};
-    const action = policy(outcome.pending);
+    const action = await policy(outcome.pending);
     if (!action) return {pending: outcome.pending, handled};
     answered.add(outcome.pending.requestId);
     const {receipt} = await s.d.answer(chatId, outcome.pending, action);
@@ -262,9 +269,9 @@ const SCENARIOS = {
       const root = 'root';
       await s.step('allow-once', async () => {
         let card = null;
-        const t = await s.turn(root, P.allow, {mock: `tool-shell:echo ${s.m('S1-ALLOW')}`, answer: pending => {
+        const t = await s.turn(root, P.allow, {mock: `tool-shell:echo ${s.m('S1-ALLOW')}`, answer: async pending => {
           card ??= pending;
-          s.d.capture('s1-approval-card');
+          await s.d.holdForCapture('s1-approval-card');
           return {approval: 'allow-once'};
         }});
         s.check('approval-shown', 'an approval card reached the shared panel', card ? card.questions.map(q => q.approval?.actionKind ?? 'question') : null, Boolean(card?.questions.some(q => q.approval)));
@@ -291,10 +298,10 @@ const SCENARIOS = {
       });
       await s.step('question-single', async () => {
         let shown = null;
-        const t = await s.turn(root, P.single, {answer: pending => {
+        const t = await s.turn(root, P.single, {answer: async pending => {
           if (pending.questions.some(q => q.approval)) return {approval: 'allow-once'};
           shown ??= pending;
-          s.d.capture('s1-question-panel');
+          await s.d.holdForCapture('s1-question-panel');
           return {pick: 'green'};
         }});
         s.modelCheck('question-shown', 'the question reached the shared question panel (no approval)', shown?.questions.map(q => ({options: q.options, multi: q.multiSelect})) ?? null, Boolean(shown));
@@ -357,9 +364,9 @@ const SCENARIOS = {
     title: 'Native subagent attribution and background work', validation: ['OCE-01', 'OCE-21'], parity: true, permissionMode: 'full', phases: ['run'],
     steps: ['subagents', 'background-shell', 'stop-with-running-child'],
     prompts: n => ({
-      subagents: `Use your subagent tool (the tool that starts a separate agent) to start two subagents. Subagent A runs in the foreground: tell it to run the shell command "echo CHILD-A-${n}" and report the output. Subagent B: start it in the background if your subagent tool supports background agents, otherwise in the foreground; tell it to run the shell command "echo CHILD-B-${n}" and report the output. Do not run either command yourself. When both have been started, reply with exactly ROOT-DONE-${n}.`,
+      subagents: `Use your subagent tool (the tool that starts a separate agent) to start two subagents. ${SHELL_AGENT} Subagent A runs in the foreground: tell it to run the shell command "echo CHILD-A-${n}" and report the output. Subagent B: start it in the background if your subagent tool supports background agents, otherwise in the foreground; tell it to run the shell command "echo CHILD-B-${n}" and report the output. Do not run either command yourself. When both have been started, reply with exactly ROOT-DONE-${n}.`,
       background: `Use your shell tool's background option to run this command in the background: sleep 8; echo BG-SHELL-${n}\nDo not wait for it to finish. Immediately reply with exactly BG-STARTED-${n}.`,
-      slow: `Use your subagent tool to start one subagent and tell it to run the shell command "sleep 45; echo CHILD-SLOW-${n}" and report the output. Wait for it, then reply with its output.`,
+      slow: `Use your subagent tool to start one subagent (${SHELL_AGENT}) and tell it to run the shell command "sleep 45; echo CHILD-SLOW-${n}" and report the output. Wait for it, then reply with its output.`,
     }),
     unverified: ['Grandchild visibility (experimental.subagent_depth 2) needs that profile setting; not set by this runner.'],
     async run(s, P) {
@@ -941,10 +948,10 @@ const SCENARIOS = {
     parity: true, extra: true, permissionMode: 'ask', phases: ['run'],
     steps: ['late-child-ask', 'follow-up-while-parked', 'foreground-child-stop'],
     prompts: n => ({
-      late: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent with the description "Asking child" and this task: "First use your file read tool to read README.md, then use your file search (glob) tool to list the *.md files, then use your shell tool to run exactly this command and nothing else: python3 -c 'print("LATE-ASK-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly ROOT-DONE-${n} and end your turn.`,
-      parked: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent with the description "Sleeping child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(45); print("PARKED-CHILD-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly PARKED-ROOT-${n} and end your turn.`,
+      late: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent. ${SHELL_AGENT} Give it the description "Asking child" and this task: "First use your file read tool to read README.md, then use your file search (glob) tool to list the *.md files, then use your shell tool to run exactly this command and nothing else: python3 -c 'print("LATE-ASK-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly ROOT-DONE-${n} and end your turn.`,
+      parked: `Use your subagent tool with background set to true (a background subagent) to launch ONE subagent. ${SHELL_AGENT} Give it the description "Sleeping child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(45); print("PARKED-CHILD-${n}")'. Then reply with only the command output." Do not wait for it and do not run the command yourself: immediately reply with exactly PARKED-ROOT-${n} and end your turn.`,
       followup: `Reply with exactly FOLLOWUP-${n}. Do not use tools.`,
-      fg: `Use your subagent tool to launch ONE subagent in the foreground (do not run it in the background) with the description "Foreground child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(90); print("FG-CHILD-${n}")'. Then reply with only the command output." Wait for the subagent to finish, then reply with exactly FG-ROOT-${n} followed by what the subagent reported.`,
+      fg: `Use your subagent tool to launch ONE subagent in the foreground (do not run it in the background). ${SHELL_AGENT} Give it the description "Foreground child" and this task: "Use your shell tool to run exactly this command and nothing else: python3 -c 'import time; time.sleep(90); print("FG-CHILD-${n}")'. Then reply with only the command output." Wait for the subagent to finish, then reply with exactly FG-ROOT-${n} followed by what the subagent reported.`,
     }),
     unverified: ['Whether the child asks after the root Done depends on model timing; an ask during the root turn is answered and recorded as early (ask-timing).',
       'Claude Code background agents may not raise host asks; the Claude run records what it does.'],
@@ -968,7 +975,7 @@ const SCENARIOS = {
         const chat = s.d.chatByRole('root');
         if (!early.length) {
           const late = await chat.mirror.waitFor(() => chat.mirror.currentPending(), {timeoutMs: 150000, label: 'late child ask'}).catch(() => null);
-          s.d.capture('s2x-late-ask-card');
+          await s.d.holdForCapture('s2x-late-ask-card');
           s.check('late-ask-shown', 'the background child approval reaches the root chat panel after the root Done (OCF-51)',
             late ? late.questions.map(q => ({header: q.header ?? null, kind: q.approval?.actionKind ?? 'question', subagent: q.approval?.details?.subagent ?? null})) : null,
             Boolean(late?.questions.some(q => q.approval)));
@@ -1414,7 +1421,8 @@ async function runScenario(id, opts, {rehearsal = null} = {}) {
   evidence.writeManifest();
 
   await rpc.connect();
-  const driver = new Driver({rpc, evidence, identity, provider, nonce, rpcTimeoutMs: Number(opts['rpc-timeout'] ?? 45000), ax: Boolean(opts.ax)});
+  const driver = new Driver({rpc, evidence, identity, provider, nonce, rpcTimeoutMs: Number(opts['rpc-timeout'] ?? 45000), ax: Boolean(opts.ax),
+    captureHoldMs: Number(opts['capture-hold-ms'] ?? 0)});
   let failure = null;
   let stopped = [];
   try {
@@ -1734,7 +1742,7 @@ const {values: opts, positionals} = parseArgs({
     provider: {type: 'string', default: 'opencode'}, tier: {type: 'string'}, model: {type: 'string'}, variant: {type: 'string'},
     'evidence-root': {type: 'string'}, 'turn-timeout': {type: 'string'}, 'allow-usage-store': {type: 'boolean', default: false},
     phase: {type: 'string'}, run: {type: 'string'}, 'fake-args': {type: 'string'}, 'rpc-timeout': {type: 'string'}, ax: {type: 'boolean', default: false},
-    'hold-ms': {type: 'string'}, 'stall-wait-ms': {type: 'string'}, 'big-command': {type: 'string'}, 'mock-url': {type: 'string'},
+    'hold-ms': {type: 'string'}, 'capture-hold-ms': {type: 'string'}, 'stall-wait-ms': {type: 'string'}, 'big-command': {type: 'string'}, 'mock-url': {type: 'string'},
   },
   allowPositionals: true,
 });
