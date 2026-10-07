@@ -198,11 +198,16 @@ pub(super) enum PromptOutcome {
     Unknown(String),
 }
 
-/// The slash command a turn's text invokes, if OpenCode knows it.
+/// The slash command a turn's text invokes, if OpenCode knows it. Skills
+/// share the composer catalog but are not commands (OC-14).
 pub(super) fn known_command<'a>(prompt: &'a str, commands: &[SlashCommand]) -> Option<&'a str> {
     let rest = prompt.strip_prefix('/')?;
     let name = rest.split(char::is_whitespace).next().unwrap_or_default();
-    (!name.is_empty() && commands.iter().any(|c| c.name == name)).then_some(name)
+    (!name.is_empty()
+        && commands
+            .iter()
+            .any(|c| c.name == name && c.kind.is_command()))
+    .then_some(name)
 }
 
 /// LUNA's own admission of a turn's native inputs, before anything is

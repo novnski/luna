@@ -74,6 +74,8 @@ pub(super) struct Session {
     pub(super) live_runs: LiveRuns,
     /// Where the run registers its server for out-of-turn controls.
     pub(super) live: LiveServers,
+    /// LUNA's runtime contract and tools for this run (OC-13), if any.
+    pub(super) luna: Option<LunaRun>,
 }
 
 pub(super) fn new_message_id() -> String {
@@ -307,7 +309,12 @@ pub(super) async fn run_session(session: Session) {
         known_commands,
         live_runs,
         live,
+        luna,
     } = session;
+    let (mut luna_endpoint, mut luna) = match luna {
+        Some(run) => (run.endpoint, Some(run.bridge)),
+        None => (None, None),
+    };
     let RunControls {
         request_input,
         mut steering,
@@ -345,8 +352,13 @@ pub(super) async fn run_session(session: Session) {
                     .and_then(Value::as_str)
                     .unwrap_or(resume)
                     .to_owned();
-                let rules =
+                let mut rules =
                     rule_set.rules_for(info.get("agent").and_then(Value::as_str), RuleScope::Root);
+                // The attached LUNA tools, allowed for the root session only
+                // and appended last (OC-13).
+                if let Some(bridge) = &luna {
+                    bridge.extend_rules(&mut rules);
+                }
                 // `session.update` (204): the resumed session takes this
                 // run's LUNA permission mode as its v2 ruleset.
                 server
@@ -359,7 +371,10 @@ pub(super) async fn run_session(session: Session) {
                 (session_id, rules)
             }
             None => {
-                let rules = rule_set.rules_for(None, RuleScope::Root);
+                let mut rules = rule_set.rules_for(None, RuleScope::Root);
+                if let Some(bridge) = &luna {
+                    bridge.extend_rules(&mut rules);
+                }
                 (create_session(&server, dir, &rules).await?, rules)
             }
         };
@@ -470,14 +485,40 @@ pub(super) async fn run_session(session: Session) {
     let (stop_tx, mut stop_rx) = mpsc::unbounded_channel::<ChildStopRequest>();
     let _live = live_runs.register(&session_id, stop_tx);
 
-    // Advertise slash commands (composer popup); a warm cache skips the call.
-    let commands = match known_commands {
-        Some(commands) => commands,
-        None => server
-            .commands_wire(dir)
-            .await
-            .map(|v| commands_from_wire(&v))
-            .unwrap_or_default(),
+    // LUNA's contract (OC-13): read the MCP attachment back and deliver the
+    // instructions before the first prompt. A failure withdraws delivery for
+    // this OpenCode version and warns; the turn itself goes ahead.
+    if let Some(bridge) = luna.as_mut() {
+        bridge.bind_session(&session_id);
+        if let Err(reason) = bridge.deliver(&server, dir, luna_endpoint.as_ref()).await {
+            record_delivery_failure(server.version.as_deref(), &reason);
+            if !send(&event_tx, delivery_notice(&reason)).await {
+                server.shutdown(kill_grace).await;
+                return;
+            }
+        }
+    }
+    // The session's own MCP readback (inventory evidence, OC-14).
+    if let Ok(servers) = server.mcp_servers(dir).await
+        && !servers.is_empty()
+    {
+        record_session_mcp(&session_id, &request.cwd, servers);
+    }
+
+    // Advertise slash commands and skills (composer popup). The run's own
+    // server is up, so its live list is one loopback read: when it differs
+    // from the cached one, that location's cache is retired (OC-14: a
+    // change made between runs shows without an app restart). Only commands
+    // route through the command endpoint.
+    let mut commands = match (server.discovery_catalog(dir, false).await, known_commands) {
+        (Ok(fresh), Some(cached)) => {
+            if fresh != cached {
+                bump_catalog_epoch(&discovery_location(dir));
+            }
+            fresh
+        }
+        (Ok(fresh), None) => fresh,
+        (Err(_), cached) => cached.unwrap_or_default(),
     };
     if !commands.is_empty()
         && !send(
@@ -559,6 +600,13 @@ pub(super) async fn run_session(session: Session) {
         .and_then(Value::as_str)
         .map(str::to_owned);
     let first_id = luna_prompt_id(&session_id, first_luna_id.as_deref());
+    if let Some(started) = luna.as_mut().and_then(OpencodeLunaBridge::begin_turn)
+        && !send(&event_tx, started).await
+    {
+        bus_handle.abort();
+        server.shutdown(kill_grace).await;
+        return;
+    }
     let posted_ms = unix_ms();
     let first_outcome = post_prompt(
         &server,
@@ -672,6 +720,11 @@ pub(super) async fn run_session(session: Session) {
         ($label:lifetime, $next:expr) => {{
             let next: crate::SteerMessage = $next;
             let id = luna_prompt_id(&session_id, next.message_id.as_deref());
+            if let Some(started) = luna.as_mut().and_then(OpencodeLunaBridge::begin_turn)
+                && !send(&event_tx, started).await
+            {
+                break $label;
+            }
             let posted_ms = unix_ms();
             let outcome = post_prompt(
                 &server,
@@ -773,6 +826,9 @@ pub(super) async fn run_session(session: Session) {
                 if start_followup!($label, next) {
                     continue $label;
                 }
+            }
+            if let Some(bridge) = luna.as_mut() {
+                bridge.end_turn();
             }
             let (prev, _next) = rotate(&mut assistant_message_id);
             if !send(&event_tx, AgentEvent::AssistantMessageCompleted {
@@ -992,6 +1048,28 @@ pub(super) async fn run_session(session: Session) {
                     done_sent = true;
                     break $label;
                 }
+                BusMsg::Signal(WireSignal::CatalogChanged) => {
+                    // OpenCode announced a command or skill change (OC-14;
+                    // also sent while a location boots). Only a catalog that
+                    // really differs retires this location's cached copy and
+                    // refreshes the composer's list.
+                    if let Ok(fresh) = server.discovery_catalog(dir, false).await
+                        && fresh != commands
+                    {
+                        bump_catalog_epoch(&discovery_location(dir));
+                        commands = fresh;
+                        if !send(&event_tx, AgentEvent::AvailableCommands {
+                            commands: commands.clone(),
+                        }).await {
+                            break $label;
+                        }
+                    }
+                }
+                BusMsg::Signal(signal) => {
+                    if let Some(bridge) = luna.as_mut() {
+                        bridge.observe(signal);
+                    }
+                }
                 BusMsg::CommandFailed(message) => {
                     // A command that never started its execution would
                     // otherwise stall until the watchdog; one that did
@@ -1168,6 +1246,13 @@ pub(super) async fn run_session(session: Session) {
                                     // execution it starts is announced once,
                                     // as the wake turn (BusOutcome::ProviderTurn).
                                 }
+                                ("inbox.delivered", false, None) if luna.is_some() && turn.active => {
+                                    // Input LUNA did not post, inside a LUNA
+                                    // turn with the LUNA tool bridge: the
+                                    // engine's fence stays keyed to the turn
+                                    // id the bridge minted (OC-13); the
+                                    // receipt above records the input.
+                                }
                                 ("inbox.delivered", false, None) => {
                                     // Input LUNA did not post (a background
                                     // completion, another client): a
@@ -1272,12 +1357,20 @@ pub(super) async fn run_session(session: Session) {
                             // provider turn, ending with its own Done.
                             parked = false;
                             wake_deadline = None;
-                            let turn_id =
-                                format!("opencode-turn-{}", uuid::Uuid::new_v4().simple());
-                            if !send(&event_tx, AgentEvent::ProviderTurnStarted {
-                                thread_id: session_id.clone(),
-                                turn_id,
-                            }).await {
+                            // With LUNA tools attached the bridge mints the
+                            // id, so the wake turn's tool calls stay fenced to
+                            // it (OC-13).
+                            let started = luna
+                                .as_mut()
+                                .and_then(OpencodeLunaBridge::begin_turn)
+                                .unwrap_or_else(|| AgentEvent::ProviderTurnStarted {
+                                    thread_id: session_id.clone(),
+                                    turn_id: format!(
+                                        "opencode-turn-{}",
+                                        uuid::Uuid::new_v4().simple()
+                                    ),
+                                });
+                            if !send(&event_tx, started).await {
                                 break $label;
                             }
                             turn = TurnState::begin(None);
@@ -1533,6 +1626,19 @@ pub(super) async fn run_session(session: Session) {
 
             Some(request) = stop_rx.recv() => {
                 answer_stop(request, &children, &server, dir);
+            }
+
+            // LUNA tool calls (OC-13): the evidence fence decides each one.
+            call = next_call(&mut luna_endpoint), if luna.is_some() => {
+                if let (Some(call), Some(bridge)) = (call, luna.as_mut()) {
+                    bridge.on_call(call);
+                }
+            }
+
+            _ = parked_deadline(luna.as_ref().and_then(OpencodeLunaBridge::next_deadline)) => {
+                if let Some(bridge) = luna.as_mut() {
+                    bridge.expire();
+                }
             }
 
             posted = steer_posted_rx.recv() => {

@@ -629,6 +629,7 @@ impl TurnWire {
             known_commands: Some(vec![]),
             live_runs: LiveRuns::default(),
             live: LiveServers::default(),
+            luna: None,
         }));
         Self {
             bus,

@@ -55,6 +55,9 @@ pub(crate) struct LunaMcpEndpoint {
     token: String,
     calls: mpsc::Receiver<LunaMcpCall>,
     shutdown: CancellationToken,
+    /// Authorized `tools/list` answers served (the OpenCode adapter's catalog
+    /// readback evidence).
+    catalog_reads: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Drop for LunaMcpEndpoint {
@@ -72,6 +75,7 @@ struct ServerState {
     calls: mpsc::Sender<LunaMcpCall>,
     in_flight: Mutex<HashMap<String, CancellationToken>>,
     shutdown: CancellationToken,
+    catalog_reads: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl LunaMcpEndpoint {
@@ -86,6 +90,7 @@ impl LunaMcpEndpoint {
         );
         let (calls_tx, calls) = mpsc::channel(32);
         let shutdown = CancellationToken::new();
+        let catalog_reads = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let state = Arc::new(ServerState {
             token: token.clone(),
             authority: format!("127.0.0.1:{port}"),
@@ -93,6 +98,7 @@ impl LunaMcpEndpoint {
             calls: calls_tx,
             in_flight: Mutex::new(HashMap::new()),
             shutdown: shutdown.clone(),
+            catalog_reads: Arc::clone(&catalog_reads),
         });
         tokio::spawn(serve(listener, state));
         Ok(Self {
@@ -100,7 +106,14 @@ impl LunaMcpEndpoint {
             token,
             calls,
             shutdown,
+            catalog_reads,
         })
+    }
+
+    /// How many authorized `tools/list` requests this endpoint answered.
+    pub(crate) fn catalog_reads(&self) -> u64 {
+        self.catalog_reads
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// `-c` overrides for this spawn only; the user's Codex config is never
@@ -320,7 +333,12 @@ async fn handle(request: Request<Incoming>, state: &ServerState) -> Response<Ful
             )
         }
         Some("ping") => rpc_result(id, json!({})),
-        Some("tools/list") => rpc_result(id, json!({"tools": state.tools})),
+        Some("tools/list") => {
+            state
+                .catalog_reads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            rpc_result(id, json!({"tools": state.tools}))
+        }
         Some("tools/call") => {
             let Some(name) = params.get("name").and_then(Value::as_str) else {
                 return rpc_error(id, -32602, "Invalid params");

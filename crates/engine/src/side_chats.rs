@@ -770,8 +770,10 @@ impl SideChats {
         );
         let mode = meta.config.permission_mode;
         // Legacy providers without an instruction channel still receive the
-        // bounded seed in their first ordinary prompt. Codex and Claude use
-        // the stable runtime-contract section, including for goals/reviews.
+        // bounded seed in their first ordinary prompt. Codex, Claude and
+        // OpenCode (while its LUNA delivery is verified: the session's `luna`
+        // instruction entry) use the stable runtime-contract section,
+        // including for goals/reviews.
         let prompt = if first
             && self
                 .0
@@ -781,10 +783,11 @@ impl SideChats {
                 .context_control()
                 .last_boundary
                 .is_none()
-            && !matches!(
-                meta.config.harness,
-                luna_proto::HarnessId::Codex | luna_proto::HarnessId::ClaudeCode
-            ) {
+            && !self
+                .0
+                .sessions
+                .provider_has_instruction_channel(meta.config.harness)
+        {
             let context: String = lock(&self.0.db).query_row(
                 "SELECT context FROM side_chats WHERE id=?1",
                 [id],

@@ -165,6 +165,11 @@ pub enum RuntimeDelivery {
     /// The same per-process `luna` MCP endpoint, attached to every Claude CLI
     /// spawn through an inline `--mcp-config` entry (fresh and resumed).
     ClaudeMcpTools,
+    /// The same per-process `luna` MCP endpoint, attached to every spawned
+    /// OpenCode 2 server through its inline `OPENCODE_CONFIG_CONTENT` layer;
+    /// the instructions ride the session's `luna` instruction entry. Reported
+    /// only for an OpenCode version whose delivery routes were verified.
+    OpenCodeMcpTools,
 }
 
 impl RuntimeDelivery {
@@ -172,7 +177,19 @@ impl RuntimeDelivery {
     pub fn attaches_luna_tools(self) -> bool {
         matches!(
             self,
-            Self::CodexMcpTools | Self::CodexDynamicTools | Self::ClaudeMcpTools
+            Self::CodexMcpTools
+                | Self::CodexDynamicTools
+                | Self::ClaudeMcpTools
+                | Self::OpenCodeMcpTools
+        )
+    }
+
+    /// Whether the tools are served by a per-process `luna` MCP endpoint, so
+    /// a resumed provider session sees the current catalog on every spawn.
+    pub fn serves_luna_mcp(self) -> bool {
+        matches!(
+            self,
+            Self::CodexMcpTools | Self::ClaudeMcpTools | Self::OpenCodeMcpTools
         )
     }
 }

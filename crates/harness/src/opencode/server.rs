@@ -117,6 +117,18 @@ impl Server {
         cwd: Option<&str>,
         startup: Duration,
     ) -> Result<Self, HarnessError> {
+        Self::spawn_with_env(exe, cwd, startup, &[]).await
+    }
+
+    /// [`Server::spawn`] with extra server environment: the LUNA tool
+    /// attachment (`OPENCODE_CONFIG_CONTENT`, the bearer token, the stable
+    /// `LUNA_*` identity; OC-13). Agent tool processes inherit it.
+    pub(super) async fn spawn_with_env(
+        exe: &std::path::Path,
+        cwd: Option<&str>,
+        startup: Duration,
+        extra_env: &[(String, String)],
+    ) -> Result<Self, HarnessError> {
         let password = uuid::Uuid::new_v4().to_string();
         register_secret(&password);
         let mut cmd = Command::new(exe);
@@ -130,6 +142,9 @@ impl Server {
             // Read by OpenCode builds that gate the embedded web UI (set by
             // the desktop app too); a no-op where unsupported (2.0.22).
             .env("OPENCODE_DISABLE_EMBEDDED_WEB_UI", "1");
+        for (name, value) in extra_env {
+            cmd.env(name, value);
+        }
         crate::compose_child_path(&mut cmd, exe);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);

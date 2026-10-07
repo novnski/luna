@@ -54,6 +54,10 @@ pub(super) enum BusMsg {
     /// 4xx/5xx or a transport error). Not a bus frame: the detached command
     /// task reports it here so the turn settles instead of stalling.
     CommandFailed(String),
+    /// A raw frame the loop needs besides the normalized payloads: LUNA tool
+    /// evidence or a catalog change ([`wire_signal`]). Sent before that
+    /// frame's normalized payloads.
+    Signal(WireSignal),
 }
 
 /// What a reconnect's durable-log read found for the root session.
@@ -240,6 +244,13 @@ async fn forward_frame(tx: &mpsc::Sender<BusMsg>, state: &mut BusState, event: V
         return true;
     }
     note_event_type(event.get("type").and_then(Value::as_str).unwrap_or(""));
+    // Raw LUNA-tool evidence and catalog changes (OC-13/OC-14) reach the
+    // loop BEFORE the frame's normalized payloads.
+    if let Some(signal) = wire_signal(&event)
+        && tx.send(BusMsg::Signal(signal)).await.is_err()
+    {
+        return false;
+    }
     if let Some((id, session, pending)) = request_lifecycle(&event)
         && tx
             .send(BusMsg::Request {
