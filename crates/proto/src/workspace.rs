@@ -124,7 +124,11 @@ mod tests {
                     "message-queue-edit-lease-v1",
                     "task-identity-v1",
                     "session-history-search-v1",
-                    "side-chat-task-commands-v1"
+                    "side-chat-task-commands-v1",
+                    "side-chat-persistence-v1",
+                    "chat-workbench-v1",
+                    "context-transfer-v1",
+                    "task-work-v1"
                 ],
             })
         );

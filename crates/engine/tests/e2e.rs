@@ -2506,13 +2506,46 @@ async fn rpc_permission_change_keeps_active_effective_until_replacement_starts()
 
 #[tokio::test]
 async fn unsupported_auto_never_runs_as_hidden_ask() {
+    /// An installed OpenCode, so dispatch reaches the permission guard instead
+    /// of stopping at the missing provider. Counts every run it is asked for.
+    #[derive(Default)]
+    struct InstalledOpenCode {
+        runs: std::sync::atomic::AtomicUsize,
+    }
+
+    #[async_trait]
+    impl Harness for InstalledOpenCode {
+        fn id(&self) -> HarnessId {
+            HarnessId::Opencode
+        }
+        fn display_name(&self) -> &str {
+            "OpenCode"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        async fn models(&self) -> Result<Vec<Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            _request: RunRequest,
+            _controls: RunControls,
+        ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+            self.runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(HarnessError::Protocol("OpenCode must not start".into()))
+        }
+    }
+
     let dir = tempfile::tempdir().unwrap();
-    let core = assemble(
-        dir.path(),
-        Arc::new(MockHarness {
-            script: mock_script(),
-        }),
-    );
+    let opencode = Arc::new(InstalledOpenCode::default());
+    let core = assemble(dir.path(), opencode.clone());
     let mut request = run_request("must not run");
     request.harness = Some(HarnessId::Opencode);
     request.permission_mode = luna_proto::PermissionMode::Auto;
@@ -2522,6 +2555,11 @@ async fn unsupported_auto_never_runs_as_hidden_ask() {
         .await
         .expect_err("OpenCode Auto must not degrade to hidden Ask");
     assert!(error.to_string().contains("hidden Ask"), "{error}");
+    assert_eq!(
+        opencode.runs.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the provider is never started"
+    );
     assert!(core.sessions.session_status(CHAT).is_none());
 }
 
