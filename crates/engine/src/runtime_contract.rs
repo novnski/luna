@@ -233,7 +233,7 @@ fn assemble(
                 name: "luna_status guidance".into(),
                 source: RuntimeInstructionSource::Tool,
                 provenance: "engine tool registry luna_status@1".into(),
-                text: if matches!(delivery, RuntimeDelivery::CodexMcpTools | RuntimeDelivery::ClaudeMcpTools) {
+                text: if delivery.serves_luna_mcp() {
                     "LUNA tools are served by the `luna` MCP server attached to this session. Use its luna_status tool when you need this task's current LUNA identity or granted scopes."
                 } else {
                     "Use luna_status when you need this task's current LUNA identity or granted scopes."
@@ -299,7 +299,8 @@ fn assemble(
             RuntimeDelivery::Unsupported => "This provider has no verified LUNA instruction/tool delivery path.",
             RuntimeDelivery::CodexDynamicTools
             | RuntimeDelivery::CodexMcpTools
-            | RuntimeDelivery::ClaudeMcpTools => unreachable!(),
+            | RuntimeDelivery::ClaudeMcpTools
+            | RuntimeDelivery::OpenCodeMcpTools => unreachable!(),
         }.into(),
     }).into_iter().collect::<Vec<_>>();
     if tools_supported {
@@ -365,15 +366,14 @@ pub(crate) fn compile_with_context_sections(
             requires_safe_boundary: false,
         });
     }
-    if matches!(
-        candidate_delivery,
-        RuntimeDelivery::CodexMcpTools | RuntimeDelivery::ClaudeMcpTools
-    ) {
+    if candidate_delivery.serves_luna_mcp() {
         // MCP tools are attached to every provider process, so a resumed
         // thread (new, pre-L23, or one with frozen dynamic tools) gets the
         // current catalog. Only changed instructions/context still need the
         // active turn to settle first. Claude sessions acknowledged as
-        // instructions-only gain the tools on their next spawn the same way.
+        // instructions-only, and OpenCode sessions acknowledged before their
+        // delivery was verified, gain the tools on their next spawn the same
+        // way (every OpenCode turn boots its own server).
         let changed = input
             .acknowledged_contract
             .as_ref()

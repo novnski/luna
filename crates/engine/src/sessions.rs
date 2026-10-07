@@ -1208,11 +1208,16 @@ impl LunaProspectiveInterruptProposal {
 
 /// A checkpoint is evidence for one active provider turn, never authorization.
 /// Adapters whose native turn evidence arms the provider-turn fence below:
-/// Codex (`turn/started`, checkpoints) and Claude (`system:init` .. `result`,
-/// with each call's `tool_use` id matched in `claude::luna_tools`). Other
-/// providers never attach LUNA tools, so their claims fail closed.
+/// Codex (`turn/started`, checkpoints), Claude (`system:init` .. `result`,
+/// with each call's `tool_use` id matched in `claude::luna_tools`) and
+/// OpenCode (one minted turn per prompt, with each call matched to a root
+/// `session.tool.called` in `opencode::luna_tools`). Other providers never
+/// attach LUNA tools, so their claims fail closed.
 fn provider_turn_fence(harness: HarnessId) -> bool {
-    matches!(harness, HarnessId::Codex | HarnessId::ClaudeCode)
+    matches!(
+        harness,
+        HarnessId::Codex | HarnessId::ClaudeCode | HarnessId::Opencode
+    )
 }
 
 /// Claiming a call ID only reserves it for a future engine-owned proposal; it
@@ -3267,6 +3272,20 @@ impl SessionsEngine {
         }
     }
 
+    /// Whether a run of `harness` carries LUNA's runtime-contract instruction
+    /// section: Codex and Claude always, OpenCode while its delivery is
+    /// verified. Side chats send their frozen seed through that section and
+    /// fall back to a quoted first-prompt prefix only without one.
+    pub(crate) fn provider_has_instruction_channel(&self, harness: HarnessId) -> bool {
+        match harness {
+            HarnessId::Codex | HarnessId::ClaudeCode => true,
+            HarnessId::Opencode => self.inner.registry.resolve(harness).is_ok_and(|adapter| {
+                adapter.luna_runtime_delivery() != luna_proto::RuntimeDelivery::Unsupported
+            }),
+            _ => false,
+        }
+    }
+
     /// Accurate tool capabilities: only what this session actually attaches.
     fn apply_chat_tool_capabilities(
         context: &mut luna_proto::RuntimeContext,
@@ -4493,7 +4512,17 @@ impl SessionsEngine {
                 explicit_resume,
             )?;
         }
-        if matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode)
+        let provider_delivery = self
+            .inner
+            .registry
+            .resolve(harness_id)?
+            .luna_runtime_delivery();
+        // OpenCode compiles a contract only while its delivery is verified
+        // (OC-13); otherwise it keeps the no-contract path and its side
+        // chats keep the quoted seed (`provider_has_instruction_channel`).
+        if (matches!(harness_id, HarnessId::Codex | HarnessId::ClaudeCode)
+            || (harness_id == HarnessId::Opencode
+                && provider_delivery != luna_proto::RuntimeDelivery::Unsupported))
             && self.inner.task_identity.get().is_some()
         {
             let known_session_id = self
@@ -4516,11 +4545,6 @@ impl SessionsEngine {
                 .integration_settings()
                 .map(|settings| settings.contributions(context.project_id.as_deref()))
                 .unwrap_or_default();
-            let provider_delivery = self
-                .inner
-                .registry
-                .resolve(harness_id)?
-                .luna_runtime_delivery();
             let (cross_task_tools, cross_task_omissions) =
                 self.cross_task_catalog(&context, provider_delivery);
             Self::apply_chat_tool_capabilities(&mut context, provider_delivery, &cross_task_tools);
@@ -8945,9 +8969,10 @@ async fn drive_run(
             }
             continue;
         }
-        // Claude's adapter mints a turn id at each root `system:init`. It only
-        // arms the LUNA tool fence; wake turns keep their existing lifecycle.
-        if harness_id == HarnessId::ClaudeCode
+        // Claude's adapter mints a turn id at each root `system:init`, and
+        // OpenCode's at each prompt it posts. It only arms the LUNA tool
+        // fence; wake turns keep their existing lifecycle.
+        if matches!(harness_id, HarnessId::ClaudeCode | HarnessId::Opencode)
             && let AgentEvent::ProviderTurnStarted { thread_id, turn_id } = &event
         {
             if inner
