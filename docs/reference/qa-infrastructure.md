@@ -364,7 +364,19 @@ node scripts/qa-opencode-live.mjs run --tier T2|T3 [--provider opencode] \
   [--mock-log <requests.jsonl>]
 node scripts/qa-opencode-live.mjs snapshot [--run <dir>]
 node scripts/qa-opencode-live.mjs verify-restart [--run <dir>]
+node scripts/qa-opencode-live.mjs answer --run <dir> \
+  --action allow-once|deny|cancel|pick:<text>|text:<text>|dismiss|mcp:Accept
+node scripts/qa-opencode-live.mjs capture [--run <dir>] [--label <name>]
+node scripts/qa-opencode-live.mjs rehearse [run options]   # fake engine, R0
 ```
+
+`run` also takes `--answer none|allow-once|deny|cancel` (approvals) and
+`--pick <option text>` (questions); an approval or question without a policy
+ends the turn wait and fails `turn-N-unanswered`. `--capture` records a window
+capture after each turn (`--ax` adds AX readback, see below). The driver also
+refuses to run while any other Luna GUI is running. `answer` answers the current pending
+approval or question on a previous run's chat (an operator helper; the send
+lands in that run's manifest). `capture` never sends.
 
 It asserts the QA identity before any write: bundle path, codesign, plist id,
 port and data dir, `LUNA_QA_MCP_ISOLATION=1`, `OPENCODE_EXECUTABLE` being a
@@ -377,18 +389,175 @@ model from `ListModels` for T3. `--variant` sets LUNA's `reasoning`, the shared
 variant mechanism.
 
 It writes `manifest.json` before each send, records the wire-log directory and
-its byte offsets, and keeps persistent `WatchDocMessages`, `WatchQueue` and
-`WatchSessions` subscriptions for `observer.json`; turn completion (`working`
-then `idle`/`errored`, or an advanced `lastCompletedTurn`) is read from those
-frames, not by polling. Error scenarios pass `--expect-status errored`. At the end it copies the run's slice of the wire
-log into `wire/` (and to `native-frames.jsonl` and `http.jsonl` when the
-adapter writes files with those names), then checks that each user message
-appears exactly once. Evidence goes to `target/qa/opencode/<scenario>/run-*`
-with a `latest` pointer, or under `--evidence-root`. `verify-restart` requires
-a new app PID and checks that each recorded send survives exactly once with no
-replayed queue row. `--provider claude-code` runs the same steps for PD-14
-comparison diffs. Approval- and question-driven scenarios still need an
-answering step added to the driver.
+its byte offsets, and keeps persistent `WatchDocMessages`, `WatchQueue`,
+`WatchSessions`, `WatchTaskCommands` and `WatchNativeTasks` subscriptions for
+`observer.json`. Sends use the UI path: `ExecuteTaskCommand` `session.run`
+when the chat is idle and `queueMessage` (hold for turn end) when it is busy,
+with the message id as the command id. A turn settles from those frames, tied
+to its own user row: the session is idle or errored with nothing streaming,
+and the reply after the row settled or the session was seen active after it
+(a provider wake turn never settles another turn). Error scenarios pass
+`--expect-status errored`. At the end it copies the run's slice of each
+`opencode-wire-<pid>.jsonl` into `wire/` and splits it into
+`native-frames.jsonl` (`sse*` records) and `http.jsonl`, then checks that each
+user message appears exactly once. Evidence goes to
+`target/qa/opencode/<scenario>/run-*` with a `latest` pointer, or under
+`--evidence-root`. `verify-restart` requires a new app PID and checks that each
+recorded send survives exactly once with no replayed queue row.
+`--provider claude-code` runs the same steps for PD-14 comparison diffs.
+
+### In-app scenario runner (S1..S8)
+
+`scripts/qa-opencode-scenarios.mjs` runs named scenarios through the same
+shared plumbing (`scripts/qa-opencode-lib.mjs`, `scripts/qa-opencode-driver.mjs`).
+Every write is the UI's RPC with the UI's fences
+(`crates/ui/src/task_commands.rs`): approvals through `session.respondApproval`
+(card choices become `providerChoice{index}`, otherwise the decision enum),
+questions and MCP forms through `session.respondInput`, Stop through a
+turn-fenced `session.interrupt`, fork/edit/rewind through `forkTask`,
+`editEarlierMessage` and `rewindConversation` with the UI's history review
+token, side chats through `CreateSideChat` (native fork, or `forceSnapshot`
+with an excerpt) and `SendSideChat`, Review through `nativeReview`, plus
+`compactContext`, `setModel`, `steerQueuedNow`, `goal` and image uploads
+(`UploadChunk`/`UploadCommit`).
+
+| Id | Validation rows | Mode | Steps |
+| --- | --- | --- | --- |
+| S1 | OCE-16, OCE-05 | ask | allow once; deny with feedback; cancel turn; single and multi-select question; stale answer after Stop |
+| S2 | OCE-01, OCE-21 | full | two native subagents (foreground and background); background shell native-task row; Stop with a running child |
+| S3 | OCE-18 | full | `luna` `get_workspace` on fresh, resumed, forked and post-compaction sessions; refused from a native subagent; cross-project request |
+| S4 | OCE-04, OCE-05, OCE-09 | ask | `pre`: completed turn, pending approval, queued row, then `restart-required.json`; the QA operator restarts the app gracefully; `post`: readback, stale or live answer, continuation |
+| S5 | OCE-10, OCE-24 | full | three marker turns; fork from user and assistant rows; fork recall; native-fork and snapshot side chats (two messages each); edit earlier message; same-chat rewind with unrelated file changes; recall after rewind |
+| S6 | OCE-13 | full | catalog before and after refresh; turn with a variant; switch variant with `setModel`; Usage history only with `--allow-usage-store` |
+| S7 | OCE-08, OCE-14, OCE-20 | full | image on the first turn, on a queued row and on a steered row (staged SHA-256 compared with `files[]` in the wire log); manual compaction then a `luna` call; project command discovery, `/qa-echo` and the generated title |
+| S8 | OCE-23 | full | Review of uncommitted changes, a commit and a base branch; goals readback |
+
+```bash
+node scripts/qa-opencode-scenarios.mjs list
+node scripts/qa-opencode-scenarios.mjs dry-run S1 --provider opencode
+node scripts/qa-opencode-scenarios.mjs run S1 --provider opencode --tier T3 \
+  --evidence-root /abs/evidence/dir
+node scripts/qa-opencode-scenarios.mjs run S1 --provider claude-code --tier T3 \
+  --evidence-root /abs/evidence/dir
+node scripts/qa-opencode-scenarios.mjs run S4 --provider opencode --tier T3 --phase pre
+#   ...the QA operator quits and relaunches the QA app gracefully...
+node scripts/qa-opencode-scenarios.mjs run S4 --provider opencode --tier T3 \
+  --phase post --run <run dir printed by pre>
+node scripts/qa-opencode-diff.mjs compare <opencode run> <claude run> [--allow allow.json]
+```
+
+Prompts depend only on the scenario and a per-run nonce, so OpenCode and
+Claude get identical text; `--tier T2` OpenCode runs append the mock
+provider's `[[mock:...]]` marker. Model-prose criteria (a marker in the reply)
+are decisive at T3 and informational at T2; informational rows never decide
+`pass.json`. The question steps of S1 and the `luna` calls of S3 and S7 need a
+real model (the mock has no scripted question or `luna` tool calls). A failure
+stops the scenario, sends at most one Stop per chat it created that is still
+running (QF-22) and keeps every artifact; an unknown send stops it without
+further writes. Each run directory holds the §2 artifacts plus
+`normalized/steps-<phase>.json` (the parity-diff input: per step and chat
+role, the document layout, tool multiset, session statuses, queue and
+native-task rows, context control, receipts, approval and question shapes),
+`normalized/*-frames-<role>.jsonl`, `state/<milestone>.json`,
+`screenshots/` and `ax/`, and `manifest.modelUsage`.
+
+Window captures follow QF-19: `screencapture -x -o -l<window>` of the largest
+layer-0 window owned by the verified listener PID, only when the no-prompt
+Screen Recording probe passes. Otherwise `screenshots/<label>.json` records
+`blocked` and the document state stands in. AX readback (a bounded System
+Events walk of the QA window into `ax/<label>.json`) is opt-in with `--ax`,
+because driving System Events can raise the macOS Automation prompt the first
+time. Grant Screen Recording (and, for `--ax`, Automation and Accessibility)
+to the terminal that runs the runner when UI evidence is the claim.
+
+`scripts/qa-opencode-diff.mjs compare` refuses runs of different scenarios,
+step lists or masked prompt hashes (exit 2), lists every difference by step
+and path in `diff.json` and `diff.md`, and exits 1 while any difference is
+unexplained. `template <diff.json>` writes an allowance skeleton whose `TODO`
+reasons `compare` refuses until each is replaced with the native OpenCode
+behaviour it records (and the same note goes into the OpenCode run's
+`result.md`).
+
+Offline checks need no app: `self-check` (both scripts) tests the failure
+cases above against the shared plumbing; `rehearse [S#|all]` runs every
+scenario for both providers against `scripts/qa-opencode-fake-engine.mjs`, a
+scripted fake engine the runner spawns itself, and diffs each pair;
+`rehearse-faults` drops one `ExecuteTaskCommand` reply (read back by command
+id, never resent) and loses one command outright (the run stops with the send
+`unknown` and no later writes). Rehearsals are tier R0 and write
+`rehearsal.json`, never `pass.json` (QF-21): they prove the runner's plumbing,
+not LUNA, OpenCode or Claude behaviour.
+
+### In-app scenario driver: failure cases (written before the tooling)
+
+The scenario runner drives the in-app scenarios S1..S8 through the RPCs the UI
+uses. These cases were recorded before its code and each names the outcome the
+tooling must produce.
+
+12. **QF-12 approval answered off the UI path.** OpenCode approval cards carry
+    `details.choices` (`Deny`, `Allow once`, `Cancel turn`); sending the
+    `allowOnce` enum, or a label the card does not offer, is not what the UI
+    sends. *Expected:* the driver maps a requested action exactly like
+    `approval_decision` in `crates/ui/src/composer.rs` (card choices give
+    `providerChoice{index}`, otherwise `allowOnce`/`allowTask`/`deny`/`cancel`)
+    through `ExecuteTaskCommand` `session.respondApproval`, records the card
+    and the decision, and fails the step when the requested choice is absent
+    instead of silently sending Deny.
+13. **QF-13 LUNA cross-task approval answered over JSON RPC.** The UI answers
+    `lunaCrossTask` approvals through an in-process route only. *Expected:*
+    the driver refuses them and records `not-rpc-answerable`.
+14. **QF-14 stale or resolved request answered as live.** *Expected:* only an
+    unresolved `input` part seen in the live transcript mirror is answered as
+    live. Stale-answer probes (after Stop, after restart) are labelled probes;
+    their receipt (rejected, conflict or applied-without-effect) is the
+    evidence and they are never retried.
+15. **QF-15 polling instead of subscriptions.** *Expected:* waits are driven by
+    persistent `WatchDocMessages`, `WatchSessions`, `WatchQueue`,
+    `WatchTaskCommands` and `WatchNativeTasks` frames. A transcript desync
+    (delta `count`, append `len` or a missing anchor) resubscribes for a reset
+    and is recorded in `observer.json`. No RPC is issued inside a wait loop;
+    snapshots are single reads at milestones.
+16. **QF-16 history review token forged or stale.** *Expected:* fork, edit and
+    rewind tokens are built like the UI: a fresh `GetTaskCommandSnapshot`, the
+    binding's provider session, the chat's account and cwd, and the mirrored
+    message text (text parts trimmed, joined by a newline). A conflict receipt
+    is recorded and never retried with a refreshed token.
+17. **QF-17 unknown outcome replayed.** A lost reply to `ExecuteTaskCommand`,
+    `QueueMessage`, `CreateSideChat`, `SendSideChat` or an answer.
+    *Expected:* the send is in `manifest.json` before its RPC; a lost task
+    command is read back once by `commandId`; without a receipt the send stays
+    `unknown`, the scenario stops, and nothing is resent.
+18. **QF-18 provider-specific steps break the parity diff.** *Expected:* both
+    providers get identical prompts built from the scenario definition and the
+    run nonce only; the manifest records each prompt's SHA-256 with the nonce
+    masked; the diff tool refuses runs of different scenarios, step lists or
+    masked prompt hashes.
+19. **QF-19 wrong window captured, or a permission prompt raised.**
+    *Expected:* the window is the largest layer-0 CGWindowList window owned by
+    the verified QA listener PID; `screencapture -x -o -l<id>` runs only when
+    the no-prompt Screen Recording probe passes; otherwise the capture is
+    recorded as `blocked` and AX or document readback is used. Screenshots are
+    labelled presentation-only.
+20. **QF-20 the diff hides real differences.** *Expected:* normalization drops
+    only volatile values (ids, timestamps, nonces, model prose, paths) and keeps
+    part and tool kinds, layout, statuses, receipt intents and reasons, and
+    approval and question shapes. Every difference is listed; an `--allow`
+    entry needs a reason and only marks a listed difference as expected.
+21. **QF-21 a rehearsal is mislabelled as evidence.** The runner can rehearse
+    against a fake engine to prove its own plumbing. *Expected:* rehearsals
+    are tier `R0`, write `rehearsal.json` and never `pass.json`, and run only
+    against a fake engine the runner spawned itself (the listener PID is that
+    child), never against an app.
+22. **QF-22 a failed scenario leaves a turn running.** *Expected:* on failure
+    the runner sends at most one turn-fenced Stop per chat it created that
+    still has an active turn, records it, and never quits the app.
+23. **QF-23 the Usage store is read during an OpenCode run.** *Expected:* S6
+    calls `GetUsageSnapshot` only with `--allow-usage-store`, which the user
+    approves per run (see the known limit above).
+24. **QF-24 restart scenarios restart the app.** *Expected:* S4 never quits or
+    launches an app. Its `pre` phase leaves a pending approval and a queued
+    row, writes `restart-required.json` and exits; the QA operator restarts the
+    app gracefully; `post` requires a different app PID.
 
 ### Evidence artifact
 
