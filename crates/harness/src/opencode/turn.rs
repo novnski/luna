@@ -118,8 +118,9 @@ pub(super) struct TurnState {
     pub(super) failed: bool,
     /// A provider-side interrupt reason other than a user Stop.
     pub(super) interrupt_reason: Option<String>,
-    /// Last provider assistant message in this root turn. OpenCode's native
-    /// fork endpoint uses message ids as history checkpoints.
+    /// Last provider assistant message (`msg_…`) in this root turn: the
+    /// anchor from which the turn end reads back its checkpoint, the turn's
+    /// first user message id (`history`).
     pub(super) provider_checkpoint_id: Option<String>,
     /// Deadline for the first session-scoped event after the prompt.
     pub(super) stall_deadline: Option<tokio::time::Instant>,
@@ -335,8 +336,9 @@ pub(super) async fn run_session(session: Session) {
             Some(resume) => {
                 // Sessions are durable server-side: resume = reuse the id.
                 // A failed lookup (including a transient server failure) is
-                // not authorization to discard this conversation's history.
-                let info = server.session_info(resume, dir).await?;
+                // not authorization to discard this conversation's history;
+                // a session deleted outside LUNA says so (OC-12).
+                let info = server.resumable_session(resume, dir).await?;
                 previous_model = info.get("model").and_then(model_key);
                 let session_id = info
                     .get("id")
@@ -778,7 +780,24 @@ pub(super) async fn run_session(session: Session) {
             }).await {
                 break $label;
             }
-            if let Some(checkpoint_id) = turn.provider_checkpoint_id.clone()
+            // OC-12: the checkpoint is the turn's first user message id, read
+            // back from the provider's own history (a failed readback means
+            // no checkpoint, never a guessed one).
+            let checkpoint = match (errored, turn.provider_checkpoint_id.as_deref()) {
+                (false, Some(anchor)) => server
+                    .turn_checkpoint(&session_id, dir, anchor)
+                    .await
+                    .unwrap_or_else(|error| {
+                        tracing::debug!(
+                            target: "luna_harness::opencode",
+                            %error,
+                            "turn checkpoint readback failed"
+                        );
+                        None
+                    }),
+                _ => None,
+            };
+            if let Some(checkpoint_id) = checkpoint
                 && !send(&event_tx, AgentEvent::ProviderCheckpoint { checkpoint_id }).await
             {
                 break $label;

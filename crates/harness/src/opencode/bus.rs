@@ -246,9 +246,10 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
                     .assistant_messages
                     .entry(message.to_owned())
                     .or_insert(role == "assistant");
-                // Always a real `msg_` id (step.started): usage no longer
-                // rides a synthetic message, so it is never a checkpoint.
-                if role == "assistant" {
+                // Only a real v2 message id (`msg_`, from step.started) anchors
+                // the turn-end checkpoint readback: usage no longer rides a
+                // synthetic message, and never becomes a checkpoint.
+                if role == "assistant" && message.starts_with("msg_") {
                     turn.provider_checkpoint_id = Some(message.to_owned());
                 }
                 let events = replay_pending(main_feed, message, true, turn);

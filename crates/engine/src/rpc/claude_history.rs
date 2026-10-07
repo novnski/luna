@@ -1,11 +1,15 @@
-//! CC-10 Claude same-session rewind and native file checkpoints.
+//! CC-10 / OC-12 same-session rewind through the provider-neutral native
+//! history hooks, and Claude's native file checkpoints.
 //!
 //! Provider-backed forks, earlier-message edits and recovery restores reuse
-//! the shared `fork_provider_history` path. This module adds the two Claude
-//! operations that are not forks: `rewind_conversation` on the same native
-//! session (reusing the shared pending-rewind presentation, send blocker and
-//! Reconcile action) and the CLI's own file checkpoints, which stay separate
-//! from conversation rewind and from LUNA's Git checkpoints.
+//! the shared `fork_provider_history` path. This module adds the two
+//! operations that are not forks: same-session conversation rewind for every
+//! adapter that implements `native_history_turns` and
+//! `rewind_native_conversation` (Claude Code's `rewind_conversation`,
+//! OpenCode's `revert.stage{files:false}` + commit), reusing the shared
+//! pending-rewind presentation, send blocker and Reconcile action; and
+//! Claude's own file checkpoints, which stay separate from conversation
+//! rewind and from LUNA's Git checkpoints (OpenCode's are deferred, PD-16).
 
 use super::*;
 use luna_harness::{
@@ -53,6 +57,24 @@ fn record_id(task_id: &str, command_id: &str) -> String {
 
 fn other(message: impl Into<String>) -> crate::EngineError {
     crate::EngineError::Other(message.into())
+}
+
+/// The provider's name in same-session rewind copy.
+fn provider_label(provider: HarnessId) -> &'static str {
+    match provider {
+        HarnessId::ClaudeCode => "Claude",
+        HarnessId::Opencode => "OpenCode",
+        _ => "The provider",
+    }
+}
+
+/// "the same … session" in same-session rewind copy.
+fn session_label(provider: HarnessId) -> &'static str {
+    match provider {
+        HarnessId::ClaudeCode => "Claude Code session",
+        HarnessId::Opencode => "OpenCode session",
+        _ => "provider session",
+    }
 }
 
 fn mutation(message: impl Into<String>) -> TaskProjectionError {
@@ -160,7 +182,9 @@ fn checkpoint_file_digest(path: &std::path::Path) -> Result<Option<String>, RpcE
 }
 
 impl EngineRpc {
-    fn claude_scope(
+    /// The bound native session. Claude's transcripts live under its config
+    /// dir; OpenCode's server owns its own storage (no provider home).
+    fn native_scope(
         &self,
         chat: &Chat,
         binding: &luna_proto::ExecutionBinding,
@@ -168,28 +192,34 @@ impl EngineRpc {
         NativeHistoryScope {
             session_id: binding.provider_task_id.clone(),
             cwd: chat.cwd.clone().unwrap_or_else(|| ".".into()),
-            provider_home: Some(
+            provider_home: (binding.provider_id == HarnessId::ClaudeCode).then(|| {
                 self.agent_accounts
                     .skill_config_dirs()
                     .0
                     .to_string_lossy()
-                    .into_owned(),
-            ),
+                    .into_owned()
+            }),
         }
     }
 
-    async fn claude_turns(
+    async fn native_turns(
         &self,
+        provider: HarnessId,
         scope: NativeHistoryScope,
     ) -> Result<NativeHistoryTurns, crate::EngineError> {
-        let harness = self.registry.resolve(HarnessId::ClaudeCode)?;
+        let harness = self.registry.resolve(provider)?;
         tokio::time::timeout(NATIVE_TIMEOUT, harness.native_history_turns(scope))
             .await
-            .map_err(|_| other("Claude history readback timed out"))?
+            .map_err(|_| {
+                other(format!(
+                    "{} history readback timed out",
+                    provider_label(provider)
+                ))
+            })?
             .map_err(crate::EngineError::from)
     }
 
-    fn claude_rewind_ready(
+    fn native_rewind_ready(
         &self,
         task_id: &str,
     ) -> Result<(Chat, luna_proto::ExecutionBinding), crate::EngineError> {
@@ -207,15 +237,15 @@ impl EngineRpc {
             .view(task_id)
             .and_then(|view| view.current_binding)
             .ok_or_else(|| other("rewind task has no binding"))?;
-        if binding.provider_id != HarnessId::ClaudeCode
-            || chat.config.as_ref().map(|config| config.harness) != Some(HarnessId::ClaudeCode)
+        if !crate::history_operations::rewinds_through_native_hooks(binding.provider_id)
+            || chat.config.as_ref().map(|config| config.harness) != Some(binding.provider_id)
         {
             return Err(other("rewind task provider changed"));
         }
         Ok((chat, binding))
     }
 
-    fn clear_claude_rewind(
+    fn clear_native_rewind(
         &self,
         task_id: &str,
         command_id: &str,
@@ -232,9 +262,10 @@ impl EngineRpc {
             .map_err(TaskProjectionError::Mutation)
     }
 
-    /// Same-chat rewind on the same Claude session. The caller has already
-    /// required Keep files and a ready history operation.
-    pub(super) async fn rewind_claude_conversation(
+    /// Same-chat rewind on the same native session (Claude Code, OpenCode).
+    /// The caller has already required Keep files and a ready history
+    /// operation.
+    pub(super) async fn rewind_native_same_chat(
         &self,
         command_id: &str,
         task_id: &str,
@@ -243,12 +274,14 @@ impl EngineRpc {
         chat: Chat,
         binding: luna_proto::ExecutionBinding,
     ) -> Result<Option<CommandReceipt>, TaskProjectionError> {
+        let provider = binding.provider_id;
+        let label = provider_label(provider);
         self.validate_history_review(task_id, &chat, &binding, &review)
             .map_err(TaskProjectionError::Mutation)?;
         if review.message_id.as_deref() != Some(message_id.as_str()) {
             return Err(mutation("rewind review selected a different message"));
         }
-        // A parked warm Claude process holds the pre-rewind conversation in
+        // A parked warm process holds the pre-rewind conversation in
         // memory; retire it and keep dispatch excluded until this finishes.
         let _rewind_transition = self
             .sessions
@@ -261,7 +294,7 @@ impl EngineRpc {
             .map_err(TaskProjectionError::Mutation)?;
         let plan = plan_history(
             handle.doc(),
-            HarnessId::ClaudeCode,
+            provider,
             ConversationForkBoundaryKind::BeforeUserMessage,
             Some(&message_id),
         )
@@ -272,15 +305,15 @@ impl EngineRpc {
         else {
             return Err(mutation("rewind has no exact before-turn boundary"));
         };
-        let scope = self.claude_scope(&chat, &binding);
+        let scope = self.native_scope(&chat, &binding);
         let native = self
-            .claude_turns(scope.clone())
+            .native_turns(provider, scope.clone())
             .await
             .map_err(TaskProjectionError::Mutation)?;
         if native.compacted {
-            return Err(mutation(
-                "Claude compacted this session, so earlier turns cannot be rewound exactly. Start a new task with context instead.",
-            ));
+            return Err(mutation(format!(
+                "{label} compacted this session, so earlier turns cannot be rewound exactly. Start a new task with context instead.",
+            )));
         }
         let entries = handle
             .doc()
@@ -298,18 +331,24 @@ impl EngineRpc {
                 .filter(|entry| entry.role == MessageRole::Assistant)
                 .map(|entry| handle.doc().provider_checkpoint(&entry.id))
                 .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| mutation("LUNA history lacks exact Claude turn identities"))?,
+                .ok_or_else(|| {
+                    mutation(format!("LUNA history lacks exact {label} turn identities"))
+                })?,
         );
         if document_turns != native.turn_starts {
-            return Err(mutation(
-                "Claude and LUNA turn history differ; rewind was not sent",
-            ));
+            return Err(mutation(format!(
+                "{label} and LUNA turn history differ; rewind was not sent",
+            )));
         }
         let position = native
             .turn_starts
             .iter()
             .position(|id| id == &target)
-            .ok_or_else(|| mutation("the selected turn is not in Claude's active history"))?;
+            .ok_or_else(|| {
+                mutation(format!(
+                    "the selected turn is not in {label}'s active history"
+                ))
+            })?;
         let cutoff = entries
             .iter()
             .position(|entry| entry.id == message_id)
@@ -334,9 +373,9 @@ impl EngineRpc {
                 .collect::<Vec<_>>(),
         );
         if retained_turns[..] != native.turn_starts[..position] {
-            return Err(mutation(
-                "rewind retained turns differ from Claude's native prefix",
-            ));
+            return Err(mutation(format!(
+                "rewind retained turns differ from {label}'s native prefix",
+            )));
         }
         let last_seen = native
             .turn_starts
@@ -404,14 +443,16 @@ impl EngineRpc {
             .map_err(|error| TaskProjectionError::Mutation(error.into()))?;
         let mut context = handle.doc().context_control();
         context.pending_rewind = Some(command_id.into());
-        context.notice = Some("Claude conversation rewind is awaiting readback. Later history remains visible; new turns are blocked. Use Reconcile rewind after a restart or uncertain result.".into());
+        context.notice = Some(format!(
+            "{label} conversation rewind is awaiting readback. Later history remains visible; new turns are blocked. Use Reconcile rewind after a restart or uncertain result."
+        ));
         self.doc_host
             .persist_context_control(task_id, command_id, &context)
             .map_err(TaskProjectionError::Mutation)?;
 
         let harness = self
             .registry
-            .resolve(HarnessId::ClaudeCode)
+            .resolve(provider)
             .map_err(|error| TaskProjectionError::Mutation(error.into()))?;
         let written = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let tracked = written.clone();
@@ -433,26 +474,30 @@ impl EngineRpc {
         .await;
         let written = written.load(std::sync::atomic::Ordering::Acquire);
         match outcome {
-            Ok(Ok(NativeRewindOutcome::Rewound)) => match self.claude_turns(scope).await {
-                Ok(turns) if !turns.compacted && turns.turn_starts == record.retained_turns => Ok(
-                    Some(self.commit_claude_rewind(task_id, command_id, &record, true)?),
-                ),
-                _ => Err(TaskProjectionError::ProviderUnknown(other(
-                    "Claude acknowledged the rewind but readback did not show the retained prefix. Later history stays visible; reconcile before sending.",
-                ))),
-            },
+            Ok(Ok(NativeRewindOutcome::Rewound)) => {
+                match self.native_turns(provider, scope).await {
+                    Ok(turns) if !turns.compacted && turns.turn_starts == record.retained_turns => {
+                        Ok(Some(self.commit_native_rewind(
+                            task_id, command_id, &record, true,
+                        )?))
+                    }
+                    _ => Err(TaskProjectionError::ProviderUnknown(other(format!(
+                        "{label} acknowledged the rewind but readback did not show the retained prefix. Later history stays visible; reconcile before sending.",
+                    )))),
+                }
+            }
             Ok(Ok(NativeRewindOutcome::Refused { reason, message })) => {
-                self.clear_claude_rewind(
+                self.clear_native_rewind(
                     task_id,
                     command_id,
-                    format!("Claude refused the rewind ({reason}): {message}. No history was removed; files kept."),
+                    format!("{label} refused the rewind ({reason}): {message}. No history was removed; files kept."),
                 )?;
                 Err(mutation(format!(
-                    "Claude refused the rewind ({reason}): {message}"
+                    "{label} refused the rewind ({reason}): {message}"
                 )))
             }
             Ok(Err(error)) if !written => {
-                self.clear_claude_rewind(
+                self.clear_native_rewind(
                     task_id,
                     command_id,
                     format!("Rewind was not sent: {error}"),
@@ -461,22 +506,25 @@ impl EngineRpc {
             }
             Ok(Err(error)) => Err(TaskProjectionError::ProviderUnknown(error.into())),
             Err(_) if !written => {
-                self.clear_claude_rewind(
+                self.clear_native_rewind(
                     task_id,
                     command_id,
-                    "Rewind was not sent: Claude did not start in time.".into(),
+                    format!("Rewind was not sent: {label} did not start in time."),
                 )?;
-                Err(mutation("Claude rewind timed out before it was sent"))
+                Err(mutation(format!(
+                    "{label} rewind timed out before it was sent"
+                )))
             }
-            Err(_) => Err(TaskProjectionError::ProviderUnknown(other(
-                "Claude rewind completion timed out; later history remains visible. Reconcile without repeating the rewind.",
-            ))),
+            Err(_) => Err(TaskProjectionError::ProviderUnknown(other(format!(
+                "{label} rewind completion timed out; later history remains visible. Reconcile without repeating the rewind.",
+            )))),
         }
     }
 
-    /// `Ok(None)` when `rewind_command_id` is not a Claude rewind, so the
-    /// shared reconcile arm continues with its Codex readback.
-    pub(super) async fn reconcile_claude_rewind(
+    /// `Ok(None)` when `rewind_command_id` is not a native-hook rewind
+    /// (Claude Code, OpenCode), so the shared reconcile arm continues with
+    /// its Codex readback.
+    pub(super) async fn reconcile_native_rewind(
         &self,
         command_id: &str,
         task_id: &str,
@@ -495,8 +543,9 @@ impl EngineRpc {
             return Err(mutation("rewind intent identity differs"));
         }
         let (chat, binding) = self
-            .claude_rewind_ready(task_id)
+            .native_rewind_ready(task_id)
             .map_err(TaskProjectionError::Mutation)?;
+        let provider = binding.provider_id;
         let context = self
             .doc_host
             .context_control(task_id)
@@ -504,7 +553,7 @@ impl EngineRpc {
         if context.pending_rewind.as_deref() != Some(rewind_command_id) {
             return Err(mutation("No matching unresolved rewind"));
         }
-        let scope = self.claude_scope(&chat, &binding);
+        let scope = self.native_scope(&chat, &binding);
         if binding.binding_id != record.binding_id
             || binding.generation != record.binding_generation
             || binding.provider_task_id != record.session_id
@@ -521,25 +570,26 @@ impl EngineRpc {
             ));
         }
         let observed = self
-            .claude_turns(scope)
+            .native_turns(provider, scope)
             .await
             .map_err(TaskProjectionError::Mutation)?;
         if !observed.compacted && observed.turn_starts == record.retained_turns {
-            Ok(Some(self.commit_claude_rewind(
+            Ok(Some(self.commit_native_rewind(
                 task_id, command_id, &record, true,
             )?))
         } else if !observed.compacted && observed.turn_starts == record.original_turns {
-            Ok(Some(self.commit_claude_rewind(
+            Ok(Some(self.commit_native_rewind(
                 task_id, command_id, &record, false,
             )?))
         } else {
-            Err(mutation(
-                "Claude history differs from both saved prefixes. Later LUNA history stays visible and sends remain blocked.",
-            ))
+            Err(mutation(format!(
+                "{} history differs from both saved prefixes. Later LUNA history stays visible and sends remain blocked.",
+                provider_label(provider)
+            )))
         }
     }
 
-    fn commit_claude_rewind(
+    fn commit_native_rewind(
         &self,
         task_id: &str,
         command_id: &str,
@@ -547,7 +597,7 @@ impl EngineRpc {
         reverted: bool,
     ) -> Result<CommandReceipt, TaskProjectionError> {
         let (_, binding) = self
-            .claude_rewind_ready(task_id)
+            .native_rewind_ready(task_id)
             .map_err(TaskProjectionError::ProviderUnknown)?;
         if binding.binding_id != record.binding_id
             || binding.generation != record.binding_generation
@@ -556,6 +606,9 @@ impl EngineRpc {
                 "rewind binding changed; retained history was not projected",
             )));
         }
+        let provider = binding.provider_id;
+        let label = provider_label(provider);
+        let session = session_label(provider);
         let id = record_id(task_id, &record.command_id);
         let source_bytes = self
             .store
@@ -573,7 +626,7 @@ impl EngineRpc {
         let marker = self.history_marker(
             format!("history-rewind:{}", record.command_id),
             format!(
-                "Rewound this conversation before message {} in the same Claude Code session. Files and external effects were kept. Audit snapshot: {id}.",
+                "Rewound this conversation before message {} in the same {session}. Files and external effects were kept. Audit snapshot: {id}.",
                 record.message_id
             ),
         );
@@ -607,10 +660,10 @@ impl EngineRpc {
                     let mut context = doc.context_control();
                     context.pending_rewind = None;
                     context.provider_summary = None;
-                    context.notice = Some(if reverted {
-                        "Conversation rewound in the same Claude Code session. Files kept; Claude file checkpoints and Git checkpoints are separate.".into()
-                    } else {
-                        "Rewind readback verified the original Claude conversation. No history was removed; files kept.".into()
+                    context.notice = Some(match (reverted, provider) {
+                        (true, HarnessId::ClaudeCode) => "Conversation rewound in the same Claude Code session. Files kept; Claude file checkpoints and Git checkpoints are separate.".into(),
+                        (true, _) => format!("Conversation rewound in the same {session}. Files kept; Git checkpoints are separate."),
+                        (false, _) => format!("Rewind readback verified the original {label} conversation. No history was removed; files kept."),
                     });
                     doc.set_context_control(&context)?;
                     Ok(())
@@ -621,7 +674,7 @@ impl EngineRpc {
                 TaskProjectionError::ProviderUnknown(other(error.message().to_string()))
             })?;
         // The binding and session id stay current: continuation resumes the
-        // same Claude session from its persisted rewind anchor.
+        // same native session from its persisted rewind point.
         Ok(receipt)
     }
 
@@ -688,7 +741,7 @@ impl EngineRpc {
         let checkpoint = self
             .claude_file_checkpoint(&params.task_id, &params.message_id)
             .map_err(|error| fail(&error))?;
-        let scope = self.claude_scope(&chat, &binding);
+        let scope = self.native_scope(&chat, &binding);
         let harness = self
             .registry
             .resolve(HarnessId::ClaudeCode)

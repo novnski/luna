@@ -177,6 +177,28 @@ fn v2_session_frames(kind: &str, data: &Value) -> Option<Vec<Value>> {
             warning["type"] = json!("session.warning");
             vec![warning]
         }
+        // OC-12: a session deleted outside LUNA (another client, or the
+        // agent's own tool) ends its turn with an actionable error rather
+        // than a stall. Non-root sessions' frames are ignored by the bus.
+        "session.deleted" => {
+            let session = data.get("sessionID").and_then(Value::as_str).unwrap_or("");
+            vec![
+                json!({
+                    "type": "session.error",
+                    "properties": {
+                        "sessionID": v2_session(data),
+                        "error": {
+                            "name": "SessionDeleted",
+                            "data": { "message": history::deleted_session_message(session) },
+                        },
+                    }
+                }),
+                json!({
+                    "type": "session.idle",
+                    "properties": { "sessionID": v2_session(data) }
+                }),
+            ]
+        }
         "session.step.started" => vec![json!({
             "type": "message.updated",
             "properties": {

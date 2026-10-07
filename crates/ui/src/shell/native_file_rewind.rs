@@ -42,6 +42,9 @@ pub(super) fn rewind_copy(provider: Option<HarnessId>, pending: bool) -> &'stati
         (false, Some(HarnessId::ClaudeCode)) => {
             "Remove this message and every later turn from this same Claude Code session. Claude keeps the removed turns only as an unreachable branch; an audit snapshot is kept in LUNA. Your draft, files and external effects are kept."
         }
+        (false, Some(HarnessId::Opencode)) => {
+            "Remove this message and every later turn from this same OpenCode session. OpenCode deletes the removed turns; an audit snapshot is kept in LUNA. Your draft, files and external effects are kept."
+        }
         (false, _) => {
             "Remove this message and every later turn from this same Codex conversation. The provider's removed history cannot be restored by LUNA; an audit snapshot is kept. Your draft, files and external effects are kept."
         }
