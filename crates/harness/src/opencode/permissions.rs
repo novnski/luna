@@ -22,9 +22,12 @@
 //! ([`verify_session_rules`]); a session without LUNA's rules never runs.
 //!
 //! Containment (PD-14): every ruleset ends with `opencode_session_move: deny`
-//! so the chat's directory stays LUNA-owned. Child (subagent) sessions are
-//! capped on creation with the same mode compiled against the CHILD's agent
-//! plus `luna_*: deny` — LUNA tools are root-only for every provider.
+//! so the chat's directory stays LUNA-owned. Child (subagent) sessions
+//! inherit their parent's session rules at creation (`oc2:core/src/
+//! session.ts:276`), so they start at the parent's ceiling; on
+//! `session.created` LUNA replaces those with the same mode compiled against
+//! the CHILD's agent plus `luna_*: deny` — LUNA tools are root-only for
+//! every provider, and an agent's own restrictions survive.
 //!
 //! Replies are `POST /api/session/{s}/permission/{id}/reply` with
 //! `{decision: "once" | "reject", message?}`. LUNA never sends `always`
@@ -58,13 +61,18 @@ pub(super) const CHOICE_ALLOW_ONCE: &str = "Allow once";
 pub(super) const CHOICE_CANCEL_TURN: &str = "Cancel turn";
 
 /// The feedback a Deny sends, so the model continues without the action.
-pub(super) const DENY_FEEDBACK: &str = "The user denied this request in LUNA. Continue without it, or ask the user how to proceed.";
+pub(super) const DENY_FEEDBACK: &str =
+    "The user denied this request in LUNA. Continue without it, or ask the user how to proceed.";
 /// The feedback when LUNA closes an approval without an answer.
 const UNANSWERED_FEEDBACK: &str =
     "LUNA closed this approval without an answer, so it was not approved. Continue without it.";
 
 /// Answered native request ids remembered against resync re-delivery.
 const MAX_SETTLED_IDS: usize = 1024;
+
+/// The agent list right after boot: up to 5 s at 250 ms.
+const AGENT_LIST_ATTEMPTS: u32 = 20;
+const AGENT_LIST_POLL: Duration = Duration::from_millis(250);
 
 /// A rule effect, ordered by permissiveness.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -310,10 +318,16 @@ impl AgentRules {
             };
             // An agent with any rule LUNA can't read is left out, so the
             // static ruleset applies to it instead of a partial reading.
-            let Some(rules) = agent
-                .get("permissions")
-                .and_then(Value::as_array)
-                .and_then(|rules| rules.iter().map(Rule::from_json).collect::<Option<Vec<_>>>())
+            let Some(rules) =
+                agent
+                    .get("permissions")
+                    .and_then(Value::as_array)
+                    .and_then(|rules| {
+                        rules
+                            .iter()
+                            .map(Rule::from_json)
+                            .collect::<Option<Vec<_>>>()
+                    })
             else {
                 continue;
             };
@@ -346,13 +360,31 @@ impl SessionRuleSet {
         dir: Option<&str>,
         mode: luna_proto::PermissionMode,
     ) -> Self {
-        let agents = match server.get_json("/api/agent", dir).await {
-            Ok(list) => AgentRules::from_list(&list),
-            Err(error) => {
-                tracing::warn!(target: "luna_harness::opencode", %error, "agent list unavailable");
-                None
+        // A freshly booted location registers its agents shortly after the
+        // first request (observed live on 2.0.22: `{data: []}` right after
+        // boot), so an empty list or a 503 is polled briefly.
+        let mut agents = None;
+        for attempt in 0..AGENT_LIST_ATTEMPTS {
+            let last = attempt + 1 == AGENT_LIST_ATTEMPTS;
+            match server.get_json("/api/agent", dir).await {
+                Ok(list) => {
+                    let empty = list
+                        .get("data")
+                        .and_then(Value::as_array)
+                        .is_some_and(Vec::is_empty);
+                    if !empty || last {
+                        agents = AgentRules::from_list(&list);
+                        break;
+                    }
+                }
+                Err(error) if !last && error.to_string().contains(" 503 ") => {}
+                Err(error) => {
+                    tracing::warn!(target: "luna_harness::opencode", %error, "agent list unavailable");
+                    break;
+                }
             }
-        };
+            tokio::time::sleep(AGENT_LIST_POLL).await;
+        }
         if agents.is_none() {
             tracing::warn!(
                 target: "luna_harness::opencode",
@@ -513,8 +545,13 @@ impl UserRequests {
 
     /// Already shown or answered?
     pub(super) fn known(&self, id: &str) -> bool {
-        self.pending.lock().is_ok_and(|pending| pending.contains_key(id))
-            || self.settled.lock().is_ok_and(|settled| settled.contains(id))
+        self.pending
+            .lock()
+            .is_ok_and(|pending| pending.contains_key(id))
+            || self
+                .settled
+                .lock()
+                .is_ok_and(|settled| settled.contains(id))
     }
 
     /// Register a pending prompt for a native request id.
@@ -555,7 +592,10 @@ impl UserRequests {
             return;
         }
         let agent = info.get("agent").and_then(Value::as_str);
-        let title = info.get("title").and_then(Value::as_str).filter(|t| !t.is_empty());
+        let title = info
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|t| !t.is_empty());
         let label = match (agent, title) {
             (Some(agent), Some(title)) => format!("{agent}: {title}"),
             (Some(agent), None) => agent.to_owned(),
@@ -719,13 +759,16 @@ pub(super) fn permission_question(
     };
     // Command / input: the shell's parsed commands, the fetched URL, the
     // search query, or the edited paths.
-    let command = match action {
-        "shell" => meta_text("command").or_else(|| (!resources.is_empty()).then(|| resources.join("\n"))),
-        "webfetch" => meta_text("url").or_else(|| resources.first().cloned()),
-        "websearch" => meta_text("query").or_else(|| resources.first().cloned()),
-        "edit" => meta_text("filepath").or_else(|| (!resources.is_empty()).then(|| resources.join(", "))),
-        _ => (!resources.is_empty()).then(|| resources.join(", ")),
-    };
+    let command =
+        match action {
+            "shell" => meta_text("command")
+                .or_else(|| (!resources.is_empty()).then(|| resources.join("\n"))),
+            "webfetch" => meta_text("url").or_else(|| resources.first().cloned()),
+            "websearch" => meta_text("query").or_else(|| resources.first().cloned()),
+            "edit" => meta_text("filepath")
+                .or_else(|| (!resources.is_empty()).then(|| resources.join(", "))),
+            _ => (!resources.is_empty()).then(|| resources.join(", ")),
+        };
     let file_changes = metadata
         .and_then(|m| m.get("files"))
         .filter(|files| files.as_array().is_some_and(|files| !files.is_empty()))
@@ -791,7 +834,10 @@ pub(super) fn permission_question(
     };
     let summary = match (action, resources.is_empty()) {
         ("shell", false) => format!("{who} requests to run {}", clip(&resources.join("; "), 512)),
-        ("edit", false) => format!("{who} requests to edit {}", clip(&resources.join(", "), 512)),
+        ("edit", false) => format!(
+            "{who} requests to edit {}",
+            clip(&resources.join(", "), 512)
+        ),
         ("external_directory", false) => format!(
             "{who} requests access outside the workspace: {}",
             clip(&resources.join(", "), 512)
@@ -823,8 +869,8 @@ pub(super) fn permission_question(
         command,
         reason,
         file_changes,
-        grant_root: (action == "external_directory" && !resources.is_empty())
-            .then(|| resources.join(", ")),
+        // External directories ride `command`: OpenCode's grant covers any
+        // access there, so it is not presented as a write root.
         network,
         choices,
         subagent,

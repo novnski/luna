@@ -137,10 +137,8 @@ pub(super) async fn run_session(session: Session) {
                     .and_then(Value::as_str)
                     .unwrap_or(resume)
                     .to_owned();
-                let rules = rule_set.rules_for(
-                    info.get("agent").and_then(Value::as_str),
-                    RuleScope::Root,
-                );
+                let rules =
+                    rule_set.rules_for(info.get("agent").and_then(Value::as_str), RuleScope::Root);
                 // `session.update` (204): the resumed session takes this
                 // run's LUNA permission mode as its v2 ruleset.
                 server

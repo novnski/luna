@@ -212,7 +212,10 @@ impl FormField {
             kind,
             title: text("title"),
             description: text("description"),
-            required: raw.get("required").and_then(Value::as_bool).unwrap_or(false),
+            required: raw
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             hidden: raw.get("hidden").and_then(Value::as_bool).unwrap_or(false),
             when,
             default: raw.get("default").filter(|value| !value.is_null()).cloned(),
@@ -235,7 +238,12 @@ impl FormField {
                 max_length,
                 pattern,
                 ..
-            } => format.is_none() && min_length.is_none() && max_length.is_none() && pattern.is_none(),
+            } => {
+                format.is_none()
+                    && min_length.is_none()
+                    && max_length.is_none()
+                    && pattern.is_none()
+            }
             FieldKind::Multiselect {
                 min_items,
                 max_items,
@@ -335,7 +343,9 @@ impl FormField {
                 custom,
             } => {
                 if *custom {
-                    return Err(unsupported("accepts custom entries LUNA can't collect in a typed form"));
+                    return Err(unsupported(
+                        "accepts custom entries LUNA can't collect in a typed form",
+                    ));
                 }
                 schema.value_type = "array".into();
                 schema.choices = choices(options);
@@ -645,7 +655,11 @@ pub(super) fn plan_form(
                     "{prompt_message}{server_name} requests {}. {}\n{} ({}){notes}",
                     field.name(),
                     field.description.as_deref().unwrap_or(""),
-                    if schema.required { "Required" } else { "Optional" },
+                    if schema.required {
+                        "Required"
+                    } else {
+                        "Optional"
+                    },
                     schema.value_type
                 );
                 let options = if schema.value_type == "boolean" {
@@ -718,11 +732,9 @@ impl FormPlan {
                     return FormReply::Cancel(self.dismissed.clone());
                 }
                 for question in &self.questions {
-                    let Some(field) = self
-                        .fields
-                        .iter()
-                        .find(|field| question.id == format!("form:{}:{}", self.form_id, field.key))
-                    else {
+                    let Some(field) = self.fields.iter().find(|field| {
+                        question.id == format!("form:{}:{}", self.form_id, field.key)
+                    }) else {
                         continue;
                     };
                     let labels = answers
@@ -738,8 +750,7 @@ impl FormPlan {
             PlanShape::Typed => match luna_proto::mcp_response(&self.questions, answers) {
                 Ok(response) => match response["action"].as_str() {
                     Some("accept") => {
-                        if let Some(content) = response.get("content").and_then(Value::as_object)
-                        {
+                        if let Some(content) = response.get("content").and_then(Value::as_object) {
                             answer = content.clone();
                         }
                     }
@@ -792,7 +803,7 @@ fn field_active(field: &FormField, answer: &serde_json::Map<String, Value>) -> b
             return false;
         };
         let hit = match value {
-            Value::Array(items) => items.iter().any(|item| *item == when.value),
+            Value::Array(items) => items.contains(&when.value),
             other => *other == when.value,
         };
         hit == when.eq
@@ -946,8 +957,8 @@ impl FormResponder {
                     // The answer failed OpenCode's validation: tell the asker
                     // so it continues instead of waiting forever.
                     Ok((status, text)) if status == reqwest::StatusCode::BAD_REQUEST => {
-                        let detail = describe_error_envelope(&text)
-                            .unwrap_or_else(|| truncate_body(&text));
+                        let detail =
+                            describe_error_envelope(&text).unwrap_or_else(|| truncate_body(&text));
                         let failed = self
                             .cancel(Some(&format!(
                                 "OpenCode rejected the answer LUNA collected: {detail}"
@@ -957,7 +968,9 @@ impl FormResponder {
                             "OpenCode rejected the answer to \"{}\" ({detail}); the request was \
                              cancelled{}",
                             self.title,
-                            failed.map(|f| format!(" (cancel failed: {f})")).unwrap_or_default()
+                            failed
+                                .map(|f| format!(" (cancel failed: {f})"))
+                                .unwrap_or_default()
                         ))
                         .await;
                     }
@@ -1052,15 +1065,17 @@ pub(super) fn handle_form_created(ask: FormAsk<'_>) -> BusOutcome {
             responder
                 .send(
                     &token,
-                    FormReply::Cancel(Some(
-                        "No LUNA turn is active to show this request.".into(),
-                    )),
+                    FormReply::Cancel(Some("No LUNA turn is active to show this request.".into())),
                 )
                 .await;
         });
         return BusOutcome::Continue;
     }
-    let thread = if global { requests.root.as_str() } else { owner };
+    let thread = if global {
+        requests.root.as_str()
+    } else {
+        owner
+    };
     let subagent = if global {
         None
     } else {
@@ -1160,9 +1175,7 @@ pub(super) async fn resync_pending_requests(ctx: Resync<'_>) {
         .lock()
         .map(|pending| pending.keys().cloned().collect())
         .unwrap_or_default();
-    let list = |value: Value| -> Option<Vec<Value>> {
-        unwrap_data(value).as_array().cloned()
-    };
+    let list = |value: Value| -> Option<Vec<Value>> { unwrap_data(value).as_array().cloned() };
     if let Some(asks) = server
         .get_json("/api/permission/request", dir)
         .await

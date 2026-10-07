@@ -422,8 +422,7 @@ pub(super) async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             BusOutcome::Continue
         }
         "form.created" => {
-            if event_session
-                .is_some_and(|owner| owner == GLOBAL_FORM_OWNER || requests.owns(owner))
+            if event_session.is_some_and(|owner| owner == GLOBAL_FORM_OWNER || requests.owns(owner))
             {
                 turn.note_activity();
             }

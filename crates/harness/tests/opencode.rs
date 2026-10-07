@@ -183,7 +183,10 @@ impl FakeOpencode {
                         *first = Some(self.events.receiver_count() > 0);
                     }
                 }
-                self.posts.lock().unwrap().push((path.clone(), body.clone()));
+                self.posts
+                    .lock()
+                    .unwrap()
+                    .push((path.clone(), body.clone()));
             }
             let (status, payload) = self.route(&method, &path, &body);
             let body = match payload {
