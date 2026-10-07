@@ -888,6 +888,61 @@ fn reset_label(state: UsageResetState, now_ms: i64) -> String {
     }
 }
 
+/// The reset line of one pooled quota row on the Usage page, shared by every
+/// provider. Failure cases:
+/// - PR-01 A stale row says "Reset time unavailable" although its accounts
+///   reported a reset (S6, OpenCode Go). The earliest reported reset is shown
+///   the way the account tooltip shows it (`reset_label`): a last-reported
+///   absolute time while stale.
+/// - PR-02 A stale reset becomes a live countdown. Only fresh accounts count
+///   down; a stale one never reads "Next reset in".
+/// - PR-03 A fresh reset that already passed counts down from zero. It reads
+///   "Reset time passed · refresh to verify".
+/// - PR-04 A window with nothing used shows its rolling reset. Unused windows
+///   are ignored, as before.
+/// - PR-05 No account reported a reset. The row still says "Reset time
+///   unavailable".
+fn pooled_reset_label(
+    reported: &[(&UsageLimitSnapshot, &luna_proto::UsageLimitWindow)],
+    now_ms: i64,
+) -> String {
+    let used = || {
+        reported
+            .iter()
+            .filter(|(_, window)| window.used_percent > 0.0)
+    };
+    let next_fresh = used()
+        .filter(|(limit, _)| limit.is_fresh(now_ms))
+        .filter_map(|(_, window)| window.resets_at_ms)
+        .filter(|at| *at > now_ms)
+        .min();
+    if let Some(at) = next_fresh {
+        let delta = (at - now_ms) / 60_000;
+        return if delta < 60 {
+            format!("Next reset in {delta}m")
+        } else if delta < 24 * 60 {
+            format!("Next reset in {}h {}m", delta / 60, delta % 60)
+        } else {
+            format!(
+                "Next reset in {}d {}h",
+                delta / (24 * 60),
+                (delta % (24 * 60)) / 60
+            )
+        };
+    }
+    used()
+        .filter_map(|(limit, window)| {
+            window
+                .resets_at_ms
+                .map(|at| (at, limit.reset_state(window, now_ms)))
+        })
+        .min_by_key(|(at, _)| *at)
+        .map_or_else(
+            || "Reset time unavailable".into(),
+            |(_, state)| reset_label(state, now_ms),
+        )
+}
+
 fn limits_status(limit: &UsageLimitSnapshot, now_ms: i64) -> String {
     let state = match limit.availability {
         LimitAvailability::Ready => "",
@@ -1019,31 +1074,7 @@ fn pooled_limit_sections(limits: &[UsageLimitSnapshot], theme: &Theme, now_ms: i
                 .sum::<f32>()
                 / reported.len() as f32;
             let remaining = (100.0 - used).round();
-            let next_reset = reported
-                .iter()
-                .filter_map(|(limit, window)| {
-                    (window.used_percent > 0.0)
-                        .then(|| window.resets_at_ms)
-                        .flatten()
-                        .filter(|at| *at > now_ms && limit.is_fresh(now_ms))
-                })
-                .min();
-            let reset = next_reset
-                .map(|at| {
-                    let delta = (at - now_ms) / 60_000;
-                    if delta < 60 {
-                        format!("Next reset in {delta}m")
-                    } else if delta < 24 * 60 {
-                        format!("Next reset in {}h {}m", delta / 60, delta % 60)
-                    } else {
-                        format!(
-                            "Next reset in {}d {}h",
-                            delta / (24 * 60),
-                            (delta % (24 * 60)) / 60
-                        )
-                    }
-                })
-                .unwrap_or_else(|| "Reset time unavailable".into());
+            let reset = pooled_reset_label(&reported, now_ms);
             let mut segments = div()
                 .w_full()
                 .flex()
@@ -1277,10 +1308,10 @@ fn compact_limit_row(
                         .line_height(crate::typography::ui_rems(15.0))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(palette.heading)
-                        .child(match limit.provider {
-                            UsageProvider::OpenCodeGo => "opencode",
-                            provider => provider.label(),
-                        }),
+                        // The shared provider name, as the Usage page's
+                        // history rows use it; the plan badge names the
+                        // subscription ("OpenCode Go").
+                        .child(limit.provider.label()),
                 )
                 .when_some(limit.plan.clone(), |el, plan| {
                     el.child(

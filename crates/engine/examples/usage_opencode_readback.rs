@@ -58,6 +58,10 @@ fn summary(snapshot: &UsageSnapshot) -> Value {
         .find(|source| source.provider == UsageProvider::OpenCodeGo);
     json!({
         "days": snapshot.summary.days,
+        // The record window, for scripts/qa-opencode-usage-reconcile.py.
+        "readAtMs": snapshot.summary.read_at_ms,
+        "periodStartsMs": snapshot.summary.period_starts_ms,
+        "untilMs": snapshot.summary.until_ms,
         "scanDurationMs": snapshot.summary.scan_duration_ms,
         "partial": snapshot.summary.partial,
         "warnings": snapshot.summary.warnings,
