@@ -10,7 +10,9 @@
 //!   back to its last completed read and the source is marked partial.
 //! - OCH-02 The reader writes to provider storage. Databases open with
 //!   `SQLITE_OPEN_READ_ONLY` and never `CREATE`, so a missing file is never
-//!   created and no pragma, migration or checkpoint is issued.
+//!   created and no pragma, migration or checkpoint is issued. A closed store
+//!   (no `-wal`, `-shm` or `-journal`) opens immutable, so SQLite does not
+//!   create WAL side files in the provider's directory either.
 //! - OCH-03 Message text reaches LUNA memory or its cache. SQL selects only
 //!   usage fields through `json_extract`; legacy files decode into a usage-only
 //!   struct; the cache holds the shared usage `Record` alone.
@@ -237,16 +239,44 @@ fn columns(db: &Connection, table: &str) -> Result<HashSet<String>, ReadError> {
     Ok(names)
 }
 
+fn sidecar(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(suffix);
+    PathBuf::from(name)
+}
+
+/// Opens a store read-only. A read-only connection to a WAL database creates
+/// `-wal`/`-shm` files when they are absent, which would write into the
+/// provider's directory. OpenCode keeps them while it has the store open, so
+/// without any writer side file the store is closed and is read as immutable.
+fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    if ["-wal", "-shm", "-journal"]
+        .iter()
+        .any(|suffix| sidecar(path, suffix).exists())
+    {
+        return Connection::open_with_flags(path, flags);
+    }
+    let mut uri = String::from("file:");
+    for byte in path.as_os_str().as_encoded_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                uri.push(*byte as char)
+            }
+            _ => uri.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    uri.push_str("?mode=ro&immutable=1");
+    Connection::open_with_flags(uri, flags | OpenFlags::SQLITE_OPEN_URI)
+}
+
 /// One complete or deadline-bounded read of a database's assistant usage.
 fn read_database(
     path: &Path,
     since_ms: i64,
     deadline: Instant,
 ) -> Result<(Vec<Record>, bool), ReadError> {
-    let db = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
+    let db = open_read_only(path)?;
     // A busy live provider should fail this source promptly rather than
     // stalling the scan while SQLite waits for its writer.
     db.busy_timeout(BUSY_TIMEOUT)?;
@@ -434,9 +464,7 @@ fn is_database_path(root: &Path, path: &Path) -> bool {
 /// committed write changes at least one of them.
 fn database_signature(path: &Path) -> Option<(u64, u128, String)> {
     let metadata = fs::metadata(path).ok()?;
-    let mut wal = path.as_os_str().to_owned();
-    wal.push("-wal");
-    let wal = fs::metadata(PathBuf::from(wal))
+    let wal = fs::metadata(sidecar(path, "-wal"))
         .map(|meta| (meta.len(), modified_ns(&meta)))
         .unwrap_or((0, 0));
     Some((
