@@ -384,6 +384,20 @@ Rig evidence is T2 for the OpenCode server and the mock only. It proves
 nothing about LUNA's adapter, engine, document or UI, and nothing about real
 model output.
 
+`scripts/qa-opencode-keepalive-proxy.py` is a fault wrapper for LUNA's own
+HTTP client. Give it to LUNA as the OpenCode executable (a harness probe's
+first argument, or `OPENCODE_EXECUTABLE`) with the profile wrapper in
+`LUNA_KA_REAL_OPENCODE`. It starts the real `opencode serve` and puts a
+loopback proxy in front of it. `opencode serve` 2.0.22 advertises
+`Keep-Alive: timeout=5` but closes an idle connection at 6.00 s, and a
+request that meets that close is lost. The proxy holds the server's idle
+close back from LUNA, so a request on a connection idle for
+`LUNA_KA_IDLE_MS` (default 6000) is reset every time, not only on a lucky
+boundary hit. `LUNA_KA_RESET_REPLIES=N` also resets the first N permission
+or form replies. `LUNA_KA_LOG` receives the request lines and faults, never
+headers. With `opencode_input_probe`'s `PROBE_ANSWER_DELAY_MS=7000`, this
+reproduces the S1 lost answer (round 2) at the harness level.
+
 ### Live app driver
 
 `scripts/qa-opencode-live.mjs` follows `scripts/qa-task-work-live.mjs`:

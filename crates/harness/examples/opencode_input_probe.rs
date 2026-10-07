@@ -33,6 +33,11 @@
 //! - `PROBE_CWD`: the run's workspace (default: a fresh temp dir).
 //! - `PROBE_FOLLOWUP`: a second prompt queued as a follow-up turn of the
 //!   same run (delivered when the first turn ends).
+//! - `PROBE_ANSWER_DELAY_MS`: answer every prompt this long after it was
+//!   shown (a user who reads before answering; e.g. 7000 lets LUNA's
+//!   pooled connection pass the server's 6 s keep-alive close).
+//! - `PROBE_IDLE_TIMEOUT_SECS`: fail (exit 2) when the run emits nothing for
+//!   this long (default 180): a turn left waiting on a prompt nobody sees.
 
 use std::sync::{Arc, Mutex};
 
@@ -157,6 +162,16 @@ async fn main() {
     let min_questions: u32 = env("PROBE_MIN_QUESTIONS")
         .and_then(|n| n.parse().ok())
         .unwrap_or(0);
+    let answer_delay = std::time::Duration::from_millis(
+        env("PROBE_ANSWER_DELAY_MS")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0),
+    );
+    let idle_timeout = std::time::Duration::from_secs(
+        env("PROBE_IDLE_TIMEOUT_SECS")
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(180),
+    );
 
     let policy = PermissionPolicy {
         requested_mode: mode,
@@ -251,7 +266,16 @@ async fn main() {
         if dismiss {
             eprintln!("    -> dismissed (empty answers)");
         }
-        let _ = tx.send(answers);
+        if answer_delay.is_zero() {
+            let _ = tx.send(answers);
+        } else {
+            eprintln!("    -> answering in {answer_delay:?}");
+            tokio::spawn(async move {
+                tokio::time::sleep(answer_delay).await;
+                eprintln!("    -> answered after {answer_delay:?}");
+                let _ = tx.send(answers);
+            });
+        }
         rx
     });
     let input_for_resume = Arc::clone(&answer_input);
@@ -296,15 +320,14 @@ async fn main() {
     let mut subagent_events = 0u32;
     let mut session_id: Option<String> = None;
     let status = loop {
-        let ev =
-            match tokio::time::timeout(std::time::Duration::from_secs(180), stream.next()).await {
-                Ok(Some(ev)) => ev,
-                Ok(None) => break None,
-                Err(_) => {
-                    eprintln!("--- timed out");
-                    std::process::exit(2);
-                }
-            };
+        let ev = match tokio::time::timeout(idle_timeout, stream.next()).await {
+            Ok(Some(ev)) => ev,
+            Ok(None) => break None,
+            Err(_) => {
+                eprintln!("--- timed out: no event for {idle_timeout:?}");
+                std::process::exit(2);
+            }
+        };
         match ev {
             Ok(AgentEvent::Done { status, error, .. }) => {
                 if let Some(error) = error {
