@@ -583,6 +583,10 @@ impl Harness for ClaudeHarness {
         history::rewind_files(&self.resolve_executable()?, request).await
     }
 
+    fn supports_native_child_stop(&self) -> bool {
+        true
+    }
+
     async fn stop_native_child(
         &self,
         native_session_id: &str,

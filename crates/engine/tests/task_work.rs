@@ -265,6 +265,9 @@ impl Harness for NativePeer {
     async fn models(&self) -> Result<Vec<Model>, HarnessError> {
         Ok(vec![])
     }
+    fn supports_native_child_stop(&self) -> bool {
+        true
+    }
     async fn stop_native_child(
         &self,
         session: &str,

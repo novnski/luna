@@ -519,6 +519,11 @@ impl Harness for OpencodeHarness {
         }
     }
 
+    /// Per-child Stop is offered for OpenCode exactly as for Claude.
+    fn supports_native_child_stop(&self) -> bool {
+        true
+    }
+
     /// Per-child Stop, like Claude (CC-08): interrupt the child session of
     /// the live run bound to `native_session_id`. `Requested` is a receipt;
     /// the child's own `execution.interrupted` settles its chip.
