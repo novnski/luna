@@ -1155,7 +1155,9 @@ const SCENARIOS = {
         } else {
           s.check(`${lower(tag)}-answerable`, 'the pending request is answerable after the pause', 'no open card', false);
         }
-        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer: allowAll, timeoutMs: s.turnTimeout});
+        // The answered card stays open in the mirror until the provider's
+        // reply lands; ignore it so the wait does not end on it as unanswered.
+        const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, answer: allowAll, ignore: live ? [live.requestId] : [], timeoutMs: s.turnTimeout});
         s.settled(wait, `${lower(tag)}-turn-completes`);
         outcome(tag, kind, sent);
         const inputs = s.after('root', sent.messageId).flatMap(e => (e.parts ?? []).filter(p => p.kind === 'input'));
