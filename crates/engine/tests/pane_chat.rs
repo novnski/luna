@@ -2417,10 +2417,15 @@ async fn child_execution_selects_provider_model_options_and_keeps_fresh_history_
         .config
         .unwrap();
     assert_eq!(default_config.harness, HarnessId::ClaudeCode);
-    assert!(
-        default_config.model.is_none()
-            && default_config.reasoning.is_none()
-            && default_config.model_options.is_empty()
+    // No model asked: the child resolves the provider's default (the
+    // catalog's first model) with that model's default reasoning and
+    // options, so its execution is exact before it starts.
+    assert_eq!(default_config.model.as_deref(), Some("parent-model"));
+    assert_eq!(default_config.reasoning, Some(ReasoningLevel::High));
+    assert_eq!(default_config.model_options.len(), 1);
+    assert_eq!(
+        default_config.model_options.get("fastMode"),
+        Some(&json!("off"))
     );
     evidence(
         "child-execution-before-restart.json",
@@ -2516,7 +2521,8 @@ async fn child_execution_rejects_invalid_choices_before_identity_or_worktree_cre
         json!({"provider":"claude-code","model":"child-model","reasoning":"ultra"}),
         json!({"provider":"claude-code","model":"child-model","modelOptions":{"fastMode":"invalid"}}),
         json!({"provider":"claude-code","model":"child-model","modelOptions":{"lunaRuntimeContract":"forged"}}),
-        json!({"provider":"claude-code","modelOptions":{"fastMode":"on"}}),
+        // Options without a model are checked against the resolved default.
+        json!({"provider":"claude-code","modelOptions":{"fastMode":"turbo"}}),
         json!({"provider":"claude-code","model":"child-model","modelOptions":{"fastMode":true}}),
         json!({"provider":"claude-code","model":"child-model","permissionMode":"auto"}),
     ];
@@ -2635,10 +2641,14 @@ async fn blank_child_provider_choice_stays_unbound_and_independent_until_first_s
     assert_eq!(own.config.as_ref().unwrap().harness, HarnessId::ClaudeCode);
     assert_eq!(own.child_thread, lineage);
     assert_eq!(own.cwd, before.cwd);
-    assert_eq!(
-        core.workspace.chat(&parent).unwrap().unwrap(),
-        parent_before
-    );
+    // Background diff sync may bind the new parent to its repository
+    // checkout at any time (its cwd never moves); that discovery is not a
+    // side effect of the child's provider choice.
+    let mut parent_after = core.workspace.chat(&parent).unwrap().unwrap();
+    if parent_before.checkout_id.is_none() {
+        parent_after.checkout_id = None;
+    }
+    assert_eq!(parent_after, parent_before);
     assert_eq!(
         client
             .call("GetComposerDraft", json!({"taskId":child}))
