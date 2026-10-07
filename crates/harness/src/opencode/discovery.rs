@@ -357,10 +357,12 @@ pub(super) fn extensions_view(
     readback: Result<(Value, Option<Value>), String>,
 ) -> NativeExtensionsView {
     let home = crate::executable::home_dir();
-    let config_home = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.as_ref().map(|home| home.join(".config")))
-        .map(|dir| dir.join("opencode"));
+    // The server's global config root, through a QA profile wrapper too;
+    // unavailable (no user-scope rows) when the wrapper cannot be evaluated.
+    let config_home = OpencodeStorage::current()
+        .global_config_dir()
+        .ok()
+        .flatten();
     let project = std::path::Path::new(location);
     let display = |path: &std::path::Path| -> String {
         if let Ok(rest) = path.strip_prefix(project) {

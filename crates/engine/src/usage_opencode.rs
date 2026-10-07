@@ -1,10 +1,15 @@
 //! Read-only OpenCode Go limits through its published usage endpoint.
 //! Credentials are used only in memory; historical OpenCode usage is separate.
+//! The account database, `auth.json` and credential variables are the ones
+//! the OpenCode server LUNA would spawn sees
+//! (`luna_harness::opencode::OpencodeStorage`): a QA app whose executable is
+//! a profile wrapper reads the profile's store, never the user's.
 
 use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::DateTime;
+use luna_harness::opencode::OpencodeStorage;
 use luna_proto::{LimitAvailability, UsageLimitSnapshot, UsageLimitWindow, UsageProvider};
 use reqwest::redirect::Policy;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
@@ -35,19 +40,56 @@ impl Credential {
     }
 }
 
-fn data_directory() -> Option<PathBuf> {
-    if let Some(path) = std::env::var_os("XDG_DATA_HOME") {
-        let path = PathBuf::from(path);
-        if path.is_absolute() {
-            return Some(path.join("opencode"));
-        }
-    }
-    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share/opencode"))
+/// Where the selected credential lives for the server LUNA would spawn.
+struct Store {
+    database: Option<PathBuf>,
+    auth_file: Option<PathBuf>,
+    api_key: Option<String>,
+    auth_content: Option<String>,
 }
 
-fn active_v2_credential(directory: &std::path::Path) -> Result<Option<Credential>, ()> {
+const UNDETERMINED: &str = "OpenCode data directory could not be determined";
+
+fn store() -> Result<Store, &'static str> {
+    let storage = OpencodeStorage::current();
+    let text = |name: &str| -> Result<Option<String>, &'static str> {
+        Ok(storage
+            .var(name)
+            .map_err(|_| UNDETERMINED)?
+            .and_then(|value| value.into_string().ok()))
+    };
+    let api_key = text("OPENCODE_API_KEY")?.filter(|key| !key.trim().is_empty());
+    let auth_content = text("OPENCODE_AUTH_CONTENT")?;
+    // An explicit OPENCODE_DATA_DIR names the data root for this reader as
+    // it does for history; otherwise the server's own data root and database.
+    let (database, data) = if text(crate::usage::OPENCODE_DATA_DIR_VARIABLE)?.is_some() {
+        let root = crate::usage::opencode_storage_roots(&storage)
+            .map_err(|_| UNDETERMINED)?
+            .into_iter()
+            .next();
+        (root.as_ref().map(|root| root.join("opencode.db")), root)
+    } else {
+        (
+            storage.database().map_err(|_| UNDETERMINED)?,
+            storage.data_dir().map_err(|_| UNDETERMINED)?,
+        )
+    };
+    tracing::debug!(
+        target: "luna_engine::usage",
+        database = ?database,
+        data = ?data,
+        "OpenCode Go credential store"
+    );
+    Ok(Store {
+        database,
+        auth_file: data.map(|data| data.join("auth.json")),
+        api_key,
+        auth_content,
+    })
+}
+
+fn active_v2_credential(path: &std::path::Path) -> Result<Option<Credential>, ()> {
     type ActiveAccountRow = (String, String, String, Option<i64>, Option<String>);
-    let path = directory.join("opencode.db");
     if !path.is_file() {
         return Ok(None);
     }
@@ -104,10 +146,8 @@ fn active_v2_credential(directory: &std::path::Path) -> Result<Option<Credential
     }))
 }
 
-fn api_credential(directory: &std::path::Path) -> Result<Option<Credential>, ()> {
-    if let Ok(token) = std::env::var("OPENCODE_API_KEY")
-        && !token.trim().is_empty()
-    {
+fn api_credential(store: &Store) -> Result<Option<Credential>, ()> {
+    if let Some(token) = store.api_key.as_deref() {
         return Ok(Some(Credential {
             token: token.trim().into(),
             organization: None,
@@ -115,10 +155,16 @@ fn api_credential(directory: &std::path::Path) -> Result<Option<Credential>, ()>
             endpoint: "https://opencode.ai/zen/go/v1/usage",
         }));
     }
-    let content = std::env::var("OPENCODE_AUTH_CONTENT")
-        .ok()
+    let content = store
+        .auth_content
+        .clone()
         .filter(|content| serde_json::from_str::<Value>(content).is_ok())
-        .or_else(|| std::fs::read_to_string(directory.join("auth.json")).ok());
+        .or_else(|| {
+            store
+                .auth_file
+                .as_ref()
+                .and_then(|path| std::fs::read_to_string(path).ok())
+        });
     let Some(content) = content else {
         return Ok(None);
     };
@@ -146,19 +192,21 @@ fn api_credential(directory: &std::path::Path) -> Result<Option<Credential>, ()>
     Ok(None)
 }
 
-fn credential() -> Result<Option<Credential>, ()> {
-    let Some(directory) = data_directory() else {
-        return Ok(None);
-    };
+fn credential() -> Result<Option<Credential>, &'static str> {
+    const FAILED: &str = "OpenCode Go credential read failed";
+    let store = store()?;
     // Explicit API key wins. The active v2 account otherwise supersedes the
     // legacy auth file; neither store is changed or refreshed here.
-    if std::env::var("OPENCODE_API_KEY").is_ok_and(|key| !key.trim().is_empty()) {
-        return api_credential(&directory);
+    if store.api_key.is_some() {
+        return api_credential(&store).map_err(|_| FAILED);
     }
-    if let Some(account) = active_v2_credential(&directory)? {
-        Ok(Some(account))
-    } else {
-        api_credential(&directory)
+    let account = match store.database.as_deref() {
+        Some(database) => active_v2_credential(database).map_err(|_| FAILED)?,
+        None => None,
+    };
+    match account {
+        Some(account) => Ok(Some(account)),
+        None => api_credential(&store).map_err(|_| FAILED),
     }
 }
 
@@ -230,13 +278,16 @@ fn parse_limit_response(value: &Value, id: Option<String>) -> Option<UsageLimitS
 }
 
 pub(crate) async fn read_go_limits() -> UsageLimitSnapshot {
-    let selected = tokio::task::spawn_blocking(credential).await;
-    let Some(selected) = selected.ok().and_then(Result::ok) else {
-        return unavailable(
-            LimitAvailability::ProbeFailed,
-            "OpenCode Go credential read failed",
-            None,
-        );
+    let selected = match tokio::task::spawn_blocking(credential).await {
+        Ok(Ok(selected)) => selected,
+        Ok(Err(detail)) => return unavailable(LimitAvailability::ProbeFailed, detail, None),
+        Err(_) => {
+            return unavailable(
+                LimitAvailability::ProbeFailed,
+                "OpenCode Go credential read failed",
+                None,
+            );
+        }
     };
     let Some(selected) = selected else {
         return unavailable(

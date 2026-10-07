@@ -278,13 +278,20 @@ none. LUNA's per-session `luna` server is attached by the adapter and is
 unaffected. A scenario that relies on fixture project config says so in
 `result.md`.
 
-**Known limit.** The wrapper isolates the OpenCode child only. LUNA-process
-readers still resolve the user's directories from the app environment: the
-OpenCode Go limits reader (PD-17, `GetUsageSnapshot` with `includeLimits`),
-OpenCode usage history, and the skills catalog's OpenCode config root. The live
-driver never calls those RPCs. Do not open the Usage page in the QA app during
-an OpenCode run unless the scenario covers it and the user approves reading
-that store.
+**LUNA-process readers.** The OpenCode Go limits reader (PD-17,
+`GetUsageSnapshot` with `includeLimits`), OpenCode usage history, the skills
+catalog's OpenCode config root and the native extensions view run inside LUNA,
+not in the OpenCode child. They resolve their directories through
+`luna_harness::opencode::OpencodeStorage`, which replays the static `export`
+and `unset` lines of the `OPENCODE_EXECUTABLE` wrapper chain over the app
+environment, exactly as the spawned server sees them. In the QA app they
+therefore read the profile's `data/opencode` and `config/opencode`, never the
+user's. A wrapper that changes storage in a way LUNA cannot evaluate (command
+substitution, `source`, a conditional export) makes those readers report the
+OpenCode store as unavailable instead of falling back to `$HOME`. Explicit
+`XDG_*`, `OPENCODE_CONFIG_DIR`, `OPENCODE_DB` and `OPENCODE_DATA_DIR` in the
+app environment are honored the same way. The profile has no OpenCode Go
+account, so the QA Usage page shows OpenCode history but no Go limits.
 
 ### Real-model policy (PD-18)
 

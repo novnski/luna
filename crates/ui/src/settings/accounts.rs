@@ -1613,9 +1613,10 @@ impl AccountsPage {
                 limits
                     .into_iter()
                     .map(|limit| {
+                        let name = limit.provider.limits_label();
                         let title: SharedString = match &limit.plan {
-                            Some(plan) => format!("OpenCode Go · {plan}").into(),
-                            None => "OpenCode Go".into(),
+                            Some(plan) if plan != name => format!("{name} · {plan}").into(),
+                            _ => name.into(),
                         };
                         let detail = (limit.availability != LimitAvailability::Ready).then(|| {
                             SharedString::from(

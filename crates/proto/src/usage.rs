@@ -15,16 +15,28 @@ pub const USAGE_LIMIT_FRESHNESS_MS: i64 = 5 * 60_000;
 pub enum UsageProvider {
     Codex,
     Claude,
-    /// OpenCode Go subscription quotas. No historical transcript adapter yet.
+    /// OpenCode: history from its local stores, live session rows, and the
+    /// OpenCode Go subscription quotas. The wire name stays `openCodeGo`
+    /// (contract v2); only the limits card is labelled "OpenCode Go".
     OpenCodeGo,
 }
 
 impl UsageProvider {
+    /// The provider name for history, live rows and generic usage.
     pub fn label(self) -> &'static str {
         match self {
             Self::Codex => "Codex",
             Self::Claude => "Claude",
+            Self::OpenCodeGo => "OpenCode",
+        }
+    }
+
+    /// The name of this provider's subscription limits card. OpenCode's
+    /// limits come only from an OpenCode Go subscription.
+    pub fn limits_label(self) -> &'static str {
+        match self {
             Self::OpenCodeGo => "OpenCode Go",
+            other => other.label(),
         }
     }
 }
