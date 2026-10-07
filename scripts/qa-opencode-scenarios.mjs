@@ -1457,12 +1457,20 @@ const SCENARIOS = {
         s.check('steer-answer-applied', 'the answer sent while the agent is still working is applied', {status: receipt?.status, reason: receipt?.reason?.message ?? null, busyWhenAnswered}, receipt?.status === 'applied');
         s.info('answered-while-busy', 'the agent was still working when the answer was sent', busyWhenAnswered, busyWhenAnswered);
         const wait = await s.d.waitTurn(chatId, {mark: sent.mark, messageId: sent.messageId, timeoutMs: 300000});
-        await s.d.waitIdle(chatId, {timeoutMs: 180000}).catch(() => null);
         s.settled(wait, 'steer-turn-settles', ['idle']);
+        // The steered answer opens a boundary inside the turn; read the
+        // transcript only once the final WORK reply is in.
+        await waitReply(s.m('WORK'), 'final reply after the steered answer', 300000);
         const delivered = userTexts().some(text => text.includes(`[luna-question:${fresh.id}]`) && text.includes('Debug'));
         s.check('steer-answer-delivered', 'the answer reached the agent tagged with the card id', delivered, delivered);
-        const replies = s.entries('root').filter(e => e.role === 'assistant').map(e => textOf(e)).join('\n');
-        s.modelCheck('steer-answer-consumed', `the agent reported LEVEL-${s.nonce}-debug`, replies.slice(-300), replies.toLowerCase().includes(`level-${s.nonce}-debug`.toLowerCase()));
+        const after = s.after('root', sent.messageId);
+        const answerAt = after.findIndex(e => e.role === 'user' && textOf(e).includes(`[luna-question:${fresh.id}]`));
+        const finalAt = after.findLastIndex(e => e.role === 'assistant' && textOf(e).includes(s.m('WORK')));
+        s.check('steer-inside-turn', 'the answer landed inside the running turn, before its final reply', {answerAt, finalAt}, answerAt >= 0 && finalAt > answerAt);
+        // Whether the model folds a mid-turn answer into its reply is model
+        // behaviour; LUNA's part is the delivery checked above.
+        const replies = after.filter(e => e.role === 'assistant').map(e => textOf(e)).join(' / ');
+        s.info('steer-answer-consumed', `the agent reported LEVEL-${s.nonce}-debug`, replies.slice(-200), replies.toLowerCase().includes(`level-${s.nonce}-debug`.toLowerCase()));
         s.d.capture('s9q-steered');
       });
     },
