@@ -10144,8 +10144,18 @@ impl Composer {
                     self.wizard = Some(candidate.clone());
                     self.advance_task = None;
                     let initial = candidate.current_typed().to_string();
-                    self.answer_input
-                        .update(cx, |input, cx| input.set_text(initial, cx));
+                    let has_pick = candidate.page_has_pick();
+                    self.answer_input.update(cx, |input, cx| {
+                        input.set_text(initial, cx);
+                        input.set_placeholder(
+                            if has_pick {
+                                "Type your own answer, or leave this blank to use the selected option"
+                            } else {
+                                "Type your own answer, or pick an option above"
+                            },
+                            cx,
+                        );
+                    });
                     // An async picker that opened on its own hides after a
                     // while (the agent kept working); a reopened one stays.
                     let card = (self.current_key.clone(), candidate.request_id.clone());

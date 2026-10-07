@@ -5608,11 +5608,20 @@ impl SessionsEngine {
         invocation: &luna_harness::LunaToolInvocation,
     ) -> Result<serde_json::Value, EngineError> {
         let questions = crate::runtime_contract::ask_user_questions(&invocation.arguments)?;
+        // A short stable id: the answer message shows it in its
+        // [luna-question:<id>] tag, and provider call ids can be very long.
         let call_id = invocation.context.provider_call_id();
         let message_id = if call_id.is_empty() {
             format!("luna-ask-{}", new_id())
         } else {
-            format!("luna-ask-{call_id}")
+            use sha2::Digest as _;
+            let digest = sha2::Sha256::digest(call_id.as_bytes());
+            let short = digest
+                .iter()
+                .take(6)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            format!("luna-ask-{short}")
         };
         let ended = || EngineError::Other("the LUNA run that asked has ended".into());
         let runs = lock(&self.inner.runs);
